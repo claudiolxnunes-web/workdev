@@ -4,15 +4,34 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from anthropic import Anthropic
+from openai import OpenAI
 from app.database import SessionLocal
 from app.models.project import Project
 from app.models.backlog import BacklogItem
 from app.models.subtask import BacklogSubtask
 
 router = APIRouter()
-client = Anthropic()
 
-MODEL = "claude-sonnet-4-6"
+ANTHROPIC_MODEL = "claude-sonnet-4-6"
+OPENAI_MODEL = "gpt-4o"
+
+_anthropic_client = None
+_openai_client = None
+
+
+def get_anthropic() -> Anthropic:
+    global _anthropic_client
+    if _anthropic_client is None:
+        _anthropic_client = Anthropic()
+    return _anthropic_client
+
+
+def get_openai() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI()
+    return _openai_client
+
 
 SYSTEM = (
     "Você é o assistente do WorkDev, plataforma de engenharia do Cláudio "
@@ -38,8 +57,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
-
-
+    provider: str | None = None
 TOOLS = [
     {
         "name": "listar_projetos",
@@ -172,23 +190,18 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
     return json.dumps({"erro": "ferramenta desconhecida"})
 
 
-@router.post("/ai/chat")
-def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
-    messages = [{"role": m.role, "content": m.content} for m in req.messages]
-
+def chat_anthropic(messages: list, db: Session) -> str:
+    client = get_anthropic()
     for _ in range(5):
         resp = client.messages.create(
-            model=MODEL,
+            model=ANTHROPIC_MODEL,
             max_tokens=1024,
             system=SYSTEM,
             tools=TOOLS,
             messages=messages,
         )
-
         if resp.stop_reason != "tool_use":
-            texto = "".join(b.text for b in resp.content if b.type == "text")
-            return {"reply": texto}
-
+            return "".join(b.text for b in resp.content if b.type == "text")
         messages.append({"role": "assistant", "content": resp.content})
         results = []
         for block in resp.content:
@@ -200,5 +213,54 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
                     "content": out,
                 })
         messages.append({"role": "user", "content": results})
+    return "Não consegui concluir a operação (limite de passos)."
 
-    return {"reply": "Não consegui concluir a operação (limite de passos)."}
+def tools_openai() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["input_schema"],
+            },
+        }
+        for t in TOOLS
+    ]
+
+
+def chat_openai(messages: list, db: Session) -> str:
+    client = get_openai()
+    msgs = [{"role": "system", "content": SYSTEM}] + messages
+    for _ in range(5):
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_tokens=1024,
+            tools=tools_openai(),
+            messages=msgs,
+        )
+        msg = resp.choices[0].message
+        if not msg.tool_calls:
+            return msg.content or ""
+        msgs.append(msg)
+        for tc in msg.tool_calls:
+            args = json.loads(tc.function.arguments or "{}")
+            out = executar_tool(tc.function.name, args, db)
+            msgs.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": out,
+            })
+    return "Não consegui concluir a operação (limite de passos)."
+
+@router.post("/ai/chat")
+def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
+    provider = (req.provider or os.getenv("AI_PROVIDER", "anthropic")).lower()
+    messages = [{"role": m.role, "content": m.content} for m in req.messages]
+    try:
+        if provider == "openai":
+            return {"reply": chat_openai(messages, db), "provider": "openai"}
+        return {"reply": chat_anthropic(messages, db), "provider": "anthropic"}
+    except Exception as e:
+        return {"reply": f"Erro no provider {provider}: {type(e).__name__} - {e}",
+                "provider": provider, "error": True}
