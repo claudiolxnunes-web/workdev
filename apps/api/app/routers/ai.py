@@ -12,8 +12,8 @@ from app.models.subtask import BacklogSubtask
 
 router = APIRouter()
 
-ANTHROPIC_MODEL = "claude-sonnet-4-6"
-OPENAI_MODEL = "gpt-4o"
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 _anthropic_client = None
 _openai_client = None
