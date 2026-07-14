@@ -7,6 +7,7 @@ from anthropic import Anthropic
 from app.database import SessionLocal
 from app.models.project import Project
 from app.models.backlog import BacklogItem
+from app.models.subtask import BacklogSubtask
 
 router = APIRouter()
 client = Anthropic()
@@ -15,10 +16,10 @@ MODEL = "claude-sonnet-4-6"
 
 SYSTEM = (
     "Você é o assistente do WorkDev, plataforma de engenharia do Cláudio "
-    "(BPF Consult). Responda sempre em português do Brasil, de forma curta e "
-    "direta. Use as ferramentas para consultar ou modificar projetos e backlog. "
-    "Slugs conhecidos: workdev-core, nutrigestor-crm, agente-pessoal, openclaw, "
-    "feed-bpf, nutricontrole."
+    "(BPF Consult). Responda sempre em português do Brasil, curto e direto. "
+    "Use as ferramentas para consultar ou modificar projetos, backlog e "
+    "subtasks. Slugs: workdev-core, nutrigestor-crm, agente-pessoal, "
+    "openclaw, feed-bpf, nutricontrole."
 )
 
 
@@ -47,7 +48,7 @@ TOOLS = [
     },
     {
         "name": "listar_backlog",
-        "description": "Lista itens do backlog, com filtro opcional por status e/ou projeto",
+        "description": "Lista itens do backlog, filtro opcional por status e/ou projeto",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -71,6 +72,29 @@ TOOLS = [
             "required": ["titulo", "projeto_slug"],
         },
     },
+    {
+        "name": "decompor_task",
+        "description": "Cria subtasks para um item do backlog. Use quando pedirem para decompor/quebrar uma task. Você decide as subtasks: títulos claros e acionáveis, em ordem de execução.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "titulo_task": {"type": "string", "description": "título (ou parte) da task"},
+                "subtasks": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["titulo_task", "subtasks"],
+        },
+    },
+    {
+        "name": "listar_subtasks",
+        "description": "Lista as subtasks de uma task do backlog",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "titulo_task": {"type": "string"},
+            },
+            "required": ["titulo_task"],
+        },
+    },
 ]
 
 
@@ -91,10 +115,9 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
             if not p:
                 return json.dumps({"erro": "projeto não encontrado"})
             q = q.filter(BacklogItem.project_id == p.id)
-        items = q.all()
         return json.dumps(
             [{"titulo": i.title, "status": i.status, "prioridade": i.priority,
-              "tipo": i.type, "sprint": i.sprint} for i in items],
+              "tipo": i.type, "sprint": i.sprint} for i in q.all()],
             ensure_ascii=False,
         )
 
@@ -114,6 +137,37 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
         db.commit()
         return json.dumps({"ok": True, "titulo": item.title, "projeto": p.name},
                           ensure_ascii=False)
+
+    if nome == "decompor_task":
+        t = (db.query(BacklogItem)
+             .filter(BacklogItem.title.ilike(f"%{args['titulo_task']}%"))
+             .first())
+        if not t:
+            return json.dumps({"erro": "task não encontrada"})
+        criadas = []
+        for i, titulo in enumerate(args["subtasks"], start=1):
+            db.add(BacklogSubtask(backlog_id=t.id, title=titulo,
+                                  execution_order=i))
+            criadas.append(titulo)
+        db.commit()
+        return json.dumps({"ok": True, "task": t.title, "subtasks": criadas},
+                          ensure_ascii=False)
+
+    if nome == "listar_subtasks":
+        t = (db.query(BacklogItem)
+             .filter(BacklogItem.title.ilike(f"%{args['titulo_task']}%"))
+             .first())
+        if not t:
+            return json.dumps({"erro": "task não encontrada"})
+        subs = (db.query(BacklogSubtask)
+                .filter(BacklogSubtask.backlog_id == t.id)
+                .order_by(BacklogSubtask.execution_order).all())
+        return json.dumps(
+            {"task": t.title,
+             "subtasks": [{"ordem": s.execution_order, "titulo": s.title,
+                           "status": s.status} for s in subs]},
+            ensure_ascii=False,
+        )
 
     return json.dumps({"erro": "ferramenta desconhecida"})
 

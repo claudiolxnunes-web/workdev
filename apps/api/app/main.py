@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from app.routers.projects import router as projects_router
 from app.routers.backlog import router as backlog_router
 from app.routers.ai import router as ai_router
+from app.routers.subtasks import router as subtasks_router
 
 load_dotenv()
 API_KEY = os.getenv("WORKDEV_API_KEY")
@@ -27,6 +28,7 @@ async def require_api_key(request: Request, call_next):
 app.include_router(projects_router, prefix="/api")
 app.include_router(backlog_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
+app.include_router(subtasks_router, prefix="/api")
 
 
 @app.get("/health")

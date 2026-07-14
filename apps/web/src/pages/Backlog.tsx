@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getBacklog, updateStatus, deleteItem } from "../services/backlog.service";
 import type { BacklogItem } from "../services/backlog.service";
 import NewTaskModal from "../components/NewTaskModal";
+import TaskDetail from "../components/TaskDetail";
 
 const COLUMNS = [
   { key: "todo", label: "To Do", color: "text-blue-400" },
@@ -29,6 +30,7 @@ export default function Backlog() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
+  const [selected, setSelected] = useState<BacklogItem | null>(null);
 
   async function load() {
     try {
@@ -98,7 +100,7 @@ export default function Backlog() {
                 .map((item) => (
                   <div
                     key={item.id}
-                    onClick={() => advance(item)}
+                    onClick={() => setSelected(item)}
                     className="bg-slate-800 rounded-lg p-3 cursor-pointer hover:bg-slate-700 transition-colors"
                     title="Clique para avançar o status"
                   >
@@ -132,6 +134,7 @@ export default function Backlog() {
           </div>
         ))}
       </div>
+      <TaskDetail item={selected} onClose={() => setSelected(null)} onAdvance={(i) => { advance(i); setSelected(null); }} />
       <NewTaskModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}

@@ -51,3 +51,30 @@ export async function deleteItem(id: string) {
   const response = await fetch(`/api/backlog/${id}`, { method: "DELETE" });
   if (!response.ok) throw new Error("Erro ao deletar item");
 }
+
+export interface Subtask {
+  id: string;
+  backlog_id: string;
+  title: string;
+  description?: string;
+  status: string;
+  execution_order: number;
+  assigned_agent?: string;
+  result?: string;
+}
+
+export async function getSubtasks(backlogId: string): Promise<Subtask[]> {
+  const r = await fetch(`/api/subtasks/${backlogId}`);
+  if (!r.ok) throw new Error("Erro ao buscar subtasks");
+  return r.json();
+}
+
+export async function updateSubtask(id: string, data: Partial<Subtask>) {
+  const r = await fetch(`/api/subtasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error("Erro ao atualizar subtask");
+  return r.json();
+}

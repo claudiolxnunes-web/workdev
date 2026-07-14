@@ -15,6 +15,7 @@ if config.config_file_name is not None:
 from app.database import Base
 from app.models.project import Project  # noqa
 from app.models.backlog import BacklogItem  # noqa
+from app.models.subtask import BacklogSubtask  # noqa
 
 target_metadata = Base.metadata
 
