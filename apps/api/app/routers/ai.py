@@ -10,6 +10,7 @@ from app.models.project import Project
 from app.models.backlog import BacklogItem
 from app.models.subtask import BacklogSubtask
 from app.models.knowledge import KnowledgeEntry
+from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 
 router = APIRouter()
 
@@ -59,6 +60,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     provider: str | None = None
+    session_id: str | None = None
 TOOLS = [
     {
         "name": "listar_projetos",
@@ -320,10 +322,40 @@ def chat_openai(messages: list, db: Session) -> str:
 def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     provider = (req.provider or os.getenv("AI_PROVIDER", "anthropic")).lower()
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
+
+    session = None
+    if req.session_id:
+        session = db.query(ChatSession).filter(
+            ChatSession.id == req.session_id).first()
+    if session is None and messages:
+        first_user = next((m["content"] for m in messages
+                           if m["role"] == "user"), "Conversa")
+        session = ChatSession(title=first_user[:250])
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+    if session and messages:
+        last = messages[-1]
+        if last["role"] == "user":
+            db.add(ChatMessageDB(session_id=session.id,
+                                 role="user", content=last["content"]))
+            db.commit()
+
     try:
         if provider == "openai":
-            return {"reply": chat_openai(messages, db), "provider": "openai"}
-        return {"reply": chat_anthropic(messages, db), "provider": "anthropic"}
+            reply = chat_openai(messages, db)
+        else:
+            provider = "anthropic"
+            reply = chat_anthropic(messages, db)
     except Exception as e:
-        return {"reply": f"Erro no provider {provider}: {type(e).__name__} - {e}",
-                "provider": provider, "error": True}
+        reply = f"Erro no provider {provider}: {type(e).__name__} - {e}"
+        return {"reply": reply, "provider": provider, "error": True,
+                "session_id": str(session.id) if session else None}
+
+    if session:
+        db.add(ChatMessageDB(session_id=session.id,
+                             role="assistant", content=reply))
+        session.updated_at = __import__("datetime").datetime.utcnow()
+        db.commit()
+    return {"reply": reply, "provider": provider,
+            "session_id": str(session.id) if session else None}

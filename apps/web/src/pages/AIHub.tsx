@@ -5,15 +5,65 @@ interface Msg {
   content: string;
 }
 
+interface SessionMeta {
+  id: string;
+  title: string;
+  updated_at: string;
+}
+
 export default function AIHub() {
   const [messages, setMessages] = useState<Msg[]>([]);
+  const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(
+    () => sessionStorage.getItem("workdev_chat_session")
+  );
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(true);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  useEffect(() => {
+    loadSessions();
+    if (sessionId) restoreSession(sessionId);
+  }, []);
+
+  async function loadSessions() {
+    try {
+      const r = await fetch("/api/chat/sessions");
+      if (r.ok) setSessions(await r.json());
+    } catch { /* silencioso */ }
+  }
+
+  async function restoreSession(id: string) {
+    try {
+      const r = await fetch(`/api/chat/sessions/${id}`);
+      if (!r.ok) { newChat(); return; }
+      const data = await r.json();
+      setMessages(data.messages);
+      setSessionId(id);
+      sessionStorage.setItem("workdev_chat_session", id);
+    } catch { /* silencioso */ }
+  }
+
+  function newChat() {
+    setMessages([]);
+    setSessionId(null);
+    sessionStorage.removeItem("workdev_chat_session");
+  }
+
+  async function deleteSession(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm("Apagar esta conversa?")) return;
+    try {
+      await fetch(`/api/chat/sessions/${id}`, { method: "DELETE" });
+      if (id === sessionId) newChat();
+      loadSessions();
+    } catch { /* silencioso */ }
+  }
 
   async function send() {
     const text = input.trim();
@@ -26,13 +76,18 @@ export default function AIHub() {
       const r = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next }),
+        body: JSON.stringify({ messages: next, session_id: sessionId }),
       });
       const data = await r.json();
       setMessages([
         ...next,
         { role: "assistant" as const, content: data.reply || "Erro na resposta" },
       ]);
+      if (data.session_id) {
+        setSessionId(data.session_id);
+        sessionStorage.setItem("workdev_chat_session", data.session_id);
+        loadSessions();
+      }
     } catch {
       setMessages([
         ...next,
@@ -44,51 +99,92 @@ export default function AIHub() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)]">
-      <h1 className="text-3xl font-bold mb-4">AI Hub</h1>
-
-      <div className="flex-1 overflow-y-auto space-y-4 bg-slate-900 border border-slate-800 rounded-xl p-4">
-        {messages.length === 0 && (
-          <p className="text-slate-500 text-sm">
-            Converse com o WorkDev. Ex: "quantos itens high estão pendentes?",
-            "cria uma task no nutrigestor: ajustar favicon", "status dos projetos"
-          </p>
-        )}
-        {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`max-w-[85%] rounded-xl px-4 py-2 whitespace-pre-wrap text-sm ${
-              m.role === "user"
-                ? "bg-blue-600 ml-auto"
-                : "bg-slate-800"
-            }`}
+    <div className="flex h-[calc(100vh-8rem)] gap-4">
+      {showSidebar && (
+        <div className="w-64 flex flex-col bg-slate-900 border border-slate-800 rounded-xl p-3 shrink-0">
+          <button
+            onClick={newChat}
+            className="bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-2 text-sm mb-3 transition-colors"
           >
-            {m.content}
+            + Nova conversa
+          </button>
+          <div className="flex-1 overflow-y-auto space-y-1">
+            {sessions.length === 0 && (
+              <p className="text-slate-600 text-xs px-1">Nenhuma conversa salva</p>
+            )}
+            {sessions.map((s) => (
+              <div
+                key={s.id}
+                onClick={() => restoreSession(s.id)}
+                className={`group flex items-center gap-2 rounded-lg px-3 py-2 text-xs cursor-pointer transition-colors ${
+                  s.id === sessionId
+                    ? "bg-slate-700 text-white"
+                    : "text-slate-400 hover:bg-slate-800"
+                }`}
+              >
+                <span className="flex-1 truncate">{s.title}</span>
+                <button
+                  onClick={(e) => deleteSession(s.id, e)}
+                  className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-opacity"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
           </div>
-        ))}
-        {loading && (
-          <div className="bg-slate-800 rounded-xl px-4 py-2 text-sm text-slate-400 max-w-[85%]">
-            Pensando...
-          </div>
-        )}
-        <div ref={endRef} />
-      </div>
-
-      <div className="flex gap-3 mt-4">
-        <input
-          className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm"
-          placeholder="Pergunte ou peça algo ao WorkDev..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-        />
-        <button
-          onClick={send}
-          disabled={loading}
-          className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition-colors disabled:opacity-50"
-        >
-          Enviar
-        </button>
+        </div>
+      )}
+      <div className="flex flex-col flex-1 min-w-0">
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={() => setShowSidebar(!showSidebar)}
+            className="text-slate-400 hover:text-white text-xl"
+            title="Alternar histórico"
+          >
+            ☰
+          </button>
+          <h1 className="text-3xl font-bold">AI Hub</h1>
+        </div>
+        <div className="flex-1 overflow-y-auto space-y-4 bg-slate-900 border border-slate-800 rounded-xl p-4">
+          {messages.length === 0 && (
+            <p className="text-slate-500 text-sm">
+              Converse com o WorkDev. Ex: "quantos itens high estão pendentes?",
+              "cria uma task no nutrigestor: ajustar favicon", "status dos projetos"
+            </p>
+          )}
+          {messages.map((m, i) => (
+            <div
+              key={i}
+              className={`max-w-[85%] rounded-xl px-4 py-2 whitespace-pre-wrap text-sm ${
+                m.role === "user" ? "bg-blue-600 ml-auto" : "bg-slate-800"
+              }`}
+            >
+              {m.content}
+            </div>
+          ))}
+          {loading && (
+            <div className="bg-slate-800 rounded-xl px-4 py-2 text-sm text-slate-400 max-w-[85%]">
+              Pensando...
+            </div>
+          )}
+          <div ref={endRef} />
+        </div>
+        <div className="flex gap-3 mt-4">
+          <input
+            className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm"
+            placeholder="Pergunte ou peça algo ao WorkDev..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && send()}
+          />
+          <button
+            onClick={send}
+            disabled={loading}
+            className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition-colors disabled:opacity-50"
+          >
+            Enviar
+          </button>
+        </div>
       </div>
     </div>
   );
