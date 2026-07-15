@@ -9,6 +9,7 @@ from app.database import SessionLocal
 from app.models.project import Project
 from app.models.backlog import BacklogItem
 from app.models.subtask import BacklogSubtask
+from app.models.knowledge import KnowledgeEntry
 
 router = APIRouter()
 
@@ -103,6 +104,32 @@ TOOLS = [
         },
     },
     {
+        "name": "registrar_conhecimento",
+        "description": "Registra uma entrada no Knowledge Engine: decisoes, licoes aprendidas, solucoes ou referencias. Use quando pedirem para registrar/gravar/anotar conhecimento, licao ou decisao.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "titulo": {"type": "string"},
+                "conteudo": {"type": "string", "description": "texto completo em markdown"},
+                "categoria": {"type": "string", "enum": ["decisao", "licao", "solucao", "referencia"]},
+                "tags": {"type": "string", "description": "separadas por virgula, ex: docker,ufw"},
+                "projeto_slug": {"type": "string", "description": "opcional; omitir se global"},
+            },
+            "required": ["titulo", "conteudo", "categoria"],
+        },
+    },
+    {
+        "name": "buscar_conhecimento",
+        "description": "Busca no Knowledge Engine por texto (titulo, conteudo ou tags) e/ou categoria. Use antes de opinar sobre problemas tecnicos - pode haver licao registrada.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "termo": {"type": "string"},
+                "categoria": {"type": "string", "enum": ["decisao", "licao", "solucao", "referencia"]},
+            },
+        },
+    },
+    {
         "name": "listar_subtasks",
         "description": "Lista as subtasks de uma task do backlog",
         "input_schema": {
@@ -184,6 +211,42 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
             {"task": t.title,
              "subtasks": [{"ordem": s.execution_order, "titulo": s.title,
                            "status": s.status} for s in subs]},
+            ensure_ascii=False,
+        )
+
+    if nome == "registrar_conhecimento":
+        pid = None
+        if args.get("projeto_slug"):
+            p = db.query(Project).filter(Project.slug == args["projeto_slug"]).first()
+            if p:
+                pid = p.id
+        entry = KnowledgeEntry(
+            project_id=pid,
+            title=args["titulo"],
+            content=args["conteudo"],
+            category=args["categoria"],
+            tags=args.get("tags"),
+        )
+        db.add(entry)
+        db.commit()
+        return json.dumps({"ok": True, "titulo": entry.title,
+                           "categoria": entry.category}, ensure_ascii=False)
+
+    if nome == "buscar_conhecimento":
+        q = db.query(KnowledgeEntry)
+        if args.get("categoria"):
+            q = q.filter(KnowledgeEntry.category == args["categoria"])
+        if args.get("termo"):
+            termo = f"%{args['termo']}%"
+            q = q.filter(
+                KnowledgeEntry.title.ilike(termo)
+                | KnowledgeEntry.content.ilike(termo)
+                | KnowledgeEntry.tags.ilike(termo)
+            )
+        rs = q.order_by(KnowledgeEntry.created_at.desc()).limit(10).all()
+        return json.dumps(
+            [{"titulo": r.title, "categoria": r.category, "tags": r.tags,
+              "conteudo": r.content[:500]} for r in rs],
             ensure_ascii=False,
         )
 
