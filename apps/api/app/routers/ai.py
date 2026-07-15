@@ -142,6 +142,36 @@ TOOLS = [
             "required": ["titulo_task"],
         },
     },
+    {
+        "name": "atualizar_task",
+        "description": "Atualiza uma task do backlog: status (todo/doing/blocked/done), prioridade, titulo ou sprint. Use quando pedirem para marcar como concluida/done, mover para doing, mudar prioridade, renomear. Se houver mais de uma task com titulo parecido, a tool devolve a lista para voce pedir especificacao.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "titulo_task": {"type": "string", "description": "titulo (ou parte unica) da task"},
+                "novo_status": {"type": "string", "enum": ["todo", "doing", "blocked", "done"]},
+                "nova_prioridade": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+                "novo_titulo": {"type": "string"},
+                "novo_sprint": {"type": "string"},
+            },
+            "required": ["titulo_task"],
+        },
+    },
+    {
+        "name": "atualizar_subtask",
+        "description": "Atualiza uma subtask de uma task: status (todo/doing/done) ou titulo. Identifique a subtask pela ordem (numero) ou por parte do titulo.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "titulo_task": {"type": "string"},
+                "ordem": {"type": "integer", "description": "numero de ordem da subtask"},
+                "titulo_subtask": {"type": "string", "description": "alternativa a ordem"},
+                "novo_status": {"type": "string", "enum": ["todo", "doing", "done"]},
+                "novo_titulo": {"type": "string"},
+            },
+            "required": ["titulo_task"],
+        },
+    },
 ]
 
 
@@ -252,12 +282,86 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
             ensure_ascii=False,
         )
 
+    if nome == "atualizar_task":
+        termo = args["titulo_task"]
+        matches = (db.query(BacklogItem)
+                   .filter(BacklogItem.title.ilike(f"%{termo}%")).all())
+        exatas = [m for m in matches if m.title.lower() == termo.lower()]
+        if len(exatas) == 1:
+            matches = exatas
+        if not matches:
+            return json.dumps({"erro": "task não encontrada"}, ensure_ascii=False)
+        if len(matches) > 1:
+            return json.dumps(
+                {"erro": "match ambíguo — especifique melhor",
+                 "candidatas": [{"titulo": m.title, "status": m.status,
+                                 "prioridade": m.priority} for m in matches]},
+                ensure_ascii=False)
+        t = matches[0]
+        alteracoes = {}
+        if args.get("novo_status"):
+            t.status = args["novo_status"]
+            alteracoes["status"] = t.status
+        if args.get("nova_prioridade"):
+            t.priority = args["nova_prioridade"]
+            alteracoes["prioridade"] = t.priority
+        if args.get("novo_titulo"):
+            t.title = args["novo_titulo"][:250]
+            alteracoes["titulo"] = t.title
+        if args.get("novo_sprint"):
+            t.sprint = args["novo_sprint"]
+            alteracoes["sprint"] = t.sprint
+        if not alteracoes:
+            return json.dumps({"erro": "nenhuma alteração informada"},
+                              ensure_ascii=False)
+        db.commit()
+        return json.dumps({"ok": True, "task": t.title,
+                           "alteracoes": alteracoes}, ensure_ascii=False)
+
+    if nome == "atualizar_subtask":
+        t = (db.query(BacklogItem)
+             .filter(BacklogItem.title.ilike(f"%{args['titulo_task']}%"))
+             .first())
+        if not t:
+            return json.dumps({"erro": "task não encontrada"}, ensure_ascii=False)
+        q = db.query(BacklogSubtask).filter(BacklogSubtask.backlog_id == t.id)
+        s = None
+        if args.get("ordem") is not None:
+            s = q.filter(BacklogSubtask.execution_order == args["ordem"]).first()
+        elif args.get("titulo_subtask"):
+            subs = q.filter(
+                BacklogSubtask.title.ilike(f"%{args['titulo_subtask']}%")).all()
+            if len(subs) > 1:
+                return json.dumps(
+                    {"erro": "match ambíguo — use a ordem",
+                     "candidatas": [{"ordem": x.execution_order,
+                                     "titulo": x.title} for x in subs]},
+                    ensure_ascii=False)
+            s = subs[0] if subs else None
+        if not s:
+            return json.dumps({"erro": "subtask não encontrada"},
+                              ensure_ascii=False)
+        alteracoes = {}
+        if args.get("novo_status"):
+            s.status = args["novo_status"]
+            alteracoes["status"] = s.status
+        if args.get("novo_titulo"):
+            s.title = args["novo_titulo"][:250]
+            alteracoes["titulo"] = s.title
+        if not alteracoes:
+            return json.dumps({"erro": "nenhuma alteração informada"},
+                              ensure_ascii=False)
+        db.commit()
+        return json.dumps({"ok": True, "task": t.title,
+                           "subtask": s.title, "ordem": s.execution_order,
+                           "alteracoes": alteracoes}, ensure_ascii=False)
+
     return json.dumps({"erro": "ferramenta desconhecida"})
 
 
 def chat_anthropic(messages: list, db: Session) -> str:
     client = get_anthropic()
-    for _ in range(5):
+    for _ in range(12):
         resp = client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=1024,
@@ -297,7 +401,7 @@ def tools_openai() -> list:
 def chat_openai(messages: list, db: Session) -> str:
     client = get_openai()
     msgs = [{"role": "system", "content": SYSTEM}] + messages
-    for _ in range(5):
+    for _ in range(12):
         resp = client.chat.completions.create(
             model=OPENAI_MODEL,
             max_tokens=1024,
