@@ -45,9 +45,22 @@ def health():
 app.mount("/assets", StaticFiles(directory=f"{DIST}/assets"), name="assets")
 
 
+_SCAN_PATTERNS = (
+    "wp-", ".env", ".git", "phpmyadmin", "admin.php", "config.",
+    "vendor/", "cgi-bin", ".aws", "backup", ".ssh", "eval-stdin",
+)
+_FILE_EXTS = (
+    ".php", ".asp", ".aspx", ".jsp", ".cgi", ".sql", ".bak",
+    ".yml", ".yaml", ".ini", ".log", ".sh", ".xml", ".txt",
+)
+
+
 @app.get("/{path:path}")
 def spa(path: str):
     file = os.path.join(DIST, path)
     if path and os.path.isfile(file):
         return FileResponse(file)
+    low = path.lower()
+    if any(p in low for p in _SCAN_PATTERNS) or low.endswith(_FILE_EXTS):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
     return FileResponse(f"{DIST}/index.html")
