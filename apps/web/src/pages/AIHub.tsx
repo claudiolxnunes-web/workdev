@@ -25,6 +25,8 @@ export default function AIHub() {
     { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
     { label: "Kimi K2.6", provider: "kimi", model: "kimi-k2.6" },
     { label: "Gemini 3.5 Flash", provider: "gemini", model: "gemini-3.5-flash" },
+    { label: "Nemotron Ultra 550B (free)", provider: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b:free" },
+    { label: "Qwen3 Coder (free)", provider: "openrouter", model: "qwen/qwen3-coder:free" },
   ];
   const [modelo, setModelo] = useState(MODELOS[0]);
   const [loading, setLoading] = useState(false);

@@ -41,6 +41,10 @@ COMPAT_PROVIDERS = {
                "env_key": "GEMINI_API_KEY",
                "default_model": os.getenv("GEMINI_MODEL",
                                           "gemini-3.5-flash")},
+    "openrouter": {"base_url": "https://openrouter.ai/api/v1",
+                   "env_key": "OPENROUTER_API_KEY",
+                   "default_model": os.getenv("OPENROUTER_MODEL",
+                                              "moonshotai/kimi-k3")},
 }
 
 
@@ -440,7 +444,12 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None) -> str
         results = []
         for block in resp.content:
             if block.type == "tool_use":
-                out = executar_tool(block.name, block.input, db)
+                try:
+                    out = executar_tool(block.name, block.input, db)
+                except Exception as e:
+                    out = json.dumps({"erro": f"argumentos invalidos: "
+                                      f"{type(e).__name__} {e}"},
+                                     ensure_ascii=False)
                 results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -479,7 +488,12 @@ def chat_openai(messages: list, db: Session, model: str | None = None, provider:
         msgs.append(msg)
         for tc in msg.tool_calls:
             args = json.loads(tc.function.arguments or "{}")
-            out = executar_tool(tc.function.name, args, db)
+            try:
+                out = executar_tool(tc.function.name, args, db)
+            except Exception as e:
+                out = json.dumps({"erro": f"argumentos invalidos: "
+                                  f"{type(e).__name__} {e}"},
+                                 ensure_ascii=False)
             msgs.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
