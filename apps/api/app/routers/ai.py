@@ -517,6 +517,29 @@ def chat_openai(messages: list, db: Session, model: str | None = None, provider:
             })
     return "Não consegui concluir a operação (limite de passos)."
 
+class VozRequest(BaseModel):
+    texto: str
+
+
+@router.post("/ai/voz")
+def ai_voz(req: VozRequest, db: Session = Depends(get_db)):
+    """Executor de comandos de voz: texto transcrito -> Fable -> acao."""
+    instrucao = (
+        "Comando de voz transcrito (pode conter erros de transcricao). "
+        "Execute as acoes pedidas usando as tools disponiveis. "
+        "Responda em no maximo 3 frases curtas confirmando o que foi feito, "
+        "sem markdown — a resposta vira mensagem de Telegram.\n\n"
+        f"Comando: {req.texto}"
+    )
+    messages = [{"role": "user", "content": instrucao}]
+    try:
+        reply = chat_anthropic(messages, db)
+    except Exception as e:
+        return {"reply": f"Erro ao executar: {type(e).__name__} - {e}",
+                "error": True}
+    return {"reply": reply}
+
+
 @router.post("/ai/chat")
 def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     provider = (req.provider or os.getenv("AI_PROVIDER", "anthropic")).lower()
