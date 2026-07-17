@@ -148,14 +148,13 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "string", "description": "id (uuid) da task — prefira sempre que souber"},
                 "titulo_task": {"type": "string", "description": "titulo (ou parte unica) da task"},
                 "novo_status": {"type": "string", "enum": ["todo", "doing", "blocked", "done"]},
                 "nova_prioridade": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
                 "novo_titulo": {"type": "string"},
                 "novo_sprint": {"type": "string"},
             },
-            "required": [],
+            "required": ["titulo_task"],
         },
     },
     {
@@ -165,14 +164,12 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "titulo_task": {"type": "string"},
-                "task_id": {"type": "string", "description": "id (uuid) da task — prefira sempre que souber"},
-                "subtask_id": {"type": "string", "description": "id (uuid) da subtask — prefira sempre que souber"},
                 "ordem": {"type": "integer", "description": "numero de ordem da subtask"},
                 "titulo_subtask": {"type": "string", "description": "alternativa a ordem"},
                 "novo_status": {"type": "string", "enum": ["todo", "doing", "done"]},
                 "novo_titulo": {"type": "string"},
             },
-            "required": [],
+            "required": ["titulo_task"],
         },
     },
 ]
@@ -196,9 +193,8 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
                 return json.dumps({"erro": "projeto não encontrado"})
             q = q.filter(BacklogItem.project_id == p.id)
         return json.dumps(
-            [{"id": str(i.id), "titulo": i.title, "status": i.status,
-              "prioridade": i.priority, "tipo": i.type,
-              "sprint": i.sprint} for i in q.all()],
+            [{"titulo": i.title, "status": i.status, "prioridade": i.priority,
+              "tipo": i.type, "sprint": i.sprint} for i in q.all()],
             ensure_ascii=False,
         )
 
@@ -244,9 +240,8 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
                 .filter(BacklogSubtask.backlog_id == t.id)
                 .order_by(BacklogSubtask.execution_order).all())
         return json.dumps(
-            {"task": t.title, "task_id": str(t.id),
-             "subtasks": [{"id": str(s.id), "ordem": s.execution_order,
-                           "titulo": s.title,
+            {"task": t.title,
+             "subtasks": [{"ordem": s.execution_order, "titulo": s.title,
                            "status": s.status} for s in subs]},
             ensure_ascii=False,
         )
@@ -288,26 +283,18 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
         )
 
     if nome == "atualizar_task":
-        if args.get("task_id") is not None:
-            matches = (db.query(BacklogItem)
-                       .filter(BacklogItem.id == args["task_id"]).all())
-        elif args.get("titulo_task"):
-            termo = args["titulo_task"]
-            matches = (db.query(BacklogItem)
-                       .filter(BacklogItem.title.ilike(f"%{termo}%")).all())
-            exatas = [m for m in matches if m.title.lower() == termo.lower()]
-            if len(exatas) == 1:
-                matches = exatas
-        else:
-            return json.dumps({"erro": "informe task_id ou titulo_task"},
-                              ensure_ascii=False)
+        termo = args["titulo_task"]
+        matches = (db.query(BacklogItem)
+                   .filter(BacklogItem.title.ilike(f"%{termo}%")).all())
+        exatas = [m for m in matches if m.title.lower() == termo.lower()]
+        if len(exatas) == 1:
+            matches = exatas
         if not matches:
             return json.dumps({"erro": "task não encontrada"}, ensure_ascii=False)
         if len(matches) > 1:
             return json.dumps(
                 {"erro": "match ambíguo — especifique melhor",
-                 "candidatas": [{"id": str(m.id), "titulo": m.title,
-                                 "status": m.status,
+                 "candidatas": [{"titulo": m.title, "status": m.status,
                                  "prioridade": m.priority} for m in matches]},
                 ensure_ascii=False)
         t = matches[0]
@@ -332,52 +319,25 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
                            "alteracoes": alteracoes}, ensure_ascii=False)
 
     if nome == "atualizar_subtask":
+        t = (db.query(BacklogItem)
+             .filter(BacklogItem.title.ilike(f"%{args['titulo_task']}%"))
+             .first())
+        if not t:
+            return json.dumps({"erro": "task não encontrada"}, ensure_ascii=False)
+        q = db.query(BacklogSubtask).filter(BacklogSubtask.backlog_id == t.id)
         s = None
-        t = None
-        if args.get("subtask_id") is not None:
-            s = (db.query(BacklogSubtask)
-                 .filter(BacklogSubtask.id == args["subtask_id"]).first())
-            if not s:
-                return json.dumps({"erro": "subtask não encontrada"},
-                                  ensure_ascii=False)
-            t = (db.query(BacklogItem)
-                 .filter(BacklogItem.id == s.backlog_id).first())
-        elif args.get("task_id") is not None:
-            t = (db.query(BacklogItem)
-                 .filter(BacklogItem.id == args["task_id"]).first())
-        elif args.get("titulo_task"):
-            ts = (db.query(BacklogItem)
-                  .filter(BacklogItem.title.ilike(f"%{args['titulo_task']}%"))
-                  .all())
-            if len(ts) > 1:
+        if args.get("ordem") is not None:
+            s = q.filter(BacklogSubtask.execution_order == args["ordem"]).first()
+        elif args.get("titulo_subtask"):
+            subs = q.filter(
+                BacklogSubtask.title.ilike(f"%{args['titulo_subtask']}%")).all()
+            if len(subs) > 1:
                 return json.dumps(
-                    {"erro": "task ambígua — use task_id",
-                     "candidatas": [{"id": str(x.id), "titulo": x.title,
-                                     "status": x.status} for x in ts]},
+                    {"erro": "match ambíguo — use a ordem",
+                     "candidatas": [{"ordem": x.execution_order,
+                                     "titulo": x.title} for x in subs]},
                     ensure_ascii=False)
-            t = ts[0] if ts else None
-        if s is None:
-            if not t:
-                return json.dumps(
-                    {"erro": "task não encontrada — informe subtask_id, "
-                             "task_id ou titulo_task"}, ensure_ascii=False)
-            q = (db.query(BacklogSubtask)
-                 .filter(BacklogSubtask.backlog_id == t.id))
-            if args.get("ordem") is not None:
-                s = q.filter(
-                    BacklogSubtask.execution_order == args["ordem"]).first()
-            elif args.get("titulo_subtask"):
-                subs = q.filter(
-                    BacklogSubtask.title.ilike(
-                        f"%{args['titulo_subtask']}%")).all()
-                if len(subs) > 1:
-                    return json.dumps(
-                        {"erro": "match ambíguo — use subtask_id ou ordem",
-                         "candidatas": [{"id": str(x.id),
-                                         "ordem": x.execution_order,
-                                         "titulo": x.title} for x in subs]},
-                        ensure_ascii=False)
-                s = subs[0] if subs else None
+            s = subs[0] if subs else None
         if not s:
             return json.dumps({"erro": "subtask não encontrada"},
                               ensure_ascii=False)
@@ -404,16 +364,11 @@ def chat_anthropic(messages: list, db: Session) -> str:
     for _ in range(12):
         resp = client.messages.create(
             model=ANTHROPIC_MODEL,
-            max_tokens=4096,
+            max_tokens=1024,
             system=SYSTEM,
             tools=TOOLS,
             messages=messages,
         )
-        if resp.stop_reason == "max_tokens":
-            txt = "".join(b.text for b in resp.content if b.type == "text")
-            return (txt + "\n\n[resposta truncada — limite de tokens]") \
-                if txt else ("Resposta truncada pelo limite de tokens — "
-                             "tente um pedido menor ou dividido.")
         if resp.stop_reason != "tool_use":
             return "".join(b.text for b in resp.content if b.type == "text")
         messages.append({"role": "assistant", "content": resp.content})
