@@ -28,11 +28,30 @@ def get_anthropic() -> Anthropic:
     return _anthropic_client
 
 
-def get_openai() -> OpenAI:
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = OpenAI()
-    return _openai_client
+_compat_clients: dict = {}
+
+COMPAT_PROVIDERS = {
+    "openai": {"base_url": None, "env_key": "OPENAI_API_KEY",
+               "default_model": OPENAI_MODEL},
+    "kimi": {"base_url": "https://api.moonshot.cn/v1",
+             "env_key": "MOONSHOT_API_KEY",
+             "default_model": os.getenv("KIMI_MODEL", "kimi-k2.6")},
+    "gemini": {"base_url": "https://generativelanguage.googleapis.com"
+                           "/v1beta/openai/",
+               "env_key": "GEMINI_API_KEY",
+               "default_model": os.getenv("GEMINI_MODEL",
+                                          "gemini-3.5-flash")},
+}
+
+
+def get_openai(provider: str = "openai") -> OpenAI:
+    if provider not in _compat_clients:
+        cfg = COMPAT_PROVIDERS[provider]
+        kwargs = {"api_key": os.getenv(cfg["env_key"])}
+        if cfg["base_url"]:
+            kwargs["base_url"] = cfg["base_url"]
+        _compat_clients[provider] = OpenAI(**kwargs)
+    return _compat_clients[provider]
 
 
 SYSTEM = (
@@ -60,6 +79,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     provider: str | None = None
+    model: str | None = None
     session_id: str | None = None
 TOOLS = [
     {
@@ -399,11 +419,11 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
     return json.dumps({"erro": "ferramenta desconhecida"})
 
 
-def chat_anthropic(messages: list, db: Session) -> str:
+def chat_anthropic(messages: list, db: Session, model: str | None = None) -> str:
     client = get_anthropic()
     for _ in range(12):
         resp = client.messages.create(
-            model=ANTHROPIC_MODEL,
+            model=model or ANTHROPIC_MODEL,
             max_tokens=4096,
             system=SYSTEM,
             tools=TOOLS,
@@ -443,12 +463,12 @@ def tools_openai() -> list:
     ]
 
 
-def chat_openai(messages: list, db: Session) -> str:
-    client = get_openai()
+def chat_openai(messages: list, db: Session, model: str | None = None, provider: str = "openai") -> str:
+    client = get_openai(provider)
     msgs = [{"role": "system", "content": SYSTEM}] + messages
     for _ in range(12):
         resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=model or COMPAT_PROVIDERS[provider]["default_model"],
             max_tokens=1024,
             tools=tools_openai(),
             messages=msgs,
@@ -491,11 +511,11 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
             db.commit()
 
     try:
-        if provider == "openai":
-            reply = chat_openai(messages, db)
+        if provider in COMPAT_PROVIDERS:
+            reply = chat_openai(messages, db, req.model, provider)
         else:
             provider = "anthropic"
-            reply = chat_anthropic(messages, db)
+            reply = chat_anthropic(messages, db, req.model)
     except Exception as e:
         reply = f"Erro no provider {provider}: {type(e).__name__} - {e}"
         return {"reply": reply, "provider": provider, "error": True,

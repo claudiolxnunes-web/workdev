@@ -18,6 +18,15 @@ export default function AIHub() {
     () => sessionStorage.getItem("workdev_chat_session")
   );
   const [input, setInput] = useState("");
+  const MODELOS = [
+    { label: "Claude Sonnet 4.6", provider: "anthropic", model: "claude-sonnet-4-6" },
+    { label: "Claude Haiku 4.5", provider: "anthropic", model: "claude-haiku-4-5-20251001" },
+    { label: "GPT-4o", provider: "openai", model: "gpt-4o" },
+    { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
+    { label: "Kimi K2.6", provider: "kimi", model: "kimi-k2.6" },
+    { label: "Gemini 3.5 Flash", provider: "gemini", model: "gemini-3.5-flash" },
+  ];
+  const [modelo, setModelo] = useState(MODELOS[0]);
   const [loading, setLoading] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const endRef = useRef<HTMLDivElement>(null);
@@ -76,7 +85,7 @@ export default function AIHub() {
       const r = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next, session_id: sessionId }),
+        body: JSON.stringify({ messages: next, session_id: sessionId, provider: modelo.provider, model: modelo.model }),
       });
       const data = await r.json();
       setMessages([
@@ -177,6 +186,17 @@ export default function AIHub() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
           />
+          <select
+            value={modelo.label}
+            onChange={(e) =>
+              setModelo(MODELOS.find((m) => m.label === e.target.value) || MODELOS[0])
+            }
+            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-3 text-sm text-slate-300"
+          >
+            {MODELOS.map((m) => (
+              <option key={m.label} value={m.label}>{m.label}</option>
+            ))}
+          </select>
           <button
             onClick={send}
             disabled={loading}
