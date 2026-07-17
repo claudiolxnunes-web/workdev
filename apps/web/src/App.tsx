@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Routes, Route, NavLink } from "react-router-dom"
 import ProjectDetails from "./pages/ProjectDetails"
@@ -14,6 +15,13 @@ import Settings from "./pages/Settings"
 import Backlog from "./pages/Backlog"
 
 function App() {
+  const [versao, setVersao] = useState("")
+  useEffect(() => {
+    fetch("/health")
+      .then((r) => r.json())
+      .then((d) => d.version && setVersao(`v${d.version}`))
+      .catch(() => {})
+  }, [])
   const menuClass =
     "block px-3 py-2 rounded-lg transition-colors hover:bg-slate-800"
 
@@ -32,7 +40,7 @@ function App() {
         </div>
 
         <Badge variant="secondary">
-          v0.2.0
+          {versao || "…"}
         </Badge>
       </header>
 
