@@ -157,13 +157,14 @@ TOOLS = [
     },
     {
         "name": "listar_subtasks",
-        "description": "Lista as subtasks de uma task do backlog",
+        "description": "Lista as subtasks de uma task do backlog. Prefira task_id (uuid) quando souber; senao use titulo_task. Se houver mais de uma task com titulo parecido, a tool devolve candidatas para voce pedir especificacao.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "titulo_task": {"type": "string"},
+                "task_id": {"type": "string", "description": "id (uuid) da task — prefira sempre que souber"},
+                "titulo_task": {"type": "string", "description": "titulo (ou parte unica) da task"},
             },
-            "required": ["titulo_task"],
+            "required": [],
         },
     },
     {
@@ -259,11 +260,26 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
                           ensure_ascii=False)
 
     if nome == "listar_subtasks":
-        t = (db.query(BacklogItem)
-             .filter(BacklogItem.title.ilike(f"%{args['titulo_task']}%"))
-             .first())
+        t = None
+        if args.get("task_id"):
+            t = db.query(BacklogItem).filter(
+                BacklogItem.id == args["task_id"]).first()
+            if not t:
+                return json.dumps({"erro": "task não encontrada por task_id"})
+        elif args.get("titulo_task"):
+            matches = (db.query(BacklogItem)
+                       .filter(BacklogItem.title.ilike(
+                           f"%{args['titulo_task']}%"))
+                       .all())
+            if len(matches) > 1:
+                return json.dumps(
+                    {"erro": "mais de uma task encontrada, especifique",
+                     "candidatas": [{"id": str(m.id), "titulo": m.title}
+                                    for m in matches]},
+                    ensure_ascii=False)
+            t = matches[0] if matches else None
         if not t:
-            return json.dumps({"erro": "task não encontrada"})
+            return json.dumps({"erro": "task não encontrada — informe task_id ou titulo_task"})
         subs = (db.query(BacklogSubtask)
                 .filter(BacklogSubtask.backlog_id == t.id)
                 .order_by(BacklogSubtask.execution_order).all())
