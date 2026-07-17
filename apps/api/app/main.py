@@ -10,6 +10,7 @@ from app.routers.subtasks import router as subtasks_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.chat_sessions import router as chat_sessions_router
 from app.routers.engineering import router as engineering_router
+from app.routers.deployments import router as deployments_router
 
 load_dotenv()
 API_KEY = os.getenv("WORKDEV_API_KEY")
@@ -35,6 +36,7 @@ app.include_router(subtasks_router, prefix="/api")
 app.include_router(knowledge_router, prefix="/api")
 app.include_router(chat_sessions_router, prefix="/api")
 app.include_router(engineering_router, prefix="/api")
+app.include_router(deployments_router, prefix="/api")
 
 
 @app.get("/health")

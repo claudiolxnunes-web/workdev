@@ -1,0 +1,50 @@
+[
+  {
+    "nome": "WorkDev",
+    "url": "https://workdev.bpfconsult.com.br/health",
+    "host": "VPS1",
+    "ambiente": "prod"
+  },
+  {
+    "nome": "BPF Suite (monolito)",
+    "url": "https://www.bpfconsult.com.br",
+    "host": "Lovable",
+    "ambiente": "prod"
+  },
+  {
+    "nome": "AUDITS_BPF",
+    "url": "https://friendly-flame-igniter.lovable.app",
+    "host": "Lovable",
+    "ambiente": "prod"
+  },
+  {
+    "nome": "Agro CRM",
+    "url": "https://soil-to-client.lovable.app",
+    "host": "Lovable",
+    "ambiente": "prod"
+  },
+  {
+    "nome": "Agent Hub Pro",
+    "url": "https://rapid-ai-ally.lovable.app",
+    "host": "Lovable",
+    "ambiente": "prod"
+  },
+  {
+    "nome": "NutriGestor CRM",
+    "url": "https://nutrigestor-crm.netlify.app",
+    "host": "Netlify",
+    "ambiente": "prod"
+  },
+  {
+    "nome": "Gerador de Rotulos",
+    "url": "https://www.bpfconsult.com.br/rotulos",
+    "host": "Lovable",
+    "ambiente": "prod"
+  },
+  {
+    "nome": "FeedOptimize",
+    "url": "https://feedoptimize.netlify.app",
+    "host": "Netlify",
+    "ambiente": "dev"
+  }
+]
