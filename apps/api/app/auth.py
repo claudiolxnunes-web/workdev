@@ -12,9 +12,9 @@ SESSION_TTL_SECONDS = int(os.getenv("WORKDEV_SESSION_TTL_SECONDS", "43200"))
 
 
 def _secret() -> bytes:
-    value = os.getenv("WORKDEV_SESSION_SECRET") or os.getenv("WORKDEV_API_KEY")
+    value = os.getenv("WORKDEV_SESSION_SECRET")
     if not value:
-        raise RuntimeError("WORKDEV_SESSION_SECRET ou WORKDEV_API_KEY não configurada")
+        raise RuntimeError("WORKDEV_SESSION_SECRET não configurada")
     return value.encode()
 
 
