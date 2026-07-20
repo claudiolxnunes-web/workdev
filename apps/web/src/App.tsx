@@ -6,7 +6,6 @@ import ProjectDetails from "./pages/ProjectDetails"
 import NewProject from "./pages/NewProject"
 import Dashboard from "./pages/Dashboard"
 import Projects from "./pages/Projects"
-import AIHub from "./pages/AIHub"
 import Knowledge from "./pages/Knowledge"
 import Deployments from "./pages/Deployments"
 import Monitoring from "./pages/Monitoring"
@@ -16,6 +15,7 @@ import Backlog from "./pages/Backlog"
 const EngineeringPage = lazy(() =>
   import('./modules/engineering').then((m) => ({ default: m.EngineeringPage }))
 )
+const AIHub = lazy(() => import("./pages/AIHub"))
 
 function App() {
   const [versao, setVersao] = useState("")
@@ -142,7 +142,14 @@ function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/projects" element={<Projects />} />
-            <Route path="/ai-hub" element={<AIHub />} />
+            <Route
+              path="/ai-hub"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <AIHub />
+                </Suspense>
+              }
+            />
             <Route path="/knowledge" element={<Knowledge />} />
             <Route
               path="/engineering"
