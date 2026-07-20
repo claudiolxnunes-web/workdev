@@ -8,16 +8,19 @@ export interface KnowledgeEntry {
   content: string;
   category: "decisao" | "licao" | "solucao" | "referencia";
   tags: string | null;
+  project_id: string | null;
   created_at: string;
 }
 
 export async function getKnowledge(
   categoria?: string,
-  termo?: string
+  termo?: string,
+  projectId?: string
 ): Promise<KnowledgeEntry[]> {
   const params = new URLSearchParams();
   if (categoria) params.set("categoria", categoria);
   if (termo) params.set("termo", termo);
+  if (projectId) params.set("project_id", projectId);
   const qs = params.toString() ? `?${params.toString()}` : "";
   const response = await fetch(`${API_URL}/api/knowledge${qs}`, { headers });
   if (!response.ok) throw new Error("Erro ao buscar conhecimento");

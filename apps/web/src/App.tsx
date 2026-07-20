@@ -1,7 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Routes, Route, NavLink } from "react-router-dom"
-import ProjectDetails from "./pages/ProjectDetails"
 
 import NewProject from "./pages/NewProject"
 import Dashboard from "./pages/Dashboard"
@@ -19,6 +18,7 @@ const AIHub = lazy(() => import("./pages/AIHub"))
 const AgentsPage = lazy(() =>
   import("./modules/agents").then((module) => ({ default: module.AgentsPage }))
 )
+const ProjectWorkspace = lazy(() => import("./pages/ProjectWorkspace"))
 
 function App() {
   const [versao, setVersao] = useState("")
@@ -190,7 +190,14 @@ function App() {
             <Route path="/deployments" element={<Deployments />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/settings" element={<Settings />} />
-            <Route path="/projects/:slug" element={<ProjectDetails />} />
+            <Route
+              path="/projects/:slug"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <ProjectWorkspace />
+                </Suspense>
+              }
+            />
             <Route path="/projects/new" element={<NewProject />} />
             <Route path="/backlog" element={<Backlog />} /> 
          </Routes>

@@ -20,6 +20,8 @@ export interface BacklogItem {
   effort?: number;
   sprint?: string;
   rank?: number;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export async function getBacklog(): Promise<BacklogItem[]> {
