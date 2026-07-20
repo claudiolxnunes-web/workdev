@@ -16,6 +16,9 @@ const EngineeringPage = lazy(() =>
   import('./modules/engineering').then((m) => ({ default: m.EngineeringPage }))
 )
 const AIHub = lazy(() => import("./pages/AIHub"))
+const AgentsPage = lazy(() =>
+  import("./modules/agents").then((module) => ({ default: module.AgentsPage }))
+)
 
 function App() {
   const [versao, setVersao] = useState("")
@@ -34,7 +37,7 @@ function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-white">
       {/* Header */}
-      <header className="border-b border-slate-800 px-8 py-4 flex justify-between items-center">
+      <header className="border-b border-slate-800 px-4 py-3 sm:px-8 sm:py-4 flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold">WorkDev Core</h1>
           <p className="text-slate-400 text-sm">
@@ -47,10 +50,10 @@ function App() {
         </Badge>
       </header>
 
-      <div className="flex">
+      <div className="flex flex-col md:flex-row">
         {/* Sidebar */}
-        <aside className="w-64 border-r border-slate-800 min-h-[calc(100vh-81px)] p-6">
-          <nav className="space-y-4">
+        <aside className="w-full border-b border-slate-800 p-2 md:w-64 md:border-b-0 md:border-r md:min-h-[calc(100vh-81px)] md:p-6">
+          <nav className="flex gap-1 overflow-x-auto md:block md:space-y-4">
 
             <NavLink
               to="/"
@@ -87,6 +90,15 @@ function App() {
               }
             >
               🤖 AI Hub
+            </NavLink>
+
+            <NavLink
+              to="/agents"
+              className={({ isActive }) =>
+                `${isActive ? activeMenuClass : menuClass} shrink-0`
+              }
+            >
+              💻 Agents
             </NavLink>
 
             <NavLink
@@ -138,7 +150,7 @@ function App() {
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 p-8">
+        <main className="min-w-0 flex-1 p-3 sm:p-5 md:p-8">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/projects" element={<Projects />} />
@@ -151,6 +163,14 @@ function App() {
               }
             />
             <Route path="/knowledge" element={<Knowledge />} />
+            <Route
+              path="/agents"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <AgentsPage />
+                </Suspense>
+              }
+            />
             <Route
               path="/engineering"
               element={

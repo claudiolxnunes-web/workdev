@@ -11,9 +11,11 @@ from app.routers.knowledge import router as knowledge_router
 from app.routers.chat_sessions import router as chat_sessions_router
 from app.routers.engineering import router as engineering_router
 from app.routers.deployments import router as deployments_router
+from app.routers.auth import router as auth_router
+from app.routers.terminal import router as terminal_router
+from app.auth import request_is_authenticated
 
 load_dotenv()
-API_KEY = os.getenv("WORKDEV_API_KEY")
 DIST = "/opt/workdev/apps/web/dist"
 
 app = FastAPI(title="WorkDev API", version="0.4.0")
@@ -21,10 +23,8 @@ app = FastAPI(title="WorkDev API", version="0.4.0")
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    if request.url.path.startswith("/api"):
-        same_origin = request.headers.get("sec-fetch-site") == "same-origin"
-        has_key = API_KEY and request.headers.get("X-API-Key") == API_KEY
-        if not (same_origin or has_key):
+    if request.url.path.startswith("/api") and request.url.path != "/api/auth/login":
+        if not request_is_authenticated(request):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
 
@@ -37,6 +37,8 @@ app.include_router(knowledge_router, prefix="/api")
 app.include_router(chat_sessions_router, prefix="/api")
 app.include_router(engineering_router, prefix="/api")
 app.include_router(deployments_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(terminal_router)
 
 
 @app.get("/health")

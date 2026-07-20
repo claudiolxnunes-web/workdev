@@ -3,6 +3,9 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
+.agent-terminal .xterm { height: 100%; }
+.agent-terminal .xterm-viewport { overscroll-behavior: contain; }
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
