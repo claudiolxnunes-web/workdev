@@ -190,7 +190,7 @@ function App() {
             <Route path="/deployments" element={<Deployments />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/settings" element={<Settings />} />
-            <Route path="/projects/feed_bpf" element={<ProjectDetails />} />
+            <Route path="/projects/:slug" element={<ProjectDetails />} />
             <Route path="/projects/new" element={<NewProject />} />
             <Route path="/backlog" element={<Backlog />} /> 
          </Routes>
