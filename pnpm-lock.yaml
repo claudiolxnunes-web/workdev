@@ -26,6 +26,9 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.110.7
         version: 2.110.7
+      '@workdev/engineering-graph':
+        specifier: workspace:*
+        version: link:../../packages/engineering-graph
       '@xterm/addon-fit':
         specifier: ^0.11.0
         version: 0.11.0

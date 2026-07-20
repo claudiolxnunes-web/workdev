@@ -11,7 +11,8 @@ export class GraphEventEmitter {
   private handlers: { [K in keyof GraphEvents]?: Handler<GraphEvents[K]>[] } = {};
 
   on<K extends keyof GraphEvents>(event: K, fn: Handler<GraphEvents[K]>): () => void {
-    (this.handlers[event] ??= []).push(fn);
+    const list = (this.handlers[event] ??= []) as Handler<GraphEvents[K]>[];
+    list.push(fn);
     return () => this.off(event, fn);
   }
 
