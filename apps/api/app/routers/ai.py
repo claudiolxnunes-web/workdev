@@ -517,6 +517,24 @@ def chat_openai(messages: list, db: Session, model: str | None = None, provider:
             })
     return "Não consegui concluir a operação (limite de passos)."
 
+@router.get("/ai/providers")
+def ai_providers():
+    providers = [
+        {"provider": "anthropic", "label": "Claude (Anthropic)",
+         "connected": bool(os.getenv("ANTHROPIC_API_KEY"))},
+        {"provider": "openai", "label": "OpenAI",
+         "connected": bool(os.getenv("OPENAI_API_KEY"))},
+        {"provider": "kimi", "label": "Kimi (Moonshot)",
+         "connected": bool(os.getenv("MOONSHOT_API_KEY"))},
+        {"provider": "gemini", "label": "Gemini",
+         "connected": bool(os.getenv("GEMINI_API_KEY"))},
+        {"provider": "openrouter", "label": "OpenRouter",
+         "connected": bool(os.getenv("OPENROUTER_API_KEY"))},
+    ]
+    connected = sum(1 for p in providers if p["connected"])
+    return {"providers": providers, "connected": connected, "total": len(providers)}
+
+
 class VozRequest(BaseModel):
     texto: str
 
