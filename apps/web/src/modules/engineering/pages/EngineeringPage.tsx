@@ -3,13 +3,13 @@ import { EngineeringLayout } from '../components/EngineeringLayout'
 import { useEngineeringContext } from '../components/EngineeringProvider'
 import { GraphExplorer } from '../../../components/graph'
 import { TimelineTab } from '../components/TimelineTab'
+import { ADRsTab } from '../components/ADRsTab'
 
 function EngineeringContent({ projectId }: { projectId?: string }) {
   const { activeTab } = useEngineeringContext()
 
   const placeholders: Record<string, string> = {
     'overview':  '📊 Overview — em breve',
-    'adrs':      '📋 ADRs — em breve',
     'rfcs':      '📝 RFCs — em breve',
     'decisions': '🧠 Decisions — em breve',
   }
@@ -27,6 +27,10 @@ function EngineeringContent({ projectId }: { projectId?: string }) {
 
   if (activeTab === 'timeline') {
     return <TimelineTab projectId={projectId} />
+  }
+
+  if (activeTab === 'adrs') {
+    return <ADRsTab projectId={projectId} />
   }
 
   return (

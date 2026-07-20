@@ -17,6 +17,7 @@ from app.models.project import Project  # noqa
 from app.models.backlog import BacklogItem  # noqa
 from app.models.subtask import BacklogSubtask  # noqa
 from app.models.knowledge import KnowledgeEntry  # noqa
+from app.models.adr import ADR  # noqa
 
 target_metadata = Base.metadata
 

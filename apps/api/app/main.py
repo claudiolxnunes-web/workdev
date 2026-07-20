@@ -13,6 +13,7 @@ from app.routers.engineering import router as engineering_router
 from app.routers.deployments import router as deployments_router
 from app.routers.auth import router as auth_router
 from app.routers.terminal import router as terminal_router
+from app.routers.adrs import router as adrs_router
 from app.auth import request_is_authenticated
 
 load_dotenv()
@@ -38,6 +39,7 @@ app.include_router(chat_sessions_router, prefix="/api")
 app.include_router(engineering_router, prefix="/api")
 app.include_router(deployments_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
+app.include_router(adrs_router, prefix="/api")
 app.include_router(terminal_router)
 
 
