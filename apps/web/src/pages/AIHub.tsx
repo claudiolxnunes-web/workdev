@@ -1,9 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-
-interface Msg {
-  role: "user" | "assistant";
-  content: string;
-}
+import { Trash2 } from "lucide-react";
+import { MessageBubble, type Msg } from "@/components/ai-hub";
 
 interface SessionMeta {
   id: string;
@@ -94,7 +91,7 @@ export default function AIHub() {
       const data = await r.json();
       setMessages([
         ...next,
-        { role: "assistant" as const, content: data.reply || "Erro na resposta" },
+        { role: "assistant" as const, content: data.reply || "Erro na resposta", error: !!data.error },
       ]);
       if (data.session_id) {
         setSessionId(data.session_id);
@@ -104,7 +101,7 @@ export default function AIHub() {
     } catch {
       setMessages([
         ...next,
-        { role: "assistant" as const, content: "Erro ao falar com a API" },
+        { role: "assistant" as const, content: "Erro ao falar com a API", error: true },
       ]);
     } finally {
       setLoading(false);
@@ -135,12 +132,13 @@ export default function AIHub() {
                     : "text-slate-400 hover:bg-slate-800"
                 }`}
               >
-                <span className="flex-1 truncate">{s.title}</span>
+                <span className="flex-1 truncate" title={s.title}>{s.title}</span>
                 <button
                   onClick={(e) => deleteSession(s.id, e)}
-                  className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-opacity"
+                  className="shrink-0 opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-opacity"
+                  title="Apagar conversa"
                 >
-                  ✕
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             ))}
@@ -158,7 +156,7 @@ export default function AIHub() {
           </button>
           <h1 className="text-3xl font-bold">AI Hub</h1>
         </div>
-        <div className="flex-1 overflow-y-auto space-y-4 bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div className="flex-1 min-w-0 overflow-y-auto space-y-4 bg-slate-900 border border-slate-800 rounded-xl p-4">
           {messages.length === 0 && (
             <p className="text-slate-500 text-sm">
               Converse com o WorkDev. Ex: "quantos itens high estão pendentes?",
@@ -166,17 +164,10 @@ export default function AIHub() {
             </p>
           )}
           {messages.map((m, i) => (
-            <div
-              key={i}
-              className={`max-w-[85%] rounded-xl px-4 py-2 whitespace-pre-wrap text-sm ${
-                m.role === "user" ? "bg-blue-600 ml-auto" : "bg-slate-800"
-              }`}
-            >
-              {m.content}
-            </div>
+            <MessageBubble key={i} msg={m} />
           ))}
           {loading && (
-            <div className="bg-slate-800 rounded-xl px-4 py-2 text-sm text-slate-400 max-w-[85%]">
+            <div className="max-w-[75%] rounded-2xl rounded-bl-sm bg-slate-800 px-4 py-2.5 text-sm text-slate-400">
               Pensando...
             </div>
           )}
