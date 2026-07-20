@@ -1,4 +1,49 @@
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { createProject } from "../services/projects.service";
+
+const TYPES = ["SaaS", "CRM", "Dashboard", "API"];
+const FRONTENDS = ["React", "NextJS", "Vue"];
+const BACKENDS = ["FastAPI", "NodeJS", "Django"];
+const DATABASES = ["PostgreSQL", "MySQL", "Supabase"];
+const DEPLOY_TARGETS = ["Hostinger VPS", "Vercel", "Netlify"];
+
 export default function NewProject() {
+  const navigate = useNavigate();
+  const [name, setName] = useState("");
+  const [type, setType] = useState(TYPES[0]);
+  const [frontend, setFrontend] = useState(FRONTENDS[0]);
+  const [backend, setBackend] = useState(BACKENDS[0]);
+  const [database, setDatabase] = useState(DATABASES[0]);
+  const [deployTarget, setDeployTarget] = useState(DEPLOY_TARGETS[0]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const inputCls =
+    "w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3";
+
+  async function create() {
+    if (!name.trim()) {
+      setError("Nome do projeto é obrigatório");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const project = await createProject({
+        name: name.trim(),
+        type,
+        stack: `${frontend} + ${backend} + ${database}`,
+        description: `Deploy target: ${deployTarget}`,
+      });
+      navigate(`/projects/${project.slug}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao criar projeto");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="max-w-3xl">
       <h1 className="text-4xl font-bold mb-8">
@@ -13,8 +58,11 @@ export default function NewProject() {
           </label>
 
           <input
-            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3"
+            className={inputCls}
             placeholder="Feed_BPF"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
           />
         </div>
 
@@ -23,11 +71,14 @@ export default function NewProject() {
             Project Type
           </label>
 
-          <select className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3">
-            <option>SaaS</option>
-            <option>CRM</option>
-            <option>Dashboard</option>
-            <option>API</option>
+          <select
+            className={inputCls}
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+          >
+            {TYPES.map((t) => (
+              <option key={t}>{t}</option>
+            ))}
           </select>
         </div>
 
@@ -36,10 +87,14 @@ export default function NewProject() {
             Frontend
           </label>
 
-          <select className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3">
-            <option>React</option>
-            <option>NextJS</option>
-            <option>Vue</option>
+          <select
+            className={inputCls}
+            value={frontend}
+            onChange={(e) => setFrontend(e.target.value)}
+          >
+            {FRONTENDS.map((f) => (
+              <option key={f}>{f}</option>
+            ))}
           </select>
         </div>
 
@@ -48,10 +103,14 @@ export default function NewProject() {
             Backend
           </label>
 
-          <select className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3">
-            <option>FastAPI</option>
-            <option>NodeJS</option>
-            <option>Django</option>
+          <select
+            className={inputCls}
+            value={backend}
+            onChange={(e) => setBackend(e.target.value)}
+          >
+            {BACKENDS.map((b) => (
+              <option key={b}>{b}</option>
+            ))}
           </select>
         </div>
 
@@ -60,10 +119,14 @@ export default function NewProject() {
             Database
           </label>
 
-          <select className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3">
-            <option>PostgreSQL</option>
-            <option>MySQL</option>
-            <option>Supabase</option>
+          <select
+            className={inputCls}
+            value={database}
+            onChange={(e) => setDatabase(e.target.value)}
+          >
+            {DATABASES.map((d) => (
+              <option key={d}>{d}</option>
+            ))}
           </select>
         </div>
 
@@ -72,15 +135,25 @@ export default function NewProject() {
             Deploy Target
           </label>
 
-          <select className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3">
-            <option>Hostinger VPS</option>
-            <option>Vercel</option>
-            <option>Netlify</option>
+          <select
+            className={inputCls}
+            value={deployTarget}
+            onChange={(e) => setDeployTarget(e.target.value)}
+          >
+            {DEPLOY_TARGETS.map((d) => (
+              <option key={d}>{d}</option>
+            ))}
           </select>
         </div>
 
-        <button className="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg font-semibold transition-colors">
-          Create Project
+        {error && <p className="text-red-400 text-sm">{error}</p>}
+
+        <button
+          onClick={create}
+          disabled={saving}
+          className="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg font-semibold transition-colors disabled:opacity-50"
+        >
+          {saving ? "Criando..." : "Create Project"}
         </button>
 
       </div>
