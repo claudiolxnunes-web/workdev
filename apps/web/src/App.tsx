@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, lazy, Suspense } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Routes, Route, NavLink } from "react-router-dom"
 import ProjectDetails from "./pages/ProjectDetails"
@@ -8,11 +8,14 @@ import Dashboard from "./pages/Dashboard"
 import Projects from "./pages/Projects"
 import AIHub from "./pages/AIHub"
 import Knowledge from "./pages/Knowledge"
-import { EngineeringPage } from './modules/engineering'
 import Deployments from "./pages/Deployments"
 import Monitoring from "./pages/Monitoring"
 import Settings from "./pages/Settings"
 import Backlog from "./pages/Backlog"
+
+const EngineeringPage = lazy(() =>
+  import('./modules/engineering').then((m) => ({ default: m.EngineeringPage }))
+)
 
 function App() {
   const [versao, setVersao] = useState("")
@@ -141,8 +144,22 @@ function App() {
             <Route path="/projects" element={<Projects />} />
             <Route path="/ai-hub" element={<AIHub />} />
             <Route path="/knowledge" element={<Knowledge />} />
-            <Route path="/engineering" element={<EngineeringPage />} />
-            <Route path="/projects/:projectId/engineering" element={<EngineeringPage />} />
+            <Route
+              path="/engineering"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <EngineeringPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/projects/:projectId/engineering"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <EngineeringPage />
+                </Suspense>
+              }
+            />
             <Route path="/deployments" element={<Deployments />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/settings" element={<Settings />} />

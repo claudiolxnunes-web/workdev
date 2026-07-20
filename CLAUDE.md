@@ -34,10 +34,12 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
      anon key em `createClient(url, key)`, revogável individualmente sem
      regerar o JWT secret do projeto). Bundle buildado confirmado sem
      `service_role` nem os JWTs antigos (anon/service_role).
-   - ⚠️ **Pendência remanescente:** a service_role key antiga **não foi
-     rotacionada no dashboard do Supabase** — só foi removida do `.env`. Se ela
-     vazou antes disso (histórico do bundle, cache de CDN, git history), continua
-     válida até ser revogada/regenerada em Project Settings → API Keys.
+   - ✅ **Legacy API keys desativadas em 2026-07-20T12:31:44Z.** Confirmado por
+     teste direto: a antiga service_role key agora retorna HTTP 401
+     `"Legacy API keys are disabled"`. As legacy anon/service_role JWT desse
+     projeto (inclusive a que vazou no bundle) estão inválidas; só as chaves
+     novas (`sb_publishable_...` / `sb_secret_...`) funcionam. Pendência de
+     segurança encerrada.
 2. **NutriGestor CRM** (`ngrepqqlvglzqnoswfug`): projeto separado, não relacionado
    ao WorkDev.
 - Postgres principal do WorkDev (backlog, projects, chat) é o container `postgres`
@@ -70,9 +72,6 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 - Idioma de trabalho: português (Brasil).
 
 ## Pendências conhecidas (não fazer sem pedir)
-- Rotacionar/revogar a service_role key antiga do projeto `cxqfwswartqqwsanceaj`
-  no dashboard do Supabase (ver seção "Bancos de dados" acima — já saiu do
-  `.env`, mas o segredo em si ainda é válido até ser revogado lá).
 - Code-split do bundle `apps/web` (>500kB, aviso do Vite — candidato óbvio é a
   rota Engineering por causa do `@xyflow/react`).
 - Melhorias de UI no AI Hub (markdown nas mensagens, bolhas de chat, erros
