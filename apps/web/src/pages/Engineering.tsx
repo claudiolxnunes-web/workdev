@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getEngineeringStatus } from "../services/engineering.service";
 import type { EngineeringStatus } from "../services/engineering.service";
+import { GraphExplorer } from "../components/graph";
 
 const modules = [
   { title: "Architecture", description: "System architecture and technical decisions." },
@@ -125,6 +126,13 @@ export default function Engineering() {
           )}
         </div>
       )}
+    
+      <div className="mt-8 bg-slate-900 border border-slate-800 rounded-xl p-6">
+        <h2 className="text-lg font-semibold mb-4">Engineering Graph</h2>
+        <div style={{ height: 520 }}>
+          <GraphExplorer project_id="" />
+        </div>
+      </div>
     </div>
   );
 }

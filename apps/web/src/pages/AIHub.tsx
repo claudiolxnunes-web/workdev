@@ -28,7 +28,7 @@ export default function AIHub() {
     { label: "Kimi K3 (OpenRouter)", provider: "openrouter", model: "moonshotai/kimi-k3" },
     { label: "Gemini 3.5 Flash", provider: "gemini", model: "gemini-3.5-flash" },
     { label: "Nemotron Ultra 550B (free)", provider: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b:free" },
-    { label: "Qwen3 Coder (free)", provider: "openrouter", model: "qwen/qwen3-coder:free" },
+    { label: "Qwen3 Coder", provider: "openrouter", model: "qwen/qwen3-coder" },
   ];
   const [modelo, setModelo] = useState(MODELOS[0]);
   const [loading, setLoading] = useState(false);

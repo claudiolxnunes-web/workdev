@@ -8,7 +8,7 @@ import Dashboard from "./pages/Dashboard"
 import Projects from "./pages/Projects"
 import AIHub from "./pages/AIHub"
 import Knowledge from "./pages/Knowledge"
-import Engineering from "./pages/Engineering"
+import { EngineeringPage } from './modules/engineering'
 import Deployments from "./pages/Deployments"
 import Monitoring from "./pages/Monitoring"
 import Settings from "./pages/Settings"
@@ -141,7 +141,8 @@ function App() {
             <Route path="/projects" element={<Projects />} />
             <Route path="/ai-hub" element={<AIHub />} />
             <Route path="/knowledge" element={<Knowledge />} />
-            <Route path="/engineering" element={<Engineering />} />
+            <Route path="/engineering" element={<EngineeringPage />} />
+            <Route path="/projects/:projectId/engineering" element={<EngineeringPage />} />
             <Route path="/deployments" element={<Deployments />} />
             <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/settings" element={<Settings />} />
