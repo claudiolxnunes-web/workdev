@@ -152,7 +152,9 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
           Nenhum dado sincronizado para este projeto.
         </div>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className={`grid gap-4 transition-[grid-template-columns] duration-300 ${
+          selectedNode ? "xl:grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-1"
+        }`}>
           <div className="h-[560px] overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
             <ReactFlow
               nodes={nodes}
@@ -172,9 +174,9 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
                 pannable
                 zoomable
               />
-              <Panel position="top-left" className="!m-3 max-w-[190px] rounded-lg border border-slate-700 bg-slate-950/95 p-2 shadow-xl">
-                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Filtrar tipos</p>
-                <div className="flex flex-wrap gap-1.5">
+              <Panel position="bottom-center" className="!m-2 max-w-[calc(100%-120px)] overflow-x-auto rounded-full border border-slate-700 bg-slate-950/90 px-2 py-1.5 shadow-xl backdrop-blur">
+                <div className="flex items-center gap-1 whitespace-nowrap">
+                  <span className="px-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Tipos</span>
                   {activeTypes.map((type) => {
                     const hidden = hiddenTypes.has(type);
                     return (
@@ -183,7 +185,8 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
                         key={type}
                         onClick={() => toggleType(type)}
                         aria-pressed={!hidden}
-                        className={`flex items-center gap-1 rounded px-1.5 py-1 text-[10px] transition-opacity ${hidden ? "opacity-35" : "opacity-100"}`}
+                        title={`${hidden ? "Mostrar" : "Ocultar"} ${typeLabels[type] ?? type}`}
+                        className={`flex items-center gap-1 rounded-full px-1.5 py-1 text-[9px] transition-all hover:bg-slate-800 ${hidden ? "opacity-30 grayscale" : "opacity-100"}`}
                       >
                         <span className="h-2.5 w-2.5 rounded-full" style={{ background: NODE_VISUALS[type]?.color ?? "#64748b" }} />
                         {typeLabels[type] ?? type}
@@ -195,14 +198,19 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
             </ReactFlow>
           </div>
 
-          <aside className="max-h-[560px] overflow-y-auto rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <h3 className="font-semibold">Time Machine</h3>
-            {!selectedNode ? (
-              <p className="mt-3 text-sm text-slate-500">
-                Selecione um nó para reconstruir sua linha do tempo completa.
-              </p>
-            ) : (
-              <>
+          {selectedNode && (
+            <aside className="max-h-[560px] animate-in slide-in-from-right-4 fade-in overflow-y-auto rounded-xl border border-slate-800 bg-slate-900 p-4 duration-300">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-semibold">Time Machine</h3>
+                <button
+                  type="button"
+                  onClick={() => selectNode(null)}
+                  className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-800 hover:text-white"
+                  aria-label="Fechar Time Machine e recolher nó"
+                >
+                  ×
+                </button>
+              </div>
                 <p className="mt-1 text-xs text-slate-500">
                   {selectedNode.type} · {selectedNode.entity_id.slice(0, 8)}
                 </p>
@@ -215,9 +223,8 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
                     </li>
                   ))}
                 </ol>
-              </>
-            )}
-          </aside>
+            </aside>
+          )}
         </div>
       )}
     </div>
