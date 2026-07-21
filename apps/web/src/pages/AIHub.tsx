@@ -16,6 +16,7 @@ export default function AIHub() {
   );
   const [input, setInput] = useState("");
   const MODELOS = [
+    { label: "GPT-OSS 20B (Ollama Cloud)", provider: "ollama", model: "gpt-oss:20b" },
     { label: "Claude Sonnet 4.6", provider: "anthropic", model: "claude-sonnet-4-6" },
     { label: "Claude Haiku 4.5", provider: "anthropic", model: "claude-haiku-4-5-20251001" },
     { label: "GPT-4o", provider: "openai", model: "gpt-4o" },

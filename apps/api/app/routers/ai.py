@@ -49,6 +49,10 @@ COMPAT_PROVIDERS = {
                    "env_key": "OPENROUTER_API_KEY",
                    "default_model": os.getenv("OPENROUTER_MODEL",
                                               "moonshotai/kimi-k3")},
+    "ollama": {"base_url": "https://ollama.com/v1/",
+               "env_key": "OLLAMA_API_KEY",
+               "default_model": os.getenv("OLLAMA_MODEL",
+                                            "gpt-oss:20b")},
 }
 
 
@@ -742,6 +746,8 @@ def ai_providers():
          "connected": bool(os.getenv("GEMINI_API_KEY"))},
         {"provider": "openrouter", "label": "OpenRouter",
          "connected": bool(os.getenv("OPENROUTER_API_KEY"))},
+        {"provider": "ollama", "label": "Ollama Cloud",
+         "connected": bool(os.getenv("OLLAMA_API_KEY"))},
     ]
     connected = sum(1 for p in providers if p["connected"])
     return {"providers": providers, "connected": connected, "total": len(providers)}
