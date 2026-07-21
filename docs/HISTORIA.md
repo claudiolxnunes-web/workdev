@@ -101,8 +101,7 @@ NutriGestor CRM são INTEGRADOS ao WorkDev, nunca migrados para dentro dele.
 - Backend preparado para sincronizar automaticamente Project, Task, Subtask,
   Knowledge, ADR, RFC, Decision, Commit, Deployment e Monitoring.
 - Fase 3 ativada com `SUPABASE_SECRET_KEY` nova, RLS e publicação Realtime.
-  Permanece pendente apenas executar `POST /api/engineering/graph/sync` para o
-  backfill completo do histórico.
+  Backfill completo executado — ver entrada abaixo.
 
 ## Handoff PLAN → BUILD (21/07/2026)
 
@@ -128,6 +127,37 @@ NutriGestor CRM são INTEGRADOS ao WorkDev, nunca migrados para dentro dele.
 - `scripts/start_kimi_agent.sh` lê `MOONSHOT_API_KEY` do backend sem duplicar ou
   expor a chave e desativa telemetria da CLI.
 - `AGENTS.md` unifica as instruções de segurança e execução dos três Agents.
+
+## Correções de produção e Engineering Realtime de ponta a ponta (21/07/2026)
+
+- Incidente descoberto e corrigido: `DATABASE_URL` apontava para o IP de bridge
+  Docker `172.17.0.1`, que sumiu após um reboot — toda rota `/api/*` que
+  tocasse o Postgres travava indefinidamente (sem erro, sem timeout),
+  enquanto `/health` (sem banco) mascarava o problema respondendo normal.
+  Trocado para `127.0.0.1:5432` (porta publicada pelo container no host, não
+  depende mais de qual bridge o Docker realocar); `workdev-api` reiniciado e
+  validado.
+- `SUPABASE_SECRET_KEY` rotacionada (a anterior estava inválida — "Invalid
+  API key", possivelmente de outro projeto Supabase) e testada com leitura E
+  escrita reais no Supabase antes de salvar.
+- Descompasso de UUID corrigido: a tabela `projects` do Supabase do grafo só
+  tinha o WorkDev Core com um `id` diferente do UUID real no Postgres —
+  qualquer sync falhava com violação de FK. Inserida uma segunda linha com o
+  UUID real (`slug=workdev-core-pg`), linha antiga preservada intacta. Sync
+  validado ponta a ponta: ADR criado via API gerou o nó correspondente em
+  `graph_nodes` automaticamente.
+- Backfill executado (`POST /api/engineering/graph/sync`): 133 nós
+  sincronizados, 14 falhas — todas pelo mesmo motivo esperado (os outros 5
+  projetos ainda não têm linha na tabela `projects` do grafo).
+- Nó de teste órfão (criado durante a validação do sync, projeto já deletado
+  do Postgres) removido manualmente do grafo — não existe cascade automático
+  entre a exclusão no Postgres e o grafo Supabase ainda.
+- `/api/settings` corrigido: a rota estava registrada com barra final
+  (`/api/settings/`), incompatível com o `fetch('/api/settings')` do
+  frontend — a chamada caía no fallback da SPA e recebia HTML como se fosse
+  sucesso (HTTP 200). `config_service.py` também resolvia a raiz do projeto
+  uma pasta acima do correto (`apps/config` em vez de `/opt/workdev/config`),
+  então mesmo com a rota certa a resposta vinha vazia (`{}`).
 
 ## Backlog de evolução (registrado)
 - Persistir histórico do AI Hub; auto-refresh do kanban
