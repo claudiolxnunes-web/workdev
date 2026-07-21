@@ -174,9 +174,9 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
                 pannable
                 zoomable
               />
-              <Panel position="bottom-center" className="!m-2 max-w-[calc(100%-120px)] overflow-x-auto rounded-full border border-slate-700 bg-slate-950/90 px-2 py-1.5 shadow-xl backdrop-blur">
-                <div className="flex items-center gap-1 whitespace-nowrap">
-                  <span className="px-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Tipos</span>
+              <Panel position="top-center" className="!m-2 w-[calc(100%_-_1rem)] max-w-3xl overflow-x-auto rounded-full border border-slate-700 bg-slate-950/90 px-2 py-1.5 shadow-xl backdrop-blur">
+                <div className="flex min-w-max items-center justify-center gap-1 whitespace-nowrap">
+                  <span className="hidden px-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:inline">Tipos</span>
                   {activeTypes.map((type) => {
                     const hidden = hiddenTypes.has(type);
                     return (
@@ -186,10 +186,10 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
                         onClick={() => toggleType(type)}
                         aria-pressed={!hidden}
                         title={`${hidden ? "Mostrar" : "Ocultar"} ${typeLabels[type] ?? type}`}
-                        className={`flex items-center gap-1 rounded-full px-1.5 py-1 text-[9px] transition-all hover:bg-slate-800 ${hidden ? "opacity-30 grayscale" : "opacity-100"}`}
+                        className={`flex items-center gap-1 rounded-full p-1 text-[9px] transition-all hover:bg-slate-800 sm:px-1.5 ${hidden ? "opacity-30 grayscale" : "opacity-100"}`}
                       >
                         <span className="h-2.5 w-2.5 rounded-full" style={{ background: NODE_VISUALS[type]?.color ?? "#64748b" }} />
-                        {typeLabels[type] ?? type}
+                        <span className="hidden sm:inline">{typeLabels[type] ?? type}</span>
                       </button>
                     );
                   })}
