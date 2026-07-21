@@ -47,7 +47,12 @@ async def _send_output(websocket: WebSocket, master_fd: int) -> None:
             return
         if not data:
             return
-        await websocket.send_bytes(data)
+        try:
+            await websocket.send_bytes(data)
+        except Exception:
+            # The browser may disconnect while PTY output is still in flight.
+            # Treat that as a normal end-of-stream so terminal cleanup can run.
+            return
 
 
 def _current_process(session: str) -> str:
@@ -122,20 +127,24 @@ async def agent_terminal(websocket: WebSocket, agent: str):
     except WebSocketDisconnect:
         pass
     finally:
-        if output_task:
-            output_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await output_task
-        if process and process.poll() is None:
-            process.terminate()
-            with suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=2)
-            if process.poll() is None:
-                process.kill()
-        if master_fd >= 0:
-            with suppress(OSError):
-                os.close(master_fd)
-        if slave_fd >= 0:
-            with suppress(OSError):
-                os.close(slave_fd)
-        await _release(session)
+        try:
+            if output_task:
+                output_task.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await output_task
+            if process and process.poll() is None:
+                with suppress(OSError):
+                    process.terminate()
+                with suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=2)
+                if process.poll() is None:
+                    with suppress(OSError):
+                        process.kill()
+            if master_fd >= 0:
+                with suppress(OSError):
+                    os.close(master_fd)
+            if slave_fd >= 0:
+                with suppress(OSError):
+                    os.close(slave_fd)
+        finally:
+            await _release(session)
