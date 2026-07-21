@@ -87,6 +87,23 @@ NutriGestor CRM são INTEGRADOS ao WorkDev, nunca migrados para dentro dele.
 - Terminal Hostinger embaralha colagens grandes → heredocs em partes,
   ou patches via sed/python3
 
+## Engineering Graph — fases 1, 2 e 4 (21/07/2026)
+
+- Modelo e migration Supabase documentados para `graph_nodes`/`graph_edges`,
+  com RLS somente leitura no frontend e publicação Realtime.
+- `@workdev/engineering-graph` consolidado com mutations, queries, timeline,
+  eventos, Overview e testes unitários.
+- Engineering Module completo: Overview, Timeline, Graph Explorer, ADRs,
+  RFCs, Decisions, visualizações por Feature/Release e Time Machine.
+- ADRs e RFCs agora podem ser ligados a Features, e Knowledge a uma task do
+  backlog; migrations PostgreSQL `b18c3f9e7210` e `af39d82c1107` aplicadas,
+  com Alembic sem drift.
+- Backend preparado para sincronizar automaticamente Project, Task, Subtask,
+  Knowledge, ADR, RFC, Decision, Commit, Deployment e Monitoring.
+- Fase 3 permanece bloqueada apenas para ativação: falta configurar uma
+  `SUPABASE_SECRET_KEY`, aplicar a migration Realtime no Supabase e executar
+  `POST /api/engineering/graph/sync` com os IDs reais do PostgreSQL.
+
 ## Backlog de evolução (registrado)
 - Persistir histórico do AI Hub; auto-refresh do kanban
 - Tool node agente_workdev no coordenador LangGraph do VPS2 (voz→backlog)

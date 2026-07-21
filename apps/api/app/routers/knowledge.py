@@ -33,4 +33,5 @@ def listar_conhecimento(categoria: str | None = None,
     return [{"id": str(r.id), "title": r.title, "content": r.content,
              "category": r.category, "tags": r.tags,
              "project_id": str(r.project_id) if r.project_id else None,
+             "backlog_id": str(r.backlog_id) if r.backlog_id else None,
              "created_at": str(r.created_at)} for r in rs]

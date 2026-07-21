@@ -1,4 +1,4 @@
-export * from "./types";
-export { graphClient } from "./client";
-export { EngineeringGraphService, graphService } from "./EngineeringGraphService";
-export { GraphEventEmitter, graphEvents } from "./GraphEventEmitter";
+export * from "./types.ts";
+export { graphClient } from "./client.ts";
+export { EngineeringGraphService, graphService } from "./EngineeringGraphService.ts";
+export { GraphEventEmitter, graphEvents } from "./GraphEventEmitter.ts";

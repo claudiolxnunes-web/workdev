@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { getRFCs, createRFC } from "../../../services/rfcs.service";
 import type { RFC, RFCStatus } from "../../../services/rfcs.service";
+import { getBacklog } from "../../../services/backlog.service";
+import type { BacklogItem } from "../../../services/backlog.service";
 
 const STATUSES: RFCStatus[] = ["draft", "review", "accepted", "rejected"];
 
@@ -21,6 +23,8 @@ export function RFCsTab({ projectId }: { projectId?: string }) {
   const [proposal, setProposal] = useState("");
   const [consequences, setConsequences] = useState("");
   const [status, setStatus] = useState<RFCStatus>("draft");
+  const [featureId, setFeatureId] = useState("");
+  const [features, setFeatures] = useState<BacklogItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -35,6 +39,11 @@ export function RFCsTab({ projectId }: { projectId?: string }) {
 
   useEffect(() => {
     load();
+    getBacklog()
+      .then((items) => setFeatures(items.filter(
+        (item) => item.project_id === projectId && item.type === "feature",
+      )))
+      .catch(() => setFeatures([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -52,6 +61,7 @@ export function RFCsTab({ projectId }: { projectId?: string }) {
     try {
       await createRFC({
         project_id: projectId,
+        feature_id: featureId || undefined,
         title: title.trim(),
         context: context.trim(),
         proposal: proposal.trim(),
@@ -63,6 +73,7 @@ export function RFCsTab({ projectId }: { projectId?: string }) {
       setProposal("");
       setConsequences("");
       setStatus("draft");
+      setFeatureId("");
       load();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Erro ao criar RFC");
@@ -112,6 +123,16 @@ export function RFCsTab({ projectId }: { projectId?: string }) {
             value={consequences}
             onChange={(e) => setConsequences(e.target.value)}
           />
+          <select
+            className={inputCls}
+            value={featureId}
+            onChange={(e) => setFeatureId(e.target.value)}
+          >
+            <option value="">Vincular ao projeto (sem Feature específica)</option>
+            {features.map((feature) => (
+              <option key={feature.id} value={feature.id}>{feature.title}</option>
+            ))}
+          </select>
           <select
             className={inputCls}
             value={status}

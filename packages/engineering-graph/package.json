@@ -1,7 +1,11 @@
 {
   "name": "@workdev/engineering-graph",
   "version": "0.1.0",
+  "type": "module",
   "main": "index.ts",
   "types": "index.ts",
+  "scripts": {
+    "test": "node EngineeringGraphService.test.ts"
+  },
   "dependencies": { "@supabase/supabase-js": "^2.45.0" }
 }

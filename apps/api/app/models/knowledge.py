@@ -11,6 +11,9 @@ class KnowledgeEntry(Base):
     project_id = Column(UUID(as_uuid=True),
                         ForeignKey("projects.id", ondelete="SET NULL"),
                         nullable=True, index=True)
+    backlog_id = Column(UUID(as_uuid=True),
+                        ForeignKey("backlog.id", ondelete="SET NULL"),
+                        nullable=True, index=True)
     title = Column(String(255), nullable=False)
     content = Column(Text, nullable=False)
     category = Column(String(20), nullable=False, server_default="licao")

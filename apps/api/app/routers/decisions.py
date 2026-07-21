@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models.decision import Decision
 from app.models.project import Project
+from app.services.engineering_graph import graph_sync
 
 router = APIRouter()
 
@@ -32,7 +33,8 @@ def list_decisions(project_id: str | None = None, db: Session = Depends(get_db))
 
 
 @router.post("/decisions", status_code=201)
-def create_decision(payload: DecisionCreate, db: Session = Depends(get_db)):
+def create_decision(payload: DecisionCreate, background_tasks: BackgroundTasks,
+                    db: Session = Depends(get_db)):
     if not db.query(Project).filter(Project.id == payload.project_id).first():
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -40,6 +42,14 @@ def create_decision(payload: DecisionCreate, db: Session = Depends(get_db)):
     db.add(decision)
     db.commit()
     db.refresh(decision)
+    background_tasks.add_task(
+        graph_sync.sync_safely,
+        "sync_related",
+        "Decision",
+        str(decision.id),
+        str(decision.project_id),
+        "HAS_DECISION",
+    )
     return decision
 
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from uuid import UUID
@@ -6,6 +6,7 @@ from app.database import SessionLocal
 from app.models.backlog import BacklogItem
 from app.models.project import Project
 from app.schemas.backlog import BacklogCreate, BacklogUpdate, BacklogOut
+from app.services.engineering_graph import graph_sync
 
 router = APIRouter()
 
@@ -40,13 +41,21 @@ def project_backlog(project_slug: str, db: Session = Depends(get_db)):
 
 
 @router.post("/backlog", response_model=BacklogOut, status_code=201)
-def create_item(item: BacklogCreate, db: Session = Depends(get_db)):
+def create_item(item: BacklogCreate, background_tasks: BackgroundTasks,
+                db: Session = Depends(get_db)):
     if not db.query(Project).filter(Project.id == item.project_id).first():
         raise HTTPException(404, "Project not found")
     obj = BacklogItem(**item.model_dump())
     db.add(obj)
     db.commit()
     db.refresh(obj)
+    background_tasks.add_task(
+        graph_sync.sync_safely,
+        "sync_backlog",
+        str(obj.id),
+        str(obj.project_id),
+        obj.type,
+    )
     return obj
 
 

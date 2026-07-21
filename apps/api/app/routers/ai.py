@@ -11,6 +11,7 @@ from app.models.backlog import BacklogItem
 from app.models.subtask import BacklogSubtask
 from app.models.knowledge import KnowledgeEntry
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
+from app.services.engineering_graph import graph_sync
 
 router = APIRouter()
 
@@ -140,6 +141,8 @@ TOOLS = [
                 "categoria": {"type": "string", "enum": ["decisao", "licao", "solucao", "referencia"]},
                 "tags": {"type": "string", "description": "separadas por virgula, ex: docker,ufw"},
                 "projeto_slug": {"type": "string", "description": "opcional; omitir se global"},
+                "task_id": {"type": "string", "description": "opcional; UUID da task relacionada"},
+                "titulo_task": {"type": "string", "description": "opcional; título exato da task relacionada"},
             },
             "required": ["titulo", "conteudo", "categoria"],
         },
@@ -241,6 +244,9 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
         )
         db.add(item)
         db.commit()
+        graph_sync.sync_safely(
+            "sync_backlog", str(item.id), str(item.project_id), item.type
+        )
         return json.dumps({"ok": True, "titulo": item.title, "projeto": p.name},
                           ensure_ascii=False)
 
@@ -251,11 +257,21 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
         if not t:
             return json.dumps({"erro": "task não encontrada"})
         criadas = []
+        objetos = []
         for i, titulo in enumerate(args["subtasks"], start=1):
-            db.add(BacklogSubtask(backlog_id=t.id, title=titulo,
-                                  execution_order=i))
+            subtask = BacklogSubtask(backlog_id=t.id, title=titulo,
+                                     execution_order=i)
+            db.add(subtask)
+            objetos.append(subtask)
             criadas.append(titulo)
         db.commit()
+        for subtask in objetos:
+            graph_sync.sync_safely(
+                "sync_subtask",
+                str(subtask.id),
+                str(t.id),
+                str(t.project_id),
+            )
         return json.dumps({"ok": True, "task": t.title, "subtasks": criadas},
                           ensure_ascii=False)
 
@@ -293,12 +309,39 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
 
     if nome == "registrar_conhecimento":
         pid = None
+        backlog_id = None
         if args.get("projeto_slug"):
             p = db.query(Project).filter(Project.slug == args["projeto_slug"]).first()
             if p:
                 pid = p.id
+        task = None
+        if args.get("task_id"):
+            task = db.query(BacklogItem).filter(
+                BacklogItem.id == args["task_id"]
+            ).first()
+        elif args.get("titulo_task"):
+            query = db.query(BacklogItem).filter(
+                BacklogItem.title.ilike(args["titulo_task"])
+            )
+            if pid:
+                query = query.filter(BacklogItem.project_id == pid)
+            matches = query.all()
+            if len(matches) > 1:
+                return json.dumps(
+                    {"erro": "mais de uma task encontrada para o conhecimento"},
+                    ensure_ascii=False,
+                )
+            task = matches[0] if matches else None
+        if args.get("task_id") or args.get("titulo_task"):
+            if not task:
+                return json.dumps({"erro": "task relacionada não encontrada"})
+            if pid and task.project_id != pid:
+                return json.dumps({"erro": "task não pertence ao projeto informado"})
+            pid = task.project_id
+            backlog_id = task.id
         entry = KnowledgeEntry(
             project_id=pid,
+            backlog_id=backlog_id,
             title=args["titulo"],
             content=args["conteudo"],
             category=args["categoria"],
@@ -306,6 +349,15 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
         )
         db.add(entry)
         db.commit()
+        if entry.project_id:
+            graph_sync.sync_safely(
+                "sync_related",
+                "Knowledge",
+                str(entry.id),
+                str(entry.project_id),
+                "LINKED_TO_KNOWLEDGE",
+                str(entry.backlog_id) if entry.backlog_id else None,
+            )
         return json.dumps({"ok": True, "titulo": entry.title,
                            "categoria": entry.category}, ensure_ascii=False)
 

@@ -21,12 +21,12 @@ export function EngineeringLayout({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-slate-800 pb-2">
+      <div className="flex gap-2 overflow-x-auto border-b border-slate-800 pb-2">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 rounded-t-lg text-sm font-medium transition-colors ${
+            className={`shrink-0 px-4 py-2 rounded-t-lg text-sm font-medium transition-colors ${
               activeTab === tab.id
                 ? 'bg-slate-800 text-white'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'

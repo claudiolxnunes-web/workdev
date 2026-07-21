@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { getADRs, createADR } from "../../../services/adrs.service";
 import type { ADR, ADRStatus } from "../../../services/adrs.service";
+import { getBacklog } from "../../../services/backlog.service";
+import type { BacklogItem } from "../../../services/backlog.service";
 
 const STATUSES: ADRStatus[] = ["proposed", "accepted", "deprecated", "superseded"];
 
@@ -21,6 +23,8 @@ export function ADRsTab({ projectId }: { projectId?: string }) {
   const [decision, setDecision] = useState("");
   const [consequences, setConsequences] = useState("");
   const [status, setStatus] = useState<ADRStatus>("proposed");
+  const [featureId, setFeatureId] = useState("");
+  const [features, setFeatures] = useState<BacklogItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -35,6 +39,11 @@ export function ADRsTab({ projectId }: { projectId?: string }) {
 
   useEffect(() => {
     load();
+    getBacklog()
+      .then((items) => setFeatures(items.filter(
+        (item) => item.project_id === projectId && item.type === "feature",
+      )))
+      .catch(() => setFeatures([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -52,6 +61,7 @@ export function ADRsTab({ projectId }: { projectId?: string }) {
     try {
       await createADR({
         project_id: projectId,
+        feature_id: featureId || undefined,
         title: title.trim(),
         context: context.trim(),
         decision: decision.trim(),
@@ -63,6 +73,7 @@ export function ADRsTab({ projectId }: { projectId?: string }) {
       setDecision("");
       setConsequences("");
       setStatus("proposed");
+      setFeatureId("");
       load();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Erro ao criar ADR");
@@ -112,6 +123,16 @@ export function ADRsTab({ projectId }: { projectId?: string }) {
             value={consequences}
             onChange={(e) => setConsequences(e.target.value)}
           />
+          <select
+            className={inputCls}
+            value={featureId}
+            onChange={(e) => setFeatureId(e.target.value)}
+          >
+            <option value="">Vincular ao projeto (sem Feature específica)</option>
+            {features.map((feature) => (
+              <option key={feature.id} value={feature.id}>{feature.title}</option>
+            ))}
+          </select>
           <select
             className={inputCls}
             value={status}

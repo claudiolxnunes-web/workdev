@@ -14,8 +14,19 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 ## Infraestrutura
 - **VPS1** (`srv1749939`, IP 2.25.199.80, Ubuntu 24.04): Traefik, PostgreSQL (container
   `postgres`, user `evolution`, db `workdev`), Redis, Evolution API, WorkDev em si
-  (`/opt/workdev`). `workdev-api.service` (systemd) bind em `172.17.0.1`/rede docker,
-  ajustar via `evolution_evo-net` bridge se IP mudar em reboot.
+  (`/opt/workdev`).
+  - ✅ **Corrigido em 2026-07-21:** `DATABASE_URL` em `apps/api/.env` apontava para o
+    IP de bridge Docker `172.17.0.1`, que parou de existir depois de um reboot
+    (`evolution_evo-net` migrou para `172.18.0.0/16`, `docker0` foi remapeado para
+    `172.16.0.1/24` e ficou down). Isso causava **incidente silencioso em produção**:
+    o processo já rodando mantinha conexões antigas do pool vivas, mas qualquer
+    conexão nova travava indefinidamente — toda rota `/api/*` que tocasse o Postgres
+    ficava pendurada sem erro nem timeout, enquanto `/health` (sem DB) continuava
+    respondendo normal, mascarando o problema. Trocado `DATABASE_URL` para usar
+    `127.0.0.1:5432` (porta publicada pelo container `postgres` no host) em vez do
+    IP de bridge — não depende mais de qual container network o Docker realocar
+    após reboot. `workdev-api.service` reiniciado e todas as rotas validadas (200,
+    sem travar).
 - **VPS2** (`srv1750921`, IP 2.25.201.90): OpenClaw, Agente Pessoal (Telegram
   @Clxn2000bot), n8n.
 - **GCP** `workspace-clxn-ia` (e2-standard-2, southamerica-east1-c, projeto
@@ -40,6 +51,13 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
      projeto (inclusive a que vazou no bundle) estão inválidas; só as chaves
      novas (`sb_publishable_...` / `sb_secret_...`) funcionam. Pendência de
      segurança encerrada.
+   - 🚧 **Engineering Realtime preparado em 2026-07-21:** migration em
+     `supabase/migrations/202607210001_engineering_graph_realtime.sql`, leitura
+     Realtime no frontend e sincronização automática no backend. Para ativar,
+     ainda é preciso criar uma `sb_secret_...` dedicada, salvá-la somente como
+     `SUPABASE_SECRET_KEY` em `apps/api/.env`, aplicar a migration e executar
+     `POST /api/engineering/graph/sync`. O Supabase CLI local não está logado.
+     Chaves `sb_secret_...` vão apenas no header `apikey` (não são JWT).
 2. **NutriGestor CRM** (`ngrepqqlvglzqnoswfug`): projeto separado, não relacionado
    ao WorkDev.
 - Postgres principal do WorkDev (backlog, projects, chat) é o container `postgres`

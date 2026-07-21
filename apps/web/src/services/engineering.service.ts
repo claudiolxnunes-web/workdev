@@ -38,3 +38,16 @@ export async function getEngineeringStatus(): Promise<EngineeringStatus> {
   if (!response.ok) throw new Error("Erro ao buscar status");
   return response.json();
 }
+
+export async function getEngineeringGraphLabels(
+  projectId?: string,
+): Promise<Record<string, string>> {
+  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+  const response = await fetch(
+    `${API_URL}/api/engineering/graph/labels${query}`,
+    { headers },
+  );
+  if (!response.ok) throw new Error("Erro ao buscar títulos do grafo");
+  const body = await response.json() as { labels: Record<string, string> };
+  return body.labels;
+}

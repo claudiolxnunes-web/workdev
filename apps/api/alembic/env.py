@@ -20,6 +20,7 @@ from app.models.knowledge import KnowledgeEntry  # noqa
 from app.models.adr import ADR  # noqa
 from app.models.rfc import RFC  # noqa
 from app.models.decision import Decision  # noqa
+from app.models.chat import ChatSession, ChatMessage  # noqa
 
 target_metadata = Base.metadata
 

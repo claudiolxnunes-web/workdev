@@ -6,21 +6,19 @@ import { TimelineTab } from '../components/TimelineTab'
 import { ADRsTab } from '../components/ADRsTab'
 import { RFCsTab } from '../components/RFCsTab'
 import { DecisionsTab } from '../components/DecisionsTab'
+import { OverviewTab } from '../components/OverviewTab'
 
 function EngineeringContent({ projectId }: { projectId?: string }) {
   const { activeTab } = useEngineeringContext()
 
-  const placeholders: Record<string, string> = {
-    'overview': '📊 Overview — em breve',
+  if (activeTab === 'overview') {
+    return <OverviewTab projectId={projectId} />
   }
 
   if (activeTab === 'graph-explorer') {
     return (
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-        <h2 className="text-lg font-semibold mb-4">Engineering Graph</h2>
-        <div style={{ height: 520 }}>
-          <GraphExplorer project_id={projectId ?? ""} />
-        </div>
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-6">
+        <GraphExplorer project_id={projectId} />
       </div>
     )
   }
@@ -41,11 +39,7 @@ function EngineeringContent({ projectId }: { projectId?: string }) {
     return <DecisionsTab projectId={projectId} />
   }
 
-  return (
-    <div className="rounded-lg border border-slate-800 p-8 text-center text-slate-400">
-      {placeholders[activeTab]}
-    </div>
-  )
+  return null
 }
 
 export function EngineeringPage({ projectId }: { projectId?: string }) {

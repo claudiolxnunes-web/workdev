@@ -1,98 +1,188 @@
-import { useEffect, useState } from 'react'
-import type { Node, Edge } from '@xyflow/react'
-import { supabase } from '@/lib/supabase'
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Edge, Node } from "@xyflow/react";
+import { graphService } from "@workdev/engineering-graph";
+import type { GraphEdge, GraphNode, GraphResult } from "@workdev/engineering-graph";
+import { getEngineeringGraphLabels } from "../../services/engineering.service";
 
 const nodeColors: Record<string, string> = {
-  Project:        '#6366f1',
-  Feature:        '#8b5cf6',
-  Task:           '#3b82f6',
-  Subtask:        '#60a5fa',
-  Commit:         '#10b981',
-  Deployment:     '#f59e0b',
-  Knowledge:      '#ec4899',
-  ADR:            '#f97316',
-  RFC:            '#14b8a6',
-  AIConversation: '#a855f7',
-  Release:        '#ef4444',
-  Monitoring:     '#84cc16',
+  Project: "#6366f1",
+  Feature: "#8b5cf6",
+  Task: "#3b82f6",
+  Subtask: "#60a5fa",
+  Commit: "#10b981",
+  Deployment: "#f59e0b",
+  Knowledge: "#ec4899",
+  ADR: "#f97316",
+  RFC: "#14b8a6",
+  AIConversation: "#a855f7",
+  Release: "#ef4444",
+  Monitoring: "#84cc16",
+  Decision: "#0ea5e9",
+};
+
+export type GraphView = "all" | "features" | "releases";
+
+function selectView(graph: GraphResult, view: GraphView): GraphResult {
+  if (view === "all") return graph;
+
+  const rootType = view === "features" ? "Feature" : "Release";
+  const visible = new Set(
+    graph.nodes.filter((node) => node.type === rootType).map((node) => node.id),
+  );
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const edge of graph.edges) {
+      const next = view === "features"
+        ? [edge.source_node, edge.target_node]
+        : [edge.target_node, edge.source_node];
+      if (visible.has(next[0]) && !visible.has(next[1])) {
+        visible.add(next[1]);
+        changed = true;
+      }
+    }
+  }
+
+  return {
+    nodes: graph.nodes.filter((node) => visible.has(node.id)),
+    edges: graph.edges.filter(
+      (edge) => visible.has(edge.source_node) && visible.has(edge.target_node),
+    ),
+  };
 }
 
-interface GraphNodeRow {
-  id: string
-  type: string
-  entity_id: string
-  project_id: string
-  created_at: string
+function connectedTimeline(graph: GraphResult, nodeId: string | null): GraphNode[] {
+  if (!nodeId) return [];
+  const connected = new Set([nodeId]);
+  const ancestors = [nodeId];
+  while (ancestors.length > 0) {
+    const current = ancestors.pop();
+    for (const edge of graph.edges) {
+      if (edge.target_node === current && !connected.has(edge.source_node)) {
+        connected.add(edge.source_node);
+        ancestors.push(edge.source_node);
+      }
+    }
+  }
+  const descendants = [nodeId];
+  while (descendants.length > 0) {
+    const current = descendants.pop();
+    for (const edge of graph.edges) {
+      if (edge.source_node === current && !connected.has(edge.target_node)) {
+        connected.add(edge.target_node);
+        descendants.push(edge.target_node);
+      }
+    }
+  }
+  return graph.nodes
+    .filter((node) => connected.has(node.id))
+    .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
 }
 
-interface GraphEdgeRow {
-  id: string
-  source_node: string
-  target_node: string
-  relationship: string
-  created_at: string
+function toFlowNodes(nodes: GraphNode[]): Node[] {
+  return nodes.map((node, index) => ({
+    id: node.id,
+    position: { x: (index % 4) * 230, y: Math.floor(index / 4) * 145 },
+    data: {
+      label: node.label || `${node.type} · ${node.entity_id.slice(0, 8)}`,
+    },
+    style: {
+      background: nodeColors[node.type] || "#64748b",
+      color: "#fff",
+      borderRadius: 8,
+      padding: "8px 16px",
+      fontWeight: 600,
+      fontSize: 13,
+    },
+  }));
 }
 
-const DEFAULT_PROJECT_ID = '4224987e-a792-4b80-b571-1c47fc734ca4'
+function toFlowEdges(edges: GraphEdge[]): Edge[] {
+  return edges.map((edge) => ({
+    id: edge.id,
+    source: edge.source_node,
+    target: edge.target_node,
+    label: edge.relationship,
+    animated: true,
+    style: { stroke: "#64748b" },
+    labelStyle: { fill: "#94a3b8", fontSize: 11 },
+  }));
+}
 
-export function useGraphExplorer(project_id: string = DEFAULT_PROJECT_ID) {
-  const [nodes, setNodes] = useState<Node[]>([])
-  const [edges, setEdges] = useState<Edge[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+export function useGraphExplorer(projectId?: string) {
+  const [graph, setGraph] = useState<GraphResult>({ nodes: [], edges: [] });
+  const [view, setView] = useState<GraphView>("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const loaded = useRef(false);
+
+  const load = useCallback(async () => {
+    if (!loaded.current) setLoading(true);
+    setError(null);
+    try {
+      const [result, labels] = await Promise.all([
+        graphService.getProjectGraph(projectId),
+        getEngineeringGraphLabels(projectId),
+      ]);
+      setGraph({
+        ...result,
+        nodes: result.nodes.map((node) => ({
+          ...node,
+          label: labels[node.entity_id] || node.label,
+        })),
+      });
+      loaded.current = true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Erro ao carregar grafo");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
 
   useEffect(() => {
-    async function load() {
-      setLoading(true)
-      setError(null)
+    loaded.current = false;
+    queueMicrotask(() => {
+      setSelectedId(null);
+      void load();
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = graphService.subscribeToProject(
+      projectId,
+      () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => void load(), 150);
+      },
+      setRealtimeConnected,
+    );
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [load, projectId]);
 
-      const { data: graphNodes, error: nodesError } = await supabase
-        .from('graph_nodes')
-        .select('*')
-        .eq('project_id', project_id || DEFAULT_PROJECT_ID)
+  const visible = useMemo(() => selectView(graph, view), [graph, view]);
+  const selectedNode = useMemo(
+    () => graph.nodes.find((node) => node.id === selectedId) ?? null,
+    [graph.nodes, selectedId],
+  );
+  const timeline = useMemo(
+    () => connectedTimeline(graph, selectedId),
+    [graph, selectedId],
+  );
 
-      if (nodesError) { setError(nodesError.message); setLoading(false); return }
-
-      const nodeIds = (graphNodes as GraphNodeRow[]).map((n) => n.id)
-
-      const { data: graphEdges, error: edgesError } = await supabase
-        .from('graph_edges')
-        .select('*')
-        .or(`source_node.in.(${nodeIds.join(',')}),target_node.in.(${nodeIds.join(',')})`)
-
-      if (edgesError) { setError(edgesError.message); setLoading(false); return }
-
-      const flowNodes: Node[] = (graphNodes as GraphNodeRow[]).map((n, i) => ({
-        id: n.id,
-        position: { x: (i % 4) * 220, y: Math.floor(i / 4) * 140 },
-        data: { label: n.type },
-        style: {
-          background: nodeColors[n.type] || '#64748b',
-          color: '#fff',
-          borderRadius: 8,
-          padding: '8px 16px',
-          fontWeight: 600,
-          fontSize: 13,
-        },
-      }))
-
-      const flowEdges: Edge[] = (graphEdges as GraphEdgeRow[]).map((e) => ({
-        id: e.id,
-        source: e.source_node,
-        target: e.target_node,
-        label: e.relationship,
-        animated: true,
-        style: { stroke: '#64748b' },
-        labelStyle: { fill: '#94a3b8', fontSize: 11 },
-      }))
-
-      setNodes(flowNodes)
-      setEdges(flowEdges)
-      setLoading(false)
-    }
-
-    load()
-  }, [project_id])
-
-  return { nodes, edges, loading, error }
+  return {
+    nodes: toFlowNodes(visible.nodes),
+    edges: toFlowEdges(visible.edges),
+    sourceNodes: graph.nodes,
+    loading,
+    error,
+    view,
+    setView,
+    selectedNode,
+    selectNode: setSelectedId,
+    timeline,
+    realtimeConnected,
+  };
 }

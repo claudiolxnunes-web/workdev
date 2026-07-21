@@ -11,6 +11,9 @@ class ADR(Base):
     project_id = Column(UUID(as_uuid=True),
                         ForeignKey("projects.id", ondelete="CASCADE"),
                         nullable=False, index=True)
+    feature_id = Column(UUID(as_uuid=True),
+                        ForeignKey("backlog.id", ondelete="SET NULL"),
+                        nullable=True, index=True)
     title = Column(String(255), nullable=False)
     context = Column(Text, nullable=False)
     decision = Column(Text, nullable=False)

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from uuid import UUID
@@ -6,6 +6,7 @@ from app.database import SessionLocal
 from app.models.subtask import BacklogSubtask
 from app.models.backlog import BacklogItem
 from app.schemas.subtask import SubtaskCreate, SubtaskUpdate, SubtaskOut
+from app.services.engineering_graph import graph_sync
 
 router = APIRouter()
 
@@ -28,13 +29,22 @@ def list_subtasks(backlog_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/subtasks", response_model=SubtaskOut, status_code=201)
-def create_subtask(sub: SubtaskCreate, db: Session = Depends(get_db)):
-    if not db.query(BacklogItem).filter(BacklogItem.id == sub.backlog_id).first():
+def create_subtask(sub: SubtaskCreate, background_tasks: BackgroundTasks,
+                   db: Session = Depends(get_db)):
+    backlog = db.query(BacklogItem).filter(BacklogItem.id == sub.backlog_id).first()
+    if not backlog:
         raise HTTPException(404, "Backlog item not found")
     obj = BacklogSubtask(**sub.model_dump())
     db.add(obj)
     db.commit()
     db.refresh(obj)
+    background_tasks.add_task(
+        graph_sync.sync_safely,
+        "sync_subtask",
+        str(obj.id),
+        str(obj.backlog_id),
+        str(backlog.project_id),
+    )
     return obj
 
 

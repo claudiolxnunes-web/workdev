@@ -6,6 +6,7 @@ export type ADRStatus = "proposed" | "accepted" | "deprecated" | "superseded";
 export interface ADR {
   id: string;
   project_id: string;
+  feature_id: string | null;
   title: string;
   context: string;
   decision: string;
@@ -17,6 +18,7 @@ export interface ADR {
 
 export interface ADRCreate {
   project_id: string;
+  feature_id?: string;
   title: string;
   context: string;
   decision: string;

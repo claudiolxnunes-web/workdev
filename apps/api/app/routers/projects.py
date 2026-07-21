@@ -1,11 +1,12 @@
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models.project import Project
+from app.services.engineering_graph import graph_sync
 
 router = APIRouter()
 
@@ -47,7 +48,8 @@ def get_projects(db: Session = Depends(get_db)):
     return db.query(Project).all()
 
 @router.post("/projects", status_code=201)
-def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
+def create_project(payload: ProjectCreate, background_tasks: BackgroundTasks,
+                   db: Session = Depends(get_db)):
     slug = slugify(payload.name)
     if not slug:
         raise HTTPException(status_code=400, detail="Nome inválido")
@@ -68,6 +70,9 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     db.add(project)
     db.commit()
     db.refresh(project)
+    background_tasks.add_task(
+        graph_sync.sync_safely, "sync_project", str(project.id)
+    )
     return project
 
 

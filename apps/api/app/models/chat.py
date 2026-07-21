@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, text
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Index, text
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
@@ -18,7 +18,11 @@ class ChatMessage(Base):
                 server_default=text("gen_random_uuid()"))
     session_id = Column(UUID(as_uuid=True),
                         ForeignKey("chat_sessions.id", ondelete="CASCADE"),
-                        nullable=False, index=True)
+                        nullable=False)
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, server_default=text("now()"))
+
+    __table_args__ = (
+        Index("idx_chat_messages_session", "session_id", "created_at"),
+    )

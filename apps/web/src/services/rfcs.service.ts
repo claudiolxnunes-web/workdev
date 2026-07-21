@@ -6,6 +6,7 @@ export type RFCStatus = "draft" | "review" | "accepted" | "rejected";
 export interface RFC {
   id: string;
   project_id: string;
+  feature_id: string | null;
   title: string;
   context: string;
   proposal: string;
@@ -17,6 +18,7 @@ export interface RFC {
 
 export interface RFCCreate {
   project_id: string;
+  feature_id?: string;
   title: string;
   context: string;
   proposal: string;

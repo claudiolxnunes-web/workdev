@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { graphService } from "@workdev/engineering-graph";
 import type { GraphNode } from "@workdev/engineering-graph";
+import { getEngineeringGraphLabels } from "../../../services/engineering.service";
 
 const nodeColors: Record<string, string> = {
   Project: "#6366f1",
@@ -39,17 +40,39 @@ export function TimelineTab({ projectId }: { projectId?: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  useEffect(() => {
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+
+  const load = useCallback(() => {
     setLoading(true);
     setError("");
-    graphService
-      .getTimeline(50)
-      .then((all) =>
-        setNodes(projectId ? all.filter((n) => n.project_id === projectId) : all)
-      )
+    Promise.all([
+      graphService.getTimeline(50, projectId),
+      getEngineeringGraphLabels(projectId),
+    ])
+      .then(([timeline, labels]) => setNodes(timeline.map((node) => ({
+        ...node,
+        label: labels[node.entity_id] || node.label,
+      }))))
       .catch(() => setError("Erro ao carregar timeline do grafo"))
       .finally(() => setLoading(false));
   }, [projectId]);
+
+  useEffect(() => {
+    queueMicrotask(load);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = graphService.subscribeToProject(
+      projectId,
+      () => {
+        clearTimeout(timer);
+        timer = setTimeout(load, 150);
+      },
+      setRealtimeConnected,
+    );
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [load, projectId]);
 
   if (loading) return <p className="text-slate-400">Carregando...</p>;
   if (error) return <p className="text-red-400">{error}</p>;
@@ -59,6 +82,12 @@ export function TimelineTab({ projectId }: { projectId?: string }) {
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="font-semibold">Eventos do grafo</h2>
+        <span className={realtimeConnected ? "text-xs text-emerald-400" : "text-xs text-amber-400"}>
+          ● {realtimeConnected ? "ao vivo" : "reconectando"}
+        </span>
+      </div>
       <ul className="space-y-1">
         {nodes.map((n) => (
           <li
@@ -70,7 +99,7 @@ export function TimelineTab({ projectId }: { projectId?: string }) {
               style={{ background: nodeColors[n.type] || "#64748b" }}
             />
             <div className="min-w-0 flex-1">
-              <span className="font-medium">{n.type}</span>
+              <span className="font-medium">{n.label || n.type}</span>
               {typeof n.entity_id === "string" && (
                 <span className="text-slate-600 text-xs ml-2 font-mono">
                   {n.entity_id.slice(0, 8)}
