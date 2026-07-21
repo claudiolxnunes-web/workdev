@@ -12,6 +12,9 @@ const statusColor: Record<string, string> = {
   draft: "bg-amber-500/20 text-amber-300", approved: "bg-emerald-500/20 text-emerald-300",
   needs_revision: "bg-red-500/20 text-red-300", superseded: "bg-slate-700 text-slate-400",
 }
+const agentLabel: Record<AgentName, string> = {
+  claude: "Claude Code", codex: "Codex", kimi: "Kimi Code", qwen: "Qwen Code",
+}
 
 export function PlanningPanel({ onClose }: { onClose: () => void }) {
   const [plans, setPlans] = useState<ExecutionPlan[]>([])
@@ -44,7 +47,7 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
     setBusy(plan.id); setError(""); setMessage("")
     try {
       await sendToBuild(plan.id, agent)
-      setMessage(`Build enviado para ${agent === "codex" ? "Codex" : agent === "kimi" ? "Kimi Code" : "Claude Code"}.`)
+      setMessage(`Build enviado para ${agentLabel[agent]}.`)
       await load()
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha no handoff") }
     finally { setBusy(null) }
@@ -89,6 +92,7 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
                   <button disabled={busy === plan.id} onClick={() => void build(plan, "codex")} className="rounded-lg bg-sky-600 px-3 py-2 text-sm hover:bg-sky-500 disabled:opacity-50">Enviar ao Codex</button>
                   <button disabled={busy === plan.id} onClick={() => void build(plan, "claude")} className="rounded-lg bg-violet-600 px-3 py-2 text-sm hover:bg-violet-500 disabled:opacity-50">Enviar ao Claude</button>
                   <button disabled={busy === plan.id} onClick={() => void build(plan, "kimi")} className="rounded-lg bg-fuchsia-600 px-3 py-2 text-sm hover:bg-fuchsia-500 disabled:opacity-50">Enviar ao Kimi</button>
+                  <button disabled={busy === plan.id} onClick={() => void build(plan, "qwen")} className="rounded-lg bg-amber-600 px-3 py-2 text-sm hover:bg-amber-500 disabled:opacity-50">Enviar ao Qwen</button>
                 </>}
               </div>
             </article>

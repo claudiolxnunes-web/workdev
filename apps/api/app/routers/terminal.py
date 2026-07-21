@@ -13,10 +13,16 @@ from app.auth import websocket_is_authenticated
 
 
 router = APIRouter(tags=["agents"])
-ALLOWED_SESSIONS = {"claude": "code", "codex": "codex", "kimi": "kimi"}
+ALLOWED_SESSIONS = {
+    "claude": "code",
+    "codex": "codex",
+    "kimi": "kimi",
+    "qwen": "qwen",
+}
 _active_connections: set[str] = set()
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
+_PROCESS_LABELS = {"qwen": "qwen-code"}
 
 
 def _resize(fd: int, rows: int, cols: int) -> None:
@@ -99,10 +105,11 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         os.close(slave_fd)
         slave_fd = -1
         current_process = await asyncio.to_thread(_current_process, session)
+        running = bool(current_process and current_process not in _SHELL_PROCESSES)
         await websocket.send_text(json.dumps({
             "type": "status",
-            "running": bool(current_process and current_process not in _SHELL_PROCESSES),
-            "process": current_process,
+            "running": running,
+            "process": _PROCESS_LABELS.get(agent, current_process) if running else current_process,
         }))
         output_task = asyncio.create_task(_send_output(websocket, master_fd))
 

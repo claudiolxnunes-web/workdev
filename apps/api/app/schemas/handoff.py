@@ -9,7 +9,7 @@ PlanStatus = Literal["draft", "approved", "needs_revision", "superseded"]
 RunStatus = Literal[
     "queued", "running", "blocked", "review", "completed", "failed", "cancelled"
 ]
-AgentName = Literal["codex", "claude", "kimi"]
+AgentName = Literal["codex", "claude", "kimi", "qwen"]
 
 
 class PlanCreate(BaseModel):

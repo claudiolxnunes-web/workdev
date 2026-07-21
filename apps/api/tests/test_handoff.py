@@ -4,8 +4,8 @@ from app.services.handoff import RUN_TRANSITIONS, SUPPORTED_AGENTS, render_agent
 
 
 class HandoffContractTest(unittest.TestCase):
-    def test_supported_agents_include_kimi(self):
-        self.assertEqual(SUPPORTED_AGENTS, {"codex", "claude", "kimi"})
+    def test_supported_agents_include_all_build_agents(self):
+        self.assertEqual(SUPPORTED_AGENTS, {"codex", "claude", "kimi", "qwen"})
 
     def test_terminal_states_cannot_transition(self):
         self.assertEqual(RUN_TRANSITIONS["completed"], set())

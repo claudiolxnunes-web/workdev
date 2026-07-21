@@ -23,7 +23,7 @@ from app.auth import request_is_authenticated
 load_dotenv()
 DIST = "/opt/workdev/apps/web/dist"
 
-app = FastAPI(title="WorkDev API", version="0.6.0")
+app = FastAPI(title="WorkDev API", version="0.7.0")
 
 
 @app.middleware("http")
@@ -53,7 +53,7 @@ app.include_router(terminal_router)
 
 @app.get("/health")
 def health():
-    return {"service": "WorkDev API", "version": "0.6.0", "status": "online"}
+    return {"service": "WorkDev API", "version": "0.7.0", "status": "online"}
 
 
 app.mount("/assets", StaticFiles(directory=f"{DIST}/assets"), name="assets")

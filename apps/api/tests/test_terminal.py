@@ -2,7 +2,7 @@ import asyncio
 import os
 import unittest
 
-from app.routers.terminal import _claim, _release, _send_output
+from app.routers.terminal import ALLOWED_SESSIONS, _claim, _release, _send_output
 
 
 class FailingWebSocket:
@@ -11,6 +11,12 @@ class FailingWebSocket:
 
 
 class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_all_agents_have_isolated_tmux_sessions(self):
+        self.assertEqual(
+            ALLOWED_SESSIONS,
+            {"claude": "code", "codex": "codex", "kimi": "kimi", "qwen": "qwen"},
+        )
+
     async def test_output_sender_stops_when_websocket_disconnects(self):
         read_fd, write_fd = os.pipe()
         try:
