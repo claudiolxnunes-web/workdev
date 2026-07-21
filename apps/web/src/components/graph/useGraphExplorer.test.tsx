@@ -171,7 +171,7 @@ describe("GraphExplorer labels and semantic zoom", () => {
   });
 });
 
-describe("GraphExplorer realtime debounce", () => {
+describe("GraphExplorer interactions and realtime debounce", () => {
   beforeEach(() => {
     vi.useRealTimers();
     sessionStorage.clear();
@@ -179,6 +179,22 @@ describe("GraphExplorer realtime debounce", () => {
     subscribeToProject.mockReset();
     getEngineeringGraphLabels.mockReset();
     getEngineeringGraphLabels.mockResolvedValue({});
+  });
+
+  it("opens a node card on first click and closes plus collapses on second click", async () => {
+    getProjectGraph.mockResolvedValue(largeFixture());
+    subscribeToProject.mockReturnValue(() => undefined);
+
+    const { result } = renderHook(() => useGraphExplorer("project"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => result.current.selectNode("feature-0"));
+    expect(result.current.selectedNode?.id).toBe("feature-0");
+    expect(result.current.nodes).toHaveLength(55);
+
+    act(() => result.current.selectNode("feature-0"));
+    expect(result.current.selectedNode).toBeNull();
+    expect(result.current.nodes).toHaveLength(5);
   });
 
   it("coalesces 10 events into one reload and keeps the new task collapsed", async () => {

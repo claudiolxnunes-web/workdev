@@ -288,6 +288,16 @@ export function useGraphExplorer(projectId?: string) {
   );
 
   const selectNode = useCallback((id: string | null) => {
+    const closingId = id === null ? selectedId : id === selectedId ? id : null;
+    if (closingId) {
+      setSelectedId(null);
+      setExpandedIds((current) => {
+        const next = new Set(current);
+        next.delete(closingId);
+        return next;
+      });
+      return;
+    }
     setSelectedId(id);
     if (!id || !(childrenByParent.get(id)?.length)) return;
     setExpandedIds((current) => {
@@ -296,7 +306,7 @@ export function useGraphExplorer(projectId?: string) {
       else next.add(id);
       return next;
     });
-  }, [childrenByParent]);
+  }, [childrenByParent, selectedId]);
 
   const expandAll = useCallback(() => {
     setExpandedIds(new Set(childrenByParent.keys()));
