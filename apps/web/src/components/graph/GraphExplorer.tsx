@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Background,
   Controls,
@@ -8,6 +9,7 @@ import {
   ReactFlow,
   type NodeProps,
   type NodeTypes,
+  type ReactFlowInstance,
   type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -82,6 +84,7 @@ export function EngineeringNode({ data, selected }: NodeProps<GraphFlowNode>) {
 const nodeTypes: NodeTypes = { engineering: EngineeringNode };
 
 export function GraphExplorer({ project_id }: { project_id?: string }) {
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<GraphFlowNode> | null>(null);
   const {
     nodes,
     edges,
@@ -134,6 +137,28 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
           >
             Colapsar tudo
           </button>
+          <div className="flex overflow-hidden rounded-lg border border-slate-700 bg-slate-800" aria-label="Controles de zoom">
+            <button
+              type="button"
+              onClick={() => void flowInstance?.zoomOut({ duration: 200 })}
+              disabled={!flowInstance}
+              className="flex h-9 w-10 items-center justify-center text-xl leading-none hover:bg-slate-700 disabled:opacity-40"
+              aria-label="Diminuir grafo"
+              title="Diminuir grafo"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              onClick={() => void flowInstance?.zoomIn({ duration: 200 })}
+              disabled={!flowInstance}
+              className="flex h-9 w-10 items-center justify-center border-l border-slate-700 text-xl leading-none hover:bg-slate-700 disabled:opacity-40"
+              aria-label="Aumentar grafo"
+              title="Aumentar grafo"
+            >
+              +
+            </button>
+          </div>
           <select
             aria-label="Escopo do grafo"
             value={view}
@@ -160,6 +185,7 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
+              onInit={setFlowInstance}
               fitView
               minZoom={0.2}
               maxZoom={2}
