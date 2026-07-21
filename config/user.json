@@ -1,0 +1,12 @@
+{
+  "app": {
+    "name": "WorkDev Core - Personalizado",
+    "version": "1.0.0",
+    "environment": "development"
+  },
+  "features": {
+    "enableGraphExplorer": true,
+    "enableAIHub": true,
+    "enableRealTimeSync": true
+  }
+}

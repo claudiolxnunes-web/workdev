@@ -1,0 +1,16 @@
+{
+  "app": {
+    "environment": "development"
+  },
+  "database": {
+    "host": "localhost",
+    "port": 5433
+  },
+  "supabase": {
+    "url": "http://localhost:54321",
+    "anonKey": "local_anon_key"
+  },
+  "features": {
+    "enableRealTimeSync": true
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "app": {
+    "environment": "production"
+  },
+  "database": {
+    "host": "127.0.0.1",
+    "port": 5432
+  },
+  "supabase": {
+    "url": "https://cxqfwswartqqwsanceaj.supabase.co",
+    "anonKey": "sb_publishable_UkDICuKRFixZk8BgM_nuEg_TyojmNGt"
+  },
+  "features": {
+    "enableRealTimeSync": true
+  }
+}
