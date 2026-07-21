@@ -163,7 +163,7 @@ function toFlowEdges(edges: GraphEdge[]): Edge[] {
     id: edge.id,
     source: edge.source_node,
     target: edge.target_node,
-    animated: false,
+    animated: true,
     style: { stroke: "#475569", strokeWidth: 1.25 },
   }));
 }
