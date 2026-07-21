@@ -90,7 +90,7 @@ export function BuildQueue({ agent }: { agent: AgentName }) {
     <section className="flex max-h-80 w-full shrink-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900 md:max-h-none md:w-80">
       <div className="border-b border-slate-800 p-3">
         <h3 className="font-semibold">Fila de Build</h3>
-        <p className="text-xs text-slate-500">Planos aprovados para {agent === "codex" ? "Codex" : "Claude Code"}</p>
+        <p className="text-xs text-slate-500">Planos aprovados para {agent === "codex" ? "Codex" : agent === "kimi" ? "Kimi Code" : "Claude Code"}</p>
       </div>
       {error && <p className="m-3 rounded bg-red-950/50 p-2 text-xs text-red-300">{error}</p>}
       <div className="min-h-0 flex-1 overflow-y-auto">

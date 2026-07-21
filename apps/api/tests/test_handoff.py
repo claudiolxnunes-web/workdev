@@ -1,9 +1,12 @@
 import unittest
 
-from app.services.handoff import RUN_TRANSITIONS, render_agent_prompt
+from app.services.handoff import RUN_TRANSITIONS, SUPPORTED_AGENTS, render_agent_prompt
 
 
 class HandoffContractTest(unittest.TestCase):
+    def test_supported_agents_include_kimi(self):
+        self.assertEqual(SUPPORTED_AGENTS, {"codex", "claude", "kimi"})
+
     def test_terminal_states_cannot_transition(self):
         self.assertEqual(RUN_TRANSITIONS["completed"], set())
         self.assertEqual(RUN_TRANSITIONS["failed"], set())

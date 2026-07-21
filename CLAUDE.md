@@ -93,11 +93,14 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
   o Postgres do WorkDev (projects, backlog, tasks) — NÃO tem acesso ao Supabase
   do grafo ainda (melhoria futura na fila).
 - Handoff PLAN → BUILD (v0.5.0): AI Hub cria `execution_plans` versionados e ADRs;
-  aprovação e envio criam `agent_runs`; Codex/Claude acompanham a fila na tela
+  aprovação e envio criam `agent_runs`; Codex/Claude/Kimi acompanham a fila na tela
   Agents e registram eventos em `agent_run_events`. A CLI segura é
   `python3 /opt/workdev/scripts/workdev_agent.py --help`. Postgres é a fonte
   oficial; Plan/AgentRun/AgentEvent são projetados no Engineering Graph usando
   tipos compatíveis com os enums legados do Supabase.
+- Kimi Code: CLI oficial instalada globalmente; sessão tmux `kimi` iniciada por
+  `scripts/start_kimi_agent.sh`, que usa `kimi-k2.7-code` no endpoint
+  `api.moonshot.cn` e lê `MOONSHOT_API_KEY` somente do `.env` do backend.
 
 ## Convenções de trabalho
 - Ambiente mobile (Termux/SSH): prefira heredoc (`cat > arquivo << 'EOF'`) ou

@@ -8,7 +8,7 @@ const headers: HeadersInit = {
 
 export type PlanStatus = "draft" | "approved" | "needs_revision" | "superseded"
 export type RunStatus = "queued" | "running" | "blocked" | "review" | "completed" | "failed" | "cancelled"
-export type AgentName = "codex" | "claude"
+export type AgentName = "codex" | "claude" | "kimi"
 
 export interface ExecutionPlan {
   id: string

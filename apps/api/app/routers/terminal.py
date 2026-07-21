@@ -13,7 +13,7 @@ from app.auth import websocket_is_authenticated
 
 
 router = APIRouter(tags=["agents"])
-ALLOWED_SESSIONS = {"claude": "code", "codex": "codex"}
+ALLOWED_SESSIONS = {"claude": "code", "codex": "codex", "kimi": "kimi"}
 _active_connections: set[str] = set()
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}

@@ -118,6 +118,17 @@ NutriGestor CRM são INTEGRADOS ao WorkDev, nunca migrados para dentro dele.
 - Engineering Graph passou a projetar Plan/AgentRun/AgentEvent em tipos
   compatíveis com os enums legados, com Realtime e polling de fallback.
 
+## Kimi Code Agent (21/07/2026)
+
+- CLI oficial Kimi Code 0.28.1 instalada e validada com o modelo
+  `kimi-k2.7-code` disponível na conta Moonshot.
+- Terceiro Agent adicionado ao handoff PLAN → BUILD, à fila de execução e ao
+  terminal web, ao lado de Codex e Claude Code.
+- Sessão tmux `kimi` executa em `/opt/workdev` com contexto de 256k tokens.
+- `scripts/start_kimi_agent.sh` lê `MOONSHOT_API_KEY` do backend sem duplicar ou
+  expor a chave e desativa telemetria da CLI.
+- `AGENTS.md` unifica as instruções de segurança e execução dos três Agents.
+
 ## Backlog de evolução (registrado)
 - Persistir histórico do AI Hub; auto-refresh do kanban
 - Tool node agente_workdev no coordenador LangGraph do VPS2 (voz→backlog)

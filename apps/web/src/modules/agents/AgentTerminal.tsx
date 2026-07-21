@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
+import type { AgentName } from "@/services/handoff.service"
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "busy" | "error"
 const labels: Record<ConnectionStatus, string> = {
@@ -9,7 +10,7 @@ const labels: Record<ConnectionStatus, string> = {
   busy: "Em uso em outra janela", error: "Falha na conexão",
 }
 
-export function AgentTerminal({ agent }: { agent: "claude" | "codex" }) {
+export function AgentTerminal({ agent }: { agent: AgentName }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<ConnectionStatus>("connecting")
   const [taskRunning, setTaskRunning] = useState(false)

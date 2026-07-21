@@ -16,6 +16,7 @@ from app.models.subtask import BacklogSubtask
 
 PLAN_EDITABLE = {"draft", "needs_revision"}
 ACTIVE_RUN_STATUSES = {"queued", "running", "blocked", "review"}
+SUPPORTED_AGENTS = {"codex", "claude", "kimi"}
 RUN_TRANSITIONS = {
     "queued": {"running", "cancelled"},
     "running": {"blocked", "review", "completed", "failed", "cancelled"},
@@ -118,8 +119,8 @@ def add_run_event(
 def queue_build(db: Session, plan: ExecutionPlan, agent: str) -> tuple[AgentRun, AgentRunEvent]:
     if plan.status != "approved":
         raise HandoffError("O plano precisa estar aprovado antes do Build")
-    if agent not in {"codex", "claude"}:
-        raise HandoffError("Agente inválido; escolha codex ou claude")
+    if agent not in SUPPORTED_AGENTS:
+        raise HandoffError("Agente inválido; escolha codex, claude ou kimi")
     active = db.query(AgentRun).filter(
         AgentRun.backlog_id == plan.backlog_id,
         AgentRun.status.in_(ACTIVE_RUN_STATUSES),

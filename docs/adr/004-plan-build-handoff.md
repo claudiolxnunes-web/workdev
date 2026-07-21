@@ -44,6 +44,6 @@ Execuções: `queued → running → review → completed`. Uma execução pode 
 
 ## Consequências
 
-Há rastreabilidade entre task, plano e execução, e Codex/Claude compartilham o
-mesmo contrato. O custo adicional é manter estados e eventos consistentes; por
+Há rastreabilidade entre task, plano e execução, e Codex/Claude/Kimi compartilham
+o mesmo contrato. O custo adicional é manter estados e eventos consistentes; por
 isso transições inválidas são recusadas pela API e estados finais são imutáveis.
