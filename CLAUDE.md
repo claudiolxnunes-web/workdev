@@ -51,13 +51,29 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
      projeto (inclusive a que vazou no bundle) estão inválidas; só as chaves
      novas (`sb_publishable_...` / `sb_secret_...`) funcionam. Pendência de
      segurança encerrada.
-   - 🚧 **Engineering Realtime preparado em 2026-07-21:** migration em
-     `supabase/migrations/202607210001_engineering_graph_realtime.sql`, leitura
-     Realtime no frontend e sincronização automática no backend. Para ativar,
-     ainda é preciso criar uma `sb_secret_...` dedicada, salvá-la somente como
-     `SUPABASE_SECRET_KEY` em `apps/api/.env`, aplicar a migration e executar
-     `POST /api/engineering/graph/sync`. O Supabase CLI local não está logado.
-     Chaves `sb_secret_...` vão apenas no header `apikey` (não são JWT).
+   - ✅ **Engineering Realtime ativado em 2026-07-21:** `SUPABASE_SECRET_KEY`
+     configurada em `apps/api/.env` (rotacionada pelo Cláudio no dashboard;
+     a `sb_secret_...` antiga estava inválida/de outro projeto — nova validada
+     por leitura E escrita direta antes de salvar). `workdev-api` reiniciado.
+   - ✅ **Descompasso de UUID corrigido em 2026-07-21:** a tabela `projects`
+     do Supabase do grafo tinha só a linha seed antiga do WorkDev Core
+     (`id=4224987e-a792-4b80-b571-1c47fc734ca4`, `slug=workdev-core`), que
+     nunca bateu com o UUID real do projeto no Postgres do WorkDev
+     (`id=c33052ce-b322-4394-9bb8-4e3d786183f1`) — toda tentativa de sync
+     falhava com FK violation em `graph_nodes.project_id`. Inserida uma
+     segunda linha na tabela `projects` do grafo com o UUID real e
+     `slug=workdev-core-pg` (a linha antiga foi mantida intacta, sem
+     alterar/deletar, para não quebrar os nós já seedados que referenciam
+     o UUID antigo). Sync testado ponta a ponta: criar um ADR via
+     `POST /api/adrs` gera o nó correspondente em `graph_nodes` em
+     background, confirmado por leitura direta no Supabase.
+   - Pendência restante: `POST /api/engineering/graph/sync` (backfill do
+     histórico existente) ainda não foi executado — só sincroniza dali pra
+     frente. Não confirmado se o enum `node_type`/`relationship_type` do
+     Postgres do grafo aceita os valores novos usados pelo código
+     (`Decision`, `HAS_DECISION`, `BELONGS_TO`, `DEPENDS_ON` etc.) — se não
+     aceitar, esses syncs específicos falham graciosamente (logado, não
+     quebra a API) até alguém rodar `ALTER TYPE` no Supabase.
 2. **NutriGestor CRM** (`ngrepqqlvglzqnoswfug`): projeto separado, não relacionado
    ao WorkDev.
 - Postgres principal do WorkDev (backlog, projects, chat) é o container `postgres`
