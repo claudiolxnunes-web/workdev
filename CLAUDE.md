@@ -119,8 +119,15 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 - Idioma de trabalho: português (Brasil).
 
 ## Pendências conhecidas (não fazer sem pedir)
-- Code-split do bundle `apps/web` (>500kB, aviso do Vite — candidato óbvio é a
-  rota Engineering por causa do `@xyflow/react`).
-- Melhorias de UI no AI Hub (markdown nas mensagens, bolhas de chat, erros
-  formatados) — ver missão detalhada se solicitada.
+- Cadastrar os outros 5 projetos (Agente Pessoal, OpenClaw, Feed_BPF,
+  NutriControle, NutriGestor CRM) na tabela `projects` do grafo Supabase —
+  hoje só o WorkDev Core tem linha lá, o backfill falha pros outros por FK.
+- Cascade de exclusão Postgres → grafo (deletar ADR/RFC/Decision não limpa o
+  nó órfão em `graph_nodes`).
+- Confirmar se o enum `node_type`/`relationship_type` do Supabase aceita os
+  valores novos usados pelo `graph_sync` (`Decision`, `HAS_DECISION`,
+  `BELONGS_TO` etc.) — não verificado ainda.
+- Revisar e commitar o lote "Settings system" do frontend (SettingsPanel,
+  testes, vitest.config.ts, scripts/setup-config.sh, docs/settings-system.md)
+  — o backend já foi revisado e commitado (42ce003), falta essa parte.
 - Dar tools de grafo (`graph_nodes`/`graph_edges`) para o Fable no AI Hub.
