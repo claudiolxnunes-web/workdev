@@ -13,3 +13,5 @@ Antes de atuar neste repositório, leia `/opt/workdev/CLAUDE.md` por completo. E
 - Registre o estado com `python3 /opt/workdev/scripts/workdev_agent.py --help`.
 - O Build aceita `codex`, `claude`, `kimi` e `qwen`; a sessão `qwen` deve ser
   iniciada por `scripts/start_qwen_agent.sh`, sem expor as chaves do backend.
+- O Qwen mantém DashScope e OpenRouter no catálogo `scripts/qwen-agent-settings.json`;
+  a troca manual de provider é feita pelo comando `/model` dentro do agente.

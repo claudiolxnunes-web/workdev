@@ -102,8 +102,9 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
   `scripts/start_kimi_agent.sh`, que usa `kimi-k2.7-code` no endpoint
   `api.moonshot.cn` e lê `MOONSHOT_API_KEY` somente do `.env` do backend.
 - Qwen Code: CLI oficial instalada globalmente; sessão tmux `qwen` iniciada por
-  `scripts/start_qwen_agent.sh`. Usa `qwen3-coder-plus` com chave própria
-  `DASHSCOPE_API_KEY` quando disponível e, até lá, o OpenRouter configurado.
+  `scripts/start_qwen_agent.sh`. DashScope (`DASHSCOPE_API_KEY`) e OpenRouter
+  (`OPENROUTER_API_KEY`) ficam ativos no catálogo `scripts/qwen-agent-settings.json`;
+  o operador escolhe o provider na inicialização ou pelo `/model`.
 
 ## Convenções de trabalho
 - Ambiente mobile (Termux/SSH): prefira heredoc (`cat > arquivo << 'EOF'`) ou

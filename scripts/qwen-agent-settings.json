@@ -1,0 +1,29 @@
+{
+  "$version": 4,
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "qwen3-coder-plus",
+        "name": "Qwen3 Coder Plus — DashScope",
+        "description": "Chave direta do Alibaba Cloud Model Studio",
+        "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "envKey": "DASHSCOPE_API_KEY"
+      },
+      {
+        "id": "qwen/qwen3-coder-plus",
+        "name": "Qwen3 Coder Plus — OpenRouter",
+        "description": "Rota alternativa pelo OpenRouter",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
+      }
+    ]
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "model": {
+    "name": "qwen/qwen3-coder-plus"
+  }
+}
