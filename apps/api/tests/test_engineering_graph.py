@@ -58,6 +58,27 @@ class EngineeringGraphSyncTest(unittest.TestCase):
             "task-node", "subtask-node", "HAS_SUBTASK"
         )
 
+    def test_handoff_uses_legacy_enum_compatible_projection(self):
+        self.sync.sync_related = Mock(return_value={"id": "node"})
+        self.sync._find_node = Mock(return_value={"id": "plan-node"})
+
+        self.sync.sync_plan("plan-1", "project-1", "task-1")
+        self.sync.sync_agent_run("run-1", "project-1", "plan-1", "task-1")
+        self.sync.sync_agent_event("event-1", "project-1", "run-1")
+
+        self.assertEqual(
+            self.sync.sync_related.call_args_list[0].args,
+            ("AIConversation", "plan-1", "project-1", "LINKED_TO_KNOWLEDGE", "task-1"),
+        )
+        self.assertEqual(
+            self.sync.sync_related.call_args_list[1].args,
+            ("Task", "run-1", "project-1", "HAS_TASK", "plan-1"),
+        )
+        self.assertEqual(
+            self.sync.sync_related.call_args_list[2].args,
+            ("Monitoring", "event-1", "project-1", "HAS_SUBTASK", "run-1"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

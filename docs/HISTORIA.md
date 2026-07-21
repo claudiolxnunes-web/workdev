@@ -100,9 +100,23 @@ NutriGestor CRM são INTEGRADOS ao WorkDev, nunca migrados para dentro dele.
   com Alembic sem drift.
 - Backend preparado para sincronizar automaticamente Project, Task, Subtask,
   Knowledge, ADR, RFC, Decision, Commit, Deployment e Monitoring.
-- Fase 3 permanece bloqueada apenas para ativação: falta configurar uma
-  `SUPABASE_SECRET_KEY`, aplicar a migration Realtime no Supabase e executar
-  `POST /api/engineering/graph/sync` com os IDs reais do PostgreSQL.
+- Fase 3 ativada com `SUPABASE_SECRET_KEY` nova, RLS e publicação Realtime.
+  Permanece pendente apenas executar `POST /api/engineering/graph/sync` para o
+  backfill completo do histórico.
+
+## Handoff PLAN → BUILD (21/07/2026)
+
+- AI Hub definido como estágio de planejamento, sem acesso a shell, com tools
+  para criar planos versionados e ADRs.
+- Tabelas `execution_plans`, `agent_runs` e `agent_run_events` adicionadas pela
+  migration `c58a7d4e19f2`.
+- Painel Planos no AI Hub permite revisar, aprovar e enviar para Codex ou Claude.
+- Tela Agents ganhou fila de Build, contexto aprovado, subtasks, histórico e
+  controles de início, bloqueio, revisão e conclusão.
+- CLI local `scripts/workdev_agent.py` permite que os Agents atualizem a execução
+  sem expor `WORKDEV_API_KEY`.
+- Engineering Graph passou a projetar Plan/AgentRun/AgentEvent em tipos
+  compatíveis com os enums legados, com Realtime e polling de fallback.
 
 ## Backlog de evolução (registrado)
 - Persistir histórico do AI Hub; auto-refresh do kanban

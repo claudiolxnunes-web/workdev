@@ -10,8 +10,11 @@ from app.models.project import Project
 from app.models.backlog import BacklogItem
 from app.models.subtask import BacklogSubtask
 from app.models.knowledge import KnowledgeEntry
+from app.models.adr import ADR
+from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.services.engineering_graph import graph_sync
+from app.services.handoff import HandoffError, create_plan
 
 router = APIRouter()
 
@@ -62,8 +65,11 @@ def get_openai(provider: str = "openai") -> OpenAI:
 SYSTEM = (
     "Você é o assistente do WorkDev, plataforma de engenharia do Cláudio "
     "(BPF Consult). Responda sempre em português do Brasil, curto e direto. "
-    "Use as ferramentas para consultar ou modificar projetos, backlog e "
-    "subtasks. Slugs: workdev-core, nutrigestor-crm, agente-pessoal, "
+    "O AI Hub é o estágio PLAN: consulte contexto, registre decisões e crie "
+    "planos estruturados, mas nunca diga que executou código, testes ou deploy. "
+    "O estágio BUILD acontece nos Agents depois da aprovação do plano. "
+    "Use as ferramentas para consultar ou modificar projetos, backlog e subtasks. "
+    "Slugs: workdev-core, nutrigestor-crm, agente-pessoal, "
     "openclaw, feed-bpf, nutricontrole."
 )
 
@@ -201,6 +207,52 @@ TOOLS = [
                 "novo_titulo": {"type": "string"},
             },
             "required": [],
+        },
+    },
+    {
+        "name": "criar_plano_execucao",
+        "description": "Cria um plano de execução versionado em rascunho para uma task. Use ao finalizar o planejamento; o plano será aprovado e enviado ao Build pela interface.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "UUID da task; preferencial"},
+                "titulo_task": {"type": "string", "description": "alternativa ao UUID"},
+                "projeto_slug": {"type": "string", "description": "use para desambiguar o título"},
+                "objetivo": {"type": "string"},
+                "escopo": {"type": "string"},
+                "restricoes": {"type": "array", "items": {"type": "string"}},
+                "criterios_aceite": {"type": "array", "items": {"type": "string"}},
+                "validacoes": {"type": "array", "items": {"type": "string"}},
+                "notas_implementacao": {"type": "string"},
+            },
+            "required": ["objetivo", "criterios_aceite", "validacoes"],
+        },
+    },
+    {
+        "name": "listar_planos_execucao",
+        "description": "Lista planos de execução, opcionalmente filtrados por status ou task.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["draft", "approved", "needs_revision", "superseded"]},
+                "task_id": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "criar_adr",
+        "description": "Registra uma decisão arquitetural (ADR), opcionalmente ligada a uma feature do backlog.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "projeto_slug": {"type": "string"},
+                "titulo": {"type": "string"},
+                "contexto": {"type": "string"},
+                "decisao": {"type": "string"},
+                "consequencias": {"type": "string"},
+                "task_id": {"type": "string", "description": "feature relacionada, opcional"},
+            },
+            "required": ["projeto_slug", "titulo", "contexto", "decisao"],
         },
     },
 ]
@@ -487,6 +539,114 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
         return json.dumps({"ok": True, "task": t.title,
                            "subtask": s.title, "ordem": s.execution_order,
                            "alteracoes": alteracoes}, ensure_ascii=False)
+
+    if nome == "criar_plano_execucao":
+        task = None
+        if args.get("task_id"):
+            task = db.query(BacklogItem).filter(
+                BacklogItem.id == args["task_id"]
+            ).first()
+        elif args.get("titulo_task"):
+            query = db.query(BacklogItem).filter(
+                BacklogItem.title.ilike(f"%{args['titulo_task']}%")
+            )
+            if args.get("projeto_slug"):
+                project = db.query(Project).filter(
+                    Project.slug == args["projeto_slug"]
+                ).first()
+                if not project:
+                    return json.dumps({"erro": "projeto não encontrado"}, ensure_ascii=False)
+                query = query.filter(BacklogItem.project_id == project.id)
+            matches = query.all()
+            if len(matches) > 1:
+                return json.dumps(
+                    {"erro": "task ambígua — use task_id",
+                     "candidatas": [{"id": str(row.id), "titulo": row.title}
+                                    for row in matches]}, ensure_ascii=False,
+                )
+            task = matches[0] if matches else None
+        if not task:
+            return json.dumps(
+                {"erro": "task não encontrada — informe task_id ou titulo_task"},
+                ensure_ascii=False,
+            )
+        try:
+            plan = create_plan(db, {
+                "backlog_id": task.id,
+                "objective": args["objetivo"],
+                "scope": args.get("escopo"),
+                "constraints": args.get("restricoes") or [],
+                "acceptance_criteria": args.get("criterios_aceite") or [],
+                "validation_steps": args.get("validacoes") or [],
+                "implementation_notes": args.get("notas_implementacao"),
+                "created_by": "ai_hub",
+            })
+        except HandoffError as error:
+            return json.dumps({"erro": str(error)}, ensure_ascii=False)
+        graph_sync.sync_safely(
+            "sync_plan", str(plan.id), str(task.project_id), str(task.id)
+        )
+        return json.dumps({
+            "ok": True, "plano_id": str(plan.id), "versao": plan.version,
+            "status": plan.status, "task_id": str(task.id), "task": task.title,
+            "proximo_passo": "Revisar e aprovar no painel Planos do AI Hub",
+        }, ensure_ascii=False)
+
+    if nome == "listar_planos_execucao":
+        query = db.query(ExecutionPlan)
+        if args.get("status"):
+            query = query.filter(ExecutionPlan.status == args["status"])
+        if args.get("task_id"):
+            query = query.filter(ExecutionPlan.backlog_id == args["task_id"])
+        rows = query.order_by(ExecutionPlan.created_at.desc()).limit(30).all()
+        tasks = {
+            row.id: row.title for row in db.query(BacklogItem).filter(
+                BacklogItem.id.in_([plan.backlog_id for plan in rows])
+            ).all()
+        } if rows else {}
+        return json.dumps([
+            {"id": str(plan.id), "task_id": str(plan.backlog_id),
+             "task": tasks.get(plan.backlog_id), "versao": plan.version,
+             "status": plan.status, "objetivo": plan.objective}
+            for plan in rows
+        ], ensure_ascii=False)
+
+    if nome == "criar_adr":
+        project = db.query(Project).filter(
+            Project.slug == args["projeto_slug"]
+        ).first()
+        if not project:
+            return json.dumps({"erro": "projeto não encontrado"}, ensure_ascii=False)
+        feature_id = None
+        if args.get("task_id"):
+            feature = db.query(BacklogItem).filter(
+                BacklogItem.id == args["task_id"],
+                BacklogItem.project_id == project.id,
+                BacklogItem.type == "feature",
+            ).first()
+            if not feature:
+                return json.dumps(
+                    {"erro": "task_id não é uma feature deste projeto"},
+                    ensure_ascii=False,
+                )
+            feature_id = feature.id
+        adr = ADR(
+            project_id=project.id, feature_id=feature_id,
+            title=args["titulo"], context=args["contexto"],
+            decision=args["decisao"], consequences=args.get("consequencias"),
+            status="proposed",
+        )
+        db.add(adr)
+        db.commit()
+        db.refresh(adr)
+        graph_sync.sync_safely(
+            "sync_related", "ADR", str(adr.id), str(project.id),
+            "LINKED_TO_ADR", str(feature_id) if feature_id else None,
+        )
+        return json.dumps(
+            {"ok": True, "adr_id": str(adr.id), "titulo": adr.title,
+             "status": adr.status}, ensure_ascii=False,
+        )
 
     return json.dumps({"erro": "ferramenta desconhecida"})
 

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,6 +31,7 @@ class EngineeringGraphSync:
                     or os.getenv("VITE_SUPABASE_URL") or "").rstrip("/")
         self.secret_key = (secret_key or os.getenv("SUPABASE_SECRET_KEY")
                            or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "")
+        self._write_lock = threading.RLock()
 
     @property
     def configured(self) -> bool:
@@ -114,26 +116,27 @@ class EngineeringGraphSync:
         entity_id: str,
         project_id: str,
     ) -> dict[str, Any]:
-        existing = self._find_node(
-            entity_id=str(entity_id),
-            project_id=str(project_id),
-            node_type=node_type,
-        )
-        if existing:
-            return existing
-        payload = {
-            "type": node_type,
-            "entity_id": str(entity_id),
-            "project_id": str(project_id),
-        }
-        rows = self._request(
-            "POST",
-            "graph_nodes",
-            payload=payload,
-        )
-        if not rows:
-            raise GraphRequestError("Supabase não retornou o nó criado")
-        return rows[0]
+        with self._write_lock:
+            existing = self._find_node(
+                entity_id=str(entity_id),
+                project_id=str(project_id),
+                node_type=node_type,
+            )
+            if existing:
+                return existing
+            payload = {
+                "type": node_type,
+                "entity_id": str(entity_id),
+                "project_id": str(project_id),
+            }
+            rows = self._request(
+                "POST",
+                "graph_nodes",
+                payload=payload,
+            )
+            if not rows:
+                raise GraphRequestError("Supabase não retornou o nó criado")
+            return rows[0]
 
     def ensure_edge(
         self,
@@ -141,31 +144,32 @@ class EngineeringGraphSync:
         target_node: str,
         relationship: str,
     ) -> dict[str, Any]:
-        rows = self._request(
-            "GET",
-            "graph_edges",
-            params={
-                "select": "*",
-                "source_node": f"eq.{source_node}",
-                "target_node": f"eq.{target_node}",
-                "relationship": f"eq.{relationship}",
-                "limit": "1",
-            },
-        )
-        if rows:
-            return rows[0]
-        created = self._request(
-            "POST",
-            "graph_edges",
-            payload={
-                "source_node": source_node,
-                "target_node": target_node,
-                "relationship": relationship,
-            },
-        )
-        if not created:
-            raise GraphRequestError("Supabase não retornou a relação criada")
-        return created[0]
+        with self._write_lock:
+            rows = self._request(
+                "GET",
+                "graph_edges",
+                params={
+                    "select": "*",
+                    "source_node": f"eq.{source_node}",
+                    "target_node": f"eq.{target_node}",
+                    "relationship": f"eq.{relationship}",
+                    "limit": "1",
+                },
+            )
+            if rows:
+                return rows[0]
+            created = self._request(
+                "POST",
+                "graph_edges",
+                payload={
+                    "source_node": source_node,
+                    "target_node": target_node,
+                    "relationship": relationship,
+                },
+            )
+            if not created:
+                raise GraphRequestError("Supabase não retornou a relação criada")
+            return created[0]
 
     def sync_project(self, project_id: str) -> dict[str, Any]:
         return self.ensure_node("Project", str(project_id), str(project_id))
@@ -235,6 +239,43 @@ class EngineeringGraphSync:
         return self.sync_related(
             "Deployment", deployment_id, project_id,
             "LINKED_TO_DEPLOY", commit_id,
+        )
+
+    def sync_plan(
+        self,
+        plan_id: str,
+        project_id: str,
+        backlog_id: str,
+    ) -> dict[str, Any]:
+        # O Supabase legado ainda usa enums. AIConversation representa o
+        # artefato de planejamento até a migration dos enums ser aplicada.
+        return self.sync_related(
+            "AIConversation", plan_id, project_id,
+            "LINKED_TO_KNOWLEDGE", backlog_id,
+        )
+
+    def sync_agent_run(
+        self,
+        run_id: str,
+        project_id: str,
+        plan_id: str,
+        backlog_id: str | None = None,
+    ) -> dict[str, Any]:
+        parent = self._find_node(entity_id=plan_id, project_id=project_id)
+        if not parent and backlog_id:
+            self.sync_plan(plan_id, project_id, backlog_id)
+        return self.sync_related(
+            "Task", run_id, project_id, "HAS_TASK", plan_id
+        )
+
+    def sync_agent_event(
+        self,
+        event_id: str,
+        project_id: str,
+        run_id: str,
+    ) -> dict[str, Any]:
+        return self.sync_related(
+            "Monitoring", event_id, project_id, "HAS_SUBTASK", run_id
         )
 
     def sync_safely(self, operation: str, *args: Any, **kwargs: Any) -> bool:

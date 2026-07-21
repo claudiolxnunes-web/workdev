@@ -92,6 +92,12 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 - AI Hub: chat com Fable/Claude via Anthropic API, function-calling tools sobre
   o Postgres do WorkDev (projects, backlog, tasks) — NÃO tem acesso ao Supabase
   do grafo ainda (melhoria futura na fila).
+- Handoff PLAN → BUILD (v0.5.0): AI Hub cria `execution_plans` versionados e ADRs;
+  aprovação e envio criam `agent_runs`; Codex/Claude acompanham a fila na tela
+  Agents e registram eventos em `agent_run_events`. A CLI segura é
+  `python3 /opt/workdev/scripts/workdev_agent.py --help`. Postgres é a fonte
+  oficial; Plan/AgentRun/AgentEvent são projetados no Engineering Graph usando
+  tipos compatíveis com os enums legados do Supabase.
 
 ## Convenções de trabalho
 - Ambiente mobile (Termux/SSH): prefira heredoc (`cat > arquivo << 'EOF'`) ou

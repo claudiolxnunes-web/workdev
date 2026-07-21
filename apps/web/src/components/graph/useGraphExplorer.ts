@@ -18,6 +18,9 @@ const nodeColors: Record<string, string> = {
   Release: "#ef4444",
   Monitoring: "#84cc16",
   Decision: "#0ea5e9",
+  Plan: "#a78bfa",
+  AgentRun: "#22d3ee",
+  AgentEvent: "#94a3b8",
 };
 
 export type GraphView = "all" | "features" | "releases";

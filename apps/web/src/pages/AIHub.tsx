@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { Trash2 } from "lucide-react";
-import { MessageBubble, type Msg } from "@/components/ai-hub";
+import { MessageBubble, PlanningPanel, type Msg } from "@/components/ai-hub";
 
 interface SessionMeta {
   id: string;
@@ -30,6 +30,7 @@ export default function AIHub() {
   const [modelo, setModelo] = useState(MODELOS[0]);
   const [loading, setLoading] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
+  const [showPlans, setShowPlans] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -155,6 +156,12 @@ export default function AIHub() {
             ☰
           </button>
           <h1 className="text-3xl font-bold">AI Hub</h1>
+          <button
+            onClick={() => setShowPlans(true)}
+            className="ml-auto rounded-lg border border-violet-700 bg-violet-950/60 px-3 py-2 text-sm text-violet-200 hover:bg-violet-900"
+          >
+            Planos
+          </button>
         </div>
         <div className="flex-1 min-w-0 overflow-y-auto space-y-4 bg-slate-900 border border-slate-800 rounded-xl p-4">
           {messages.length === 0 && (
@@ -201,6 +208,7 @@ export default function AIHub() {
           </button>
         </div>
       </div>
+      {showPlans && <PlanningPanel onClose={() => setShowPlans(false)} />}
     </div>
   );
 }

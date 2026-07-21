@@ -17,12 +17,13 @@ from app.routers.monitoring import router as monitoring_router
 from app.routers.adrs import router as adrs_router
 from app.routers.rfcs import router as rfcs_router
 from app.routers.decisions import router as decisions_router
+from app.routers.handoffs import router as handoffs_router
 from app.auth import request_is_authenticated
 
 load_dotenv()
 DIST = "/opt/workdev/apps/web/dist"
 
-app = FastAPI(title="WorkDev API", version="0.4.0")
+app = FastAPI(title="WorkDev API", version="0.5.0")
 
 
 @app.middleware("http")
@@ -46,12 +47,13 @@ app.include_router(monitoring_router, prefix="/api")
 app.include_router(adrs_router, prefix="/api")
 app.include_router(rfcs_router, prefix="/api")
 app.include_router(decisions_router, prefix="/api")
+app.include_router(handoffs_router, prefix="/api")
 app.include_router(terminal_router)
 
 
 @app.get("/health")
 def health():
-    return {"service": "WorkDev API", "version": "0.4.0", "status": "online"}
+    return {"service": "WorkDev API", "version": "0.5.0", "status": "online"}
 
 
 app.mount("/assets", StaticFiles(directory=f"{DIST}/assets"), name="assets")

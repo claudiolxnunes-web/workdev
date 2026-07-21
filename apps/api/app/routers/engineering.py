@@ -12,6 +12,7 @@ from app.database import SessionLocal
 from app.models.adr import ADR
 from app.models.backlog import BacklogItem
 from app.models.decision import Decision
+from app.models.handoff import AgentRun, AgentRunEvent, ExecutionPlan
 from app.models.knowledge import KnowledgeEntry
 from app.models.project import Project
 from app.models.rfc import RFC
@@ -156,6 +157,37 @@ def graph_labels(project_id: UUID | None = None,
         for row in query.all():
             labels[str(row.id)] = row.title
 
+    plans = db.query(ExecutionPlan)
+    if item_ids:
+        plans = plans.filter(ExecutionPlan.backlog_id.in_(item_ids))
+    elif project_id:
+        plans = plans.filter(False)
+    plan_rows = plans.all()
+    plan_ids = [row.id for row in plan_rows]
+    task_titles = {str(item.id): item.title for item in items}
+    for row in plan_rows:
+        labels[str(row.id)] = (
+            f"Plano v{row.version} · {task_titles.get(str(row.backlog_id), 'Task')}"
+        )
+
+    runs = db.query(AgentRun)
+    if plan_ids:
+        runs = runs.filter(AgentRun.plan_id.in_(plan_ids))
+    elif project_id:
+        runs = runs.filter(False)
+    run_rows = runs.all()
+    run_ids = [row.id for row in run_rows]
+    for row in run_rows:
+        labels[str(row.id)] = f"{row.agent.title()} · {row.status}"
+
+    events = db.query(AgentRunEvent)
+    if run_ids:
+        events = events.filter(AgentRunEvent.run_id.in_(run_ids))
+    elif project_id:
+        events = events.filter(False)
+    for row in events.all():
+        labels[str(row.id)] = row.event_type
+
     return {"labels": labels}
 
 
@@ -250,5 +282,35 @@ def backfill_graph(db: Session = Depends(get_db)):
                         else None
                     ),
                 )
+
+    plans = db.query(ExecutionPlan).all()
+    for plan in plans:
+        parent = backlog_by_id.get(plan.backlog_id)
+        if parent:
+            execute(
+                "sync_plan", str(plan.id), str(parent.project_id),
+                str(plan.backlog_id),
+            )
+
+    plan_by_id = {row.id: row for row in plans}
+    runs = db.query(AgentRun).all()
+    for run in runs:
+        plan = plan_by_id.get(run.plan_id)
+        parent = backlog_by_id.get(run.backlog_id)
+        if plan and parent:
+            execute(
+                "sync_agent_run", str(run.id), str(parent.project_id),
+                str(plan.id), str(run.backlog_id),
+            )
+
+    run_by_id = {row.id: row for row in runs}
+    for event in db.query(AgentRunEvent).all():
+        run = run_by_id.get(event.run_id)
+        parent = backlog_by_id.get(run.backlog_id) if run else None
+        if run and parent:
+            execute(
+                "sync_agent_event", str(event.id), str(parent.project_id),
+                str(run.id),
+            )
 
     return result

@@ -2,14 +2,15 @@ export type NodeType =
   | "Project" | "Feature" | "Task" | "Subtask"
   | "Knowledge" | "ADR" | "RFC" | "Commit"
   | "Deployment" | "Release" | "AIConversation" | "Monitoring"
-  | "Decision";
+  | "Decision" | "Plan" | "AgentRun" | "AgentEvent";
 
 export type RelationshipType =
   | "HAS_FEATURE" | "HAS_TASK" | "HAS_SUBTASK"
   | "LINKED_TO_COMMIT" | "LINKED_TO_DEPLOY"
   | "LINKED_TO_KNOWLEDGE" | "LINKED_TO_ADR" | "LINKED_TO_RFC"
   | "HAS_DECISION" | "BELONGS_TO" | "DEPENDS_ON"
-  | "RELEASED_IN" | "RELATES_TO" | "BLOCKS" | "CAUSED_BY";
+  | "RELEASED_IN" | "RELATES_TO" | "BLOCKS" | "CAUSED_BY"
+  | "HAS_PLAN" | "HAS_RUN" | "HAS_EVENT";
 
 export interface GraphNode {
   id: string;
