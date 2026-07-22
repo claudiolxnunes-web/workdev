@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   Background,
   Controls,
@@ -9,7 +8,6 @@ import {
   ReactFlow,
   type NodeProps,
   type NodeTypes,
-  type ReactFlowInstance,
   type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -84,7 +82,6 @@ export function EngineeringNode({ data, selected }: NodeProps<GraphFlowNode>) {
 const nodeTypes: NodeTypes = { engineering: EngineeringNode };
 
 export function GraphExplorer({ project_id }: { project_id?: string }) {
-  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<GraphFlowNode> | null>(null);
   const {
     nodes,
     edges,
@@ -137,28 +134,6 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
           >
             Colapsar tudo
           </button>
-          <div className="flex overflow-hidden rounded-lg border border-slate-700 bg-slate-800" aria-label="Controles de zoom">
-            <button
-              type="button"
-              onClick={() => void flowInstance?.zoomOut({ duration: 200 })}
-              disabled={!flowInstance}
-              className="flex h-9 w-10 items-center justify-center text-xl leading-none hover:bg-slate-700 disabled:opacity-40"
-              aria-label="Diminuir grafo"
-              title="Diminuir grafo"
-            >
-              −
-            </button>
-            <button
-              type="button"
-              onClick={() => void flowInstance?.zoomIn({ duration: 200 })}
-              disabled={!flowInstance}
-              className="flex h-9 w-10 items-center justify-center border-l border-slate-700 text-xl leading-none hover:bg-slate-700 disabled:opacity-40"
-              aria-label="Aumentar grafo"
-              title="Aumentar grafo"
-            >
-              +
-            </button>
-          </div>
           <select
             aria-label="Escopo do grafo"
             value={view}
@@ -185,7 +160,6 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
-              onInit={setFlowInstance}
               fitView
               minZoom={0.2}
               maxZoom={2}
@@ -200,9 +174,9 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
                 pannable
                 zoomable
               />
-              <Panel position="top-center" className="!m-2 w-[calc(100%_-_1rem)] max-w-3xl overflow-x-auto rounded-full border border-slate-700 bg-slate-950/90 px-2 py-1.5 shadow-xl backdrop-blur">
-                <div className="flex min-w-max items-center justify-center gap-1 whitespace-nowrap">
-                  <span className="hidden px-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:inline">Tipos</span>
+              <Panel position="bottom-center" className="!m-2 max-w-[calc(100%-120px)] overflow-x-auto rounded-full border border-slate-700 bg-slate-950/90 px-2 py-1.5 shadow-xl backdrop-blur">
+                <div className="flex items-center gap-1 whitespace-nowrap">
+                  <span className="px-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Tipos</span>
                   {activeTypes.map((type) => {
                     const hidden = hiddenTypes.has(type);
                     return (
@@ -212,10 +186,10 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
                         onClick={() => toggleType(type)}
                         aria-pressed={!hidden}
                         title={`${hidden ? "Mostrar" : "Ocultar"} ${typeLabels[type] ?? type}`}
-                        className={`flex items-center gap-1 rounded-full p-1 text-[9px] transition-all hover:bg-slate-800 sm:px-1.5 ${hidden ? "opacity-30 grayscale" : "opacity-100"}`}
+                        className={`flex items-center gap-1 rounded-full px-1.5 py-1 text-[9px] transition-all hover:bg-slate-800 ${hidden ? "opacity-30 grayscale" : "opacity-100"}`}
                       >
                         <span className="h-2.5 w-2.5 rounded-full" style={{ background: NODE_VISUALS[type]?.color ?? "#64748b" }} />
-                        <span className="hidden sm:inline">{typeLabels[type] ?? type}</span>
+                        {typeLabels[type] ?? type}
                       </button>
                     );
                   })}
