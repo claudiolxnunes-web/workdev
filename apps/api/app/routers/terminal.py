@@ -7,7 +7,7 @@ import subprocess
 import termios
 from contextlib import suppress
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 
 from app.auth import websocket_is_authenticated
 
@@ -23,6 +23,34 @@ _active_connections: set[str] = set()
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
 _PROCESS_LABELS = {"qwen": "qwen-code"}
+
+
+def _capture_history(session: str, lines: int) -> str:
+    result = subprocess.run(
+        ["tmux", "capture-pane", "-p", "-J", "-S", f"-{lines}", "-t", session],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "Sessão tmux indisponível")
+    return result.stdout.rstrip()
+
+
+@router.get("/api/agents/{agent}/history")
+async def agent_history(
+    agent: str,
+    lines: int = Query(default=5000, ge=100, le=20000),
+):
+    session = ALLOWED_SESSIONS.get(agent)
+    if not session:
+        raise HTTPException(status_code=404, detail="Agente inválido")
+    try:
+        content = await asyncio.to_thread(_capture_history, session, lines)
+    except (RuntimeError, subprocess.TimeoutExpired) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return {"agent": agent, "lines": len(content.splitlines()), "content": content}
 
 
 def _resize(fd: int, rows: int, cols: int) -> None:
