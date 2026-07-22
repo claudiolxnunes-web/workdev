@@ -13,6 +13,8 @@ const labels: Record<ConnectionStatus, string> = {
 export function AgentTerminal({ agent }: { agent: AgentName }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
+  const socketRef = useRef<WebSocket | null>(null)
+  const historyRef = useRef<HTMLTextAreaElement>(null)
   const [status, setStatus] = useState<ConnectionStatus>("connecting")
   const [taskRunning, setTaskRunning] = useState(false)
   const [processName, setProcessName] = useState("")
@@ -41,6 +43,7 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
     terminalRef.current = terminal
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
     const socket = new WebSocket(`${protocol}//${window.location.host}/ws/agents/${agent}`)
+    socketRef.current = socket
     socket.binaryType = "arraybuffer"
 
     const fit = () => {
@@ -79,9 +82,7 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
     const selection = terminal.onSelectionChange(() => setHasSelection(terminal.hasSelection()))
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type === "keydown" && (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "c" && terminal.hasSelection()) {
-        void navigator.clipboard.writeText(terminal.getSelection())
-        setCopyFeedback("Seleção copiada")
-        window.setTimeout(() => setCopyFeedback(""), 1600)
+        void copyText(terminal.getSelection(), "Seleção copiada")
         return false
       }
       return true
@@ -89,17 +90,49 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
     return () => {
       input.dispose(); selection.dispose(); observer.disconnect(); socket.close(); terminal.dispose()
       terminalRef.current = null
+      socketRef.current = null
     }
   }, [agent, generation])
 
-  async function copySelection() {
-    const selected = terminalRef.current?.getSelection() || ""
-    if (!selected) return
+  async function copyText(text: string, success: string) {
     try {
-      await navigator.clipboard.writeText(selected)
-      setCopyFeedback("Seleção copiada")
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text)
+      else {
+        const fallback = document.createElement("textarea")
+        fallback.value = text
+        fallback.style.position = "fixed"
+        fallback.style.opacity = "0"
+        document.body.appendChild(fallback)
+        fallback.select()
+        const copied = document.execCommand("copy")
+        fallback.remove()
+        if (!copied) throw new Error("copy unsupported")
+      }
+      setCopyFeedback(success)
       window.setTimeout(() => setCopyFeedback(""), 1600)
     } catch { setCopyFeedback("Falha ao copiar") }
+  }
+
+  async function copySelection() {
+    const selected = terminalRef.current?.getSelection() || ""
+    if (selected) await copyText(selected, "Seleção copiada")
+  }
+
+  async function copyScreen() {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    const buffer = terminal.buffer.active
+    const lines: string[] = []
+    for (let row = buffer.viewportY; row < buffer.viewportY + terminal.rows; row += 1) {
+      lines.push(buffer.getLine(row)?.translateToString(true) || "")
+    }
+    await copyText(lines.join("\n").trimEnd(), "Tela copiada")
+  }
+
+  function sendPage(direction: "up" | "down") {
+    const socket = socketRef.current
+    if (socket?.readyState !== WebSocket.OPEN) return
+    socket.send(JSON.stringify({ type: "input", data: direction === "up" ? "\u001b[5~" : "\u001b[6~" }))
   }
 
   async function openHistory() {
@@ -109,23 +142,32 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || "Falha ao carregar histórico")
       setHistory(typeof data.content === "string" ? data.content : "")
+      window.requestAnimationFrame(() => {
+        const field = historyRef.current
+        if (field) field.scrollTop = field.scrollHeight
+      })
     } catch (cause) {
       setHistoryError(cause instanceof Error ? cause.message : "Falha ao carregar histórico")
     } finally { setHistoryLoading(false) }
   }
 
   async function copyHistory() {
-    try {
-      await navigator.clipboard.writeText(history)
-      setCopyFeedback("Histórico copiado")
-      window.setTimeout(() => setCopyFeedback(""), 1600)
-    } catch { setCopyFeedback("Falha ao copiar") }
+    await copyText(history, "Histórico copiado")
+  }
+
+  function downloadHistory() {
+    const url = URL.createObjectURL(new Blob([history], { type: "text/plain;charset=utf-8" }))
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `workdev-${agent}-historico.txt`
+    link.click()
+    URL.revokeObjectURL(url)
   }
 
   const active = status === "connected"
   return (
     <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
-      <div className="flex min-h-11 items-center justify-between gap-3 border-b border-slate-800 px-3 sm:px-4">
+      <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3 py-1 sm:px-4">
         <div className="flex min-w-0 items-center gap-2 text-sm">
           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${active ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-red-400"}`} />
           <span className="truncate">{labels[status]}</span>
@@ -135,7 +177,7 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
             </span>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex max-w-full shrink-0 items-center gap-1 overflow-x-auto">
           {copyFeedback && <span className="hidden text-xs text-emerald-400 sm:inline">{copyFeedback}</span>}
           <button
             type="button"
@@ -146,6 +188,11 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
           >
             Copiar seleção
           </button>
+          <button type="button" onClick={() => void copyScreen()} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Copia tudo que está visível no terminal">
+            Copiar tela
+          </button>
+          <button type="button" onClick={() => sendPage("up")} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Página anterior dentro do agente">↑</button>
+          <button type="button" onClick={() => sendPage("down")} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Próxima página dentro do agente">↓</button>
           <button type="button" onClick={() => void openHistory()} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800">
             Histórico
           </button>
@@ -163,14 +210,23 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
               <p className="text-[11px] text-slate-500">Selecione qualquer trecho ou copie tudo</p>
             </div>
             <div className="flex items-center gap-2">
+              <button type="button" onClick={() => { if (historyRef.current) historyRef.current.scrollTop = 0 }} className="rounded px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800">Início</button>
+              <button type="button" onClick={() => { const field = historyRef.current; if (field) field.scrollTop = field.scrollHeight }} className="rounded px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800">Final</button>
               <button type="button" disabled={!history} onClick={() => void copyHistory()} className="rounded bg-sky-700 px-3 py-1.5 text-xs hover:bg-sky-600 disabled:opacity-40">Copiar tudo</button>
+              <button type="button" disabled={!history} onClick={downloadHistory} className="rounded bg-slate-800 px-3 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-40">Baixar .txt</button>
               <button type="button" onClick={() => setHistoryOpen(false)} className="rounded px-2 py-1 text-xl text-slate-400 hover:bg-slate-800 hover:text-white" aria-label="Fechar histórico">×</button>
             </div>
           </div>
           {historyLoading && <p className="p-4 text-sm text-slate-400">Carregando histórico do tmux…</p>}
           {historyError && <p className="m-4 rounded bg-red-950/60 p-3 text-sm text-red-300">{historyError}</p>}
           {!historyLoading && !historyError && (
-            <pre className="min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed text-slate-300">{history || "Nenhum histórico disponível nesta sessão."}</pre>
+            <textarea
+              ref={historyRef}
+              readOnly
+              value={history || "Nenhum histórico disponível nesta sessão."}
+              className="min-h-0 flex-1 touch-pan-y resize-none overflow-auto whitespace-pre-wrap break-words border-0 bg-slate-950 p-4 font-mono text-xs leading-relaxed text-slate-300 outline-none"
+              aria-label={`Histórico textual do ${agent}`}
+            />
           )}
         </div>
       )}
