@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 import { getProject } from "../../services/projects.service";
+import { ProjectContext } from "./projectContextInstance";
 
 export interface ProjectData {
   id: string;
@@ -20,11 +21,9 @@ export interface ProjectData {
   updated_at?: string;
 }
 
-interface ProjectContextValue extends ProjectData {
+export interface ProjectContextValue extends ProjectData {
   refresh: () => void;
 }
-
-const ProjectContext = createContext<ProjectContextValue | null>(null);
 
 export function ProjectProvider({
   slug,
@@ -47,8 +46,15 @@ export function ProjectProvider({
   }, [slug]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    startTransition(() => {
+      setLoading(true);
+      setError("");
+    });
+    getProject(slug)
+      .then((p: ProjectData) => setProject(p))
+      .catch(() => setError("Projeto não encontrado"))
+      .finally(() => setLoading(false));
+  }, [slug]);
 
   if (loading) {
     return <p className="text-slate-400">Carregando projeto...</p>;
@@ -64,8 +70,3 @@ export function ProjectProvider({
   );
 }
 
-export function useProject(): ProjectContextValue {
-  const ctx = useContext(ProjectContext);
-  if (!ctx) throw new Error("useProject deve ser usado dentro de ProjectProvider");
-  return ctx;
-}

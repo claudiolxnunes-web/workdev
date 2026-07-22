@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useProject } from "../ProjectContext";
+import { startTransition, useEffect, useState } from "react";
+import { useProject } from "../useProject";
 import { getBacklog, updateStatus, deleteItem } from "../../../services/backlog.service";
 import type { BacklogItem } from "../../../services/backlog.service";
 import TaskDetail from "../../TaskDetail";
@@ -39,8 +39,10 @@ export function BacklogTab() {
   }
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    startTransition(() => setLoading(true));
+    getBacklog()
+      .then((all) => setItems(all.filter((i) => i.project_id === project.id)))
+      .finally(() => setLoading(false));
   }, [project.id]);
 
   async function remove(e: React.MouseEvent, item: BacklogItem) {

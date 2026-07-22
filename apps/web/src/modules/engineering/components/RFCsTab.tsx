@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { startTransition, useEffect, useState } from "react";
 import { getRFCs, createRFC } from "../../../services/rfcs.service";
 import type { RFC, RFCStatus } from "../../../services/rfcs.service";
 import { getBacklog } from "../../../services/backlog.service";
@@ -38,13 +38,19 @@ export function RFCsTab({ projectId }: { projectId?: string }) {
   }
 
   useEffect(() => {
-    load();
+    startTransition(() => {
+      setLoading(true);
+      setListError("");
+    });
+    getRFCs(projectId)
+      .then(setRfcs)
+      .catch(() => setListError("Erro ao carregar RFCs"))
+      .finally(() => setLoading(false));
     getBacklog()
       .then((items) => setFeatures(items.filter(
         (item) => item.project_id === projectId && item.type === "feature",
       )))
       .catch(() => setFeatures([]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   async function save() {

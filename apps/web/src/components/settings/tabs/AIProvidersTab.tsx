@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { startTransition, useEffect, useState } from "react";
 import { getProvidersStatus } from "../../../services/ai.service";
 import type { ProviderStatus } from "../../../services/ai.service";
 
@@ -9,7 +9,7 @@ export function AIProvidersTab() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    setLoading(true);
+    startTransition(() => setLoading(true));
     getProvidersStatus()
       .then((d) => {
         setProviders(d.providers);

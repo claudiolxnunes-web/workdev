@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useProject } from "./ProjectContext";
+import { useProject } from "./useProject";
 
 const STATUS_COLORS: Record<string, string> = {
   Production: "bg-green-700",

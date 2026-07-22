@@ -247,8 +247,15 @@ export function useGraphExplorer(projectId?: string) {
     return map;
   }, [scoped.edges]);
   const semanticZoom = semanticZoomFor(zoom);
+  // positions é mutado só em callbacks/efeitos (nunca durante render) e
+  // sempre em lockstep com o setGraph/load que dispara este useMemo — mas
+  // ler positions.current aqui ainda viola a regra de pureza do React.
+  // Convertê-lo pra state exigiria reescrever assignStablePositions (Map
+  // mutado in-place) sem poder validar visualmente o layout do grafo nesta
+  // sessão; disable com escopo é a opção mais segura por ora.
   const nodes = useMemo<GraphFlowNode[]>(() => scoped.nodes
     .filter((node) => visibleIds.has(node.id))
+    // eslint-disable-next-line react-hooks/refs
     .map((node) => {
       const fullLabel = node.label || `${node.type} · ${node.entity_id.slice(0, 8)}`;
       const cleaned = visibleLabel(fullLabel);

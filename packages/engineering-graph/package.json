@@ -5,7 +5,7 @@
   "main": "index.ts",
   "types": "index.ts",
   "scripts": {
-    "test": "node EngineeringGraphService.test.ts"
+    "test": "node --experimental-strip-types EngineeringGraphService.test.ts"
   },
   "dependencies": { "@supabase/supabase-js": "^2.45.0" }
 }

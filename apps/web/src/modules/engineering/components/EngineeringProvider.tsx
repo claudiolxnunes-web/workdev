@@ -1,8 +1,5 @@
-import { createContext, useContext } from 'react'
-import type { EngineeringContextData } from '../types'
 import { useEngineering } from '../hooks/useEngineering'
-
-const EngineeringContext = createContext<EngineeringContextData | null>(null)
+import { EngineeringContext } from './engineeringContextInstance'
 
 export function EngineeringProvider({
   children,
@@ -18,10 +15,4 @@ export function EngineeringProvider({
       {children}
     </EngineeringContext.Provider>
   )
-}
-
-export function useEngineeringContext() {
-  const ctx = useContext(EngineeringContext)
-  if (!ctx) throw new Error('useEngineeringContext must be used within EngineeringProvider')
-  return ctx
 }

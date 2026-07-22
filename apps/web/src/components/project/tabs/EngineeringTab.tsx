@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { useProject } from "../ProjectContext";
+import { useProject } from "../useProject";
 
 const EngineeringPage = lazy(() =>
   import("../../../modules/engineering").then((m) => ({ default: m.EngineeringPage }))

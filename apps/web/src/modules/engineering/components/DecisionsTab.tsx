@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { startTransition, useEffect, useState } from "react";
 import { getDecisions, createDecision } from "../../../services/decisions.service";
 import type { Decision } from "../../../services/decisions.service";
 
@@ -22,8 +22,14 @@ export function DecisionsTab({ projectId }: { projectId?: string }) {
   }
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    startTransition(() => {
+      setLoading(true);
+      setListError("");
+    });
+    getDecisions(projectId)
+      .then(setDecisions)
+      .catch(() => setListError("Erro ao carregar decisões"))
+      .finally(() => setLoading(false));
   }, [projectId]);
 
   async function save() {

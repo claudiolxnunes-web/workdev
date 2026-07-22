@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useProject } from "../ProjectContext";
+import { startTransition, useEffect, useState } from "react";
+import { useProject } from "../useProject";
 import { getKnowledge } from "../../../services/knowledge.service";
 import type { KnowledgeEntry } from "../../../services/knowledge.service";
 
@@ -24,7 +24,7 @@ export function KnowledgeTab() {
   const [aberto, setAberto] = useState<string | null>(null);
 
   useEffect(() => {
-    setLoading(true);
+    startTransition(() => setLoading(true));
     getKnowledge(undefined, undefined, project.id)
       .then(setEntries)
       .finally(() => setLoading(false));

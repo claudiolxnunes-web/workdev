@@ -1,4 +1,4 @@
-import { useEngineeringContext } from './EngineeringProvider'
+import { useEngineeringContext } from '../hooks/useEngineeringContext'
 import type { EngineeringTab } from '../types'
 
 const tabs: { id: EngineeringTab; label: string; icon: string }[] = [

@@ -1,5 +1,6 @@
 export { EngineeringPage } from './pages/EngineeringPage'
-export { EngineeringProvider, useEngineeringContext } from './components/EngineeringProvider'
+export { EngineeringProvider } from './components/EngineeringProvider'
+export { useEngineeringContext } from './hooks/useEngineeringContext'
 export { EngineeringLayout } from './components/EngineeringLayout'
 export { useEngineering } from './hooks/useEngineering'
 export { engineeringRoutes } from './routes'

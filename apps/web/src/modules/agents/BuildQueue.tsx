@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { startTransition, useCallback, useEffect, useState } from "react"
 import {
   getRunContext, getRuns, subscribeToHandoffs, updateRun, updateRunSubtask,
   type AgentContext, type AgentName, type AgentRun, type RunStatus,
@@ -43,13 +43,25 @@ export function BuildQueue({ agent }: { agent: AgentName }) {
   }, [])
 
   useEffect(() => {
-    setSelectedId(null); setContext(null); setLoading(true); void loadRuns()
+    startTransition(() => { setSelectedId(null); setContext(null); setLoading(true) })
+    // loadRuns() é reaproveitado por 3 gatilhos (mount, evento realtime,
+    // timer) — inline duplicaria a busca 3x; disable com escopo é mais
+    // seguro que reestruturar um fluxo com subscription+interval.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadRuns()
     const unsubscribe = subscribeToHandoffs(() => void loadRuns())
     const timer = window.setInterval(() => void loadRuns(), 12000)
     return () => { unsubscribe(); window.clearInterval(timer) }
   }, [loadRuns])
 
-  useEffect(() => { if (selectedId) void loadContext(selectedId); else setContext(null) }, [selectedId, loadContext])
+  useEffect(() => {
+    if (selectedId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void loadContext(selectedId)
+    } else {
+      startTransition(() => setContext(null))
+    }
+  }, [selectedId, loadContext])
 
   async function move(status: RunStatus) {
     if (!selectedId) return

@@ -1,5 +1,6 @@
 import os
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
@@ -34,6 +35,17 @@ async def require_api_key(request: Request, call_next):
         if not request_is_authenticated(request):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
+
+
+# Produção serve o frontend pela própria FastAPI (same-origin, não precisa de
+# CORS). Isso libera só o Vite dev server local — nunca um wildcard.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 app.include_router(projects_router, prefix="/api")

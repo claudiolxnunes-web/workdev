@@ -30,6 +30,10 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
   }, [])
 
   useEffect(() => {
+    // load() é reaproveitado por 3 gatilhos (mount, evento realtime, timer)
+    // e por approve() — inline duplicaria a busca 3x; disable com escopo é
+    // mais seguro que reestruturar um fluxo com subscription+interval.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load()
     const unsubscribe = subscribeToHandoffs(() => void load())
     const timer = window.setInterval(() => void load(), 15000)

@@ -1,4 +1,4 @@
-import { useProject } from "../ProjectContext";
+import { useProject } from "../useProject";
 
 export function RepositoryTab() {
   const project = useProject();

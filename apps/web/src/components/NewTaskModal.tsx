@@ -27,7 +27,7 @@ export default function NewTaskModal({ open, onClose, onCreated }: Props) {
     if (open) {
       getProjects().then((p) => {
         setProjects(p);
-        if (p.length && !projectId) setProjectId(p[0].id);
+        if (p.length) setProjectId((current) => current || p[0].id);
       });
     }
   }, [open]);

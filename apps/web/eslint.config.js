@@ -19,4 +19,13 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // shadcn/ui gera esses arquivos com componente + variants (cva) juntos,
+    // por convenção da própria lib — não editar pra não divergir de futuros
+    // `shadcn add`/updates.
+    files: ['src/components/ui/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

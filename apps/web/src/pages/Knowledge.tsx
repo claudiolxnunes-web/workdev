@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { startTransition, useEffect, useState } from "react"
 import { getKnowledge } from "../services/knowledge.service"
 import type { KnowledgeEntry } from "../services/knowledge.service"
 
@@ -31,7 +31,7 @@ export default function Knowledge() {
   const [carregando, setCarregando] = useState(true)
 
   useEffect(() => {
-    setCarregando(true)
+    startTransition(() => setCarregando(true))
     getKnowledge(categoria || undefined, busca || undefined)
       .then(setEntries)
       .catch(console.error)

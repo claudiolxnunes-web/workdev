@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { startTransition, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { useProject } from "../ProjectContext";
+import { useProject } from "../useProject";
 
 interface DeployApp {
   nome: string;
@@ -24,7 +24,7 @@ export function DeploymentsTab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
+    startTransition(() => setLoading(true));
     fetch("/api/deployments/status")
       .then((r) => r.json())
       .then((d) => {

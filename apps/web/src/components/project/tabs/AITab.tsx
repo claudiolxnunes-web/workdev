@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useProject } from "../ProjectContext";
+import { useProject } from "../useProject";
 
 export function AITab() {
   const project = useProject();

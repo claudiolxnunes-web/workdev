@@ -1,6 +1,6 @@
 import { EngineeringProvider } from '../components/EngineeringProvider'
 import { EngineeringLayout } from '../components/EngineeringLayout'
-import { useEngineeringContext } from '../components/EngineeringProvider'
+import { useEngineeringContext } from '../hooks/useEngineeringContext'
 import { GraphExplorer } from '../../../components/graph'
 import { TimelineTab } from '../components/TimelineTab'
 import { ADRsTab } from '../components/ADRsTab'

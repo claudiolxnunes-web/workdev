@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useProject } from "../ProjectContext";
+import { useProject } from "../useProject";
 import { updateProject } from "../../../services/projects.service";
 
 const STATUS_OPTIONS = ["Planning", "Development", "Production"];

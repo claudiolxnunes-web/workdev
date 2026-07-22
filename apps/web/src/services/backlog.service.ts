@@ -1,6 +1,6 @@
-const API_URL = "";
+const API_URL =
   import.meta.env.VITE_API_URL ||
-  "http://localhost:8000";
+  (import.meta.env.DEV ? "http://localhost:8000" : "");
 const API_KEY = import.meta.env.VITE_API_KEY || "";
 
 const headers: HeadersInit = {

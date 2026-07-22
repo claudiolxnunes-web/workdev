@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { SettingsTabs } from "./settings/SettingsTabs";
-import type { SettingsTabId } from "./settings/SettingsTabs";
+import type { SettingsTabId } from "./settings/tabsConfig";
 import { SistemaTab } from "./settings/tabs/SistemaTab";
 import { AIProvidersTab } from "./settings/tabs/AIProvidersTab";
 import { EngineeringGraphTab } from "./settings/tabs/EngineeringGraphTab";

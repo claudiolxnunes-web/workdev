@@ -1,16 +1,11 @@
 import { AlertTriangle } from "lucide-react";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { isErrorMessage } from "./messageUtils";
 
 export interface Msg {
   role: "user" | "assistant";
   content: string;
   error?: boolean;
-}
-
-const ERROR_PREFIX_RE = /^Erro (ao|na|no)\b/i;
-
-export function isErrorMessage(m: Msg): boolean {
-  return m.role === "assistant" && (!!m.error || ERROR_PREFIX_RE.test(m.content.trim()));
 }
 
 function summarize(content: string): string {

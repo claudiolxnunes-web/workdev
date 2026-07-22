@@ -44,7 +44,13 @@ export default function Backlog() {
   }
 
   useEffect(() => {
-    load();
+    getBacklog()
+      .then((data) => {
+        setItems(data);
+        setError("");
+      })
+      .catch(() => setError("Erro ao carregar backlog da API"))
+      .finally(() => setLoading(false));
   }, []);
 
   async function remove(e: React.MouseEvent, item: BacklogItem) {

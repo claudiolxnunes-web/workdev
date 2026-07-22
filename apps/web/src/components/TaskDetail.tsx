@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { startTransition, useEffect, useState } from "react";
 import { getSubtasks, updateSubtask } from "../services/backlog.service";
 import type { BacklogItem, Subtask } from "../services/backlog.service";
 
@@ -14,7 +14,7 @@ export default function TaskDetail({ item, onClose, onAdvance }: Props) {
 
   useEffect(() => {
     if (item) {
-      setLoading(true);
+      startTransition(() => setLoading(true));
       getSubtasks(item.id)
         .then(setSubs)
         .catch(() => setSubs([]))

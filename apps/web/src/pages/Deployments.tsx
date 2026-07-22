@@ -36,7 +36,14 @@ export default function Deployments() {
   }
 
   useEffect(() => {
-    carregar()
+    fetch("/api/deployments/status")
+      .then((r) => r.json())
+      .then((d) => {
+        setApps(d.apps || [])
+        setGeradoEm(d.gerado_em || "")
+        setResumo(d.resumo || { total: 0, online: 0 })
+      })
+      .finally(() => setCarregando(false))
   }, [])
 
   return (

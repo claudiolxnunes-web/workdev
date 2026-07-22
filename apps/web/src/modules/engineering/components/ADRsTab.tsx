@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { startTransition, useEffect, useState } from "react";
 import { getADRs, createADR } from "../../../services/adrs.service";
 import type { ADR, ADRStatus } from "../../../services/adrs.service";
 import { getBacklog } from "../../../services/backlog.service";
@@ -38,13 +38,19 @@ export function ADRsTab({ projectId }: { projectId?: string }) {
   }
 
   useEffect(() => {
-    load();
+    startTransition(() => {
+      setLoading(true);
+      setListError("");
+    });
+    getADRs(projectId)
+      .then(setAdrs)
+      .catch(() => setListError("Erro ao carregar ADRs"))
+      .finally(() => setLoading(false));
     getBacklog()
       .then((items) => setFeatures(items.filter(
         (item) => item.project_id === projectId && item.type === "feature",
       )))
       .catch(() => setFeatures([]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   async function save() {

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useProject } from "../ProjectContext";
+import { startTransition, useEffect, useState } from "react";
+import { useProject } from "../useProject";
 import { getBacklog } from "../../../services/backlog.service";
 import type { BacklogItem } from "../../../services/backlog.service";
 
@@ -42,7 +42,7 @@ export function OverviewTab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
+    startTransition(() => setLoading(true));
     Promise.all([
       getBacklog(),
       fetch("/api/deployments/status").then((r) => r.json()),
