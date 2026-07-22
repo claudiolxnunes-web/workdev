@@ -19,6 +19,7 @@ from app.routers.rfcs import router as rfcs_router
 from app.routers.decisions import router as decisions_router
 from app.routers.handoffs import router as handoffs_router
 from app.routers.settings import router as settings_router
+from app.routers.system import router as system_router
 from app.auth import request_is_authenticated
 
 load_dotenv()
@@ -50,6 +51,7 @@ app.include_router(rfcs_router, prefix="/api")
 app.include_router(decisions_router, prefix="/api")
 app.include_router(handoffs_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+app.include_router(system_router, prefix="/api")
 app.include_router(terminal_router)
 
 

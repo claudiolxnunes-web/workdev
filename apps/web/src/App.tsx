@@ -22,10 +22,15 @@ const ProjectWorkspace = lazy(() => import("./pages/ProjectWorkspace"))
 
 function App() {
   const [versao, setVersao] = useState("")
+  const [appName, setAppName] = useState("WorkDev Core")
   useEffect(() => {
     fetch("/health")
       .then((r) => r.json())
       .then((d) => d.version && setVersao(`v${d.version}`))
+      .catch(() => {})
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((d) => d?.app?.name && setAppName(d.app.name))
       .catch(() => {})
   }, [])
   const menuClass =
@@ -39,7 +44,7 @@ function App() {
       {/* Header */}
       <header className="border-b border-slate-800 px-4 py-3 sm:px-8 sm:py-4 flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold">WorkDev Core</h1>
+          <h1 className="text-2xl font-bold">{appName}</h1>
           <p className="text-slate-400 text-sm">
             Software Engineering Platform
           </p>
