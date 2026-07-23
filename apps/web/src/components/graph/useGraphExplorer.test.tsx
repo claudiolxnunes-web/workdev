@@ -20,6 +20,7 @@ vi.mock("../../services/engineering.service", () => ({
 import {
   computeVisibleNodeIds,
   connectedTimeline,
+  deduplicateGraph,
   semanticZoomFor,
   selectGraphScope,
   truncateLabel,
@@ -74,6 +75,70 @@ function largeFixture(): GraphResult {
 }
 
 describe("GraphExplorer hierarchy", () => {
+  it("deduplicates logical nodes, keeps the richer node and remaps every edge", () => {
+    const graph: GraphResult = {
+      nodes: [
+        {
+          id: "project-incomplete",
+          type: "Project",
+          entity_id: "4224987e-a792-4b80-b571-1c47fc734ca4",
+          project_id: "4224987e-a792-4b80-b571-1c47fc734ca4",
+        },
+        {
+          id: "project-canonical",
+          type: "Project",
+          entity_id: "4224987e-a792-4b80-b571-1c47fc734ca4",
+          project_id: "4224987e-a792-4b80-b571-1c47fc734ca4",
+          label: "WorkDev Core",
+          metadata: { source: "sync" },
+        },
+        {
+          id: "feature-a",
+          type: "Feature",
+          entity_id: "feature-a",
+          project_id: "4224987e-a792-4b80-b571-1c47fc734ca4",
+        },
+        {
+          id: "feature-b",
+          type: "Feature",
+          entity_id: "feature-b",
+          project_id: "4224987e-a792-4b80-b571-1c47fc734ca4",
+        },
+        {
+          id: "task-a",
+          type: "Task",
+          entity_id: "task-a",
+          project_id: "4224987e-a792-4b80-b571-1c47fc734ca4",
+        },
+      ],
+      edges: [
+        { id: "edge-a", source_node: "project-incomplete", target_node: "feature-a", relationship: "HAS_FEATURE" },
+        { id: "edge-a-copy", source_node: "project-canonical", target_node: "feature-a", relationship: "HAS_FEATURE" },
+        { id: "edge-b", source_node: "project-incomplete", target_node: "feature-b", relationship: "HAS_FEATURE" },
+        { id: "edge-task", source_node: "feature-a", target_node: "task-a", relationship: "HAS_TASK" },
+      ],
+    };
+
+    const result = deduplicateGraph(graph);
+
+    expect(result.collisions).toBe(1);
+    expect(result.graph.nodes).toHaveLength(4);
+    expect(result.graph.nodes.find((node) => node.entity_id.startsWith("4224987e"))).toMatchObject({
+      id: "project-canonical",
+      label: "WorkDev Core",
+    });
+    expect(result.idRemap.get("project-incomplete")).toBe("project-canonical");
+    expect(result.graph.edges).toHaveLength(3);
+    expect(result.graph.edges.every((edge) => (
+      edge.source_node !== "project-incomplete" && edge.target_node !== "project-incomplete"
+    ))).toBe(true);
+
+    const collapsed = computeVisibleNodeIds(result.graph, new Set(), new Set());
+    const expanded = computeVisibleNodeIds(result.graph, new Set(["feature-a"]), new Set());
+    expect(collapsed).toEqual(new Set(["project-canonical", "feature-a", "feature-b"]));
+    expect(expanded).toEqual(new Set([...collapsed, "task-a"]));
+  });
+
   it("mounts only Project and Feature for a graph with 205 nodes", () => {
     const graph = largeFixture();
     const visible = computeVisibleNodeIds(graph, new Set(), new Set());

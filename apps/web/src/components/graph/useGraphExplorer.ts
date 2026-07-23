@@ -63,6 +63,62 @@ export function truncateLabel(label: string, maxLength = 30): string {
   return `${label.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+export interface GraphDeduplicationResult {
+  graph: GraphResult;
+  collisions: number;
+  idRemap: Map<string, string>;
+}
+
+function logicalNodeKey(node: GraphNode): string {
+  return `${node.project_id}|${node.type}|${node.entity_id}`;
+}
+
+function nodeCompleteness(node: GraphNode): number {
+  let score = 0;
+  if (node.label?.trim()) score += 4;
+  if (node.type) score += 2;
+  if (node.metadata && Object.keys(node.metadata).length > 0) score += 1;
+  if (node.created_at) score += 1;
+  return score;
+}
+
+export function deduplicateGraph(graph: GraphResult): GraphDeduplicationResult {
+  const canonicalByKey = new Map<string, GraphNode>();
+  for (const node of graph.nodes) {
+    const key = logicalNodeKey(node);
+    const current = canonicalByKey.get(key);
+    if (!current || nodeCompleteness(node) > nodeCompleteness(current)) {
+      canonicalByKey.set(key, node);
+    }
+  }
+
+  const idRemap = new Map<string, string>();
+  for (const node of graph.nodes) {
+    const canonical = canonicalByKey.get(logicalNodeKey(node))!;
+    if (node.id !== canonical.id) idRemap.set(node.id, canonical.id);
+  }
+
+  const canonicalIds = new Set([...canonicalByKey.values()].map((node) => node.id));
+  const edgeKeys = new Set<string>();
+  const edges = graph.edges.flatMap((edge) => {
+    const sourceNode = idRemap.get(edge.source_node) ?? edge.source_node;
+    const targetNode = idRemap.get(edge.target_node) ?? edge.target_node;
+    const edgeKey = `${sourceNode}|${targetNode}|${edge.relationship}`;
+    if (edgeKeys.has(edgeKey)) return [];
+    edgeKeys.add(edgeKey);
+    return [{ ...edge, source_node: sourceNode, target_node: targetNode }];
+  });
+
+  return {
+    graph: {
+      nodes: [...canonicalByKey.values()],
+      edges,
+    },
+    collisions: graph.nodes.length - canonicalIds.size,
+    idRemap,
+  };
+}
+
 export function selectGraphScope(graph: GraphResult, view: GraphView): GraphResult {
   if (view === "all") return graph;
   const rootType = view === "features" ? "Feature" : "Release";
@@ -194,8 +250,12 @@ export function useGraphExplorer(projectId?: string) {
         ...node,
         label: labels[node.entity_id] || node.label,
       }));
-      assignStablePositions(labelled, positions.current);
-      setGraph({ ...result, nodes: labelled });
+      const deduplicated = deduplicateGraph({ ...result, nodes: labelled });
+      console.info(
+        `[graph dedup] recebidos: ${result.nodes.length}, após dedup: ${deduplicated.graph.nodes.length}, colisões: ${deduplicated.collisions}`,
+      );
+      assignStablePositions(deduplicated.graph.nodes, positions.current);
+      setGraph(deduplicated.graph);
       loaded.current = true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Erro ao carregar grafo");
