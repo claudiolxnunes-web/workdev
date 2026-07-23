@@ -163,6 +163,71 @@ describe("GraphExplorer labels and semantic zoom", () => {
     expect(screen.getByLabelText("3 filhos ocultos")).toBeInTheDocument();
   });
 
+  it.each([
+    ["Feature", "diamond"],
+    ["ADR", "hexagon"],
+    ["Task", "square"],
+  ] as const)("keeps the label box bounded and left-aligned for %s nodes", (nodeType, shape) => {
+    const fullLabel = `${nodeType}: Tool node WorkDev no Agente Pessoal com um título longo`;
+    const props = {
+      data: {
+        nodeType,
+        fullLabel,
+        displayLabel: visibleLabel(fullLabel),
+        compactLabel: truncateLabel(visibleLabel(fullLabel)),
+        hiddenChildren: 0,
+        canExpand: false,
+        expanded: false,
+        semanticZoom: "compact",
+        visual: { color: "#3b82f6", width: 165, height: 48, shape },
+      },
+      selected: false,
+    } as unknown as NodeProps<GraphFlowNode>;
+
+    render(
+      <ReactFlowProvider>
+        <EngineeringNode {...props} />
+      </ReactFlowProvider>,
+    );
+
+    const label = screen.getByText(truncateLabel(visibleLabel(fullLabel)));
+    expect(label).toHaveClass(
+      "node-label",
+      "w-full",
+      "min-w-0",
+      "overflow-hidden",
+      "text-ellipsis",
+      "whitespace-nowrap",
+      "text-left",
+    );
+  });
+
+  it("keeps a short label unchanged inside the same bounded label box", () => {
+    const fullLabel = "Task: Backup";
+    const props = {
+      data: {
+        nodeType: "Task",
+        fullLabel,
+        displayLabel: visibleLabel(fullLabel),
+        compactLabel: truncateLabel(visibleLabel(fullLabel)),
+        hiddenChildren: 0,
+        canExpand: false,
+        expanded: false,
+        semanticZoom: "compact",
+        visual: { color: "#3b82f6", width: 165, height: 48, shape: "square" },
+      },
+      selected: false,
+    } as unknown as NodeProps<GraphFlowNode>;
+
+    render(
+      <ReactFlowProvider>
+        <EngineeringNode {...props} />
+      </ReactFlowProvider>,
+    );
+
+    expect(screen.getByText("Backup")).toHaveClass("node-label", "w-full", "text-left");
+  });
+
   it("keeps the complete graph available to the Time Machine", () => {
     const timeline = connectedTimeline(largeFixture(), "feature-0-task-0");
 

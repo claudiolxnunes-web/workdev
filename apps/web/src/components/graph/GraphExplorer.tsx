@@ -62,7 +62,7 @@ export function EngineeringNode({ data, selected }: NodeProps<GraphFlowNode>) {
     >
       <Handle type="target" position={Position.Top} className="!h-1.5 !w-1.5 !border-0 !bg-slate-400" />
       {!dot && (
-        <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap">
+        <span className="node-label block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap px-2 text-left">
           {label}
         </span>
       )}
