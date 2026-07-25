@@ -13,6 +13,7 @@ import {
   type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "./graph-explorer.css";
 import { NODE_VISUALS, useGraphExplorer } from "./useGraphExplorer";
 import type { GraphFlowNode, GraphView } from "./useGraphExplorer";
 
@@ -189,13 +190,16 @@ export function GraphExplorer({ project_id }: { project_id?: string }) {
               fitView
               minZoom={0.2}
               maxZoom={2}
+              colorMode="dark"
               onMove={(_, viewport: Viewport) => setZoom(viewport.zoom)}
               onNodeClick={(_, node) => selectNode(node.id)}
               onPaneClick={() => selectNode(null)}
             >
               <Background />
-              <Controls />
+              <Controls style={{ background: "#0f172a", border: "1px solid #334155" }} />
               <MiniMap
+                style={{ background: "#020617", border: "1px solid #334155" }}
+                maskColor="rgba(51, 65, 85, 0.55)"
                 nodeColor={(node) => NODE_VISUALS[String(node.data?.nodeType)]?.color ?? "#64748b"}
                 pannable
                 zoomable

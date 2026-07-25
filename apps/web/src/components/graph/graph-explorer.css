@@ -1,0 +1,37 @@
+/* Tema dark do React Flow no Graph Explorer.
+   Usa os mesmos valores slate já usados no resto do componente (não os
+   tokens shadcn --background/--border/--muted: este app nunca ativa a
+   classe .dark do shadcn, então esses tokens sempre resolvem pro tema
+   claro e deixariam minimap/controls brancos). Escopado a .react-flow__
+   para não vazar para o resto da aplicação. */
+
+.react-flow__minimap {
+  background-color: #020617 !important;
+}
+
+.react-flow__minimap-mask {
+  fill: rgba(51, 65, 85, 0.55) !important;
+}
+
+.react-flow__controls {
+  background: transparent;
+  box-shadow: none;
+}
+
+.react-flow__controls-button {
+  background: #0f172a;
+  border-color: #334155;
+  color: #f1f5f9;
+}
+
+.react-flow__controls-button:hover {
+  background: #1e293b;
+}
+
+.react-flow__controls-button svg {
+  fill: #f1f5f9;
+}
+
+.react-flow__background {
+  background-color: #020617;
+}
