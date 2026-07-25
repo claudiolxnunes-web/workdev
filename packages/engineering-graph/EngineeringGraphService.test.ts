@@ -65,6 +65,54 @@ test("getFeatureTimeline ordena a cadeia cronologicamente", async () => {
   assert.deepEqual(timeline.map((node) => node.id), ["1", "2"]);
 });
 
+test("getProjectGraph não filtra edges por lista de IDs na URL (evita 400 com grafos grandes)", async () => {
+  const manyNodes = Array.from({ length: 400 }, (_, i) => ({
+    id: `node-${i}`,
+    type: "Task" as const,
+    entity_id: `entity-${i}`,
+    project_id: "p",
+    created_at: `2026-01-${String((i % 27) + 1).padStart(2, "0")}`,
+  }));
+  const allEdges = [
+    { id: "e1", source_node: "node-0", target_node: "node-1", relationship: "HAS_TASK" },
+    { id: "e2", source_node: "node-fora-do-set", target_node: "node-999", relationship: "HAS_TASK" },
+  ];
+
+  let orCalledOnEdges = false;
+  const client = {
+    from: (table: string) => {
+      if (table === "graph_nodes") {
+        return {
+          select: () => ({
+            eq: () => ({
+              order: async () => ({ data: manyNodes, error: null }),
+            }),
+            order: async () => ({ data: manyNodes, error: null }),
+          }),
+        };
+      }
+      if (table === "graph_edges") {
+        return {
+          select: () => ({
+            or: () => { orCalledOnEdges = true; return { data: [], error: null }; },
+            then: (resolve: (v: { data: unknown; error: null }) => void) =>
+              resolve({ data: allEdges, error: null }),
+          }),
+        };
+      }
+      throw new Error(`tabela inesperada: ${table}`);
+    },
+  } as unknown as SupabaseClient;
+
+  const service = new EngineeringGraphService(client);
+  const graph = await service.getProjectGraph("p");
+
+  assert.equal(orCalledOnEdges, false, "não deve montar filtro .or(...in(...)) para edges");
+  assert.equal(graph.nodes.length, 400);
+  // só a edge que referencia um node do set retornado deve sobrar
+  assert.deepEqual(graph.edges.map((e) => e.id), ["e1"]);
+});
+
 test("getOverview agrega nós, relações e tipos", async () => {
   const service = new EngineeringGraphService({} as SupabaseClient);
   service.getProjectGraph = async (): Promise<GraphResult> => ({

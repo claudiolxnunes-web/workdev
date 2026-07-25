@@ -71,14 +71,21 @@ export class EngineeringGraphService {
     if (projectId) query = query.eq("project_id", projectId);
     const { data: nodes, error } = await query.order("created_at", { ascending: true });
     if (error) throw error;
-    const ids = (nodes ?? []).map((n: any) => n.id);
-    if (ids.length === 0) return { nodes: [], edges: [] };
-    const idList = ids.join(",");
-    const { data: edges, error: e2 } = await this.client
-      .from("graph_edges").select("*")
-      .or(`source_node.in.(${idList}),target_node.in.(${idList})`);
+    if (!nodes || nodes.length === 0) return { nodes: [], edges: [] };
+
+    // Não filtramos edges por .in(node ids) na query: com o grafo grande
+    // (300+ nós) a URL do filtro ultrapassa o limite do servidor e o
+    // Supabase responde 400 Bad Request — foi o que quebrava as abas
+    // Overview e Graph Explorer. graph_edges não tem project_id próprio,
+    // então buscamos tudo (pequeno o bastante hoje) e filtramos aqui.
+    const ids = new Set(nodes.map((n: any) => n.id));
+    const { data: allEdges, error: e2 } = await this.client
+      .from("graph_edges").select("*");
     if (e2) throw e2;
-    return { nodes: (nodes ?? []) as GraphNode[], edges: (edges ?? []) as GraphEdge[] };
+    const edges = (allEdges ?? []).filter(
+      (e: any) => ids.has(e.source_node) || ids.has(e.target_node),
+    );
+    return { nodes: (nodes ?? []) as GraphNode[], edges: edges as GraphEdge[] };
   }
 
   async getConnectedGraph(nodeId: string): Promise<GraphResult> {
