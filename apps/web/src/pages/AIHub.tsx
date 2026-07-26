@@ -8,6 +8,31 @@ interface SessionMeta {
   updated_at: string;
 }
 
+const MODELOS = [
+  { label: "GPT-4o", provider: "openai", model: "gpt-4o" },
+  { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
+  { label: "Claude Sonnet 4.6", provider: "anthropic", model: "claude-sonnet-4-6" },
+  { label: "Claude Haiku 4.5", provider: "anthropic", model: "claude-haiku-4-5-20251001" },
+  { label: "GPT-OSS 20B (Ollama Cloud)", provider: "ollama", model: "gpt-oss:20b" },
+  { label: "Kimi K2.6", provider: "kimi", model: "kimi-k2.6" },
+  { label: "Kimi K2.7 Code", provider: "kimi", model: "kimi-k2.7-code" },
+  { label: "Kimi K3 (OpenRouter)", provider: "openrouter", model: "moonshotai/kimi-k3" },
+  { label: "Gemini 3.5 Flash", provider: "gemini", model: "gemini-3.5-flash" },
+  { label: "Nemotron Ultra 550B (free)", provider: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b:free" },
+  { label: "Qwen3 Coder", provider: "openrouter", model: "qwen/qwen3-coder" },
+];
+const MODELO_STORAGE_KEY = "workdev_ai_hub_modelo";
+const DEFAULT_MODELO_LABEL = "GPT-4o";
+
+function loadStoredModelo() {
+  try {
+    const stored = localStorage.getItem(MODELO_STORAGE_KEY);
+    const found = stored && MODELOS.find((m) => m.label === stored);
+    if (found) return found;
+  } catch { /* localStorage indisponível (modo privado etc.) */ }
+  return MODELOS.find((m) => m.label === DEFAULT_MODELO_LABEL) || MODELOS[0];
+}
+
 export default function AIHub() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -15,20 +40,7 @@ export default function AIHub() {
     () => sessionStorage.getItem("workdev_chat_session")
   );
   const [input, setInput] = useState("");
-  const MODELOS = [
-    { label: "Claude Sonnet 4.6", provider: "anthropic", model: "claude-sonnet-4-6" },
-    { label: "GPT-OSS 20B (Ollama Cloud)", provider: "ollama", model: "gpt-oss:20b" },
-    { label: "Claude Haiku 4.5", provider: "anthropic", model: "claude-haiku-4-5-20251001" },
-    { label: "GPT-4o", provider: "openai", model: "gpt-4o" },
-    { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
-    { label: "Kimi K2.6", provider: "kimi", model: "kimi-k2.6" },
-    { label: "Kimi K2.7 Code", provider: "kimi", model: "kimi-k2.7-code" },
-    { label: "Kimi K3 (OpenRouter)", provider: "openrouter", model: "moonshotai/kimi-k3" },
-    { label: "Gemini 3.5 Flash", provider: "gemini", model: "gemini-3.5-flash" },
-    { label: "Nemotron Ultra 550B (free)", provider: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b:free" },
-    { label: "Qwen3 Coder", provider: "openrouter", model: "qwen/qwen3-coder" },
-  ];
-  const [modelo, setModelo] = useState(MODELOS[0]);
+  const [modelo, setModelo] = useState(loadStoredModelo);
   const [loading, setLoading] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [showPlans, setShowPlans] = useState(false);
@@ -195,9 +207,11 @@ export default function AIHub() {
           />
           <select
             value={modelo.label}
-            onChange={(e) =>
-              setModelo(MODELOS.find((m) => m.label === e.target.value) || MODELOS[0])
-            }
+            onChange={(e) => {
+              const next = MODELOS.find((m) => m.label === e.target.value) || MODELOS[0];
+              setModelo(next);
+              try { localStorage.setItem(MODELO_STORAGE_KEY, next.label); } catch { /* ignore */ }
+            }}
             className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-3 text-sm text-slate-300"
           >
             {MODELOS.map((m) => (
