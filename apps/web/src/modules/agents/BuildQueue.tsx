@@ -1,6 +1,7 @@
 import { startTransition, useCallback, useEffect, useState } from "react"
 import {
-  getRunContext, getRuns, subscribeToHandoffs, updateRun, updateRunSubtask,
+  getRunContext, getRuns, subscribeToHandoffs, transferRun, updateRun,
+  updateRunSubtask,
   type AgentContext, type AgentName, type AgentRun, type RunStatus,
 } from "@/services/handoff.service"
 
@@ -66,9 +67,11 @@ export function BuildQueue({ agent }: { agent: AgentName }) {
   async function move(status: RunStatus) {
     if (!selectedId) return
     let message: string | undefined
-    if (["blocked", "review", "completed", "failed"].includes(status)) {
+    if (["blocked", "review", "completed", "failed", "cancelled"].includes(status)) {
       message = window.prompt(
-        status === "blocked" ? "Qual é o bloqueio?" : status === "completed" ? "Resumo do resultado:" : "Resumo:",
+        status === "blocked" ? "Qual é o bloqueio?"
+          : status === "cancelled" ? "Motivo do cancelamento:"
+          : status === "completed" ? "Resumo do resultado:" : "Resumo:",
       ) || undefined
       if (!message) return
     }
@@ -78,10 +81,34 @@ export function BuildQueue({ agent }: { agent: AgentName }) {
       if (message) fields.message = message
       if (status === "completed") { fields.result = message || "Build concluído"; fields.summary = message || "Build concluído" }
       if (["blocked", "failed"].includes(status) && message) fields.error = message
-      if (status === "review" && message) fields.summary = message
+      if (["review", "cancelled"].includes(status) && message) fields.summary = message
       await updateRun(selectedId, fields)
       await Promise.all([loadRuns(), loadContext(selectedId)])
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao atualizar") }
+    finally { setBusy(false) }
+  }
+
+  async function transfer() {
+    if (!selectedId || !selected) return
+    const others = (Object.keys(agentLabel) as AgentName[]).filter((name) => name !== selected.agent)
+    const target = window.prompt(
+      `Transferir para qual agente? (${others.join(", ")})`,
+    )?.trim().toLowerCase()
+    if (!target) return
+    if (!others.includes(target as AgentName)) {
+      setError(`Agente inválido. Use: ${others.join(", ")}`)
+      return
+    }
+    const reason = window.prompt(
+      "Motivo da transferência (ex.: créditos expiraram no meio da execução):",
+    ) || undefined
+    if (!reason) return
+    setBusy(true); setError("")
+    try {
+      await transferRun(selectedId, target as AgentName, reason)
+      setSelectedId(null)
+      await loadRuns()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao transferir") }
     finally { setBusy(false) }
   }
 
@@ -126,6 +153,8 @@ export function BuildQueue({ agent }: { agent: AgentName }) {
             {["running", "review"].includes(selected.status) && <button disabled={busy} onClick={() => void move("blocked")} className="rounded bg-red-800 px-2 py-1 text-xs">Bloquear</button>}
             {selected.status === "running" && <button disabled={busy} onClick={() => void move("review")} className="rounded bg-violet-700 px-2 py-1 text-xs">Enviar à revisão</button>}
             {["running", "review"].includes(selected.status) && <button disabled={busy} onClick={() => void move("completed")} className="rounded bg-emerald-700 px-2 py-1 text-xs">Concluir</button>}
+            {["queued", "running", "blocked"].includes(selected.status) && <button disabled={busy} onClick={() => void transfer()} className="rounded bg-amber-700 px-2 py-1 text-xs" title="Cancela esta execução e cria uma nova para outro agente">Transferir</button>}
+            {["queued", "running", "blocked"].includes(selected.status) && <button disabled={busy} onClick={() => void move("cancelled")} className="rounded bg-slate-700 px-2 py-1 text-xs">Cancelar</button>}
           </div>
           {context.subtasks.length > 0 && <div><p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">Subtasks</p>{context.subtasks.map((item) => <label key={item.id} className="flex cursor-pointer gap-2 py-1 text-xs text-slate-300"><input type="checkbox" disabled={busy} checked={item.status === "done"} onChange={() => void toggleSubtask(item.id, item.status)} /><span className={item.status === "done" ? "text-slate-500 line-through" : ""}>{item.order}. {item.title}</span></label>)}</div>}
           <details><summary className="cursor-pointer text-xs text-sky-400">Ver prompt completo</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-[11px] text-slate-400">{context.prompt}</pre></details>

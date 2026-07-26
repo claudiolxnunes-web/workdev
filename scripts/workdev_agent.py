@@ -59,6 +59,10 @@ def main() -> int:
     item.add_argument("subtask_id")
     item.add_argument("status", choices=("todo", "doing", "done"))
     item.add_argument("result", nargs="?")
+    item = sub.add_parser("transfer")
+    item.add_argument("run_id")
+    item.add_argument("agent", choices=("codex", "claude", "kimi", "qwen"))
+    item.add_argument("reason")
     args = parser.parse_args()
 
     if args.command == "context":
@@ -70,6 +74,14 @@ def main() -> int:
             "PATCH",
             f"/handoffs/runs/{args.run_id}/subtasks/{args.subtask_id}",
             {"status": args.status, "result": args.result},
+        )
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "transfer":
+        data = request(
+            "POST",
+            f"/handoffs/runs/{args.run_id}/transfer",
+            {"agent": args.agent, "reason": args.reason},
         )
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return 0

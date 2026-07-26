@@ -9,13 +9,13 @@ from app.models.handoff import AgentRun, AgentRunEvent, ExecutionPlan
 from app.models.project import Project
 from app.models.subtask import BacklogSubtask
 from app.schemas.handoff import (
-    BuildRequest, PlanCreate, PlanUpdate, RunEventCreate, RunUpdate,
-    SubtaskProgress,
+    BuildRequest, PlanCreate, PlanUpdate, RunEventCreate, RunTransfer,
+    RunUpdate, SubtaskProgress,
 )
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import (
     HandoffError, add_run_event, approve_plan, build_context, create_plan,
-    queue_build, update_plan, update_run,
+    queue_build, transfer_run, update_plan, update_run,
 )
 
 
@@ -239,6 +239,24 @@ def update_agent_run(
         raise HTTPException(409, str(error)) from error
     _sync_run(background, db, run, event)
     return _run_out(db, run)
+
+
+@router.post("/runs/{run_id}/transfer", status_code=201)
+def transfer_agent_run(
+    run_id: UUID,
+    payload: RunTransfer,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    try:
+        cancelled_run, new_run = transfer_run(
+            db, _get_run(db, run_id), payload.agent, payload.reason,
+        )
+    except HandoffError as error:
+        raise HTTPException(409, str(error)) from error
+    _sync_run(background, db, cancelled_run)
+    _sync_run(background, db, new_run)
+    return _run_out(db, new_run)
 
 
 @router.post("/runs/{run_id}/events", status_code=201)

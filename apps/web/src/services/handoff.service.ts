@@ -111,6 +111,16 @@ export async function updateRun(
   }))
 }
 
+export async function transferRun(
+  id: string,
+  agent: AgentName,
+  reason: string,
+): Promise<AgentRun> {
+  return read(fetch(`/api/handoffs/runs/${id}/transfer`, {
+    method: "POST", headers, body: JSON.stringify({ agent, reason }),
+  }))
+}
+
 export async function updateRunSubtask(
   runId: string,
   subtaskId: string,

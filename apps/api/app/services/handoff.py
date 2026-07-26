@@ -16,6 +16,7 @@ from app.models.subtask import BacklogSubtask
 
 PLAN_EDITABLE = {"draft", "needs_revision"}
 ACTIVE_RUN_STATUSES = {"queued", "running", "blocked", "review"}
+TRANSFERABLE_RUN_STATUSES = {"queued", "running", "blocked"}
 SUPPORTED_AGENTS = {"codex", "claude", "kimi", "qwen"}
 RUN_TRANSITIONS = {
     "queued": {"running", "cancelled"},
@@ -209,6 +210,38 @@ def update_run(
     if event:
         db.refresh(event)
     return run, event
+
+
+def transfer_run(
+    db: Session, run: AgentRun, new_agent: str, reason: str,
+) -> tuple[AgentRun, AgentRun]:
+    if new_agent not in SUPPORTED_AGENTS:
+        raise HandoffError("Agente inválido; escolha codex, claude, kimi ou qwen")
+    if new_agent == run.agent:
+        raise HandoffError("Escolha um agente diferente do atual para transferir")
+    if run.status not in TRANSFERABLE_RUN_STATUSES:
+        raise HandoffError(
+            f"Execução em '{run.status}' não pode ser transferida "
+            "(só queued, running ou blocked)"
+        )
+    plan = db.query(ExecutionPlan).filter(ExecutionPlan.id == run.plan_id).first()
+    if not plan:
+        raise HandoffError("Plano da execução não encontrado")
+
+    previous_agent = run.agent
+    cancelled_run, _ = update_run(
+        db, run,
+        {"status": "cancelled", "message": f"Transferido para {new_agent}: {reason}"},
+    )
+    new_run, _event = queue_build(db, plan, new_agent)
+    add_run_event(
+        db, new_run, "build.transferred",
+        f"Transferido de {previous_agent} ({reason})",
+        {"from_run_id": str(cancelled_run.id), "from_agent": previous_agent},
+    )
+    db.commit()
+    db.refresh(new_run)
+    return cancelled_run, new_run
 
 
 def build_context(db: Session, run: AgentRun) -> dict[str, Any]:

@@ -85,6 +85,11 @@ class RunOut(BaseModel):
     plan_version: int | None = None
 
 
+class RunTransfer(BaseModel):
+    agent: AgentName
+    reason: str = Field(min_length=1)
+
+
 class RunEventCreate(BaseModel):
     event_type: str = Field(min_length=2, max_length=40)
     message: str | None = None
