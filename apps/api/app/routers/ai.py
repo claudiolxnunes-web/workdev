@@ -28,7 +28,7 @@ _openai_client = None
 def get_anthropic() -> Anthropic:
     global _anthropic_client
     if _anthropic_client is None:
-        _anthropic_client = Anthropic()
+        _anthropic_client = Anthropic(timeout=30)
     return _anthropic_client
 
 
@@ -62,7 +62,7 @@ def get_openai(provider: str = "openai") -> OpenAI:
         kwargs = {"api_key": os.getenv(cfg["env_key"])}
         if cfg["base_url"]:
             kwargs["base_url"] = cfg["base_url"]
-        _compat_clients[provider] = OpenAI(**kwargs)
+        _compat_clients[provider] = OpenAI(timeout=30, **kwargs)
     return _compat_clients[provider]
 
 
@@ -679,6 +679,7 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None) -> str
                 try:
                     out = executar_tool(block.name, block.input, db)
                 except Exception as e:
+                    db.rollback()
                     out = json.dumps({"erro": f"argumentos invalidos: "
                                       f"{type(e).__name__} {e}"},
                                      ensure_ascii=False)
@@ -723,6 +724,7 @@ def chat_openai(messages: list, db: Session, model: str | None = None, provider:
             try:
                 out = executar_tool(tc.function.name, args, db)
             except Exception as e:
+                db.rollback()
                 out = json.dumps({"erro": f"argumentos invalidos: "
                                   f"{type(e).__name__} {e}"},
                                  ensure_ascii=False)
@@ -811,9 +813,12 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
                 "session_id": str(session.id) if session else None}
 
     if session:
-        db.add(ChatMessageDB(session_id=session.id,
-                             role="assistant", content=reply))
-        session.updated_at = __import__("datetime").datetime.utcnow()
-        db.commit()
+        try:
+            db.add(ChatMessageDB(session_id=session.id,
+                                 role="assistant", content=reply))
+            session.updated_at = __import__("datetime").datetime.utcnow()
+            db.commit()
+        except Exception:
+            db.rollback()
     return {"reply": reply, "provider": provider,
             "session_id": str(session.id) if session else None}
