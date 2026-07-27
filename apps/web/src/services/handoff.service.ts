@@ -6,7 +6,7 @@ const headers: HeadersInit = {
   "X-API-Key": API_KEY,
 }
 
-export type PlanStatus = "draft" | "approved" | "needs_revision" | "superseded"
+export type PlanStatus = "draft" | "approved" | "needs_revision" | "superseded" | "discarded"
 export type RunStatus = "queued" | "running" | "blocked" | "review" | "completed" | "failed" | "cancelled"
 export type AgentName = "codex" | "claude" | "kimi" | "qwen"
 
@@ -15,6 +15,7 @@ export interface ExecutionPlan {
   backlog_id: string
   version: number
   status: PlanStatus
+  title: string
   objective: string
   scope?: string
   constraints: string[]
@@ -79,8 +80,19 @@ async function read<T>(responsePromise: Promise<Response>): Promise<T> {
   return body as T
 }
 
-export async function getPlans(): Promise<ExecutionPlan[]> {
-  return read(fetch("/api/handoffs/plans?limit=100", { headers }))
+export async function getPlans(status?: PlanStatus): Promise<ExecutionPlan[]> {
+  const query = new URLSearchParams({ limit: "100" })
+  if (status) query.set("status", status)
+  return read(fetch(`/api/handoffs/plans?${query}`, { headers }))
+}
+
+export async function updatePlan(
+  id: string,
+  data: { title?: string; objective?: string; status?: "discarded" },
+): Promise<ExecutionPlan> {
+  return read(fetch(`/api/plans/${id}`, {
+    method: "PATCH", headers, body: JSON.stringify(data),
+  }))
 }
 
 export async function approvePlan(id: string): Promise<ExecutionPlan> {

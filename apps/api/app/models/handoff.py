@@ -19,6 +19,7 @@ class ExecutionPlan(Base):
     )
     version = Column(Integer, nullable=False)
     status = Column(String(24), nullable=False, server_default="draft")
+    title = Column(String(255), nullable=False)
     objective = Column(Text, nullable=False)
     scope = Column(Text)
     constraints = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))

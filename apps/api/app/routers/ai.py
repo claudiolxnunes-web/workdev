@@ -238,7 +238,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "status": {"type": "string", "enum": ["draft", "approved", "needs_revision", "superseded"]},
+                "status": {"type": "string", "enum": ["draft", "approved", "needs_revision", "superseded", "discarded"]},
                 "task_id": {"type": "string"},
             },
         },

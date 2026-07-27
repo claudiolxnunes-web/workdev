@@ -2,10 +2,10 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
-PlanStatus = Literal["draft", "approved", "needs_revision", "superseded"]
+PlanStatus = Literal["draft", "approved", "needs_revision", "superseded", "discarded"]
 RunStatus = Literal[
     "queued", "running", "blocked", "review", "completed", "failed", "cancelled"
 ]
@@ -13,8 +13,16 @@ AgentName = Literal["codex", "claude", "kimi", "qwen"]
 
 
 class PlanCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     backlog_id: UUID
-    objective: str = Field(min_length=3)
+    title: str | None = Field(
+        default=None, min_length=3,
+        validation_alias=AliasChoices("title", "titulo"),
+    )
+    objective: str = Field(
+        min_length=3, validation_alias=AliasChoices("objective", "objetivo")
+    )
     scope: str | None = None
     constraints: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
@@ -24,7 +32,17 @@ class PlanCreate(BaseModel):
 
 
 class PlanUpdate(BaseModel):
-    objective: str | None = Field(default=None, min_length=3)
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str | None = Field(
+        default=None, min_length=3,
+        validation_alias=AliasChoices("title", "titulo"),
+    )
+    objective: str | None = Field(
+        default=None, min_length=3,
+        validation_alias=AliasChoices("objective", "objetivo"),
+    )
+    status: Literal["discarded"] | None = None
     scope: str | None = None
     constraints: list[str] | None = None
     acceptance_criteria: list[str] | None = None

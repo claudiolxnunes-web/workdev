@@ -1,6 +1,12 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
-from app.services.handoff import RUN_TRANSITIONS, SUPPORTED_AGENTS, render_agent_prompt
+from app.schemas.handoff import PlanUpdate
+from app.services.handoff import (
+    HandoffError, RUN_TRANSITIONS, SUPPORTED_AGENTS, render_agent_prompt,
+    update_plan,
+)
 
 
 class HandoffContractTest(unittest.TestCase):
@@ -40,6 +46,45 @@ class HandoffContractTest(unittest.TestCase):
         self.assertIn("Agent recebe contexto", prompt)
         self.assertIn("workdev_agent.py start run-123", prompt)
         self.assertNotIn("SUPABASE_SECRET_KEY", prompt)
+
+    def test_plan_update_accepts_portuguese_edit_fields(self):
+        payload = PlanUpdate.model_validate({
+            "titulo": "Título revisado",
+            "objetivo": "Objetivo revisado",
+        })
+        self.assertEqual(payload.title, "Título revisado")
+        self.assertEqual(payload.objective, "Objetivo revisado")
+
+    def test_draft_can_be_edited_and_discarded(self):
+        db = Mock()
+        plan = SimpleNamespace(
+            status="draft", title="Original", objective="Objetivo original",
+            updated_at=None,
+        )
+        db.refresh.side_effect = lambda _plan: None
+
+        updated = update_plan(db, plan, {
+            "title": "Título novo", "objective": "Objetivo novo",
+            "status": "discarded",
+        })
+
+        self.assertEqual(updated.title, "Título novo")
+        self.assertEqual(updated.objective, "Objetivo novo")
+        self.assertEqual(updated.status, "discarded")
+        self.assertIsNotNone(updated.updated_at)
+        db.commit.assert_called_once()
+
+    def test_approved_plan_cannot_be_edited_or_discarded(self):
+        db = Mock()
+        plan = SimpleNamespace(status="approved")
+        with self.assertRaisesRegex(HandoffError, "Somente planos"):
+            update_plan(db, plan, {"status": "discarded"})
+
+    def test_needs_revision_plan_cannot_change_title_or_objective(self):
+        db = Mock()
+        plan = SimpleNamespace(status="needs_revision")
+        with self.assertRaisesRegex(HandoffError, "Título e objetivo"):
+            update_plan(db, plan, {"title": "Título bloqueado"})
 
 
 if __name__ == "__main__":

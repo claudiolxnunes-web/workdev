@@ -18,7 +18,7 @@ from app.routers.monitoring import router as monitoring_router
 from app.routers.adrs import router as adrs_router
 from app.routers.rfcs import router as rfcs_router
 from app.routers.decisions import router as decisions_router
-from app.routers.handoffs import router as handoffs_router
+from app.routers.handoffs import plans_router, router as handoffs_router
 from app.routers.settings import router as settings_router
 from app.routers.system import router as system_router
 from app.auth import request_is_authenticated
@@ -62,6 +62,7 @@ app.include_router(adrs_router, prefix="/api")
 app.include_router(rfcs_router, prefix="/api")
 app.include_router(decisions_router, prefix="/api")
 app.include_router(handoffs_router, prefix="/api")
+app.include_router(plans_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(terminal_router)

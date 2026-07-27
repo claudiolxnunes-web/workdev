@@ -50,6 +50,7 @@ def create_plan(db: Session, data: dict[str, Any]) -> ExecutionPlan:
         backlog_id=task.id,
         version=version,
         status="draft",
+        title=(data.get("title") or task.title).strip(),
         objective=data["objective"].strip(),
         scope=(data.get("scope") or "").strip() or None,
         constraints=data.get("constraints") or [],
@@ -67,6 +68,13 @@ def create_plan(db: Session, data: dict[str, Any]) -> ExecutionPlan:
 def update_plan(db: Session, plan: ExecutionPlan, data: dict[str, Any]) -> ExecutionPlan:
     if plan.status not in PLAN_EDITABLE:
         raise HandoffError("Somente planos em rascunho ou revisão podem ser alterados")
+    next_status = data.pop("status", None)
+    if ({"title", "objective"} & data.keys()) and plan.status != "draft":
+        raise HandoffError("Título e objetivo só podem ser alterados em planos Draft")
+    if next_status:
+        if next_status != "discarded" or plan.status != "draft":
+            raise HandoffError("Somente planos Draft podem ser descartados")
+        plan.status = next_status
     for field, value in data.items():
         if value is not None:
             setattr(plan, field, value.strip() if isinstance(value, str) else value)

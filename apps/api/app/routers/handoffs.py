@@ -20,6 +20,7 @@ from app.services.handoff import (
 
 
 router = APIRouter(prefix="/handoffs", tags=["handoffs"])
+plans_router = APIRouter(prefix="/plans", tags=["plans"])
 
 
 def get_db():
@@ -45,6 +46,7 @@ def _plan_out(db: Session, plan: ExecutionPlan) -> dict:
     return {
         "id": plan.id, "backlog_id": plan.backlog_id,
         "version": plan.version, "status": plan.status,
+        "title": plan.title,
         "objective": plan.objective, "scope": plan.scope,
         "constraints": plan.constraints or [],
         "acceptance_criteria": plan.acceptance_criteria or [],
@@ -123,6 +125,8 @@ def list_plans(
     query = db.query(ExecutionPlan)
     if status:
         query = query.filter(ExecutionPlan.status == status)
+    else:
+        query = query.filter(ExecutionPlan.status != "discarded")
     if backlog_id:
         query = query.filter(ExecutionPlan.backlog_id == backlog_id)
     rows = query.order_by(ExecutionPlan.created_at.desc()).limit(limit).all()
@@ -148,6 +152,7 @@ def get_execution_plan(plan_id: UUID, db: Session = Depends(get_db)):
     return _plan_out(db, _get_plan(db, plan_id))
 
 
+@plans_router.patch("/{plan_id}")
 @router.patch("/plans/{plan_id}")
 def edit_execution_plan(
     plan_id: UUID,
