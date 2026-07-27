@@ -38,6 +38,36 @@ def _capture_history(session: str, lines: int) -> str:
     return result.stdout.rstrip()
 
 
+def _scroll_terminal(session: str, direction: str) -> None:
+    command = (
+        ["tmux", "copy-mode", "-u", "-t", session]
+        if direction == "up"
+        else ["tmux", "send-keys", "-X", "-t", session, "page-down"]
+    )
+    subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+    position = subprocess.run(
+        ["tmux", "display-message", "-p", "-t", session, "#{scroll_position}"],
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+    if position.stdout.strip() in {"", "0"}:
+        subprocess.run(
+            ["tmux", "send-keys", "-X", "-t", session, "cancel"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+
+
 @router.get("/api/agents/{agent}/history")
 async def agent_history(
     agent: str,
@@ -159,6 +189,8 @@ async def agent_terminal(websocket: WebSocket, agent: str):
                 os.write(master_fd, payload["data"].encode())
             elif payload.get("type") == "resize":
                 _resize(master_fd, int(payload.get("rows", 24)), int(payload.get("cols", 80)))
+            elif payload.get("type") == "scroll" and payload.get("direction") in {"up", "down"}:
+                await asyncio.to_thread(_scroll_terminal, session, payload["direction"])
     except WebSocketDisconnect:
         pass
     finally:

@@ -129,10 +129,10 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
     await copyText(lines.join("\n").trimEnd(), "Tela copiada")
   }
 
-  function sendPage(direction: "up" | "down") {
+  function scrollPage(direction: "up" | "down") {
     const socket = socketRef.current
     if (socket?.readyState !== WebSocket.OPEN) return
-    socket.send(JSON.stringify({ type: "input", data: direction === "up" ? "\u001b[5~" : "\u001b[6~" }))
+    socket.send(JSON.stringify({ type: "scroll", direction }))
   }
 
   async function openHistory() {
@@ -191,8 +191,8 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
           <button type="button" onClick={() => void copyScreen()} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Copia tudo que está visível no terminal">
             Copiar tela
           </button>
-          <button type="button" onClick={() => sendPage("up")} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Página anterior dentro do agente">↑</button>
-          <button type="button" onClick={() => sendPage("down")} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Próxima página dentro do agente">↓</button>
+          <button type="button" onClick={() => scrollPage("up")} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Subir uma página no terminal">↑</button>
+          <button type="button" onClick={() => scrollPage("down")} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Descer uma página no terminal">↓</button>
           <button type="button" onClick={() => void openHistory()} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800">
             Histórico
           </button>
