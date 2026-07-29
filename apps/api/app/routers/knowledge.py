@@ -1,9 +1,14 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models.knowledge import KnowledgeEntry
+from app.models.project import Project
+from app.models.backlog import BacklogItem
+from app.schemas.knowledge import KnowledgeCreate, KnowledgeOut
 
 router = APIRouter()
+
+CATEGORIES = ("decisao", "licao", "solucao", "referencia")
 
 
 def get_db():
@@ -35,3 +40,21 @@ def listar_conhecimento(categoria: str | None = None,
              "project_id": str(r.project_id) if r.project_id else None,
              "backlog_id": str(r.backlog_id) if r.backlog_id else None,
              "created_at": str(r.created_at)} for r in rs]
+
+
+@router.post("/knowledge", response_model=KnowledgeOut, status_code=201)
+def criar_conhecimento(payload: KnowledgeCreate, db: Session = Depends(get_db)):
+    if payload.category not in CATEGORIES:
+        raise HTTPException(status_code=400,
+                            detail=f"categoria inválida: {payload.category}")
+    if payload.project_id and not db.query(Project).filter(
+            Project.id == payload.project_id).first():
+        raise HTTPException(status_code=404, detail="Project not found")
+    if payload.backlog_id and not db.query(BacklogItem).filter(
+            BacklogItem.id == payload.backlog_id).first():
+        raise HTTPException(status_code=404, detail="Backlog item not found")
+    entry = KnowledgeEntry(**payload.model_dump())
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
