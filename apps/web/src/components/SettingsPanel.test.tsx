@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi, describe, it, beforeEach, expect } from 'vitest';
 import SettingsPanel from './SettingsPanel';
 
@@ -57,5 +57,33 @@ describe('SettingsPanel', () => {
       expect(screen.getByText('abc123')).toBeInTheDocument();
       expect(screen.getByText('def456')).toBeInTheDocument();
     });
+  });
+
+  it('manages provider keys without rendering their values', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/ai/providers') {
+        return Promise.resolve(jsonResponse({
+          providers: [{ provider: 'openai', label: 'OpenAI', connected: false }],
+          connected: 0,
+          total: 1,
+        }));
+      }
+      return Promise.resolve(jsonResponse(healthPayload));
+    });
+
+    render(<SettingsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: /ai providers/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /configurar/i }));
+
+    const input = screen.getByLabelText(/nova chave para openai/i);
+    expect(input).toHaveAttribute('type', 'password');
+    fireEvent.change(input, { target: { value: 'chave-ultrassecreta' } });
+    fireEvent.click(screen.getByRole('button', { name: /salvar/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/ai/providers/openai/key',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    expect(screen.queryByText('chave-ultrassecreta')).not.toBeInTheDocument();
   });
 });

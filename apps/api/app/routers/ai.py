@@ -1,7 +1,7 @@
 import os
 import json
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, SecretStr
 from sqlalchemy.orm import Session
 from anthropic import Anthropic
 from openai import OpenAI
@@ -735,24 +735,88 @@ def chat_openai(messages: list, db: Session, model: str | None = None, provider:
             })
     return "Não consegui concluir a operação (limite de passos)."
 
+AI_PROVIDER_KEYS = {
+    "anthropic": ("Claude (Anthropic)", "ANTHROPIC_API_KEY"),
+    "openai": ("OpenAI", "OPENAI_API_KEY"),
+    "kimi": ("Kimi (Moonshot)", "MOONSHOT_API_KEY"),
+    "gemini": ("Gemini", "GEMINI_API_KEY"),
+    "openrouter": ("OpenRouter", "OPENROUTER_API_KEY"),
+    "ollama": ("Ollama Cloud", "OLLAMA_API_KEY"),
+}
+API_ENV_FILE = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+
+
+class ApiKeyUpdate(BaseModel):
+    api_key: SecretStr
+
+
+def _provider_status() -> list[dict]:
+    return [
+        {"provider": provider, "label": label,
+         "connected": bool(os.getenv(env_name))}
+        for provider, (label, env_name) in AI_PROVIDER_KEYS.items()
+    ]
+
+
+def _write_env_key(name: str, value: str | None) -> None:
+    """Atualiza uma chave no .env sem jamais ler ou devolver outros valores."""
+    path = os.path.abspath(API_ENV_FILE)
+    with open(path, encoding="utf-8") as source:
+        lines = source.readlines()
+    escaped = (
+        value.replace(chr(92), chr(92) * 2)
+        .replace(chr(34), chr(92) + chr(34))
+        if value else None
+    )
+    replacement = f'{name}="{escaped}"\n' if escaped else None
+    output: list[str] = []
+    found = False
+    for line in lines:
+        if line.startswith(f"{name}="):
+            found = True
+            if replacement:
+                output.append(replacement)
+        else:
+            output.append(line)
+    if replacement and not found:
+        output.append(replacement)
+    temporary = f"{path}.tmp"
+    with open(temporary, "w", encoding="utf-8") as target:
+        target.writelines(output)
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
 @router.get("/ai/providers")
 def ai_providers():
-    providers = [
-        {"provider": "anthropic", "label": "Claude (Anthropic)",
-         "connected": bool(os.getenv("ANTHROPIC_API_KEY"))},
-        {"provider": "openai", "label": "OpenAI",
-         "connected": bool(os.getenv("OPENAI_API_KEY"))},
-        {"provider": "kimi", "label": "Kimi (Moonshot)",
-         "connected": bool(os.getenv("MOONSHOT_API_KEY"))},
-        {"provider": "gemini", "label": "Gemini",
-         "connected": bool(os.getenv("GEMINI_API_KEY"))},
-        {"provider": "openrouter", "label": "OpenRouter",
-         "connected": bool(os.getenv("OPENROUTER_API_KEY"))},
-        {"provider": "ollama", "label": "Ollama Cloud",
-         "connected": bool(os.getenv("OLLAMA_API_KEY"))},
-    ]
+    providers = _provider_status()
     connected = sum(1 for p in providers if p["connected"])
     return {"providers": providers, "connected": connected, "total": len(providers)}
+
+
+@router.put("/ai/providers/{provider}/key")
+def update_ai_provider_key(provider: str, payload: ApiKeyUpdate):
+    config = AI_PROVIDER_KEYS.get(provider)
+    if not config:
+        raise HTTPException(status_code=404, detail="Provider não encontrado")
+    value = payload.api_key.get_secret_value().strip()
+    if not value or "\n" in value or "\r" in value:
+        raise HTTPException(status_code=422, detail="Chave inválida")
+    env_name = config[1]
+    _write_env_key(env_name, value)
+    os.environ[env_name] = value
+    return {"provider": provider, "connected": True}
+
+
+@router.delete("/ai/providers/{provider}/key")
+def delete_ai_provider_key(provider: str):
+    config = AI_PROVIDER_KEYS.get(provider)
+    if not config:
+        raise HTTPException(status_code=404, detail="Provider não encontrado")
+    env_name = config[1]
+    _write_env_key(env_name, None)
+    os.environ.pop(env_name, None)
+    return {"provider": provider, "connected": False}
 
 
 class VozRequest(BaseModel):
