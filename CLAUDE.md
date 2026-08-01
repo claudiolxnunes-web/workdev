@@ -141,3 +141,4 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 - User=root
 - Teste de carga da variável (NÃO usar /proc/PID/environ — dá 0 mesmo funcionando):
   /opt/workdev/apps/api/venv/bin/python -c "from dotenv import load_dotenv; import os; load_dotenv('/opt/workdev/apps/api/.env'); v=os.getenv('VAR'); print('OK', len(v)) if v else print('AUSENTE')"
+- GITHUB_TOKEN: fine-grained, All repos, Contents+Metadata Read-only, sem expiracao
