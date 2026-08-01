@@ -15,6 +15,8 @@ from app.routers.deployments import router as deployments_router
 from app.routers.auth import router as auth_router
 from app.routers.terminal import router as terminal_router
 from app.routers.monitoring import router as monitoring_router
+from app.routers.repository import router as repository_router
+from app.routers.database import router as database_router
 from app.routers.adrs import router as adrs_router
 from app.routers.rfcs import router as rfcs_router
 from app.routers.decisions import router as decisions_router
@@ -58,6 +60,8 @@ app.include_router(engineering_router, prefix="/api")
 app.include_router(deployments_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(monitoring_router, prefix="/api")
+app.include_router(repository_router, prefix="/api")
+app.include_router(database_router, prefix="/api")
 app.include_router(adrs_router, prefix="/api")
 app.include_router(rfcs_router, prefix="/api")
 app.include_router(decisions_router, prefix="/api")

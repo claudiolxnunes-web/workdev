@@ -86,6 +86,33 @@ def get_db():
         db.close()
 
 
+def build_project_system(slug: str, db: Session) -> str | None:
+    project = db.query(Project).filter(Project.slug == slug).first()
+    if project is None:
+        return None
+    itens = (
+        db.query(BacklogItem)
+        .filter(BacklogItem.project_id == project.id)
+        .order_by(BacklogItem.rank.asc().nullslast(), BacklogItem.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    por_status: dict[str, int] = {}
+    for item in itens:
+        por_status[item.status] = por_status.get(item.status, 0) + 1
+    resumo_itens = "\n".join(
+        f"- [{item.status}/{item.priority}] {item.title}" for item in itens
+    ) or "Backlog vazio."
+    return (
+        f"{SYSTEM}\n\n"
+        f"Contexto desta conversa: projeto '{project.name}' (slug: {project.slug}), "
+        f"status geral: {project.status}, tipo: {project.type}.\n"
+        f"Resumo do backlog ({sum(por_status.values())} itens, por status: {por_status}):\n"
+        f"{resumo_itens}\n"
+        f"Responda focado neste projeto, a menos que o usuário peça algo sobre outro."
+    )
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -96,6 +123,7 @@ class ChatRequest(BaseModel):
     provider: str | None = None
     model: str | None = None
     session_id: str | None = None
+    project_slug: str | None = None
 TOOLS = [
     {
         "name": "listar_projetos",
@@ -655,13 +683,13 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
     return json.dumps({"erro": "ferramenta desconhecida"})
 
 
-def chat_anthropic(messages: list, db: Session, model: str | None = None) -> str:
+def chat_anthropic(messages: list, db: Session, model: str | None = None, system: str | None = None) -> str:
     client = get_anthropic()
     for _ in range(12):
         resp = client.messages.create(
             model=model or ANTHROPIC_MODEL,
             max_tokens=4096,
-            system=SYSTEM,
+            system=system or SYSTEM,
             tools=TOOLS,
             messages=messages,
         )
@@ -705,9 +733,9 @@ def tools_openai() -> list:
     ]
 
 
-def chat_openai(messages: list, db: Session, model: str | None = None, provider: str = "openai") -> str:
+def chat_openai(messages: list, db: Session, model: str | None = None, provider: str = "openai", system: str | None = None) -> str:
     client = get_openai(provider)
-    msgs = [{"role": "system", "content": SYSTEM}] + messages
+    msgs = [{"role": "system", "content": system or SYSTEM}] + messages
     for _ in range(12):
         resp = client.chat.completions.create(
             model=model or COMPAT_PROVIDERS[provider]["default_model"],
@@ -865,12 +893,14 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
                                  role="user", content=last["content"]))
             db.commit()
 
+    system = build_project_system(req.project_slug, db) if req.project_slug else None
+
     try:
         if provider in COMPAT_PROVIDERS:
-            reply = chat_openai(messages, db, req.model, provider)
+            reply = chat_openai(messages, db, req.model, provider, system=system)
         else:
             provider = "anthropic"
-            reply = chat_anthropic(messages, db, req.model)
+            reply = chat_anthropic(messages, db, req.model, system=system)
     except Exception as e:
         reply = f"Erro no provider {provider}: {type(e).__name__} - {e}"
         return {"reply": reply, "provider": provider, "error": True,

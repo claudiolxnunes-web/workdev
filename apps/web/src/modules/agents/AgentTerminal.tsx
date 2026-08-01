@@ -15,6 +15,7 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
   const terminalRef = useRef<Terminal | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
   const historyRef = useRef<HTMLTextAreaElement>(null)
+  const selectedTextRef = useRef("")
   const [status, setStatus] = useState<ConnectionStatus>("connecting")
   const [taskRunning, setTaskRunning] = useState(false)
   const [processName, setProcessName] = useState("")
@@ -30,6 +31,8 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
     const container = containerRef.current
     if (!container) return
     setStatus("connecting")
+    selectedTextRef.current = ""
+    setHasSelection(false)
     const terminal = new Terminal({
       cursorBlink: true, convertEol: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
@@ -79,10 +82,16 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
     const input = terminal.onData((data) => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }))
     })
-    const selection = terminal.onSelectionChange(() => setHasSelection(terminal.hasSelection()))
+    const selection = terminal.onSelectionChange(() => {
+      const selected = terminal.getSelection()
+      if (selected) {
+        selectedTextRef.current = selected
+        setHasSelection(true)
+      }
+    })
     terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type === "keydown" && (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "c" && terminal.hasSelection()) {
-        void copyText(terminal.getSelection(), "Seleção copiada")
+      if (event.type === "keydown" && (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "c" && (terminal.hasSelection() || selectedTextRef.current)) {
+        void copyText(terminal.getSelection() || selectedTextRef.current, "Seleção copiada")
         return false
       }
       return true
@@ -114,7 +123,7 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
   }
 
   async function copySelection() {
-    const selected = terminalRef.current?.getSelection() || ""
+    const selected = terminalRef.current?.getSelection() || selectedTextRef.current
     if (selected) await copyText(selected, "Seleção copiada")
   }
 
@@ -176,6 +185,11 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
               • {taskRunning ? `ativo${processName ? `: ${processName}` : ""}` : "aguardando"}
             </span>
           )}
+          {agent === "claude" && (
+            <span className="text-[11px] text-amber-300 sm:text-xs" title="O Claude captura o mouse; segure Shift enquanto arrasta para selecionar texto">
+              • Shift + arrastar para selecionar
+            </span>
+          )}
         </div>
         <div className="flex max-w-full shrink-0 items-center gap-1 overflow-x-auto">
           {copyFeedback && <span className="hidden text-xs text-emerald-400 sm:inline">{copyFeedback}</span>}
@@ -184,7 +198,7 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
             disabled={!hasSelection}
             onClick={() => void copySelection()}
             className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800 disabled:text-slate-600"
-            title="Arraste no terminal para selecionar; atalho Ctrl+Shift+C"
+            title={agent === "claude" ? "No Claude, use Shift + arrastar; depois Ctrl+Shift+C para copiar" : "Arraste no terminal para selecionar; atalho Ctrl+Shift+C"}
           >
             Copiar seleção
           </button>
