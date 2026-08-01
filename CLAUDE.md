@@ -132,6 +132,7 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
   — o backend já foi revisado e commitado (42ce003), falta essa parte.
 - Dar tools de grafo (`graph_nodes`/`graph_edges`) para o Fable no AI Hub.
 
+
 ## workdev-api.service
 - Unit SEM EnvironmentFile — o .env é lido pela app (dotenv), não pelo systemd
 - Arquivo real: /opt/workdev/apps/api/.env  (o /opt/workdev/.env NÃO é lido)
