@@ -131,3 +131,12 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
   testes, vitest.config.ts, scripts/setup-config.sh, docs/settings-system.md)
   — o backend já foi revisado e commitado (42ce003), falta essa parte.
 - Dar tools de grafo (`graph_nodes`/`graph_edges`) para o Fable no AI Hub.
+
+## workdev-api.service
+- Unit SEM EnvironmentFile — o .env é lido pela app (dotenv), não pelo systemd
+- Arquivo real: /opt/workdev/apps/api/.env  (o /opt/workdev/.env NÃO é lido)
+- venv: /opt/workdev/apps/api/venv  (sem ponto)
+- ExecStart: venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+- User=root
+- Teste de carga da variável (NÃO usar /proc/PID/environ — dá 0 mesmo funcionando):
+  /opt/workdev/apps/api/venv/bin/python -c "from dotenv import load_dotenv; import os; load_dotenv('/opt/workdev/apps/api/.env'); v=os.getenv('VAR'); print('OK', len(v)) if v else print('AUSENTE')"
