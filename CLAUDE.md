@@ -193,3 +193,65 @@ PLANO (nesta ordem):
 
 PRAZO: documentos reais de conformidade MAPA comecam em ~2 semanas (meados/08).
 Fazer ANTES — hoje sao 26 documentos, depois vira operacao.
+
+### Execucao em 3 sessoes (fazer nesta ordem)
+
+SESSAO 1 — Backup (risco zero, nada em producao muda)
+ [ ] Lovable > Settings > Cloud > Export data  -> baixar dump .sql
+ [ ] Invocar Edge Function export-storage -> baixar os 4 buckets
+ [ ] Guardar em /opt/backups/create-with-voice/AAAA-MM-DD/ na VPS1
+ [ ] rsync para VPS2 (mesmo padrao do pg_backup.sh)
+ [ ] Conferir: dump abre? arquivos batem com a contagem do Storage?
+ RESULTADO: cópia offline do banco — hoje inexistente. Ja resolve o risco maior.
+
+SESSAO 2 — Preparar destino (projeto novo fica parado, nada conectado)
+ [ ] Criar projeto Supabase em claudiolx.nunes@gmail.com / org Claudio's Org
+ [ ] Decidir plano: Free (sem backup automatico) ou Pro (~$25, backup diario)
+ [ ] Restaurar dump no SQL Editor
+ [ ] Restaurar auth.users via Edge Function migrate-helper
+ [ ] Configurar os ~12 secrets das Edge Functions
+ [ ] Recriar jobs pg_cron (NAO vem no dump)
+ [ ] Conferir contagem de linhas por tabela: origem vs destino
+ RESULTADO: ambiente pronto e testado, producao ainda intacta.
+
+SESSAO 3 — Virada (unica com risco; fazer fora de horario de uso)
+ [ ] Lovable > Settings > Supabase > Connect to an existing project
+ [ ] Reconfigurar webhook Paddle (MAIOR RISCO: errar = cliente paga sem acesso)
+ [ ] Reconfigurar webhook Google Forms
+ [ ] Reconfigurar webhook Evolution
+ [ ] Testar: login, upload de documento, checkout de teste, envio WhatsApp
+ [ ] Manter o projeto antigo intacto por ~30 dias antes de desativar
+ ROLLBACK: reconectar ao Lovable Cloud se algo quebrar.
+
+REGRA: nao avancar de sessao sem a anterior validada.
+
+### Execucao em 3 sessoes (fazer nesta ordem)
+
+SESSAO 1 — Backup (risco zero, nada em producao muda)
+ [ ] Lovable > Settings > Cloud > Export data  -> baixar dump .sql
+ [ ] Invocar Edge Function export-storage -> baixar os 4 buckets
+ [ ] Guardar em /opt/backups/create-with-voice/AAAA-MM-DD/ na VPS1
+ [ ] rsync para VPS2 (mesmo padrao do pg_backup.sh)
+ [ ] Conferir: dump abre? arquivos batem com a contagem do Storage?
+ RESULTADO: cópia offline do banco — hoje inexistente. Ja resolve o risco maior.
+
+SESSAO 2 — Preparar destino (projeto novo fica parado, nada conectado)
+ [ ] Criar projeto Supabase em claudiolx.nunes@gmail.com / org Claudio's Org
+ [ ] Decidir plano: Free (sem backup automatico) ou Pro (~$25, backup diario)
+ [ ] Restaurar dump no SQL Editor
+ [ ] Restaurar auth.users via Edge Function migrate-helper
+ [ ] Configurar os ~12 secrets das Edge Functions
+ [ ] Recriar jobs pg_cron (NAO vem no dump)
+ [ ] Conferir contagem de linhas por tabela: origem vs destino
+ RESULTADO: ambiente pronto e testado, producao ainda intacta.
+
+SESSAO 3 — Virada (unica com risco; fazer fora de horario de uso)
+ [ ] Lovable > Settings > Supabase > Connect to an existing project
+ [ ] Reconfigurar webhook Paddle (MAIOR RISCO: errar = cliente paga sem acesso)
+ [ ] Reconfigurar webhook Google Forms
+ [ ] Reconfigurar webhook Evolution
+ [ ] Testar: login, upload de documento, checkout de teste, envio WhatsApp
+ [ ] Manter o projeto antigo intacto por ~30 dias antes de desativar
+ ROLLBACK: reconectar ao Lovable Cloud se algo quebrar.
+
+REGRA: nao avancar de sessao sem a anterior validada.
