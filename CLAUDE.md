@@ -166,3 +166,30 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 - ATENCAO: doc "meus_programas_bpf.md" secao 2 lista repos clxn/* — conta de TERCEIRO, repos inexistentes. Repos reais: claudiolxnunes-web/*
 - WorkDev usa usuario Postgres proprio: workdev_app (NAO evolution). DATABASE_URL=postgresql://workdev_app:...@127.0.0.1:5432/workdev
 - NutriGestor/Agro RC CRM: projeto Supabase deletado (custo ~$40/mes). Schema preservado em nutrigestor-crm/supabase/migrations (83 arquivos). Dados reconstruiveis via Power BI da empresa. Recriar com: supabase link + db push.
+
+## Migracao BYO Supabase — create-with-voice (PENDENTE)
+Contexto: create-with-voice = app unico que serve Portal + Feed_BPF + Feed_BPF Custom
++ Nutri Agro Labels (confirmado: bundle tem rotas feedbpf, feedbpf-custom, rotulos).
+- Roda em LOVABLE CLOUD: Supabase uyrcxfypdzasdminxizq NAO esta em nenhuma conta
+  propria — sem dashboard, sem connection string, sem pg_dump. Zero backup hoje.
+- Escala: 54 Edge Functions, 106 tabelas, auth.uid() em quase toda RLS, pg_cron,
+  5 funcoes de checkout Paddle, 4 buckets Storage.
+- Buckets: documentos-bpf, feed-bpf, normas_legislacao, relatorios.
+  ATENCAO: documentos-bpf e relatorios usam getPublicUrl (verificar se e publico!).
+- Ferramentas que JA EXISTEM no repo: export-storage e migrate-helper (Edge Functions).
+  NAO existe download-storage.mjs (404).
+
+PLANO (nesta ordem):
+1. Exportar dump: Lovable Settings > Cloud > Export data (nao inclui schema auth)
+2. Exportar Storage via Edge Function export-storage
+3. Criar projeto Supabase em claudiolx.nunes@gmail.com (org Claudio's Org, mesma
+   do WorkDev — evita 5a conta e o token de Management ja alcanca)
+4. Restaurar dump no SQL Editor; auth.users via migrate-helper
+5. Reconfigurar ~12 secrets (PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET, EVOLUTION_*,
+   RESEND_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, CRON_SECRET, LOVABLE_API_KEY)
+6. Reconectar Lovable: Settings > Supabase > Connect to an existing project
+7. RECONFIGURAR WEBHOOKS (maior risco): Paddle, Google Forms, Evolution
+8. Recriar jobs pg_cron (nao vem no dump)
+
+PRAZO: documentos reais de conformidade MAPA comecam em ~2 semanas (meados/08).
+Fazer ANTES — hoje sao 26 documentos, depois vira operacao.
