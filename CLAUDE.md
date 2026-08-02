@@ -161,7 +161,7 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 - AgroGestao CRM          -> regional-fixer-charm
 - AgroGestor Regional CRM -> Agrogestor-Regional-CRM
 - Agente Pessoal          -> agente-pessoal
-- Agro RC CRM (Beta)      -> soil-to-client; producao (agrorc) sem repo identificado
+- Agro RC CRM (producao, slug agro-crm) -> soil-to-client; nutrigestor-crm = migracao parada, Supabase deletado
 - OpenClaw                -> sem repositorio
 - ATENCAO: doc "meus_programas_bpf.md" secao 2 lista repos clxn/* — conta de TERCEIRO, repos inexistentes. Repos reais: claudiolxnunes-web/*
 - WorkDev usa usuario Postgres proprio: workdev_app (NAO evolution). DATABASE_URL=postgresql://workdev_app:...@127.0.0.1:5432/workdev
