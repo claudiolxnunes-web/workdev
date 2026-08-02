@@ -147,3 +147,18 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 - .env.local do Vite tem precedencia e vaza VITE_API_URL=localhost no bundle de producao
 - Solucao: renomeado para .env.development; existe .env.production com VITE_API_URL vazio
 - Sempre verificar apos build: grep -c "localhost:8000" apps/web/dist/assets/index-*.js  (esperado 0)
+
+## Mapeamento projeto -> repositorio GitHub
+(nomes-codigo do Lovable sao opacos; identificados via title do index.html / src/routes)
+- WorkDev Core            -> workdev
+- BPF Solutions Suite     -> bpf-solutions-suite  (SaaS TanStack Start + Stripe; inclui gerador-rotulos = Nutri Agro Labels)
+- Audits_BPF / AuditMAPA  -> friendly-flame-igniter
+- Agente4                 -> rapid-ai-ally
+- Site BPF_Consult        -> create-with-voice
+- FeedOptimize            -> feedoptimize
+- NutriControle Pro       -> nutricontrole-pro
+- AgroGestao CRM          -> regional-fixer-charm
+- AgroGestor Regional CRM -> Agrogestor-Regional-CRM
+- Agente Pessoal          -> agente-pessoal
+- Agro RC CRM             -> soil-to-client (title diz "Agro_RC CRM"); candidatos alternativos: nutrigestor-crm, Nutricrm
+- OpenClaw                -> sem repositorio
