@@ -255,3 +255,114 @@ SESSAO 3 — Virada (unica com risco; fazer fora de horario de uso)
  ROLLBACK: reconectar ao Lovable Cloud se algo quebrar.
 
 REGRA: nao avancar de sessao sem a anterior validada.
+
+### Execucao em 3 sessoes (fazer nesta ordem)
+
+SESSAO 1 — Backup (risco zero, nada em producao muda)
+ [ ] Lovable > Settings > Cloud > Export data  -> baixar dump .sql
+ [ ] Invocar Edge Function export-storage -> baixar os 4 buckets
+ [ ] Guardar em /opt/backups/create-with-voice/AAAA-MM-DD/ na VPS1
+ [ ] rsync para VPS2 (mesmo padrao do pg_backup.sh)
+ [ ] Conferir: dump abre? arquivos batem com a contagem do Storage?
+ RESULTADO: cópia offline do banco — hoje inexistente. Ja resolve o risco maior.
+
+SESSAO 2 — Preparar destino (projeto novo fica parado, nada conectado)
+ [ ] Criar projeto Supabase em claudiolx.nunes@gmail.com / org Claudio's Org
+ [ ] Decidir plano: Free (sem backup automatico) ou Pro (~$25, backup diario)
+ [ ] Restaurar dump no SQL Editor
+ [ ] Restaurar auth.users via Edge Function migrate-helper
+ [ ] Configurar os ~12 secrets das Edge Functions
+ [ ] Recriar jobs pg_cron (NAO vem no dump)
+ [ ] Conferir contagem de linhas por tabela: origem vs destino
+ RESULTADO: ambiente pronto e testado, producao ainda intacta.
+
+SESSAO 3 — Virada (unica com risco; fazer fora de horario de uso)
+ [ ] Lovable > Settings > Supabase > Connect to an existing project
+ [ ] Reconfigurar webhook Paddle (MAIOR RISCO: errar = cliente paga sem acesso)
+ [ ] Reconfigurar webhook Google Forms
+ [ ] Reconfigurar webhook Evolution
+ [ ] Testar: login, upload de documento, checkout de teste, envio WhatsApp
+ [ ] Manter o projeto antigo intacto por ~30 dias antes de desativar
+ ROLLBACK: reconectar ao Lovable Cloud se algo quebrar.
+
+REGRA: nao avancar de sessao sem a anterior validada.
+(## Migração BYO Supabase — create-with-voice
+
+### Sessão 1: Backup — CONCLUÍDA (02/08/2026)
+
+**Origem:** Supabase `uyrcxfypdzasdminxizq` (Lovable Cloud, sem acesso a dashboard)
+**Destino dos artefatos:** `/opt/backups/create-with-voice/` + réplica VPS2
+
+**Artefatos gerados:**
+
+- `schema.sql` — 13.369 linhas, 135 tabelas, 237 policies RLS
+- `dados.dump` — formato custom (-Fc), 135 TABLE DATA, 782 KB
+- `cron_jobs.txt` — 4 jobs (chmod 600)
+- `.dburl` — connection string, 117 chars (chmod 600)
+- `create-with-voice-20260802.tar.gz` — 268 KB, replicado em VPS2 `/opt/backups/`
+
+**Como obter a connection string:**
+
+Edge Function `migrate-helper` no projeto Lovable.
+
+- Endpoint: `https://uyrcxfypdzasdminxizq.supabase.co/functions/v1/migrate-helper`
+- Header: `x-access-key` (chave de 48 chars, hardcoded no fonte da função)
+- `?action=ping` verifica; `?action=credentials` retorna url, service_role, db_url
+- ATENÇÃO: a chave no fonte diverge entre repo e deploy. Ler o valor real em
+  Lovable → Cloud → Edge Functions → migrate-helper → View code
+
+**Conexão:**
+
+- Host: `db.uyrcxfypdzasdminxizq.supabase.co:5432/postgres`
+- Resolve **apenas em IPv6** (`2600:1f13:...`) — VPS1 tem IPv6, conecta direto, sem Pooler
+- Trocar `sslmode=prefer` por `sslmode=require`
+- Servidor: PostgreSQL 17.6 / cliente local: pg_dump 17.10
+
+**Comandos do dump:**
+
+```
+DB=$(sed 's/sslmode=prefer/sslmode=require/' /opt/backups/create-with-voice/.dburl)
+
+pg_dump "$DB" --schema-only --no-owner --no-privileges -n public -n auth -n storage -f schema.sql
+
+pg_dump "$DB" -Fc --no-owner --no-privileges -n public -n auth -n storage -f dados.dump
+```
+
+**Cron jobs a recriar na Sessão 2:**
+
+| Job | Schedule |
+|---|---|
+| crm-cadencia-diaria | 0 12 * * * |
+| whatsapp-monitor | */15 * * * * |
+| campanha-worker-1min | * * * * * |
+| cadencia-worker-30min | */30 * * * * |
+
+Todos via `net.http_post` com apikey embutida — URLs e chaves mudam no projeto novo.
+Comandos completos em `/opt/backups/create-with-voice/cron_jobs.txt`.
+
+**Volume real:** o banco reporta 4.4 GB, mas `cron.job_run_details` tem 1.118.177 linhas
+(log do pg_cron, schema `cron`, não dumpado). Os dados de negócio são pequenos:
+audit_log 409, normas_legislacao 49, documentos_bpf 27. NÃO migrar job_run_details.
+
+### PENDENTE
+
+- **Storage (4 buckets)** — `export-storage` tem token divergente entre repo e deploy.
+  Secrets existentes: `STORAGE_EXPORT_TOKEN` (17/07) e `STORAGE_EXPORT_TOKEN_ALT` (18/07).
+  O código deployado lê um dos dois — não confirmado qual.
+  Alternativa: usar service_role direto na Storage API, dispensando a função.
+  Buckets: `documentos-bpf`, `feed-bpf`, `normas_legislacao`, `relatorios`.
+- **Deletar `migrate-helper`** após a migração (expõe db_url e service_role).
+- Considerar rotacionar a service_role key do projeto antigo.
+- Na virada (Sessão 3): desativar os crons do projeto antigo ANTES de ligar os novos.
+  `campanha-worker-1min` roda a cada minuto — dois projetos ativos processam a mesma
+  campanha em duplicidade.
+
+### Lições
+
+- O repo Lovable commita sozinho constantemente (35 commits em 15 dias).
+  Rodar `git fetch` ANTES de ler qualquer arquivo local — o código no clone mente.
+- O painel Lovable mostra "Last updated" da função: o deploy pode ser anterior ao commit.
+- Os contadores Invoked/Failed no painel servem de verificação independente do curl.
+- tmux não herda variáveis de shell — recarregar `$DB` ao criar sessão nova.
+- Colar markdown no terminal executa cada linha como comando. Abrir o editor primeiro,
+  confirmar que a tela mudou, e só então colar.)
