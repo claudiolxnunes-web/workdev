@@ -152,14 +152,15 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 ## Mapeamento projeto -> repositorio GitHub
 (nomes-codigo do Lovable sao opacos; identificados via title do index.html / src/routes)
 - WorkDev Core            -> workdev
-- BPF Solutions Suite     -> bpf-solutions-suite  (SaaS TanStack Start + Stripe; inclui gerador-rotulos = Nutri Agro Labels)
+- Feed_BPF Custom + Nutri Agro Labels -> bpf-solutions-suite (Lovable "BPF Site Sync"; rota /rotulos = gerador)
 - Audits_BPF / AuditMAPA  -> friendly-flame-igniter
-- Agente4                 -> rapid-ai-ally
+- Agent Hub Pro           -> rapid-ai-ally
 - Site BPF_Consult        -> create-with-voice
 - FeedOptimize            -> feedoptimize
 - NutriControle Pro       -> nutricontrole-pro
 - AgroGestao CRM          -> regional-fixer-charm
 - AgroGestor Regional CRM -> Agrogestor-Regional-CRM
 - Agente Pessoal          -> agente-pessoal
-- Agro RC CRM             -> soil-to-client (title diz "Agro_RC CRM"); candidatos alternativos: nutrigestor-crm, Nutricrm
+- Agro RC CRM (Beta)      -> soil-to-client; producao (agrorc) sem repo identificado
 - OpenClaw                -> sem repositorio
+- ATENCAO: doc "meus_programas_bpf.md" secao 2 lista repos clxn/* — conta de TERCEIRO, repos inexistentes. Repos reais: claudiolxnunes-web/*
