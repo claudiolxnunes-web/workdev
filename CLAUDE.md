@@ -148,6 +148,7 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 - Solucao: renomeado para .env.development; existe .env.production com VITE_API_URL vazio
 - Sempre verificar apos build: grep -c "localhost:8000" apps/web/dist/assets/index-*.js  (esperado 0)
 
+
 ## Mapeamento projeto -> repositorio GitHub
 (nomes-codigo do Lovable sao opacos; identificados via title do index.html / src/routes)
 - WorkDev Core            -> workdev
