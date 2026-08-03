@@ -8,6 +8,8 @@ from fastapi import HTTPException
 from app.routers.terminal import (
     ALLOWED_SESSIONS,
     AgentSendRequest,
+    _agent_status,
+    _awaiting_approval,
     _capture_history,
     _claim,
     _release,
@@ -15,6 +17,7 @@ from app.routers.terminal import (
     _send_output,
     _send_text,
     agent_send,
+    agents_status,
 )
 
 
@@ -116,6 +119,18 @@ class SendTextTest(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
 
     @patch("app.routers.terminal.subprocess.run")
+    def test_blank_text_sends_only_enter_no_literal_call(self, run):
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+
+        _send_text("codex", "")
+
+        run.assert_called_once_with(
+            ["tmux", "send-keys", "-t", "codex", "Enter"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+
+    @patch("app.routers.terminal.subprocess.run")
     def test_raises_when_tmux_session_is_unavailable(self, run):
         run.return_value.returncode = 1
         run.return_value.stderr = "can't find session"
@@ -130,10 +145,11 @@ class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
             await agent_send("desconhecido", AgentSendRequest(text="oi"))
         self.assertEqual(ctx.exception.status_code, 404)
 
-    async def test_rejects_blank_message(self):
-        with self.assertRaises(HTTPException) as ctx:
-            await agent_send("codex", AgentSendRequest(text="   "))
-        self.assertEqual(ctx.exception.status_code, 422)
+    @patch("app.routers.terminal._send_text")
+    async def test_blank_text_is_forwarded_as_a_bare_enter(self, mock_send):
+        result = await agent_send("codex", AgentSendRequest(text=""))
+        mock_send.assert_called_once_with("codex", "")
+        self.assertEqual(result, {"agent": "codex", "sent": True})
 
     @patch("app.routers.terminal._send_text")
     async def test_sends_text_to_the_mapped_tmux_session(self, mock_send):
@@ -146,6 +162,69 @@ class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as ctx:
             await agent_send("codex", AgentSendRequest(text="oi"))
         self.assertEqual(ctx.exception.status_code, 503)
+
+
+class AwaitingApprovalTest(unittest.TestCase):
+    @patch("app.routers.terminal._capture_history")
+    def test_detects_yes_no_prompt_on_last_line(self, capture):
+        capture.return_value = "gerando plano...\npronto.\nProsseguir? (y/n)"
+        self.assertTrue(_awaiting_approval("codex"))
+
+    @patch("app.routers.terminal._capture_history")
+    def test_detects_claude_style_numbered_menu(self, capture):
+        capture.return_value = "Do you want to proceed?\n❯ 1. Yes\n  2. No"
+        self.assertTrue(_awaiting_approval("code"))
+
+    @patch("app.routers.terminal._capture_history")
+    def test_ignores_normal_output_without_prompt_markers(self, capture):
+        capture.return_value = "instalando dependencias...\n1. baixando pacote a\n2. baixando pacote b"
+        self.assertFalse(_awaiting_approval("codex"))
+
+    @patch("app.routers.terminal._capture_history")
+    def test_ignores_prompt_text_that_already_scrolled_out_of_view(self, capture):
+        capture.return_value = "\n".join([
+            "Prosseguir? (y/n)",
+            "usuario respondeu y",
+            "aplicando mudancas",
+            "build concluido",
+            "continuando execucao normalmente",
+        ])
+        self.assertFalse(_awaiting_approval("codex"))
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_returns_false_when_tmux_session_is_unavailable(self, run):
+        run.return_value.returncode = 1
+        run.return_value.stderr = "can't find session"
+        self.assertFalse(_awaiting_approval("codex"))
+
+
+class AgentStatusTest(unittest.IsolatedAsyncioTestCase):
+    @patch("app.routers.terminal._awaiting_approval")
+    @patch("app.routers.terminal._current_process")
+    async def test_reports_idle_shell_as_not_running_and_not_awaiting(self, current_process, awaiting):
+        current_process.return_value = "bash"
+        result = await _agent_status("codex", "codex")
+        self.assertFalse(result["running"])
+        self.assertFalse(result["awaiting_approval"])
+        awaiting.assert_not_called()
+
+    @patch("app.routers.terminal._awaiting_approval")
+    @patch("app.routers.terminal._current_process")
+    async def test_checks_approval_only_when_agent_process_is_running(self, current_process, awaiting):
+        current_process.return_value = "claude"
+        awaiting.return_value = True
+        result = await _agent_status("claude", "code")
+        self.assertTrue(result["running"])
+        self.assertTrue(result["awaiting_approval"])
+        awaiting.assert_called_once_with("code")
+
+    @patch("app.routers.terminal._agent_status")
+    async def test_status_endpoint_reports_all_four_agents(self, mock_status):
+        mock_status.side_effect = lambda agent, session: {
+            "agent": agent, "running": False, "process": "", "awaiting_approval": False,
+        }
+        result = await agents_status()
+        self.assertEqual({item["agent"] for item in result["agents"]}, set(ALLOWED_SESSIONS))
 
 
 if __name__ == "__main__":

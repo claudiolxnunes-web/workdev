@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import pty
+import re
 import struct
 import subprocess
 import termios
@@ -75,15 +76,16 @@ class AgentSendRequest(BaseModel):
 
 def _send_text(session: str, text: str) -> None:
     stripped = text.rstrip("\n")
-    literal = subprocess.run(
-        ["tmux", "send-keys", "-t", session, "-l", "--", stripped],
-        capture_output=True,
-        text=True,
-        timeout=5,
-        check=False,
-    )
-    if literal.returncode != 0:
-        raise RuntimeError(literal.stderr.strip() or "Sessão tmux indisponível")
+    if stripped:
+        literal = subprocess.run(
+            ["tmux", "send-keys", "-t", session, "-l", "--", stripped],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if literal.returncode != 0:
+            raise RuntimeError(literal.stderr.strip() or "Sessão tmux indisponível")
     enter = subprocess.run(
         ["tmux", "send-keys", "-t", session, "Enter"],
         capture_output=True,
@@ -100,8 +102,6 @@ async def agent_send(agent: str, payload: AgentSendRequest):
     session = ALLOWED_SESSIONS.get(agent)
     if not session:
         raise HTTPException(status_code=404, detail="Agente inválido")
-    if not payload.text.strip():
-        raise HTTPException(status_code=422, detail="Mensagem vazia")
     try:
         await asyncio.to_thread(_send_text, session, payload.text)
     except RuntimeError as error:
@@ -171,6 +171,53 @@ def _current_process(session: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+# Heurística, não parsing exato por CLI: cada agente (Claude/Codex/Kimi/Qwen)
+# formata seu próprio prompt de aprovação de um jeito diferente e não há uma
+# forma segura de descobrir os formatos exatos sem interromper uma sessão
+# real. Checa só as últimas linhas não vazias para reduzir falso positivo
+# vindo de texto de saída antigo que já rolou pra fora da tela.
+_APPROVAL_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"\(y/n\)", r"\[y/n\]", r"\by/n\b",
+        r"do you want to proceed", r"do you approve",
+        r"allow this (action|command|tool)",
+        r"deseja continuar", r"aprovar\s*\?", r"confirmar\s*\?",
+        r"❯\s*1\.\s*(yes|sim)", r"press enter to continue",
+    ]
+]
+
+
+def _awaiting_approval(session: str) -> bool:
+    try:
+        tail = _capture_history(session, 6)
+    except RuntimeError:
+        return False
+    non_empty = [line for line in tail.splitlines() if line.strip()]
+    recent = "\n".join(non_empty[-3:])
+    return any(pattern.search(recent) for pattern in _APPROVAL_PATTERNS)
+
+
+async def _agent_status(agent: str, session: str) -> dict:
+    current_process = await asyncio.to_thread(_current_process, session)
+    running = bool(current_process and current_process not in _SHELL_PROCESSES)
+    awaiting_approval = await asyncio.to_thread(_awaiting_approval, session) if running else False
+    return {
+        "agent": agent,
+        "running": running,
+        "process": _PROCESS_LABELS.get(agent, current_process) if running else current_process,
+        "awaiting_approval": awaiting_approval,
+    }
+
+
+@router.get("/api/agents/status")
+async def agents_status():
+    results = await asyncio.gather(
+        *(_agent_status(agent, session) for agent, session in ALLOWED_SESSIONS.items())
+    )
+    return {"agents": list(results)}
+
+
 @router.websocket("/ws/agents/{agent}")
 async def agent_terminal(websocket: WebSocket, agent: str):
     if not websocket_is_authenticated(websocket):
@@ -203,13 +250,8 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         )
         os.close(slave_fd)
         slave_fd = -1
-        current_process = await asyncio.to_thread(_current_process, session)
-        running = bool(current_process and current_process not in _SHELL_PROCESSES)
-        await websocket.send_text(json.dumps({
-            "type": "status",
-            "running": running,
-            "process": _PROCESS_LABELS.get(agent, current_process) if running else current_process,
-        }))
+        initial_status = await _agent_status(agent, session)
+        await websocket.send_text(json.dumps({"type": "status", **initial_status}))
         output_task = asyncio.create_task(_send_output(websocket, master_fd))
 
         while True:
