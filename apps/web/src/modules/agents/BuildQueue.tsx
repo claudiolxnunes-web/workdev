@@ -18,7 +18,7 @@ const agentLabel: Record<AgentName, string> = {
   claude: "Claude Code", codex: "Codex", kimi: "Kimi Code", qwen: "Qwen Code",
 }
 
-export function BuildQueue({ agent }: { agent: AgentName }) {
+export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName; mobileExpanded?: boolean }) {
   const [runs, setRuns] = useState<AgentRun[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [context, setContext] = useState<AgentContext | null>(null)
@@ -129,7 +129,7 @@ export function BuildQueue({ agent }: { agent: AgentName }) {
 
   const selected = runs.find((run) => run.id === selectedId)
   return (
-    <section className="flex max-h-80 w-full shrink-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900 md:max-h-none md:w-80">
+    <section className={`flex w-full shrink-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900 md:max-h-none md:w-80 ${mobileExpanded ? "min-h-0 flex-1" : "max-h-80"}`}>
       <div className="border-b border-slate-800 p-3">
         <h3 className="font-semibold">Fila de Build</h3>
         <p className="text-xs text-slate-500">Planos aprovados para {agentLabel[agent]}</p>
