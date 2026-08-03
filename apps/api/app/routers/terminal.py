@@ -8,6 +8,7 @@ import termios
 from contextlib import suppress
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from pydantic import BaseModel
 
 from app.auth import websocket_is_authenticated
 
@@ -66,6 +67,46 @@ def _scroll_terminal(session: str, direction: str) -> None:
             timeout=2,
             check=False,
         )
+
+
+class AgentSendRequest(BaseModel):
+    text: str
+
+
+def _send_text(session: str, text: str) -> None:
+    stripped = text.rstrip("\n")
+    literal = subprocess.run(
+        ["tmux", "send-keys", "-t", session, "-l", "--", stripped],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    if literal.returncode != 0:
+        raise RuntimeError(literal.stderr.strip() or "Sessão tmux indisponível")
+    enter = subprocess.run(
+        ["tmux", "send-keys", "-t", session, "Enter"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    if enter.returncode != 0:
+        raise RuntimeError(enter.stderr.strip() or "Falha ao confirmar envio")
+
+
+@router.post("/api/agents/{agent}/send")
+async def agent_send(agent: str, payload: AgentSendRequest):
+    session = ALLOWED_SESSIONS.get(agent)
+    if not session:
+        raise HTTPException(status_code=404, detail="Agente inválido")
+    if not payload.text.strip():
+        raise HTTPException(status_code=422, detail="Mensagem vazia")
+    try:
+        await asyncio.to_thread(_send_text, session, payload.text)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return {"agent": agent, "sent": True}
 
 
 @router.get("/api/agents/{agent}/history")

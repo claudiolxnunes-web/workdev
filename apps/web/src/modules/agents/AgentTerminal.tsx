@@ -26,6 +26,9 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState("")
   const [copyFeedback, setCopyFeedback] = useState("")
+  const [prompt, setPrompt] = useState("")
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState("")
 
   useEffect(() => {
     const container = containerRef.current
@@ -164,6 +167,27 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
     await copyText(history, "Histórico copiado")
   }
 
+  async function sendPrompt() {
+    const text = prompt.trim()
+    if (!text || sending) return
+    setSending(true)
+    setSendError("")
+    try {
+      const response = await fetch(`/api/agents/${agent}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || "Falha ao enviar")
+      setPrompt("")
+    } catch (cause) {
+      setSendError(cause instanceof Error ? cause.message : "Falha ao enviar")
+    } finally {
+      setSending(false)
+    }
+  }
+
   function downloadHistory() {
     const url = URL.createObjectURL(new Blob([history], { type: "text/plain;charset=utf-8" }))
     const link = document.createElement("a")
@@ -216,6 +240,32 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
         </div>
       </div>
       <div ref={containerRef} className="agent-terminal min-h-0 flex-1 p-2 sm:p-3" />
+      <div className="flex shrink-0 flex-col gap-1 border-t border-slate-800 bg-slate-950 p-2 sm:p-3">
+        <div className="flex items-end gap-2">
+          <textarea
+            value={prompt}
+            onChange={(event) => { setPrompt(event.target.value); setSendError("") }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault()
+                void sendPrompt()
+              }
+            }}
+            placeholder={`Enviar prompt para ${agent} (Enter envia, Shift+Enter quebra linha)`}
+            rows={2}
+            className="min-h-0 flex-1 resize-none rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-sky-600 focus:outline-none"
+          />
+          <button
+            type="button"
+            disabled={!prompt.trim() || sending}
+            onClick={() => void sendPrompt()}
+            className="shrink-0 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {sending ? "Enviando…" : "Enviar"}
+          </button>
+        </div>
+        {sendError && <p className="text-xs text-red-400">{sendError}</p>}
+      </div>
       {historyOpen && (
         <div className="absolute inset-0 z-20 flex flex-col bg-slate-950">
           <div className="flex min-h-12 items-center justify-between gap-3 border-b border-slate-800 px-3">

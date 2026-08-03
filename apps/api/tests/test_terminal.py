@@ -3,13 +3,18 @@ import os
 import unittest
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from app.routers.terminal import (
     ALLOWED_SESSIONS,
+    AgentSendRequest,
     _capture_history,
     _claim,
     _release,
     _scroll_terminal,
     _send_output,
+    _send_text,
+    agent_send,
 )
 
 
@@ -93,6 +98,55 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
             "tmux", "send-keys", "-X", "-t", "codex", "cancel"
         ])
         self.assertEqual(run.call_count, 3)
+
+class SendTextTest(unittest.TestCase):
+    @patch("app.routers.terminal.subprocess.run")
+    def test_sends_literal_text_then_enter(self, run):
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+
+        _send_text("codex", "gerar relatorio\n")
+
+        self.assertEqual(run.call_args_list[0].args[0], [
+            "tmux", "send-keys", "-t", "codex", "-l", "--", "gerar relatorio",
+        ])
+        self.assertEqual(run.call_args_list[1].args[0], [
+            "tmux", "send-keys", "-t", "codex", "Enter",
+        ])
+        self.assertEqual(run.call_count, 2)
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_raises_when_tmux_session_is_unavailable(self, run):
+        run.return_value.returncode = 1
+        run.return_value.stderr = "can't find session"
+
+        with self.assertRaises(RuntimeError):
+            _send_text("codex", "oi")
+
+
+class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
+    async def test_rejects_unknown_agent(self):
+        with self.assertRaises(HTTPException) as ctx:
+            await agent_send("desconhecido", AgentSendRequest(text="oi"))
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    async def test_rejects_blank_message(self):
+        with self.assertRaises(HTTPException) as ctx:
+            await agent_send("codex", AgentSendRequest(text="   "))
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    @patch("app.routers.terminal._send_text")
+    async def test_sends_text_to_the_mapped_tmux_session(self, mock_send):
+        result = await agent_send("claude", AgentSendRequest(text="continuar"))
+        mock_send.assert_called_once_with("code", "continuar")
+        self.assertEqual(result, {"agent": "claude", "sent": True})
+
+    @patch("app.routers.terminal._send_text", side_effect=RuntimeError("indisponível"))
+    async def test_reports_503_when_tmux_session_is_unavailable(self, _mock_send):
+        with self.assertRaises(HTTPException) as ctx:
+            await agent_send("codex", AgentSendRequest(text="oi"))
+        self.assertEqual(ctx.exception.status_code, 503)
+
 
 if __name__ == "__main__":
     unittest.main()
