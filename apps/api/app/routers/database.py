@@ -11,7 +11,17 @@ from app.models.project import Project
 router = APIRouter(prefix="/database", tags=["database"])
 
 SUPABASE_MANAGEMENT_API = "https://api.supabase.com/v1"
-SUPABASE_MANAGEMENT_TOKEN = os.getenv("SUPABASE_MANAGEMENT_TOKEN")
+SUPABASE_TOKENS = {
+    "xgvapaebustyotrwnzqa": os.getenv("SUPABASE_MGMT_TOKEN_GMAIL"),
+    "cxqfwswartqqwsanceaj": os.getenv("SUPABASE_MGMT_TOKEN_GMAIL"),
+    "exarkxhwghiqcgmvcsyh": os.getenv("SUPABASE_MGMT_TOKEN_BPF"),
+    "ufqqskukhzgakmwrsumq": os.getenv("SUPABASE_MGMT_TOKEN_BPF"),
+    "ilvfwbtfjtnihtsuuzcb": os.getenv("SUPABASE_MGMT_TOKEN_HOTMAIL"),
+    "dmemealywssefvohyobt": os.getenv("SUPABASE_MGMT_TOKEN_HOTMAIL"),
+    "tebrkrbfsjquqpckslks": os.getenv("SUPABASE_MGMT_TOKEN_YAHOO"),
+    "nnwlqpgsqhtyqliwufgw": os.getenv("SUPABASE_MGMT_TOKEN_YAHOO"),
+}
+SUPABASE_MANAGEMENT_TOKEN = os.getenv("SUPABASE_MGMT_TOKEN_GMAIL")
 
 TABLE_COUNT_QUERY = (
     "select count(*) as tables from information_schema.tables "
@@ -31,8 +41,9 @@ def get_db():
         db.close()
 
 
-def _headers() -> dict:
-    return {"Authorization": f"Bearer {SUPABASE_MANAGEMENT_TOKEN}"}
+def _headers(ref: str | None = None) -> dict:
+    tok = SUPABASE_TOKENS.get(ref) if ref else None
+    return {"Authorization": f"Bearer {tok or SUPABASE_MANAGEMENT_TOKEN}"}
 
 
 def _query(client: httpx.Client, ref: str, sql: str) -> list:
@@ -75,7 +86,7 @@ def database_status(slug: str, db: Session = Depends(get_db)):
         }
 
     try:
-        with httpx.Client(timeout=15, headers=_headers()) as client:
+        with httpx.Client(timeout=15, headers=_headers(ref)) as client:
             status_resp = client.get(f"{SUPABASE_MANAGEMENT_API}/projects/{ref}")
             if status_resp.status_code == 403:
                 return {
