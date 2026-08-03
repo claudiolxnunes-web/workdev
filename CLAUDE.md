@@ -27,6 +27,21 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
     IP de bridge — não depende mais de qual container network o Docker realocar
     após reboot. `workdev-api.service` reiniciado e todas as rotas validadas (200,
     sem travar).
+  - ✅ **Corrigido em 2026-08-03:** um `uvicorn` iniciado manualmente fora do
+    systemd (provável start direto em terminal/tmux, não via `systemctl`) ficou
+    órfão (PPID 1) segurando a porta 8000 desde 02:01. O unit `workdev-api`
+    (`Restart=always`, `RestartSec=5`) ficou em **crash-loop silencioso** por
+    horas tentando bindar a porta já ocupada (`NRestarts` passou de 7300) —
+    `systemctl is-active` chegava a mostrar `active` momentos antes por causa
+    do órfão continuar respondendo `/health` normalmente, mascarando o loop.
+    Um `bash deploy.sh` normal expôs o problema (o `systemctl restart` some
+    processo próprio, mas o órfão nunca foi tocado). Corrigido matando o PID
+    órfão diretamente (`kill -TERM`); o systemd, já em loop de retry, assumiu
+    a porta no ciclo seguinte. **Lição:** nunca rodar `uvicorn` à mão para
+    debug em produção — sempre `systemctl start/stop/restart workdev-api`.
+    Se `deploy.sh` falhar ou o healthcheck público não bater com o PID do
+    `Main PID` do systemd, suspeitar de processo órfão: `ss -tlnp | grep 8000`
+    mostra quem realmente está na porta.
 - **VPS2** (`srv1750921`, IP 2.25.201.90): OpenClaw, Agente Pessoal (Telegram
   @Clxn2000bot), n8n.
 - **GCP** `workspace-clxn-ia` (e2-standard-2, southamerica-east1-c, projeto
