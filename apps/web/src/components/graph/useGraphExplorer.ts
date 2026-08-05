@@ -30,6 +30,8 @@ export const NODE_VISUALS: Record<string, { color: string; width: number; height
 
 const FALLBACK_VISUAL = { color: "#64748b", width: 150, height: 42, shape: "rounded" };
 const LABEL_PREFIX = /^(project|feature|task|subtask|adr|rfc|decision|commit|deployment|deploy|release|plan|agent\s*run|agent\s*event)\s*(?:[:#·–—-]+)\s*/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const JUNK_ID_PATTERN = /^bbbbbbbb-0001-0001-0001-/i;
 
 export type GraphView = "all" | "features" | "releases";
 export type SemanticZoom = "dot" | "compact" | "full";
@@ -63,6 +65,16 @@ export function truncateLabel(label: string, maxLength = 30): string {
   return `${label.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+export function isJunkGraphNode(node: GraphNode): boolean {
+  return JUNK_ID_PATTERN.test(node.id) || JUNK_ID_PATTERN.test(node.entity_id);
+}
+
+export function fallbackNodeLabel(node: GraphNode): string {
+  if (UUID_PATTERN.test(node.entity_id)) return `${node.type} sem título`;
+  const identifier = node.entity_id.trim();
+  return identifier ? `${node.type} · ${truncateLabel(identifier, 20)}` : `${node.type} sem título`;
+}
+
 export interface GraphDeduplicationResult {
   graph: GraphResult;
   collisions: number;
@@ -84,7 +96,8 @@ function nodeCompleteness(node: GraphNode): number {
 
 export function deduplicateGraph(graph: GraphResult): GraphDeduplicationResult {
   const canonicalByKey = new Map<string, GraphNode>();
-  for (const node of graph.nodes) {
+  const cleanNodes = graph.nodes.filter((node) => !isJunkGraphNode(node));
+  for (const node of cleanNodes) {
     const key = logicalNodeKey(node);
     const current = canonicalByKey.get(key);
     if (!current || nodeCompleteness(node) > nodeCompleteness(current)) {
@@ -93,7 +106,7 @@ export function deduplicateGraph(graph: GraphResult): GraphDeduplicationResult {
   }
 
   const idRemap = new Map<string, string>();
-  for (const node of graph.nodes) {
+  for (const node of cleanNodes) {
     const canonical = canonicalByKey.get(logicalNodeKey(node))!;
     if (node.id !== canonical.id) idRemap.set(node.id, canonical.id);
   }
@@ -114,7 +127,7 @@ export function deduplicateGraph(graph: GraphResult): GraphDeduplicationResult {
       nodes: [...canonicalByKey.values()],
       edges,
     },
-    collisions: graph.nodes.length - canonicalIds.size,
+    collisions: cleanNodes.length - canonicalIds.size,
     idRemap,
   };
 }
@@ -317,7 +330,7 @@ export function useGraphExplorer(projectId?: string) {
     .filter((node) => visibleIds.has(node.id))
     // eslint-disable-next-line react-hooks/refs
     .map((node) => {
-      const fullLabel = node.label || `${node.type} · ${node.entity_id.slice(0, 8)}`;
+      const fullLabel = node.label || fallbackNodeLabel(node);
       const cleaned = visibleLabel(fullLabel);
       const children = childrenByParent.get(node.id) ?? [];
       const expanded = expandedIds.has(node.id);

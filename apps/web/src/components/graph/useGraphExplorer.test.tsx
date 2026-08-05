@@ -21,6 +21,8 @@ import {
   computeVisibleNodeIds,
   connectedTimeline,
   deduplicateGraph,
+  fallbackNodeLabel,
+  isJunkGraphNode,
   semanticZoomFor,
   selectGraphScope,
   truncateLabel,
@@ -184,6 +186,25 @@ describe("GraphExplorer hierarchy", () => {
 });
 
 describe("GraphExplorer labels and semantic zoom", () => {
+  it("filters known seed garbage and never uses a UUID as fallback label", () => {
+    const junk = {
+      id: "bbbbbbbb-0001-0001-0001-000000000004",
+      type: "Task" as const,
+      entity_id: "bbbbbbbb-0001-0001-0001-000000000004",
+      project_id: "4224987e-a792-4b80-b571-1c47fc734ca4",
+    };
+    const valid = {
+      ...junk,
+      id: "f8ef2a67-0716-4cf2-9c3c-9991bd755abc",
+      entity_id: "f8ef2a67-0716-4cf2-9c3c-9991bd755abc",
+    };
+
+    expect(isJunkGraphNode(junk)).toBe(true);
+    expect(isJunkGraphNode(valid)).toBe(false);
+    expect(fallbackNodeLabel(valid)).toBe("Task sem título");
+    expect(deduplicateGraph({ nodes: [junk, valid], edges: [] }).graph.nodes).toEqual([valid]);
+  });
+
   it("removes redundant prefixes and truncates to at most 30 characters", () => {
     const label = visibleLabel("Task: Implementar uma funcionalidade com nome muito longo");
     const truncated = truncateLabel(label);

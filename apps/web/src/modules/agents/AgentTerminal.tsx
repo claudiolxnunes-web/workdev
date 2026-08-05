@@ -33,6 +33,10 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+    let disposed = false
+    let reconnectAttempt = 0
+    let reconnectTimer: number | undefined
+    let resizeTimer: number | undefined
     setStatus("connecting")
     selectedTextRef.current = ""
     setHasSelection(false)
@@ -47,43 +51,79 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
     terminal.loadAddon(fitAddon)
     terminal.open(container)
     terminalRef.current = terminal
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/agents/${agent}`)
-    socketRef.current = socket
-    socket.binaryType = "arraybuffer"
-
     const fit = () => {
       try {
+        const buffer = terminal.buffer.active
+        const wasAtBottom = buffer.viewportY >= buffer.baseY
+        const previousViewport = buffer.viewportY
         fitAddon.fit()
-        if (socket.readyState === WebSocket.OPEN) {
+        if (!wasAtBottom) terminal.scrollToLine(Math.min(previousViewport, terminal.buffer.active.baseY))
+        const socket = socketRef.current
+        if (socket?.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }))
         }
       } catch { /* layout ainda não disponível */ }
     }
-    const observer = new ResizeObserver(fit)
+    const scheduleFit = () => {
+      window.clearTimeout(resizeTimer)
+      resizeTimer = window.setTimeout(fit, 120)
+    }
+    const observer = new ResizeObserver(scheduleFit)
     observer.observe(container)
-    socket.onopen = () => { setStatus("connected"); window.setTimeout(fit, 0) }
-    socket.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        terminal.write(new Uint8Array(event.data))
-        return
+
+    function connect() {
+      if (disposed) return
+      window.clearTimeout(reconnectTimer)
+      setStatus("connecting")
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+      const socket = new WebSocket(`${protocol}//${window.location.host}/ws/agents/${agent}`)
+      socketRef.current = socket
+      socket.binaryType = "arraybuffer"
+      socket.onopen = () => {
+        if (socket !== socketRef.current || disposed) return
+        reconnectAttempt = 0
+        setStatus("connected")
+        window.setTimeout(fit, 0)
       }
-      try {
-        const message = JSON.parse(event.data)
-        if (message.type === "status") {
-          setTaskRunning(Boolean(message.running))
-          setProcessName(typeof message.process === "string" ? message.process : "")
+      socket.onmessage = (event) => {
+        if (socket !== socketRef.current || disposed) return
+        if (event.data instanceof ArrayBuffer) {
+          terminal.write(new Uint8Array(event.data))
+          return
         }
-      } catch { /* mensagem de controle desconhecida */ }
+        try {
+          const message = JSON.parse(event.data)
+          if (message.type === "status") {
+            setTaskRunning(Boolean(message.running))
+            setProcessName(typeof message.process === "string" ? message.process : "")
+          }
+        } catch { /* mensagem de controle desconhecida */ }
+      }
+      socket.onclose = (event) => {
+        if (socket !== socketRef.current || disposed) return
+        socketRef.current = null
+        if (event.code === 1008 && event.reason.includes("uso")) {
+          setStatus("busy")
+          return
+        }
+        if (event.code === 1008 && event.reason.includes("autenticado")) {
+          window.location.reload()
+          return
+        }
+        setStatus(event.wasClean ? "disconnected" : "error")
+        const delay = Math.min(1000 * (2 ** reconnectAttempt), 10000)
+        reconnectAttempt += 1
+        reconnectTimer = window.setTimeout(connect, delay)
+      }
+      socket.onerror = () => {
+        if (socket === socketRef.current && !disposed) setStatus("error")
+      }
     }
-    socket.onclose = (event) => {
-      if (event.code === 1008 && event.reason.includes("uso")) setStatus("busy")
-      else if (event.code === 1008 && event.reason.includes("autenticado")) window.location.reload()
-      else setStatus(event.wasClean ? "disconnected" : "error")
-    }
-    socket.onerror = () => setStatus("error")
+    connect()
+
     const input = terminal.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }))
+      const socket = socketRef.current
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }))
     })
     const selection = terminal.onSelectionChange(() => {
       const selected = terminal.getSelection()
@@ -100,7 +140,10 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
       return true
     })
     return () => {
-      input.dispose(); selection.dispose(); observer.disconnect(); socket.close(); terminal.dispose()
+      disposed = true
+      window.clearTimeout(reconnectTimer)
+      window.clearTimeout(resizeTimer)
+      input.dispose(); selection.dispose(); observer.disconnect(); socketRef.current?.close(); terminal.dispose()
       terminalRef.current = null
       socketRef.current = null
     }
@@ -219,8 +262,8 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
   const active = status === "connected"
   return (
     <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
-      <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3 py-1 sm:px-4">
-        <div className="flex min-w-0 items-center gap-2 text-sm">
+      <div className="flex shrink-0 flex-col border-b border-slate-800">
+        <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 py-1 text-sm sm:px-4">
           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${active ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-red-400"}`} />
           <span className="truncate">{labels[status]}</span>
           {active && (
@@ -234,28 +277,34 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
             </span>
           )}
         </div>
-        <div className="flex max-w-full shrink-0 items-center gap-1 overflow-x-auto">
+        <div className="flex w-full flex-wrap items-center gap-1 border-t border-slate-800/70 px-2 py-1 sm:px-3">
           {copyFeedback && <span className="hidden text-xs text-emerald-400 sm:inline">{copyFeedback}</span>}
           <button
             type="button"
             disabled={!hasSelection}
             onClick={() => void copySelection()}
-            className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800 disabled:text-slate-600"
+            className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800 disabled:text-slate-600"
             title={agent === "claude" ? "No Claude, use Shift + arrastar; depois Ctrl+Shift+C para copiar" : "Arraste no terminal para selecionar; atalho Ctrl+Shift+C"}
           >
             Copiar seleção
           </button>
-          <button type="button" onClick={() => void copyScreen()} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Copia tudo que está visível no terminal">
+          <button type="button" onClick={() => void copyScreen()} className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Copia tudo que está visível no terminal">
             Copiar tela
           </button>
-          <button type="button" onClick={() => scrollPage("up")} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Subir uma página no terminal">↑</button>
-          <button type="button" onClick={() => scrollPage("down")} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Descer uma página no terminal">↓</button>
-          <button type="button" onClick={() => void openHistory()} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800">
+          <button type="button" onClick={() => scrollPage("up")} className="min-h-8 min-w-8 shrink-0 rounded px-2 py-1 text-sm text-sky-400 hover:bg-slate-800" title="Subir uma página no terminal" aria-label="Subir uma página">↑</button>
+          <button type="button" onClick={() => scrollPage("down")} className="min-h-8 min-w-8 shrink-0 rounded px-2 py-1 text-sm text-sky-400 hover:bg-slate-800" title="Descer uma página no terminal" aria-label="Descer uma página">↓</button>
+          <button type="button" onClick={() => void openHistory()} className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800">
             Histórico
           </button>
-          {!active && status !== "connecting" && (
-            <button className="shrink-0 text-sm text-sky-400 hover:text-sky-300" onClick={() => setGeneration((value) => value + 1)}>Reconectar</button>
-          )}
+          <button
+            type="button"
+            disabled={status === "connecting"}
+            className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800 hover:text-sky-300 disabled:cursor-wait disabled:text-slate-600"
+            onClick={() => setGeneration((value) => value + 1)}
+            title={active ? "Refazer a conexão com o terminal" : "Reconectar ao terminal"}
+          >
+            Reconectar
+          </button>
         </div>
       </div>
       {awaitingApproval && (

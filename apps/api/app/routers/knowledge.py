@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models.knowledge import KnowledgeEntry
 from app.models.project import Project
 from app.models.backlog import BacklogItem
 from app.schemas.knowledge import KnowledgeCreate, KnowledgeOut
+from app.services.engineering_graph import graph_sync
 
 router = APIRouter()
 
@@ -43,18 +44,36 @@ def listar_conhecimento(categoria: str | None = None,
 
 
 @router.post("/knowledge", response_model=KnowledgeOut, status_code=201)
-def criar_conhecimento(payload: KnowledgeCreate, db: Session = Depends(get_db)):
+def criar_conhecimento(payload: KnowledgeCreate,
+                        background_tasks: BackgroundTasks,
+                        db: Session = Depends(get_db)):
     if payload.category not in CATEGORIES:
         raise HTTPException(status_code=400,
                             detail=f"categoria inválida: {payload.category}")
     if payload.project_id and not db.query(Project).filter(
             Project.id == payload.project_id).first():
         raise HTTPException(status_code=404, detail="Project not found")
-    if payload.backlog_id and not db.query(BacklogItem).filter(
-            BacklogItem.id == payload.backlog_id).first():
-        raise HTTPException(status_code=404, detail="Backlog item not found")
+    backlog = None
+    if payload.backlog_id:
+        backlog = db.query(BacklogItem).filter(
+            BacklogItem.id == payload.backlog_id).first()
+        if not backlog:
+            raise HTTPException(status_code=404, detail="Backlog item not found")
     entry = KnowledgeEntry(**payload.model_dump())
     db.add(entry)
     db.commit()
     db.refresh(entry)
+    graph_project_id = payload.project_id or (
+        backlog.project_id if backlog is not None else None
+    )
+    if graph_project_id:
+        background_tasks.add_task(
+            graph_sync.sync_safely,
+            "sync_related",
+            "Knowledge",
+            str(entry.id),
+            str(graph_project_id),
+            "LINKED_TO_KNOWLEDGE",
+            str(payload.backlog_id) if payload.backlog_id else None,
+        )
     return entry
