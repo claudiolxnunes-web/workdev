@@ -240,6 +240,38 @@ sistema distinto do **AgroGestão CRM** (origem Lovable conta secundária,
 Supabase `nnwlqpgsqhtyqliwufgw`, `/opt/agrogestao`) e de **Agro RC CRM**
 (`/opt/agro-rc`). Nunca conflatar.
 
+## Decisão complementar — chave única do Resend para toda a plataforma
+
+Chave do Resend recriada em 2026-08-08 com nome **`workdev-core`**, adotada como
+credencial única de email para todos os apps da plataforma, em vez de uma chave
+por aplicação.
+
+Justificativa: operação solo, cobrança do Resend por volume e não por chave,
+menos superfície de rastreamento.
+
+Custo aceito: sem isolamento. Vazamento em qualquer app obriga revogação única
+que interrompe email em todos simultaneamente.
+
+Notas de nomenclatura: o nome sugere pertencer ao WorkDev, mas a chave serve
+todo o portfólio. Renomear se um dia houver chave exclusiva do WorkDev.
+
+Configuração pendente — a mesma chave em cada destino:
+- Secrets dos projetos Supabase (Agro RC `ilvfwbtfjtnihtsuuzcb`, Feed_BPF
+  `ufqqskukhzgakmwrsumq`, audits-bpf)
+- `/opt/workdev/apps/api/.env` (o arquivo que a API lê; **não** `/opt/workdev/.env`)
+
+Resolver antes a pendência de duplicação em `/opt/workdev/.env` — não adicionar
+variável nova a um arquivo com três cópias das existentes.
+
+Domínio `bpfconsult.com.br` precisa estar verificado no Resend (SPF/DKIM no
+GoDaddy) para envio em produção; remetentes distintos por produto usam o mesmo
+domínio.
+
+**Atenção:** configurar a chave não restaura as funções de email do Agro RC.
+`auth-email-hook`, `handle-email-suppression` e `preview-transactional-email`
+leem `LOVABLE_API_KEY` e precisam ser reescritas. Apenas `process-email-queue`
+já lê `RESEND_API_KEY` e volta a funcionar sozinho.
+
 ## Nota de direção — dois modelos de arquitetura por acidente
 
 O portfólio hoje mistura dois modelos, nenhum deles escolhido: **SPA + edge
