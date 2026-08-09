@@ -272,6 +272,25 @@ domínio.
 leem `LOVABLE_API_KEY` e precisam ser reescritas. Apenas `process-email-queue`
 já lê `RESEND_API_KEY` e volta a funcionar sozinho.
 
+## Verificações encerradas em 2026-08-09
+
+**`/opt/workdev/.env` — duplicação de variáveis: resolvida.** Registro anterior
+indicava `VITE_SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY` repetidas ~3× e
+`DATABASE_URL` ~4×. Contagem atual retorna uma ocorrência de cada, tanto em
+`/opt/workdev/.env` quanto em `/opt/workdev/apps/api/.env`. Provável efeito da
+rotação de 2026-08-04, cujo resíduo era `apps/api/.env.pre-rotacao`.
+
+**`VITE_SUPABASE_ANON_KEY` — papel correto.** Payload do JWT decodificado
+retorna `"role":"anon"`. Não há chave `service_role` exposta no bundle do
+frontend. Encerra a via de exposição que reproduzia incidente anterior.
+
+**Higiene aplicada nesta sessão:** `apps/api/.env.pre-rotacao` (23 variáveis)
+movido para `/root/env-archive/` com permissão 600, fora do diretório
+versionado; `.gitignore` recebeu `.env*` (os padrões `.env` e `*.env`
+existentes não cobriam o sufixo); arquivos vazios `ls` e `scp` removidos da raiz
+do repositório. O `.gitignore` ainda contém blocos duplicados (linhas 4-6 e
+12-14) — limpeza manual pendente, sem impacto funcional.
+
 ## Nota de direção — dois modelos de arquitetura por acidente
 
 O portfólio hoje mistura dois modelos, nenhum deles escolhido: **SPA + edge
