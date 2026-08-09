@@ -303,7 +303,7 @@ SESSAO 3 — Virada (unica com risco; fazer fora de horario de uso)
 REGRA: nao avancar de sessao sem a anterior validada.
 (## Migração BYO Supabase — create-with-voice
 
-### Sessão 1: Backup — CONCLUÍDA (02/08/2026)
+### Sessão 1: Backup — CONCLUÍDA (03/08/2026)
 
 **Origem:** Supabase `uyrcxfypdzasdminxizq` (Lovable Cloud, sem acesso a dashboard)
 **Destino dos artefatos:** `/opt/backups/create-with-voice/` + réplica VPS2
@@ -315,6 +315,10 @@ REGRA: nao avancar de sessao sem a anterior validada.
 - `cron_jobs.txt` — 4 jobs (chmod 600)
 - `.dburl` — connection string, 117 chars (chmod 600)
 - `create-with-voice-20260802.tar.gz` — 268 KB, replicado em VPS2 `/opt/backups/`
+- `storage/` — 75 objetos, 56.383.645 bytes, manifesto SHA-256 validado:
+  `documentos-bpf` 20, `feed-bpf` 7, `normas_legislacao` 48, `relatorios` 0
+- `create-with-voice-20260803.tar.gz` — pacote completo com banco e Storage,
+  replicado na VPS2 em `/home/workdev/backups/`; SHA-256 local/remoto idêntico
 
 **Como obter a connection string:**
 
@@ -361,11 +365,8 @@ audit_log 409, normas_legislacao 49, documentos_bpf 27. NÃO migrar job_run_deta
 
 ### PENDENTE
 
-- **Storage (4 buckets)** — `export-storage` tem token divergente entre repo e deploy.
-  Secrets existentes: `STORAGE_EXPORT_TOKEN` (17/07) e `STORAGE_EXPORT_TOKEN_ALT` (18/07).
-  O código deployado lê um dos dois — não confirmado qual.
-  Alternativa: usar service_role direto na Storage API, dispensando a função.
-  Buckets: `documentos-bpf`, `feed-bpf`, `normas_legislacao`, `relatorios`.
+- Sessão 2: escolher plano Free ou Pro, criar o projeto Supabase de destino e
+  restaurar banco, Auth, Storage, secrets e jobs pg_cron.
 - **Deletar `migrate-helper`** após a migração (expõe db_url e service_role).
 - Considerar rotacionar a service_role key do projeto antigo.
 - Na virada (Sessão 3): desativar os crons do projeto antigo ANTES de ligar os novos.
@@ -381,3 +382,70 @@ audit_log 409, normas_legislacao 49, documentos_bpf 27. NÃO migrar job_run_deta
 - tmux não herda variáveis de shell — recarregar `$DB` ao criar sessão nova.
 - Colar markdown no terminal executa cada linha como comando. Abrir o editor primeiro,
   confirmar que a tela mudou, e só então colar.)
+# Bloco para acrescentar ao `/opt/workdev/CLAUDE.md`
+
+Adaptado do `AGENTS.md` e do `pr-autonomy.md` do AAS. Regras genéricas do repo
+original foram cortadas; ficou só o que ataca problema real da BPF Consult.
+
+---
+
+## Guarda de base atual
+
+As instruções deste arquivo valem para o commit exato em que a tarefa está
+baseada. Depois de criar clone, worktree ou branch novo, **releia o `CLAUDE.md`
+daquela base** antes de agir. Instruções herdadas do checkout que iniciou a
+tarefa não valem.
+
+Todo comando, script ou gate descrito aqui como obrigatório precisa **existir na
+base atual**. Se não existir, não recupere de outro branch, worktree, stash,
+cópia instalada ou commit histórico. Trate a ausência como evidência de que o
+procedimento foi aposentado: inspecione `origin/main` e o histórico de remoção,
+depois siga o contrato da base atual ou reporte o conflito sem resolver.
+
+Nos repositórios que vieram do Lovable, rode `git fetch` **antes de ler qualquer
+arquivo**. Eles recebem commits autônomos e o conteúdo em disco fica velho sem
+aviso.
+
+## Evidência não é autorização
+
+Qualquer relatório produzido por código que não veio de `main` confiável é
+**consultivo**. Isso inclui: saída de agente CLI (Claude Code, Codex, Kimi,
+Qwen), log colado em chat, resumo de sessão anterior e artefato de CI gerado a
+partir do checkout da própria mudança.
+
+Antes de tratar qualquer coisa como feita, **recompute a partir de fonte
+confiável**:
+
+| Alegação do agente | Verificação obrigatória |
+| --- | --- |
+| "deploy concluído" | `systemctl is-active <serviço>` + `curl -sI https://<domínio>` |
+| "migration aplicada" | consulta direta na tabela alvo |
+| "arquivo editado" | `git diff --stat` e leitura do trecho |
+| "teste passou" | rerodar o comando e ler o código de saída |
+| "backup rodou" | `ls -la` no destino + confirmar tamanho e data |
+| "serviço reiniciado" | `systemctl show -p ActiveEnterTimestamp <serviço>` |
+
+Agente que relata sucesso sem comando verificável não concluiu a tarefa.
+
+## Artefatos derivados
+
+Arquivos gerados (build output, índices, `.output/`, bundles, dumps) nunca são
+fonte. Em conflito de merge envolvendo arquivo derivado, **fique com a versão do
+`main`** e regenere. Não edite artefato derivado à mão para "corrigir" divergência
+— corrija o gerador.
+
+## `main` é somente por pull request
+
+Edições de manutenção vão em branch de tópico ou clone temporário limpo. Push
+direto recusado não se repete: investigue a proteção antes de tentar de novo.
+
+## Escrita de arquivo em Termux
+
+Heredoc corrompe silenciosamente no Android. Use `printf` ou `echo >>`. Sem editor
+interativo — use `sed`. Um comando por bloco, pronto pra colar.
+
+## Credenciais
+
+Nunca escreva token, chave ou senha em arquivo versionado, em mensagem de chat ou
+em log. Antes de qualquer commit que toque `.env`, rode a varredura de segredos.
+Chave privada de criptografia de backup não fica no VPS.
