@@ -1,17 +1,23 @@
-node_modules
-dist
-.turbo
-.env
-*.env
-venv/
+# Dependências
 node_modules/
-dist/
-__pycache__/
-*.pyc
 .pnpm-store/
-.env
-*.env
 venv/
+
+# Build
+dist/
+.turbo/
+
+# Python
 __pycache__/
 *.pyc
+
+# Variáveis de ambiente
 .env*
+*.env
+
+# Supabase CLI
+supabase/.temp/
+
+# Backups e locais
+*.bak
+.local/
