@@ -261,7 +261,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
 
   const active = status === "connected"
   return (
-    <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
+    <section className="relative flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
       <div className="flex shrink-0 flex-col border-b border-slate-800">
         <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 py-1 text-sm sm:px-4">
           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${active ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-red-400"}`} />
@@ -271,11 +271,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
               • {taskRunning ? `ativo${processName ? `: ${processName}` : ""}` : "aguardando"}
             </span>
           )}
-          {agent === "claude" && (
-            <span className="text-[11px] text-amber-300 sm:text-xs" title="O Claude captura o mouse; segure Shift enquanto arrasta para selecionar texto">
-              • Shift + arrastar para selecionar
-            </span>
-          )}
+          {agent === "claude" && <span className="hidden text-xs text-amber-300 xl:inline">• Para copiar com estabilidade, use Texto selecionável</span>}
         </div>
         <div className="flex w-full flex-wrap items-center gap-1 border-t border-slate-800/70 px-2 py-1 sm:px-3">
           {copyFeedback && <span className="hidden text-xs text-emerald-400 sm:inline">{copyFeedback}</span>}
@@ -293,8 +289,8 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
           </button>
           <button type="button" onClick={() => scrollPage("up")} className="min-h-8 min-w-8 shrink-0 rounded px-2 py-1 text-sm text-sky-400 hover:bg-slate-800" title="Subir uma página no terminal" aria-label="Subir uma página">↑</button>
           <button type="button" onClick={() => scrollPage("down")} className="min-h-8 min-w-8 shrink-0 rounded px-2 py-1 text-sm text-sky-400 hover:bg-slate-800" title="Descer uma página no terminal" aria-label="Descer uma página">↓</button>
-          <button type="button" onClick={() => void openHistory()} className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800">
-            Histórico
+          <button type="button" onClick={() => void openHistory()} className="min-h-8 shrink-0 rounded bg-sky-950 px-2 py-1 text-xs font-medium text-sky-300 hover:bg-sky-900">
+            Texto selecionável
           </button>
           <button
             type="button"
@@ -320,7 +316,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
           </div>
         </div>
       )}
-      <div ref={containerRef} className="agent-terminal min-h-0 flex-1 p-2 sm:p-3" />
+      <div ref={containerRef} className="agent-terminal min-h-0 min-w-0 max-w-full flex-1 overflow-hidden p-2 sm:p-3" />
       <div className="flex shrink-0 flex-col gap-1 border-t border-slate-800 bg-slate-950 p-2 sm:p-3">
         <div className="flex items-end gap-2">
           <textarea
@@ -349,12 +345,12 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
       </div>
       {historyOpen && (
         <div className="absolute inset-0 z-20 flex flex-col bg-slate-950">
-          <div className="flex min-h-12 items-center justify-between gap-3 border-b border-slate-800 px-3">
+          <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
             <div>
               <p className="text-sm font-semibold">Histórico do {agent}</p>
               <p className="text-[11px] text-slate-500">Selecione qualquer trecho ou copie tudo</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex max-w-full flex-wrap items-center gap-1 sm:gap-2">
               <button type="button" onClick={() => { if (historyRef.current) historyRef.current.scrollTop = 0 }} className="rounded px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800">Início</button>
               <button type="button" onClick={() => { const field = historyRef.current; if (field) field.scrollTop = field.scrollHeight }} className="rounded px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800">Final</button>
               <button type="button" disabled={!history} onClick={() => void copyHistory()} className="rounded bg-sky-700 px-3 py-1.5 text-xs hover:bg-sky-600 disabled:opacity-40">Copiar tudo</button>

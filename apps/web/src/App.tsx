@@ -40,7 +40,7 @@ function App() {
     "block px-3 py-2 rounded-lg bg-slate-800"
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white">
+    <div className="min-h-screen max-w-full overflow-x-hidden bg-slate-950 text-white">
       {/* Header */}
       <header className="border-b border-slate-800 px-4 py-3 sm:px-8 sm:py-4 flex justify-between items-center">
         <div>
@@ -55,7 +55,7 @@ function App() {
         </Badge>
       </header>
 
-      <div className="flex flex-col md:flex-row">
+      <div className="flex min-w-0 flex-col md:flex-row">
         {/* Sidebar */}
         <aside className="w-full border-b border-slate-800 p-2 md:w-64 md:border-b-0 md:border-r md:min-h-[calc(100vh-81px)] md:p-6">
           <nav className="flex gap-1 overflow-x-auto md:block md:space-y-4">
@@ -155,7 +155,7 @@ function App() {
         </aside>
 
         {/* Main Content */}
-        <main className="min-w-0 flex-1 p-3 sm:p-5 md:p-8">
+        <main className="min-w-0 max-w-full flex-1 overflow-x-hidden p-3 sm:p-5 md:p-8">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/projects" element={<Projects />} />

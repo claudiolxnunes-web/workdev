@@ -38,13 +38,13 @@ export default function AgentsPage() {
   }, [])
 
   return (
-    <div className="flex min-h-[620px] flex-col gap-3 md:h-[calc(100vh-8.5rem)] md:min-h-[420px]">
-      <div className="flex items-center justify-between gap-3">
+    <div className="flex min-h-[620px] min-w-0 max-w-full flex-col gap-3 overflow-hidden md:h-[calc(100dvh-9rem)] md:min-h-[420px]">
+      <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div><h2 className="text-xl font-semibold sm:text-2xl">Agents</h2><p className="hidden text-sm text-slate-400 sm:block">Terminal seguro conectado às sessões tmux da VPS.</p></div>
-        <div className="flex flex-wrap rounded-lg border border-slate-700 bg-slate-900 p-1" role="tablist">
+        <div className="flex max-w-full overflow-x-auto rounded-lg border border-slate-700 bg-slate-900 p-1" role="tablist">
           {AGENTS.map((item) => (
             <button key={item.id} role="tab" aria-selected={agent === item.id} onClick={() => setAgent(item.id)}
-              className={`relative min-h-10 rounded-md px-3 text-sm font-medium sm:px-4 ${agent === item.id ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+              className={`relative min-h-10 shrink-0 rounded-md px-3 text-sm font-medium sm:px-4 ${agent === item.id ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
               {item.label}
               {awaitingApproval[item.id] && (
                 <span
@@ -64,11 +64,11 @@ export default function AgentsPage() {
           </button>
         ))}
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden md:flex-row">
         <div className={mobilePanel === "queue" ? "flex min-h-0 flex-1 flex-col md:flex-none" : "hidden md:flex md:flex-none"}>
           <BuildQueue agent={agent} mobileExpanded={mobilePanel === "queue"} />
         </div>
-        <div className={mobilePanel === "terminal" ? "flex min-h-0 flex-1 flex-col" : "hidden md:flex md:min-h-0 md:flex-1 md:flex-col"}>
+        <div className={mobilePanel === "terminal" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden md:flex md:min-h-0 md:min-w-0 md:flex-1 md:flex-col"}>
           <AgentTerminal key={agent} agent={agent} awaitingApproval={Boolean(awaitingApproval[agent])} />
         </div>
       </div>

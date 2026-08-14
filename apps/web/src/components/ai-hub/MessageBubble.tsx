@@ -26,7 +26,7 @@ export function MessageBubble({ msg }: { msg: Msg }) {
   const isUser = msg.role === "user";
   return (
     <div
-      className={`max-w-[75%] min-w-0 px-4 py-2.5 text-sm ${
+      className={`min-w-0 max-w-[92%] overflow-hidden px-4 py-2.5 text-sm sm:max-w-[82%] xl:max-w-[75%] ${
         isUser
           ? "ml-auto rounded-2xl rounded-br-sm bg-blue-600 text-white"
           : "rounded-2xl rounded-bl-sm bg-slate-800 text-slate-100"

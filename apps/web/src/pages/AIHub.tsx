@@ -45,9 +45,11 @@ export default function AIHub() {
   const [showSidebar, setShowSidebar] = useState(true);
   const [showPlans, setShowPlans] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    const panel = messagesRef.current;
+    if (panel) panel.scrollTop = panel.scrollHeight;
   }, [messages, loading]);
 
   useEffect(() => {
@@ -127,9 +129,9 @@ export default function AIHub() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] gap-4">
+    <div className="flex h-[calc(100dvh-9rem)] min-h-[520px] min-w-0 max-w-full gap-3 overflow-hidden lg:gap-4">
       {showSidebar && (
-        <div className="w-64 flex flex-col bg-slate-900 border border-slate-800 rounded-xl p-3 shrink-0">
+        <div className="hidden w-56 shrink-0 flex-col rounded-xl border border-slate-800 bg-slate-900 p-3 md:flex xl:w-64">
           <button
             onClick={newChat}
             className="bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-2 text-sm mb-3 transition-colors"
@@ -163,8 +165,8 @@ export default function AIHub() {
           </div>
         </div>
       )}
-      <div className="flex flex-col flex-1 min-w-0">
-        <div className="flex items-center gap-3 mb-4">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="mb-3 flex min-w-0 items-center gap-3">
           <button
             onClick={() => setShowSidebar(!showSidebar)}
             className="text-slate-400 hover:text-white text-xl"
@@ -172,7 +174,7 @@ export default function AIHub() {
           >
             ☰
           </button>
-          <h1 className="text-3xl font-bold">AI Hub</h1>
+          <h1 className="truncate text-2xl font-bold sm:text-3xl">AI Hub</h1>
           <button
             onClick={() => setShowPlans(true)}
             className="ml-auto rounded-lg border border-violet-700 bg-violet-950/60 px-3 py-2 text-sm text-violet-200 hover:bg-violet-900"
@@ -180,7 +182,7 @@ export default function AIHub() {
             Planos
           </button>
         </div>
-        <div className="flex-1 min-w-0 overflow-y-auto space-y-4 bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div ref={messagesRef} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-4">
           {messages.length === 0 && (
             <p className="text-slate-500 text-sm">
               Converse com o WorkDev. Ex: "quantos itens high estão pendentes?",
@@ -197,9 +199,9 @@ export default function AIHub() {
           )}
           <div ref={endRef} />
         </div>
-        <div className="flex gap-3 mt-4">
+        <div className="mt-3 flex min-w-0 flex-wrap gap-2 sm:flex-nowrap sm:gap-3">
           <input
-            className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm"
+            className="min-w-0 flex-[1_1_100%] rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-sm sm:flex-1"
             placeholder="Pergunte ou peça algo ao WorkDev..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -212,7 +214,7 @@ export default function AIHub() {
               setModelo(next);
               try { localStorage.setItem(MODELO_STORAGE_KEY, next.label); } catch { /* ignore */ }
             }}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-3 text-sm text-slate-300"
+            className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-3 text-sm text-slate-300 sm:max-w-64"
           >
             {MODELOS.map((m) => (
               <option key={m.label} value={m.label}>{m.label}</option>
@@ -221,7 +223,7 @@ export default function AIHub() {
           <button
             onClick={send}
             disabled={loading}
-            className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition-colors disabled:opacity-50"
+            className="shrink-0 rounded-lg bg-blue-600 px-5 py-3 transition-colors hover:bg-blue-700 disabled:opacity-50"
           >
             Enviar
           </button>
