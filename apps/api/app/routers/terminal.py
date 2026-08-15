@@ -7,6 +7,8 @@ import struct
 import subprocess
 import termios
 from contextlib import suppress
+from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
@@ -25,6 +27,8 @@ _active_connections: set[str] = set()
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
 _PROCESS_LABELS = {"qwen": "qwen-code"}
+_HEALTH_STATE_FILE = Path(os.getenv("AGENTS_HEALTH_STATE", "/var/lib/agents-healthcheck/status.json"))
+_HEALTH_MAX_AGE_SECONDS = 15 * 60
 
 
 def _capture_history(session: str, lines: int) -> str:
@@ -198,22 +202,49 @@ def _awaiting_approval(session: str) -> bool:
     return any(pattern.search(recent) for pattern in _APPROVAL_PATTERNS)
 
 
-async def _agent_status(agent: str, session: str) -> dict:
+def _load_supervisor_health() -> dict[str, dict]:
+    try:
+        payload = json.loads(_HEALTH_STATE_FILE.read_text(encoding="utf-8"))
+        updated_at = datetime.fromisoformat(payload["updated_at"])
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+        if age > _HEALTH_MAX_AGE_SECONDS:
+            return {}
+        agents = payload.get("agents", {})
+        return agents if isinstance(agents, dict) else {}
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return {}
+
+
+async def _agent_status(agent: str, session: str, supervisor: dict | None = None) -> dict:
     current_process = await asyncio.to_thread(_current_process, session)
     running = bool(current_process and current_process not in _SHELL_PROCESSES)
     awaiting_approval = await asyncio.to_thread(_awaiting_approval, session) if running else False
+    health = supervisor or {}
+    health_status = health.get("status")
+    if health_status not in {"idle", "busy", "blocked", "offline", "degraded"}:
+        health_status = "idle" if running else "offline"
     return {
         "agent": agent,
         "running": running,
         "process": _PROCESS_LABELS.get(agent, current_process) if running else current_process,
         "awaiting_approval": awaiting_approval,
+        "health": health_status,
+        "health_reason": health.get("reason"),
+        "checked_at": health.get("checked_at"),
+        "recovered": bool(health.get("recovered")),
     }
 
 
 @router.get("/api/agents/status")
 async def agents_status():
+    supervisor = await asyncio.to_thread(_load_supervisor_health)
     results = await asyncio.gather(
-        *(_agent_status(agent, session) for agent, session in ALLOWED_SESSIONS.items())
+        *(
+            _agent_status(agent, session, supervisor.get(agent))
+            for agent, session in ALLOWED_SESSIONS.items()
+        )
     )
     return {"agents": list(results)}
 

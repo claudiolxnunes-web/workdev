@@ -1,6 +1,10 @@
 import asyncio
+import json
 import os
+import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -13,6 +17,7 @@ from app.routers.terminal import (
     _capture_history,
     _claim,
     _release,
+    _load_supervisor_health,
     _scroll_terminal,
     _send_output,
     _send_text,
@@ -205,6 +210,7 @@ class AgentStatusTest(unittest.IsolatedAsyncioTestCase):
         current_process.return_value = "bash"
         result = await _agent_status("codex", "codex")
         self.assertFalse(result["running"])
+        self.assertEqual(result["health"], "offline")
         self.assertFalse(result["awaiting_approval"])
         awaiting.assert_not_called()
 
@@ -215,16 +221,49 @@ class AgentStatusTest(unittest.IsolatedAsyncioTestCase):
         awaiting.return_value = True
         result = await _agent_status("claude", "code")
         self.assertTrue(result["running"])
+        self.assertEqual(result["health"], "idle")
         self.assertTrue(result["awaiting_approval"])
         awaiting.assert_called_once_with("code")
 
     @patch("app.routers.terminal._agent_status")
     async def test_status_endpoint_reports_all_four_agents(self, mock_status):
-        mock_status.side_effect = lambda agent, session: {
+        mock_status.side_effect = lambda agent, session, supervisor=None: {
             "agent": agent, "running": False, "process": "", "awaiting_approval": False,
+            "health": "offline", "health_reason": None, "checked_at": None, "recovered": False,
         }
         result = await agents_status()
         self.assertEqual({item["agent"] for item in result["agents"]}, set(ALLOWED_SESSIONS))
+
+    @patch("app.routers.terminal._awaiting_approval", return_value=False)
+    @patch("app.routers.terminal._current_process", return_value="kimi-code")
+    async def test_exposes_blocked_supervisor_state(self, _current, _awaiting):
+        result = await _agent_status(
+            "kimi", "kimi", {"status": "blocked", "reason": "billing", "checked_at": "now"}
+        )
+        self.assertEqual(result["health"], "blocked")
+        self.assertEqual(result["health_reason"], "billing")
+
+
+class SupervisorHealthStateTest(unittest.TestCase):
+    def test_loads_recent_state_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "status.json"
+            path.write_text(json.dumps({
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "agents": {"kimi": {"status": "idle"}},
+            }))
+            with patch("app.routers.terminal._HEALTH_STATE_FILE", path):
+                self.assertEqual(_load_supervisor_health()["kimi"]["status"], "idle")
+
+    def test_ignores_stale_state_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "status.json"
+            path.write_text(json.dumps({
+                "updated_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+                "agents": {"kimi": {"status": "idle"}},
+            }))
+            with patch("app.routers.terminal._HEALTH_STATE_FILE", path):
+                self.assertEqual(_load_supervisor_health(), {})
 
 
 if __name__ == "__main__":
