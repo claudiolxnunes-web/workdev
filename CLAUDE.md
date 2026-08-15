@@ -182,125 +182,50 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 - WorkDev usa usuario Postgres proprio: workdev_app (NAO evolution). DATABASE_URL=postgresql://workdev_app:...@127.0.0.1:5432/workdev
 - NutriGestor/Agro RC CRM: projeto Supabase deletado (custo ~$40/mes). Schema preservado em nutrigestor-crm/supabase/migrations (83 arquivos). Dados reconstruiveis via Power BI da empresa. Recriar com: supabase link + db push.
 
-## Migracao BYO Supabase — create-with-voice (PENDENTE)
+## Backend do Feed_BPF — Supabase proprio (migracao CONCLUIDA)
+
+**PRODUCAO: `xgvapaebustyotrwnzqa`** — projeto proprio, COM dashboard, COM connection
+string, COM SQL Editor. Verificado em 2026-08-15: `.env.production` do repo
+`/opt/feed-bpf` aponta para `https://xgvapaebustyotrwnzqa.supabase.co`, e o bundle
+buildado em `dist/assets/*.js` confirma (6 ocorrencias).
+
+> ⚠️ **Nao propor contorno por falta de dashboard.** Ate 2026-08-15 este arquivo dizia
+> que o backend rodava em Lovable Cloud sem dashboard (`uyrcxfypdzasdminxizq`). Isso
+> ficou obsoleto e fez agentes desenharem gambiarra (Edge Function `migrate-helper`,
+> invocacao manual de cron) para um problema que nao existe mais. pg_cron, pg_net,
+> Vault e SQL Editor estao disponiveis normalmente pelo painel.
+
+> ⚠️ **Armadilha de deploy:** `supabase/config.toml` do repo tem
+> `project_id = "ufqqskukhzgakmwrsumq"`, que **nao e producao** — e o mesmo ref do
+> `.env` local. Um `supabase db push` ou `supabase functions deploy` rodado do repo
+> vai no projeto errado. Conferir o `--project-ref` explicitamente antes de qualquer
+> comando da CLI.
+
+Refs relacionados:
+- `xgvapaebustyotrwnzqa` — PRODUCAO (`.env.production` + bundle)
+- `ufqqskukhzgakmwrsumq` — `.env` local e `config.toml` (dev/local)
+- `uyrcxfypdzasdminxizq` — origem Lovable Cloud, **historico**, so relevante para os
+  backups de 08/2026 descritos abaixo
+
 Contexto: create-with-voice = app unico que serve Portal + Feed_BPF + Feed_BPF Custom
 + Nutri Agro Labels (confirmado: bundle tem rotas feedbpf, feedbpf-custom, rotulos).
-- Roda em LOVABLE CLOUD: Supabase uyrcxfypdzasdminxizq NAO esta em nenhuma conta
-  propria — sem dashboard, sem connection string, sem pg_dump. Zero backup hoje.
 - Escala: 54 Edge Functions, 106 tabelas, auth.uid() em quase toda RLS, pg_cron,
   5 funcoes de checkout Paddle, 4 buckets Storage.
 - Buckets: documentos-bpf, feed-bpf, normas_legislacao, relatorios.
   ATENCAO: documentos-bpf e relatorios usam getPublicUrl (verificar se e publico!).
-- Ferramentas que JA EXISTEM no repo: export-storage e migrate-helper (Edge Functions).
-  NAO existe download-storage.mjs (404).
+- Ferramentas no repo: export-storage e migrate-helper (Edge Functions).
+  `download-storage.mjs` EXISTE em /opt/feed-bpf (a nota antiga de "404" estava errada,
+  corrigido 2026-08-15).
 
-PLANO (nesta ordem):
-1. Exportar dump: Lovable Settings > Cloud > Export data (nao inclui schema auth)
-2. Exportar Storage via Edge Function export-storage
-3. Criar projeto Supabase em claudiolx.nunes@gmail.com (org Claudio's Org, mesma
-   do WorkDev — evita 5a conta e o token de Management ja alcanca)
-4. Restaurar dump no SQL Editor; auth.users via migrate-helper
-5. Reconfigurar ~12 secrets (PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET, EVOLUTION_*,
-   RESEND_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, CRON_SECRET, LOVABLE_API_KEY)
-6. Reconectar Lovable: Settings > Supabase > Connect to an existing project
-7. RECONFIGURAR WEBHOOKS (maior risco): Paddle, Google Forms, Evolution
-8. Recriar jobs pg_cron (nao vem no dump)
+PLANO DE MIGRACAO — EXECUTADO, mantido so como historico.
+Os 8 passos (dump, storage, projeto novo, restore, secrets, reconexao, webhooks,
+pg_cron) foram concluidos: o backend hoje e `xgvapaebustyotrwnzqa`, proprio e com
+dashboard. NAO reexecutar. O registro detalhado da Sessao 1 (backup) esta logo
+abaixo e continua valido como referencia dos artefatos guardados.
 
-PRAZO: documentos reais de conformidade MAPA comecam em ~2 semanas (meados/08).
-Fazer ANTES — hoje sao 26 documentos, depois vira operacao.
-
-### Execucao em 3 sessoes (fazer nesta ordem)
-
-SESSAO 1 — Backup (risco zero, nada em producao muda)
- [ ] Lovable > Settings > Cloud > Export data  -> baixar dump .sql
- [ ] Invocar Edge Function export-storage -> baixar os 4 buckets
- [ ] Guardar em /opt/backups/create-with-voice/AAAA-MM-DD/ na VPS1
- [ ] rsync para VPS2 (mesmo padrao do pg_backup.sh)
- [ ] Conferir: dump abre? arquivos batem com a contagem do Storage?
- RESULTADO: cópia offline do banco — hoje inexistente. Ja resolve o risco maior.
-
-SESSAO 2 — Preparar destino (projeto novo fica parado, nada conectado)
- [ ] Criar projeto Supabase em claudiolx.nunes@gmail.com / org Claudio's Org
- [ ] Decidir plano: Free (sem backup automatico) ou Pro (~$25, backup diario)
- [ ] Restaurar dump no SQL Editor
- [ ] Restaurar auth.users via Edge Function migrate-helper
- [ ] Configurar os ~12 secrets das Edge Functions
- [ ] Recriar jobs pg_cron (NAO vem no dump)
- [ ] Conferir contagem de linhas por tabela: origem vs destino
- RESULTADO: ambiente pronto e testado, producao ainda intacta.
-
-SESSAO 3 — Virada (unica com risco; fazer fora de horario de uso)
- [ ] Lovable > Settings > Supabase > Connect to an existing project
- [ ] Reconfigurar webhook Paddle (MAIOR RISCO: errar = cliente paga sem acesso)
- [ ] Reconfigurar webhook Google Forms
- [ ] Reconfigurar webhook Evolution
- [ ] Testar: login, upload de documento, checkout de teste, envio WhatsApp
- [ ] Manter o projeto antigo intacto por ~30 dias antes de desativar
- ROLLBACK: reconectar ao Lovable Cloud se algo quebrar.
-
-REGRA: nao avancar de sessao sem a anterior validada.
-
-### Execucao em 3 sessoes (fazer nesta ordem)
-
-SESSAO 1 — Backup (risco zero, nada em producao muda)
- [ ] Lovable > Settings > Cloud > Export data  -> baixar dump .sql
- [ ] Invocar Edge Function export-storage -> baixar os 4 buckets
- [ ] Guardar em /opt/backups/create-with-voice/AAAA-MM-DD/ na VPS1
- [ ] rsync para VPS2 (mesmo padrao do pg_backup.sh)
- [ ] Conferir: dump abre? arquivos batem com a contagem do Storage?
- RESULTADO: cópia offline do banco — hoje inexistente. Ja resolve o risco maior.
-
-SESSAO 2 — Preparar destino (projeto novo fica parado, nada conectado)
- [ ] Criar projeto Supabase em claudiolx.nunes@gmail.com / org Claudio's Org
- [ ] Decidir plano: Free (sem backup automatico) ou Pro (~$25, backup diario)
- [ ] Restaurar dump no SQL Editor
- [ ] Restaurar auth.users via Edge Function migrate-helper
- [ ] Configurar os ~12 secrets das Edge Functions
- [ ] Recriar jobs pg_cron (NAO vem no dump)
- [ ] Conferir contagem de linhas por tabela: origem vs destino
- RESULTADO: ambiente pronto e testado, producao ainda intacta.
-
-SESSAO 3 — Virada (unica com risco; fazer fora de horario de uso)
- [ ] Lovable > Settings > Supabase > Connect to an existing project
- [ ] Reconfigurar webhook Paddle (MAIOR RISCO: errar = cliente paga sem acesso)
- [ ] Reconfigurar webhook Google Forms
- [ ] Reconfigurar webhook Evolution
- [ ] Testar: login, upload de documento, checkout de teste, envio WhatsApp
- [ ] Manter o projeto antigo intacto por ~30 dias antes de desativar
- ROLLBACK: reconectar ao Lovable Cloud se algo quebrar.
-
-REGRA: nao avancar de sessao sem a anterior validada.
-
-### Execucao em 3 sessoes (fazer nesta ordem)
-
-SESSAO 1 — Backup (risco zero, nada em producao muda)
- [ ] Lovable > Settings > Cloud > Export data  -> baixar dump .sql
- [ ] Invocar Edge Function export-storage -> baixar os 4 buckets
- [ ] Guardar em /opt/backups/create-with-voice/AAAA-MM-DD/ na VPS1
- [ ] rsync para VPS2 (mesmo padrao do pg_backup.sh)
- [ ] Conferir: dump abre? arquivos batem com a contagem do Storage?
- RESULTADO: cópia offline do banco — hoje inexistente. Ja resolve o risco maior.
-
-SESSAO 2 — Preparar destino (projeto novo fica parado, nada conectado)
- [ ] Criar projeto Supabase em claudiolx.nunes@gmail.com / org Claudio's Org
- [ ] Decidir plano: Free (sem backup automatico) ou Pro (~$25, backup diario)
- [ ] Restaurar dump no SQL Editor
- [ ] Restaurar auth.users via Edge Function migrate-helper
- [ ] Configurar os ~12 secrets das Edge Functions
- [ ] Recriar jobs pg_cron (NAO vem no dump)
- [ ] Conferir contagem de linhas por tabela: origem vs destino
- RESULTADO: ambiente pronto e testado, producao ainda intacta.
-
-SESSAO 3 — Virada (unica com risco; fazer fora de horario de uso)
- [ ] Lovable > Settings > Supabase > Connect to an existing project
- [ ] Reconfigurar webhook Paddle (MAIOR RISCO: errar = cliente paga sem acesso)
- [ ] Reconfigurar webhook Google Forms
- [ ] Reconfigurar webhook Evolution
- [ ] Testar: login, upload de documento, checkout de teste, envio WhatsApp
- [ ] Manter o projeto antigo intacto por ~30 dias antes de desativar
- ROLLBACK: reconectar ao Lovable Cloud se algo quebrar.
-
-REGRA: nao avancar de sessao sem a anterior validada.
+Removidas em 2026-08-15 tres copias byte-identicas do checklist 'Execucao em 3
+sessoes', com caixas [ ] em aberto para trabalho ja feito — mandavam exportar do
+Lovable Cloud, que nao e mais o backend.
 (## Migração BYO Supabase — create-with-voice
 
 ### Sessão 1: Backup — CONCLUÍDA (03/08/2026)
@@ -363,15 +288,18 @@ Comandos completos em `/opt/backups/create-with-voice/cron_jobs.txt`.
 (log do pg_cron, schema `cron`, não dumpado). Os dados de negócio são pequenos:
 audit_log 409, normas_legislacao 49, documentos_bpf 27. NÃO migrar job_run_details.
 
-### PENDENTE
+### PENDENTE (revisado 2026-08-15 — a migração em si já foi concluída)
 
-- Sessão 2: escolher plano Free ou Pro, criar o projeto Supabase de destino e
-  restaurar banco, Auth, Storage, secrets e jobs pg_cron.
-- **Deletar `migrate-helper`** após a migração (expõe db_url e service_role).
-- Considerar rotacionar a service_role key do projeto antigo.
-- Na virada (Sessão 3): desativar os crons do projeto antigo ANTES de ligar os novos.
-  `campanha-worker-1min` roda a cada minuto — dois projetos ativos processam a mesma
-  campanha em duplicidade.
+Sessões 2 e 3 saíram da lista: foram executadas, o destino é `xgvapaebustyotrwnzqa`.
+O que continua em aberto é só a limpeza de segurança do projeto **antigo**
+(`uyrcxfypdzasdminxizq`):
+
+- **Deletar `migrate-helper`** — expõe db_url e service_role de quem tiver a chave de
+  acesso de 48 chars. Não depende de mais nada; pode ser feito hoje.
+- **Rotacionar a service_role key do projeto antigo.**
+- **Conferir se os crons do projeto antigo foram desativados.** `campanha-worker-1min`
+  roda a cada minuto; se os dois projetos ainda estiverem ativos, a mesma campanha é
+  processada em duplicidade. Verificar antes de assumir que a virada desligou.
 
 ### Lições
 
