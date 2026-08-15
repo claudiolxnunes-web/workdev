@@ -21,3 +21,4 @@ uvicorn==0.51.0
 websockets==16.1.1
 alembic==1.18.5
 requests
+sentry-sdk[fastapi]
