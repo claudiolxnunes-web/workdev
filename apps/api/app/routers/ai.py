@@ -18,7 +18,10 @@ from app.services.handoff import HandoffError, create_plan
 
 router = APIRouter()
 
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
+# Opus 5 pensa por padrao; effort controla profundidade e gasto de tokens.
+# low | medium | high | xhigh | max — medium equilibra custo e latencia no chat.
+ANTHROPIC_EFFORT = os.getenv("ANTHROPIC_EFFORT", "medium")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 _anthropic_client = None
@@ -28,7 +31,11 @@ _openai_client = None
 def get_anthropic() -> Anthropic:
     global _anthropic_client
     if _anthropic_client is None:
-        _anthropic_client = Anthropic(timeout=30)
+        # 30s estourava com modelos que pensam (thinking conta no tempo da
+        # request). Cada passo do loop de tools usa esse timeout inteiro.
+        _anthropic_client = Anthropic(
+            timeout=float(os.getenv("ANTHROPIC_TIMEOUT", "120"))
+        )
     return _anthropic_client
 
 
@@ -686,9 +693,12 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
 def chat_anthropic(messages: list, db: Session, model: str | None = None, system: str | None = None) -> str:
     client = get_anthropic()
     for _ in range(12):
+        # max_tokens limita thinking + texto da resposta juntos: 4096 truncava
+        # no meio quando o modelo pensa antes de responder.
         resp = client.messages.create(
             model=model or ANTHROPIC_MODEL,
-            max_tokens=4096,
+            max_tokens=16000,
+            output_config={"effort": ANTHROPIC_EFFORT},
             system=system or SYSTEM,
             tools=TOOLS,
             messages=messages,

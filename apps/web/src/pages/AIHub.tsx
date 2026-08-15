@@ -11,7 +11,8 @@ interface SessionMeta {
 const MODELOS = [
   { label: "GPT-4o", provider: "openai", model: "gpt-4o" },
   { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
-  { label: "Claude Sonnet 4.6", provider: "anthropic", model: "claude-sonnet-4-6" },
+  { label: "Claude Opus 5", provider: "anthropic", model: "claude-opus-5" },
+  { label: "Claude Sonnet 5", provider: "anthropic", model: "claude-sonnet-5" },
   { label: "Claude Haiku 4.5", provider: "anthropic", model: "claude-haiku-4-5-20251001" },
   { label: "GPT-OSS 20B (Ollama Cloud)", provider: "ollama", model: "gpt-oss:20b" },
   { label: "Kimi K2.6", provider: "kimi", model: "kimi-k2.6" },
@@ -22,7 +23,7 @@ const MODELOS = [
   { label: "Qwen3 Coder", provider: "openrouter", model: "qwen/qwen3-coder" },
 ];
 const MODELO_STORAGE_KEY = "workdev_ai_hub_modelo";
-const DEFAULT_MODELO_LABEL = "GPT-4o";
+const DEFAULT_MODELO_LABEL = "Claude Opus 5";
 
 function loadStoredModelo() {
   try {
