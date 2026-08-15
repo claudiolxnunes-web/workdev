@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from app.routers.projects import router as projects_router
 from app.routers.backlog import router as backlog_router
 from app.routers.ai import router as ai_router
+from app.routers.busca_web import router as busca_web_router
 from app.routers.subtasks import router as subtasks_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.chat_sessions import router as chat_sessions_router
@@ -69,6 +70,7 @@ app.include_router(handoffs_router, prefix="/api")
 app.include_router(plans_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
+app.include_router(busca_web_router, prefix="/api")
 app.include_router(terminal_router)
 
 
