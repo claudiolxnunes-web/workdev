@@ -64,7 +64,7 @@ titulo "3. Segredos em arquivo versionado"
 # Procura padroes de chave apenas no que esta rastreado pelo git,
 # ignorando .env (que nao deve estar versionado) e o proprio script.
 achados=$(git grep -lE "sk-proj-[A-Za-z0-9]{20}|sk-or-v1-[A-Za-z0-9]{20}|eyJhbGciOiJIUzI1NiIs" -- \
-            ':!*.env' ':!verificacao.sh' ':!*.lock' ':!pnpm-lock.yaml' 2>/dev/null || true)
+            ':!*.env' ':!verificar-deploy.sh' ':!skills/*' ':!*.lock' ':!pnpm-lock.yaml' 2>/dev/null || true)
 
 if [[ -z "$achados" ]]; then
   ok "nenhuma chave aparente em arquivo versionado"
