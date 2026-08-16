@@ -13,6 +13,7 @@ from app.models.knowledge import KnowledgeEntry
 from app.models.adr import ADR
 from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
+from app.services import context_engine
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
 
@@ -80,8 +81,13 @@ SYSTEM = (
     "planos estruturados, mas nunca diga que executou código, testes ou deploy. "
     "O estágio BUILD acontece nos Agents depois da aprovação do plano. "
     "Use as ferramentas para consultar ou modificar projetos, backlog e subtasks. "
-    "Slugs: workdev-core, nutrigestor-crm, agente-pessoal, "
-    "openclaw, feed-bpf, nutricontrole."
+    "O bloco de contexto abaixo foi apurado agora no banco do WorkDev: trate-o "
+    "como verdade e prefira-o à sua memória. Ele é um recorte — use as "
+    "ferramentas quando precisar de detalhe que não esteja ali."
+)
+
+FOCO_PROJETO = (
+    "Responda focado neste projeto, a menos que o usuário peça algo sobre outro."
 )
 
 
@@ -93,30 +99,49 @@ def get_db():
         db.close()
 
 
+def build_system(db: Session, project_slug: str | None = None) -> str:
+    """System prompt com o contexto do WorkDev apurado no banco.
+
+    Sem `project_slug`, monta o contexto global. Com um slug desconhecido,
+    degrada para o global e diz isso ao modelo — em vez de responder no vazio.
+
+    Uma falha ao ler o contexto nunca derruba a conversa: o chat volta ao
+    system base e segue com as ferramentas, que continuam funcionando.
+    """
+    try:
+        contexto = context_engine.build_chat_context(db, project_slug)
+    except Exception as erro:  # noqa: BLE001 — contexto é melhoria, não requisito
+        return (
+            f"{SYSTEM}\n\n"
+            f"[contexto indisponível: {type(erro).__name__}. "
+            f"Use as ferramentas para consultar o estado atual.]"
+        )
+
+    if contexto is None:
+        contexto = context_engine.montar_contexto_global(db)
+        aviso = (
+            f"\n\n[o projeto '{project_slug}' não existe no WorkDev; "
+            f"contexto global abaixo]"
+        )
+        return f"{SYSTEM}{aviso}\n\n{context_engine.renderizar_contexto(contexto)}"
+
+    partes = [SYSTEM, context_engine.renderizar_contexto(contexto)]
+    if contexto.get("escopo") == context_engine.ESCOPO_PROJETO:
+        partes.append(FOCO_PROJETO)
+    return "\n\n".join(partes)
+
+
 def build_project_system(slug: str, db: Session) -> str | None:
-    project = db.query(Project).filter(Project.slug == slug).first()
-    if project is None:
+    """Contrato preservado da E0: `None` quando o slug não existe.
+
+    Continua sendo o caminho do chat contextual dentro do workspace do projeto.
+    A montagem em si agora é do Context Engine.
+    """
+    contexto = context_engine.build_chat_context(db, slug)
+    if contexto is None:
         return None
-    itens = (
-        db.query(BacklogItem)
-        .filter(BacklogItem.project_id == project.id)
-        .order_by(BacklogItem.rank.asc().nullslast(), BacklogItem.created_at.desc())
-        .limit(20)
-        .all()
-    )
-    por_status: dict[str, int] = {}
-    for item in itens:
-        por_status[item.status] = por_status.get(item.status, 0) + 1
-    resumo_itens = "\n".join(
-        f"- [{item.status}/{item.priority}] {item.title}" for item in itens
-    ) or "Backlog vazio."
-    return (
-        f"{SYSTEM}\n\n"
-        f"Contexto desta conversa: projeto '{project.name}' (slug: {project.slug}), "
-        f"status geral: {project.status}, tipo: {project.type}.\n"
-        f"Resumo do backlog ({sum(por_status.values())} itens, por status: {por_status}):\n"
-        f"{resumo_itens}\n"
-        f"Responda focado neste projeto, a menos que o usuário peça algo sobre outro."
+    return "\n\n".join(
+        [SYSTEM, context_engine.renderizar_contexto(contexto), FOCO_PROJETO]
     )
 
 
@@ -857,6 +882,26 @@ def delete_ai_provider_key(provider: str):
     return {"provider": provider, "connected": False}
 
 
+@router.get("/ai/contexto")
+def ai_contexto(project_slug: str | None = None, db: Session = Depends(get_db)):
+    """Mostra o contexto que o chat receberia agora, sem chamar o LLM.
+
+    Somente leitura. Serve para verificar o Context Engine (e para depurar uma
+    resposta estranha) sem gastar uma chamada ao modelo.
+    """
+    contexto = context_engine.build_chat_context(db, project_slug)
+    if contexto is None:
+        raise HTTPException(status_code=404, detail="Projeto não encontrado")
+    markdown = context_engine.renderizar_contexto(contexto)
+    return {
+        "escopo": contexto["escopo"],
+        "gerado_em": contexto["gerado_em"],
+        "dados": contexto,
+        "markdown": markdown,
+        "caracteres": len(markdown),
+    }
+
+
 class VozRequest(BaseModel):
     texto: str
 
@@ -873,7 +918,7 @@ def ai_voz(req: VozRequest, db: Session = Depends(get_db)):
     )
     messages = [{"role": "user", "content": instrucao}]
     try:
-        reply = chat_anthropic(messages, db)
+        reply = chat_anthropic(messages, db, system=build_system(db))
     except Exception as e:
         return {"reply": f"Erro ao executar: {type(e).__name__} - {e}",
                 "error": True}
@@ -903,7 +948,9 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
                                  role="user", content=last["content"]))
             db.commit()
 
-    system = build_project_system(req.project_slug, db) if req.project_slug else None
+    # E1.2: o contexto passa a ser montado sempre — global quando não há projeto
+    # ativo. Antes, o chat global ia ao modelo sem nenhum dado do WorkDev.
+    system = build_system(db, req.project_slug)
 
     try:
         if provider in COMPAT_PROVIDERS:

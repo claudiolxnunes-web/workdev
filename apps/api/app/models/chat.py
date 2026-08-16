@@ -1,6 +1,13 @@
 from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Index, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from app.database import Base
+
+
+# Níveis de autoridade da conversa (E1). `prepare` está reservado: o nome
+# existe no contrato desde já, mas nenhuma tool o exige ainda. `execute` e
+# `autonomous` ficam de fora até existir aprovação explícita por execução.
+AUTORIDADES = ("observe", "plan", "prepare")
+AUTORIDADE_PADRAO = "plan"
 
 
 class ChatSession(Base):
@@ -8,8 +15,19 @@ class ChatSession(Base):
     id = Column(UUID(as_uuid=True), primary_key=True,
                 server_default=text("gen_random_uuid()"))
     title = Column(String(255), nullable=False)
+    # Projeto ativo da conversa. SET NULL: apagar um projeto não apaga o
+    # histórico do chat, só o vínculo — a conversa volta a ser global.
+    project_id = Column(UUID(as_uuid=True),
+                        ForeignKey("projects.id", ondelete="SET NULL"),
+                        nullable=True)
+    authority = Column(String(12), nullable=False,
+                       server_default=AUTORIDADE_PADRAO)
     created_at = Column(DateTime, server_default=text("now()"))
     updated_at = Column(DateTime, server_default=text("now()"))
+
+    __table_args__ = (
+        Index("ix_chat_sessions_project", "project_id", "updated_at"),
+    )
 
 
 class ChatMessage(Base):
@@ -21,6 +39,12 @@ class ChatMessage(Base):
                         nullable=False)
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
+    # Lista (não objeto): um turno pode chamar várias tools. Cada item guarda
+    # nome, argumentos e um resumo do retorno — o suficiente para auditar o
+    # que a IA consultou ou alterou sem reexecutar nada.
+    tool_calls = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    provider = Column(String(24))
+    model = Column(String(64))
     created_at = Column(DateTime, server_default=text("now()"))
 
     __table_args__ = (
