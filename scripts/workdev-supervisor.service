@@ -1,0 +1,47 @@
+[Unit]
+Description=WorkDev Supervisor — observação somente leitura do estado da plataforma
+Documentation=file:///opt/workdev/docs/supervisor-mvp-plano.md
+After=network-online.target docker.service workdev-api.service
+Wants=network-online.target
+# Sem isto o Supervisor repetiria em si mesmo o defeito que existe para
+# encontrar: falhar e o silêncio parecer normalidade.
+OnFailure=workdev-supervisor-falhou.service
+
+[Service]
+Type=oneshot
+
+# O cwd é obrigatório: `-m scripts.supervisor` resolve o pacote a partir da
+# raiz do repositório (namespace package). Fora daqui, ModuleNotFoundError.
+WorkingDirectory=/opt/workdev
+
+# HOME explícito. Serviço systemd não herda o do login, e python-dotenv,
+# psycopg e o SDK da Anthropic consultam o diretório do usuário.
+Environment=HOME=/root
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Venv oficial da API. Nada do Supervisor é instalado globalmente.
+# flock impede execuções concorrentes: o timer não sobrepõe uma execução
+# lenta, e uma chamada manual durante a execução agendada sai na hora
+# (-n, sem esperar) em vez de duplicar leitura e mensagem.
+ExecStart=/usr/bin/flock -n /run/lock/workdev-supervisor.lock \
+    /opt/workdev/apps/api/venv/bin/python -m scripts.supervisor --once
+
+User=root
+TimeoutStartSec=300
+Nice=10
+
+# Nível 0 reforçado pelo systemd: o processo não precisa escrever em lugar
+# nenhum além do próprio diretório de estado.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/workdev-supervisor /run/lock
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workdev-supervisor
+
+[Install]
+WantedBy=multi-user.target

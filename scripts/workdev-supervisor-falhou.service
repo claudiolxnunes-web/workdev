@@ -1,0 +1,14 @@
+[Unit]
+Description=Avisa no Telegram quando a execução do WorkDev Supervisor falha
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/workdev
+Environment=HOME=/root
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/workdev/apps/api/venv/bin/python -m scripts.supervisor.entrega
+User=root
+TimeoutStartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workdev-supervisor-falhou

@@ -1,0 +1,26 @@
+[Unit]
+Description=Executa o WorkDev Supervisor uma vez por dia
+Documentation=file:///opt/workdev/docs/supervisor-mvp-plano.md
+
+[Timer]
+# Uma execução por dia, 10:00 UTC = 07:00 America/Sao_Paulo.
+#
+# Não são 5 minutos nem 2x/dia de propósito: a granularidade dos dados é
+# diária (backlog.updated_at muda quando alguém edita, planos são evento raro,
+# drift de conhecimento se move em dias). A camada rápida já existe —
+# agents_healthcheck e healthcheck_api rodam a cada 5 min com alerta próprio.
+# Uma segunda execução diária olharia o mesmo estado e, pela deduplicação,
+# entregaria zero achado: treino direto para ignorar a mensagem.
+OnCalendar=*-*-* 10:00:00
+
+# Reboot às 09:55 não deve custar o relatório do dia.
+Persistent=true
+
+# Espalha a carga e evita bater junto com backup e ingestor.
+RandomizedDelaySec=300
+AccuracySec=1min
+
+Unit=workdev-supervisor.service
+
+[Install]
+WantedBy=timers.target

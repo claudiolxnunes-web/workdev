@@ -87,17 +87,23 @@ escrever.
 
 ## Custo medido
 
-Primeira execução real, 8 achados enviados:
+O custo varia com quantos achados são reportáveis na execução, não com o
+tamanho da base: o LLM só vê o que mudou, até o teto de 8.
 
-```
-llm_calls=1  llm_input_tokens=4160  llm_output_tokens=2238
-llm_cost_usd=0.0767  duration_seconds=33.1
-```
+| Cenário | Entrada | Saída | Custo |
+| --- | ---: | ---: | ---: |
+| **Pior caso** — 8 achados, execução cheia | 4.160 | 2.238 | **US$ 0,077** |
+| **Típico** — poucos achados novos (regime normal) | 1.368 | 696 | **US$ 0,024** |
 
-US$ 0,077 por execução. A uma execução diária: **~US$ 2,30/mês** — dentro da
-estimativa de US$ 2,60 feita no plano, e a razão de o plano ter descartado uma
-camada de triagem barata: ela economizaria centavos ao custo de um segundo
-prompt, um segundo schema e um modo de falha a mais.
+O pior caso acontece logo após a semeadura ou depois de um período sem
+execução. Em regime, a deduplicação faz a maioria das execuções ter dois ou
+três achados reportáveis, ou nenhum.
+
+A uma execução diária: **~US$ 0,70/mês em regime normal**, com teto de
+US$ 2,30/mês se toda execução fosse cheia. A estimativa do plano (US$ 2,60/mês)
+era o teto, não a expectativa — e reforça a razão de ter descartado uma camada
+de triagem barata: ela economizaria centavos ao custo de um segundo prompt, um
+segundo schema e um modo de falha a mais.
 
 `llm_calls` conta chamadas **concluídas**. Numa falha de rede fica 0 com
 `llm_failures=1`; numa recusa fica 1 com `llm_failures=1`, porque a chamada

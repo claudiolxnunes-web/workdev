@@ -1,10 +1,11 @@
 """Ponto de entrada do WorkDev Supervisor.
 
-Etapas E1 a E4 do plano: leitura somente-leitura, cinco checks
-determinísticos, deduplicação com estado em disco e uma chamada de LLM para
-priorizar e explicar. Ainda sem timer e sem entrega — de propósito. A ordem
-E2 (deduplicação) antes de E5 (entrega) é inegociável: notificar antes de
-deduplicar transforma a primeira semana num despejo diário dos mesmos itens.
+Etapas E1 a E5 do plano: leitura somente-leitura, cinco checks
+determinísticos, deduplicação com estado em disco, uma chamada de LLM para
+priorizar e explicar, e entrega no Telegram.
+
+Nível 0: o Supervisor lê, correlaciona e recomenda. Não altera backlog, banco,
+schema, agentes, RAG nem deploy.
 
 A única saída de rede é a chamada ao LLM, e ela acontece depois de tudo: os
 fatos já estão apurados, redigidos e deduplicados quando o modelo os vê. As
@@ -33,6 +34,8 @@ from typing import Any, TextIO
 from . import config
 from .checks import REGISTRO
 from .contexto import Contexto
+from . import entrega as entrega_mod
+from . import relatorio as relatorio_mod
 from .estado import Estado, Reconciliacao
 from .llm import ResultadoLLM, priorizar
 from .modelo import Fato, LeituraIndisponivel, agora_utc, ordenar_achados
@@ -87,56 +90,6 @@ def aplicar_ordem_deterministica(achados: list) -> None:
         achado.prioridade = posicao
 
 
-def imprimir_achados(
-    reconciliacao: Reconciliacao, llm: ResultadoLLM, saida: TextIO
-) -> None:
-    """Saída de terminal. O relatório formatado de verdade vem em E5."""
-    reportaveis = sorted(
-        reconciliacao.reportaveis,
-        key=lambda a: (a.prioridade if a.prioridade is not None else 999, a.peso),
-    )
-    if llm.resumo:
-        print(f"\n  {llm.resumo}\n", file=saida)
-
-    if reportaveis:
-        for achado in reportaveis:
-            marca = {
-                "novo": "NOVO",
-                "agravado": "AGRAVADO",
-                "reforco": "REFORÇO",
-                "resolvido": "RESOLVIDO",
-            }.get(achado.status, achado.status.upper())
-            posicao = f"{achado.prioridade}." if achado.prioridade else " -"
-            print(
-                f"  {posicao:>3} [{achado.severity:8}] {marca:9} "
-                f"{achado.fingerprint}  {achado.titulo}",
-                file=saida,
-            )
-            if achado.bucket_anterior:
-                print(
-                    f"        faixa {achado.bucket_anterior} → {achado.bucket}"
-                    f" (visto {achado.ocorrencias}x desde {achado.first_seen_at[:10]})",
-                    file=saida,
-                )
-            for rotulo, valor in (
-                ("impacto", achado.impacto),
-                ("risco", achado.risco),
-                ("ação", achado.acao_sugerida),
-            ):
-                if valor:
-                    print(f"        {rotulo}: {valor}", file=saida)
-    else:
-        print("  nenhum achado novo", file=saida)
-
-    silenciosos = [a for a in reconciliacao.achados if not a.reportavel]
-    if silenciosos:
-        por_severidade: dict[str, int] = {}
-        for achado in silenciosos:
-            por_severidade[achado.severity] = por_severidade.get(achado.severity, 0) + 1
-        detalhe = ", ".join(f"{qtd} {sev}" for sev, qtd in sorted(por_severidade.items()))
-        print(f"  ● {len(silenciosos)} persistentes ({detalhe})", file=saida)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="supervisor", description=__doc__)
     parser.add_argument("--once", action="store_true", help="executa uma única vez (padrão)")
@@ -173,6 +126,11 @@ def main(argv: list[str] | None = None) -> int:
         "--sem-llm",
         action="store_true",
         help="pula a priorização por LLM e usa só a ordem determinística",
+    )
+    parser.add_argument(
+        "--sem-entrega",
+        action="store_true",
+        help="monta o relatório mas não envia ao Telegram",
     )
     args = parser.parse_args(argv)
 
@@ -234,7 +192,29 @@ def main(argv: list[str] | None = None) -> int:
         llm = ResultadoLLM(modelo=args.modelo or config.LLM_MODELO)
         aplicar_ordem_deterministica(reportaveis)
 
-    if not args.dry_run:
+    relatorio = relatorio_mod.montar(reconciliacao.achados, resumo=llm.resumo)
+
+    # Entrega antes de persistir. Se o Telegram estiver fora, o estado novo
+    # não é gravado: o achado volta a ser novidade na próxima execução em vez
+    # de se perder. O estado anterior permanece intacto em disco — falha de
+    # entrega não apaga nada.
+    entregar = (
+        relatorio.tem_novidade
+        and not (args.seed or args.dry_run or args.sem_entrega)
+    )
+    if entregar:
+        resultado_entrega = entrega_mod.enviar(
+            relatorio_mod.texto_telegram(relatorio, agora.strftime("%d/%m %H:%M UTC"))
+        )
+    else:
+        resultado_entrega = entrega_mod.ResultadoEntrega(
+            estado="skipped:sem_novidade"
+            if not relatorio.tem_novidade
+            else "skipped:desativada"
+        )
+
+    deve_persistir = entrega_mod.deve_persistir(args.dry_run, resultado_entrega)
+    if deve_persistir:
         estado.salvar(agora)
 
     contagens = reconciliacao.contagens
@@ -262,13 +242,18 @@ def main(argv: list[str] | None = None) -> int:
             "llm_cost_usd": f"{llm.custo_usd:.4f}",
             "purged_findings": reconciliacao.purgados,
             "reportable_findings": 0 if args.seed else len(reconciliacao.reportaveis),
+            "detailed_findings": 0 if args.seed else len(relatorio.detalhados),
+            "overflow_findings": 0 if args.seed else len(relatorio.excedentes),
+            "delivery": resultado_entrega.estado,
+            "delivery_chars": resultado_entrega.caracteres,
+            "state_persisted": int(deve_persistir),
             "estado_recuperado": int(reconciliacao.estado_recuperado),
             "seed": int(args.seed),
             "dry_run": int(args.dry_run),
             "status": status,
         }
     )
-    if llm.falhas and status == "ok":
+    if (llm.falhas or resultado_entrega.falhou) and status == "ok":
         status = "degraded"
         metricas["status"] = status
 
@@ -277,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
         problemas.append(erro_conexao)
     if llm.erro:
         problemas.append(f"llm:{llm.erro}")
+    if resultado_entrega.erro:
+        problemas.append(f"entrega:{resultado_entrega.erro}")
     if problemas:
         metricas["failures"] = ";".join(problemas)
 
@@ -290,7 +277,10 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "metricas": metricas,
                 "resumo": llm.resumo,
-                "achados": [a.to_dict() for a in ordenar_achados(reconciliacao.achados)],
+                "achados": [
+                    a.to_dict()
+                    for a in relatorio_mod.ordenar_para_json(reconciliacao.achados)
+                ],
             },
             sys.stdout,
             ensure_ascii=False,
@@ -305,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
             file=saida_metricas,
         )
     else:
-        imprimir_achados(reconciliacao, llm, saida_metricas)
+        print(relatorio_mod.texto_terminal(relatorio), file=saida_metricas)
 
     return 1 if status == "failed" else 0
 

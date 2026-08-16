@@ -236,6 +236,27 @@ LLM_PRECOS_USD_POR_MTOK = {
 
 
 # --------------------------------------------------------------------------
+# Relatório e entrega (etapa E5)
+# --------------------------------------------------------------------------
+
+# No máximo três achados detalhados por execução. O Supervisor não pode virar
+# gerador de notificação: um relatório que ninguém termina de ler é igual a
+# nenhum relatório.
+RELATORIO_MAX_DETALHADOS = 3
+
+# Exceção deliberada ao limite: um achado `critical` nunca é escondido para
+# caber em três. Melhor um relatório longo num dia ruim que um crítico
+# silenciado por regra de formatação.
+RELATORIO_SEVERIDADE_SEM_LIMITE = "critical"
+
+# Canal de entrega. Mesmo arquivo já usado por agents_healthcheck.py e
+# healthcheck_api.sh — um bot, um chat, um lugar para revogar.
+ALERTA_ENV_FILE = Path(os.environ.get("SUPERVISOR_ALERTA_ENV", "/opt/scripts/alerta.env"))
+TELEGRAM_TIMEOUT_SEGUNDOS = 10
+TELEGRAM_LIMITE_CARACTERES = 3800  # o limite da API é 4096
+
+
+# --------------------------------------------------------------------------
 # Deduplicação e estado (etapa E2)
 # --------------------------------------------------------------------------
 
