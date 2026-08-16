@@ -1,14 +1,15 @@
 """Ponto de entrada do WorkDev Supervisor.
 
-Etapas E1 a E3 do plano: camada de leitura somente-leitura, os cinco checks
-determinísticos e a deduplicação com estado em disco. Ainda sem LLM, sem
-timer e sem entrega — de propósito. A ordem E2 (deduplicação) antes de E5
-(entrega) é inegociável: notificar antes de deduplicar transforma a primeira
-semana num despejo diário dos mesmos itens.
+Etapas E1 a E4 do plano: leitura somente-leitura, cinco checks
+determinísticos, deduplicação com estado em disco e uma chamada de LLM para
+priorizar e explicar. Ainda sem timer e sem entrega — de propósito. A ordem
+E2 (deduplicação) antes de E5 (entrega) é inegociável: notificar antes de
+deduplicar transforma a primeira semana num despejo diário dos mesmos itens.
 
-Nenhuma requisição de rede sai daqui. As fontes são dois Postgres em modo
-somente leitura, comandos git de leitura, `systemctl show`, `ss -tln` e dois
-arquivos em disco.
+A única saída de rede é a chamada ao LLM, e ela acontece depois de tudo: os
+fatos já estão apurados, redigidos e deduplicados quando o modelo os vê. As
+fontes são dois Postgres em modo somente leitura, comandos git de leitura,
+`systemctl show`, `ss -tln` e dois arquivos em disco.
 
 Uso (sempre a partir de /opt/workdev, sempre no venv da API):
 
@@ -33,6 +34,7 @@ from . import config
 from .checks import REGISTRO
 from .contexto import Contexto
 from .estado import Estado, Reconciliacao
+from .llm import ResultadoLLM, priorizar
 from .modelo import Fato, LeituraIndisponivel, agora_utc, ordenar_achados
 from .readers.db_workdev import LeitorWorkdev
 from .redacao import contem_segredo, redigir_fato
@@ -79,9 +81,23 @@ def emitir_metricas(metricas: dict[str, Any], saida: TextIO) -> None:
         print(f"{chave}={valor}", file=saida, flush=True)
 
 
-def imprimir_achados(reconciliacao: Reconciliacao, saida: TextIO) -> None:
-    """Saída de terminal da etapa E2. O relatório de verdade vem em E5."""
-    reportaveis = ordenar_achados(reconciliacao.reportaveis)
+def aplicar_ordem_deterministica(achados: list) -> None:
+    """Prioridade por severidade, sem LLM. É o caminho de fallback."""
+    for posicao, achado in enumerate(ordenar_achados(achados), start=1):
+        achado.prioridade = posicao
+
+
+def imprimir_achados(
+    reconciliacao: Reconciliacao, llm: ResultadoLLM, saida: TextIO
+) -> None:
+    """Saída de terminal. O relatório formatado de verdade vem em E5."""
+    reportaveis = sorted(
+        reconciliacao.reportaveis,
+        key=lambda a: (a.prioridade if a.prioridade is not None else 999, a.peso),
+    )
+    if llm.resumo:
+        print(f"\n  {llm.resumo}\n", file=saida)
+
     if reportaveis:
         for achado in reportaveis:
             marca = {
@@ -90,16 +106,25 @@ def imprimir_achados(reconciliacao: Reconciliacao, saida: TextIO) -> None:
                 "reforco": "REFORÇO",
                 "resolvido": "RESOLVIDO",
             }.get(achado.status, achado.status.upper())
+            posicao = f"{achado.prioridade}." if achado.prioridade else " -"
             print(
-                f"  [{achado.severity:8}] {marca:9} {achado.fingerprint}  {achado.titulo}",
+                f"  {posicao:>3} [{achado.severity:8}] {marca:9} "
+                f"{achado.fingerprint}  {achado.titulo}",
                 file=saida,
             )
             if achado.bucket_anterior:
                 print(
-                    f"             faixa {achado.bucket_anterior} → {achado.bucket}"
+                    f"        faixa {achado.bucket_anterior} → {achado.bucket}"
                     f" (visto {achado.ocorrencias}x desde {achado.first_seen_at[:10]})",
                     file=saida,
                 )
+            for rotulo, valor in (
+                ("impacto", achado.impacto),
+                ("risco", achado.risco),
+                ("ação", achado.acao_sugerida),
+            ):
+                if valor:
+                    print(f"        {rotulo}: {valor}", file=saida)
     else:
         print("  nenhum achado novo", file=saida)
 
@@ -138,6 +163,16 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help=f"diretório de estado (padrão: {config.ESTADO_DIR})",
+    )
+    parser.add_argument(
+        "--modelo",
+        default=None,
+        help=f"modelo para a priorização (padrão: {config.LLM_MODELO})",
+    )
+    parser.add_argument(
+        "--sem-llm",
+        action="store_true",
+        help="pula a priorização por LLM e usa só a ordem determinística",
     )
     args = parser.parse_args(argv)
 
@@ -188,6 +223,17 @@ def main(argv: list[str] | None = None) -> int:
     estado = Estado(args.estado_dir).carregar()
     reconciliacao = estado.reconciliar(fatos, agora, confiaveis, semear=args.seed)
 
+    # O LLM entra só aqui: depois dos checks, da redação e da deduplicação,
+    # e apenas sobre o que sobrou para reportar. --dry-run e --seed não gastam
+    # chamada, e --sem-llm força o caminho determinístico.
+    reportaveis = reconciliacao.reportaveis
+    usar_llm = bool(reportaveis) and not (args.seed or args.dry_run or args.sem_llm)
+    if usar_llm:
+        llm = priorizar(reportaveis, modelo=args.modelo)
+    else:
+        llm = ResultadoLLM(modelo=args.modelo or config.LLM_MODELO)
+        aplicar_ordem_deterministica(reportaveis)
+
     if not args.dry_run:
         estado.salvar(agora)
 
@@ -206,6 +252,14 @@ def main(argv: list[str] | None = None) -> int:
         metricas[nome_metrica] = contagens.get(status_achado, 0)
     metricas.update(
         {
+            "llm_calls": llm.chamadas,
+            "llm_failures": llm.falhas,
+            "llm_model": llm.modelo or "-",
+            "llm_input_tokens": llm.tokens_entrada,
+            "llm_output_tokens": llm.tokens_saida,
+            "llm_invalid_ids": llm.ids_invalidos,
+            "llm_missing_ids": llm.ids_ausentes,
+            "llm_cost_usd": f"{llm.custo_usd:.4f}",
             "purged_findings": reconciliacao.purgados,
             "reportable_findings": 0 if args.seed else len(reconciliacao.reportaveis),
             "estado_recuperado": int(reconciliacao.estado_recuperado),
@@ -214,9 +268,15 @@ def main(argv: list[str] | None = None) -> int:
             "status": status,
         }
     )
+    if llm.falhas and status == "ok":
+        status = "degraded"
+        metricas["status"] = status
+
     problemas = [d for d in desfechos.values() if d != "ok"]
     if erro_conexao:
         problemas.append(erro_conexao)
+    if llm.erro:
+        problemas.append(f"llm:{llm.erro}")
     if problemas:
         metricas["failures"] = ";".join(problemas)
 
@@ -229,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(
             {
                 "metricas": metricas,
+                "resumo": llm.resumo,
                 "achados": [a.to_dict() for a in ordenar_achados(reconciliacao.achados)],
             },
             sys.stdout,
@@ -244,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
             file=saida_metricas,
         )
     else:
-        imprimir_achados(reconciliacao, saida_metricas)
+        imprimir_achados(reconciliacao, llm, saida_metricas)
 
     return 1 if status == "failed" else 0
 

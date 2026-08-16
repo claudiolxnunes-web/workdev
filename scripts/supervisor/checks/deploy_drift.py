@@ -64,24 +64,82 @@ def _fato(
     )
 
 
+def _classificar(arquivos: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """Separa o que é servido, o que já roda do disco, e o que é só trabalho.
+
+    A distinção importa: `deploy.sh` builda apps/web e reinicia workdev-api a
+    partir da árvore de trabalho, então alteração não commitada nesses
+    caminhos entra no ar no próximo deploy. Scripts com timer ou cron já rodam
+    do disco, sem deploy nenhum. O resto — testes, docs, ADRs, código ainda
+    sem unit — não é servido nem executado: o risco ali é perder trabalho,
+    não publicar código não revisado.
+    """
+    servidos, executados, trabalho = [], [], []
+    for arquivo in arquivos:
+        if arquivo in config.CAMINHOS_EXECUTADOS:
+            executados.append(arquivo)
+        elif any(arquivo.startswith(prefixo) for prefixo in config.CAMINHOS_SERVIDOS):
+            servidos.append(arquivo)
+        else:
+            trabalho.append(arquivo)
+    return servidos, executados, trabalho
+
+
 def _codigo_nao_commitado(repo, agora: datetime) -> list[Fato]:
     arquivos = repo.modificados_rastreados()
     if not arquivos:
         return []
-    bucket, ordem = classificar(len(arquivos), config.FAIXAS_CONTAGEM)
-    return [
-        _fato(
-            "uncommitted_in_production",
-            "high",
-            bucket,
-            ordem,
-            f"{len(arquivos)} arquivo(s) rastreado(s) modificado(s) — "
-            "deploy.sh builda a árvore de trabalho, então isso já está em produção",
-            agora,
-            {"arquivos": arquivos[:20], "total": len(arquivos)},
-            ("git -C /opt/workdev status --porcelain",),
+
+    servidos, executados, trabalho = _classificar(arquivos)
+    fatos: list[Fato] = []
+
+    if servidos or executados:
+        atingidos = servidos + executados
+        bucket, ordem = classificar(len(atingidos), config.FAIXAS_CONTAGEM)
+        partes = []
+        if servidos:
+            partes.append(f"{len(servidos)} servido(s) pelo deploy")
+        if executados:
+            partes.append(f"{len(executados)} já em execução por timer/cron")
+        fatos.append(
+            _fato(
+                "uncommitted_in_production",
+                "high",
+                bucket,
+                ordem,
+                f"{len(atingidos)} arquivo(s) modificado(s) fora do controle de versão "
+                f"afetam o que está no ar: {', '.join(partes)}",
+                agora,
+                {
+                    "servidos": servidos[:20],
+                    "executados": executados[:20],
+                    "total": len(atingidos),
+                },
+                (
+                    "git -C /opt/workdev status --porcelain",
+                    "# deploy.sh: pnpm build em apps/web + systemctl restart workdev-api,"
+                    " ambos a partir da arvore de trabalho",
+                ),
+            )
         )
-    ]
+
+    if trabalho:
+        bucket, ordem = classificar(len(trabalho), config.FAIXAS_CONTAGEM)
+        fatos.append(
+            _fato(
+                "uncommitted_work",
+                "info",
+                bucket,
+                ordem,
+                f"{len(trabalho)} arquivo(s) rastreado(s) modificado(s) fora do "
+                "runtime — não afetam o que está servido, mas existem só nesta VPS",
+                agora,
+                {"arquivos": trabalho[:20], "total": len(trabalho)},
+                ("git -C /opt/workdev status --porcelain",),
+            )
+        )
+
+    return fatos
 
 
 def _commits_nao_enviados(repo, agora: datetime) -> list[Fato]:

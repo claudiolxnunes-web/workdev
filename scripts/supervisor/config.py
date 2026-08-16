@@ -117,12 +117,34 @@ UNIT_API = "workdev-api"
 PORTA_API = 8000
 DIRETORIO_MIGRATIONS = "apps/api/alembic/versions"
 
-# Onde o build e o serviço leem o código. `deploy.sh` builda a partir da
-# árvore de trabalho, não de um commit — por isso arquivo modificado e não
-# commitado já está em produção.
+# Onde o build e o serviço leem o código.
 CAMINHO_BUILD = "apps/web/dist/index.html"
 FONTES_FRONTEND = "apps/web/src"
 FONTES_BACKEND = "apps/api/app"
+
+# `deploy.sh` faz `pnpm build` em apps/web e reinicia workdev-api — os dois a
+# partir da árvore de trabalho, não de um commit. Alteração não commitada
+# nestes caminhos entra no ar no próximo deploy sem passar por revisão.
+CAMINHOS_SERVIDOS = (
+    "apps/web/src/",
+    "apps/web/public/",
+    "apps/web/index.html",
+    "apps/api/app/",
+    "apps/api/alembic/",
+)
+
+# Estes não passam por deploy nenhum: já rodam do disco, por timer ou cron.
+# Alteração aqui tem efeito imediato, sem build e sem restart.
+CAMINHOS_EXECUTADOS = (
+    "scripts/agents_healthcheck.py",
+    "scripts/healthcheck_api.sh",
+    "scripts/bootstrap_agents.sh",
+    "scripts/start_claude_agent.sh",
+    "scripts/start_codex_agent.sh",
+    "scripts/start_kimi_agent.sh",
+    "scripts/start_qwen_agent.sh",
+    "deploy.sh",
+)
 
 FAIXAS_CONTAGEM = ((2, "1"), (6, "2-5"), (21, "6-20"), (51, "21-50"), (None, "50+"))
 
@@ -186,6 +208,31 @@ MOTIVOS_DE_CREDENCIAL = ("authentication", "billing", "api_key")
 # dois runs `blocked` do codex de 05-06/08.
 FILA_STATUS = ("queued",)
 FILA_PARADA_HORAS = 6
+
+
+# --------------------------------------------------------------------------
+# LLM (etapa E4)
+# --------------------------------------------------------------------------
+
+# O LLM entra depois dos checks e recebe fatos prontos. Ele ordena e explica;
+# nunca descobre, nunca altera severidade, nunca executa nada.
+LLM_MODELO = os.environ.get("SUPERVISOR_MODELO", "claude-opus-5")
+LLM_MAX_TOKENS = 8000
+LLM_EFFORT = "medium"  # ordenar e escrever, não raciocinar fundo
+LLM_TIMEOUT_SEGUNDOS = 120
+
+# Quantos achados vão à chamada. O corte determinístico acontece antes: se há
+# mais que isto, o LLM vê os mais graves e os que mudaram.
+LLM_MAX_FATOS = 8
+
+# Preço de lista em USD por milhão de tokens (entrada, saída), usado só para
+# estimar custo no log. Sonnet 5 tem preço promocional menor até 31/08/2026;
+# aqui fica o valor cheio, para não subestimar.
+LLM_PRECOS_USD_POR_MTOK = {
+    "claude-opus-5": (5.0, 25.0),
+    "claude-sonnet-5": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+}
 
 
 # --------------------------------------------------------------------------

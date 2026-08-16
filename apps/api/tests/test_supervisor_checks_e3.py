@@ -103,12 +103,45 @@ class DeployDriftTest(unittest.TestCase):
     def test_repositorio_limpo_nao_gera_achado(self):
         self.assertEqual(coletar_deploy(RepoFalso()), [])
 
-    def test_arquivo_rastreado_modificado_ja_esta_em_producao(self):
-        fatos = coletar_deploy(RepoFalso(modificados=["a.py", "b.py", "c.py"]))
+    def test_fonte_servida_modificada_afeta_o_que_esta_no_ar(self):
+        # deploy.sh builda apps/web e reinicia a API a partir da árvore de
+        # trabalho: alteração nesses caminhos entra no ar sem passar por commit.
+        fatos = coletar_deploy(
+            RepoFalso(modificados=["apps/web/src/App.tsx", "apps/api/app/main.py"])
+        )
         self.assertEqual(subchecks(fatos), ["uncommitted_in_production"])
         self.assertEqual(fatos[0].severity, "high")
+        self.assertEqual(fatos[0].medidas["total"], 2)
+        self.assertEqual(len(fatos[0].medidas["servidos"]), 2)
+
+    def test_script_com_timer_ja_roda_do_disco(self):
+        fatos = coletar_deploy(RepoFalso(modificados=["scripts/agents_healthcheck.py"]))
+        self.assertEqual(subchecks(fatos), ["uncommitted_in_production"])
+        self.assertEqual(fatos[0].medidas["executados"], ["scripts/agents_healthcheck.py"])
+        self.assertEqual(fatos[0].medidas["servidos"], [])
+
+    def test_arquivo_fora_do_runtime_nao_e_tratado_como_producao(self):
+        # Testes, ADRs e código ainda sem unit não são servidos nem executados:
+        # o risco é perder trabalho, não publicar código não revisado.
+        fatos = coletar_deploy(
+            RepoFalso(
+                modificados=[
+                    "apps/api/tests/test_x.py",
+                    "decisions/adr.md",
+                    "scripts/supervisor/llm.py",
+                ]
+            )
+        )
+        self.assertEqual(subchecks(fatos), ["uncommitted_work"])
+        self.assertEqual(fatos[0].severity, "info")
         self.assertEqual(fatos[0].medidas["total"], 3)
-        self.assertEqual(fatos[0].bucket, "2-5")
+
+    def test_mistura_gera_dois_achados_distintos(self):
+        fatos = coletar_deploy(
+            RepoFalso(modificados=["apps/api/app/main.py", "decisions/adr.md"])
+        )
+        self.assertEqual(subchecks(fatos), ["uncommitted_in_production", "uncommitted_work"])
+        self.assertEqual(len({f.fingerprint for f in fatos}), 2)
 
     def test_commit_do_dia_ainda_nao_e_achado(self):
         repo = RepoFalso(
