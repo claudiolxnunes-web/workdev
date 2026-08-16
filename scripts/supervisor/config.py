@@ -94,6 +94,25 @@ FAIXAS_IDADE_PLANO = ((8, "3-7"), (22, "8-21"), (None, "22+"))
 CHECKS_ATIVOS = ("critical_stalled", "plan_without_execution")
 
 
+# --------------------------------------------------------------------------
+# Deduplicação e estado (etapa E2)
+# --------------------------------------------------------------------------
+
+# Um achado resolvido é reportado uma vez e fica no estado por este prazo,
+# para que um problema intermitente não apareça como "novo" a cada volta.
+RESOLVIDO_TTL_DIAS = 7
+
+# Um achado persistente e grave volta ao relatório de tempos em tempos. Sem
+# isso, "silêncio" e "resolvido" ficam indistinguíveis — a mesma classe de
+# falha do EXCEPTION WHEN OTHERS, na camada de notificação.
+REFORCO_DIAS = 14
+SEVERIDADES_COM_REFORCO = ("critical", "high")
+
+# Versão do formato de state.json. Divergiu, o estado é descartado e a
+# execução recomeça semeando — nunca tenta migrar em silêncio.
+VERSAO_ESTADO = 1
+
+
 def normalizar_prioridade(valor: str | None) -> str | None:
     """Reduz o texto livre de backlog.priority ao domínio canônico."""
     if not valor:

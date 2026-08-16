@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from .. import config
-from ..modelo import Fato, dias_desde, faixa
+from ..modelo import Fato, classificar, dias_desde
 
 
 NOME = "plan_without_execution"
@@ -86,13 +86,15 @@ def avaliar(linhas: list[dict], agora: datetime) -> list[Fato]:
             dias = dias_desde(linha.get("approved_at"), agora)
             if dias is None or dias < config.PLANO_SEM_RUN_DIAS:
                 continue
+            bucket, bucket_ordem = classificar(dias, config.FAIXAS_IDADE_PLANO)
             fatos.append(
                 Fato(
                     **comum,
                     subcheck="never_dispatched",
                     entity_type="execution_plan",
                     entity_id=linha["plano_id"],
-                    bucket=faixa(dias, config.FAIXAS_IDADE_PLANO),
+                    bucket=bucket,
+                    bucket_ordem=bucket_ordem,
                     titulo=_titulo_sem_run(linha, dias),
                     medidas={
                         "dias": dias,
@@ -114,13 +116,15 @@ def avaliar(linhas: list[dict], agora: datetime) -> list[Fato]:
         dias = dias_desde(linha.get("run_updated_at"), agora)
         if dias is None or dias < config.RUN_TRAVADO_DIAS:
             continue
+        bucket, bucket_ordem = classificar(dias, config.FAIXAS_IDADE_PLANO)
         fatos.append(
             Fato(
                 **comum,
                 subcheck="run_stalled",
                 entity_type="agent_run",
                 entity_id=linha["run_id"],
-                bucket=faixa(dias, config.FAIXAS_IDADE_PLANO),
+                bucket=bucket,
+                bucket_ordem=bucket_ordem,
                 titulo=_titulo_run_travado(linha, dias),
                 medidas={
                     "dias": dias,

@@ -617,7 +617,7 @@ RandomizedDelaySec=120
 ```
 
 `Persistent=true` para que um reboot às 09:55 não pule o dia. Execução manual:
-`python3 -m supervisor --once`. Reavaliar para 2×/dia só se, após 3 semanas, a
+`apps/api/venv/bin/python -m scripts.supervisor --once`. Reavaliar para 2×/dia só se, após 3 semanas, a
 execução única estiver consistentemente cheia (≥3 achados novos por dia).
 
 ---
@@ -810,7 +810,7 @@ individualmente por `CHECKS_ATIVOS` em `config.py`, sem tocar no resto.
 
 | # | Etapa | Entrega verificável | Esforço |
 | --- | --- | --- | --- |
-| E0 | Esqueleto: pacote, `config.py`, `modelo.py`, `redacao.py`, CLI | `python3 -m supervisor --once` roda e imprime `status=ok` com 0 checks | 1h |
+| E0 | Esqueleto: pacote, `config.py`, `modelo.py`, `redacao.py`, CLI | `apps/api/venv/bin/python -m scripts.supervisor --once` roda e imprime `status=ok` com 0 checks | 1h |
 | E1 | Readers do Postgres (read-only) + `critical_stalled` + `plan_without_execution` | `--json` imprime Fatos reais; teste de read-only passa | 3h |
 | E2 | `estado.py`: fingerprint, buckets, transições, `--seed` | rodar 2× seguidas → 2ª execução com `new_findings=0` | 2h |
 | E3 | `deploy_drift` + `knowledge_drift` + `agent_health` | os 5 checks produzindo Fatos; RAG derrubado → `degraded` | 4h |
@@ -830,7 +830,7 @@ repetidos.
 
 ## 17. Critérios de aceite
 
-1. `python3 -m supervisor --once --dry-run` conclui em **< 60s** e não escreve
+1. `apps/api/venv/bin/python -m scripts.supervisor --once --dry-run` conclui em **< 60s** e não escreve
    em disco nem chama o LLM.
 2. Um `INSERT` na conexão do Supervisor levanta `ReadOnlySqlTransaction`.
    (Teste automatizado, não inspeção.)
@@ -950,7 +950,8 @@ ninguém junta.
 `plan_without_execution`), deduplicação, saída no terminal:
 
 ```
-python3 -m supervisor --once --json
+cd /opt/workdev
+apps/api/venv/bin/python -m scripts.supervisor --once --json
 ```
 
 ~5 horas. Já responde "o que está parado, há quanto tempo, e há plano aprovado

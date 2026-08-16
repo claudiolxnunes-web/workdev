@@ -46,16 +46,23 @@ def dias_desde(momento: datetime | None, agora: datetime) -> int | None:
     return (como_utc(agora) - momento).days
 
 
-def faixa(valor: int, faixas: Sequence[tuple[int | None, str]]) -> str:
-    """Converte um valor contínuo no rótulo da sua faixa.
+def classificar(valor: int, faixas: Sequence[tuple[int | None, str]]) -> tuple[str, int]:
+    """Devolve (rótulo da faixa, ordem da faixa).
 
     O rótulo é o que entra no fingerprint: é ele que distingue "envelheceu um
-    dia" (mesmo achado) de "piorou de patamar" (achado agravado).
+    dia" (mesmo achado) de "piorou de patamar" (achado agravado). A ordem é o
+    que permite dizer, na reconciliação, se a mudança de faixa foi para pior
+    ou para melhor — o rótulo sozinho não é comparável.
     """
-    for limite, rotulo in faixas:
+    for indice, (limite, rotulo) in enumerate(faixas):
         if limite is None or valor < limite:
-            return rotulo
-    return faixas[-1][1]
+            return rotulo, indice
+    return faixas[-1][1], len(faixas) - 1
+
+
+def faixa(valor: int, faixas: Sequence[tuple[int | None, str]]) -> str:
+    """Só o rótulo da faixa."""
+    return classificar(valor, faixas)[0]
 
 
 @dataclass(frozen=True)
@@ -74,6 +81,7 @@ class Fato:
     project_name: str | None = None
     medidas: dict[str, Any] = field(default_factory=dict)
     evidencia: tuple[str, ...] = ()
+    bucket_ordem: int = 0
 
     def __post_init__(self) -> None:
         if self.severity not in PESO_SEVERIDADE:
@@ -86,6 +94,15 @@ class Fato:
             (self.check, self.subcheck or "", self.entity_id, self.bucket)
         )
         return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
+
+    @property
+    def chave_entidade(self) -> str:
+        """Identidade da coisa observada, independente da faixa.
+
+        É o que liga duas execuções em que o mesmo problema mudou de patamar:
+        o fingerprint muda (o bucket faz parte dele), a chave de entidade não.
+        """
+        return "|".join((self.check, self.subcheck or "", self.entity_id))
 
     @property
     def peso(self) -> int:
@@ -102,11 +119,107 @@ class Fato:
             "project_name": self.project_name,
             "severity": self.severity,
             "bucket": self.bucket,
+            "bucket_ordem": self.bucket_ordem,
             "titulo": self.titulo,
             "medidas": dict(self.medidas),
             "evidencia": list(self.evidencia),
             "detected_at": self.detected_at,
         }
+
+
+# Estados possíveis de um achado entre execuções.
+STATUS_REPORTAVEIS = ("novo", "agravado", "reforco", "resolvido")
+STATUS_SILENCIOSOS = ("persistente", "melhorou")
+STATUS = STATUS_REPORTAVEIS + STATUS_SILENCIOSOS
+
+
+@dataclass
+class Achado:
+    """Um Fato situado no tempo: o que mudou desde a execução anterior.
+
+    Achado é o que o relatório consome. Os campos vindos do LLM (etapa E4)
+    nascem None e nunca sobrescrevem nada de determinístico.
+    """
+
+    fingerprint: str
+    check: str
+    subcheck: str | None
+    entity_type: str
+    entity_id: str
+    project_id: str | None
+    project_name: str | None
+    severity: str
+    bucket: str
+    titulo: str
+    status: str
+    first_seen_at: str
+    last_seen_at: str
+    ocorrencias: int
+    medidas: dict[str, Any] = field(default_factory=dict)
+    evidencia: tuple[str, ...] = ()
+    bucket_anterior: str | None = None
+    severidade_anterior: str | None = None
+    prioridade: int | None = None
+    impacto: str | None = None
+    risco: str | None = None
+    recomendacao: str | None = None
+    acao_sugerida: str | None = None
+
+    @property
+    def peso(self) -> int:
+        return PESO_SEVERIDADE[self.severity]
+
+    @property
+    def reportavel(self) -> bool:
+        return self.status in STATUS_REPORTAVEIS
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "fingerprint": self.fingerprint,
+            "check": self.check,
+            "subcheck": self.subcheck,
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "project_id": self.project_id,
+            "project_name": self.project_name,
+            "severity": self.severity,
+            "bucket": self.bucket,
+            "titulo": self.titulo,
+            "status": self.status,
+            "first_seen_at": self.first_seen_at,
+            "last_seen_at": self.last_seen_at,
+            "ocorrencias": self.ocorrencias,
+            "medidas": dict(self.medidas),
+            "evidencia": list(self.evidencia),
+            "bucket_anterior": self.bucket_anterior,
+            "severidade_anterior": self.severidade_anterior,
+            "prioridade": self.prioridade,
+            "impacto": self.impacto,
+            "risco": self.risco,
+            "recomendacao": self.recomendacao,
+            "acao_sugerida": self.acao_sugerida,
+        }
+
+
+def ordenar_achados(achados: Iterable[Achado]) -> list[Achado]:
+    """Ordem determinística do relatório, antes de qualquer LLM.
+
+    Severidade primeiro; dentro dela, o que mudou vem antes do que só
+    persiste; por último, o mais antigo.
+    """
+    peso_status = {nome: peso for peso, nome in enumerate(
+        ("agravado", "novo", "reforco", "resolvido", "melhorou", "persistente")
+    )}
+    return sorted(
+        achados,
+        key=lambda a: (
+            a.peso,
+            peso_status.get(a.status, 99),
+            -(a.medidas.get("dias_parado") or a.medidas.get("dias") or 0),
+            a.check,
+            a.entity_id,
+        ),
+    )
 
 
 def ordenar(fatos: Iterable[Fato]) -> list[Fato]:

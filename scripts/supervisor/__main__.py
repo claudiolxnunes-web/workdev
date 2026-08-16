@@ -1,14 +1,16 @@
 """Ponto de entrada do WorkDev Supervisor.
 
-Etapa E1 do plano: camada de leitura somente-leitura + os dois checks de
-backlog. Ainda sem estado, sem LLM e sem entrega — de propósito. A ordem
-E2 (deduplicação) antes de E5 (entrega) é inegociável: notificar antes de
-deduplicar transforma a primeira semana num despejo diário de itens
-repetidos.
+Etapas E1 + E2 do plano: camada de leitura somente-leitura, os dois checks de
+backlog, e a deduplicação com estado em disco. Ainda sem LLM, sem timer e sem
+entrega — de propósito. A ordem E2 (deduplicação) antes de E5 (entrega) é
+inegociável: notificar antes de deduplicar transforma a primeira semana num
+despejo diário dos mesmos itens.
 
-Uso:
-    PYTHONPATH=/opt/workdev/scripts \\
-      /opt/workdev/apps/api/venv/bin/python -m supervisor --once
+Uso (sempre a partir de /opt/workdev, sempre no venv da API):
+
+    apps/api/venv/bin/python -m scripts.supervisor --once
+    ... --seed                 # semeia o estado sem reportar nada (primeira vez)
+    ... --dry-run              # reconcilia e mostra, sem gravar
     ... --json                 # documento JSON no stdout, métricas no stderr
     ... --check critical_stalled
 """
@@ -20,39 +22,89 @@ import json
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, TextIO
 
 from . import config
 from .checks import REGISTRO
-from .modelo import Fato, LeituraIndisponivel, agora_utc, ordenar
+from .estado import Estado, Reconciliacao
+from .modelo import Fato, LeituraIndisponivel, agora_utc, ordenar_achados
 from .readers.db_workdev import LeitorWorkdev
 from .redacao import contem_segredo, redigir_fato
 
 
+METRICA_POR_STATUS = {
+    "novo": "new_findings",
+    "agravado": "worsened_findings",
+    "melhorou": "improved_findings",
+    "persistente": "persistent_findings",
+    "reforco": "reinforced_findings",
+    "resolvido": "resolved_findings",
+}
+
+
 def executar_checks(
     leitor: Any, nomes: list[str], agora: datetime
-) -> tuple[list[Fato], list[str], list[str]]:
-    """Roda os checks pedidos, isolando falha de um do resto."""
+) -> tuple[list[Fato], dict[str, str]]:
+    """Roda os checks pedidos, isolando a falha de um do resto.
+
+    O segundo retorno é o desfecho por check (`ok`, `degraded`, `failed`). Ele
+    decide quem tem direito de resolver os próprios achados: um check que não
+    rodou, ou rodou mal, não pode marcar nada como resolvido.
+    """
     fatos: list[Fato] = []
-    degradados: list[str] = []
-    falhos: list[str] = []
+    desfechos: dict[str, str] = {}
 
     for nome in nomes:
         modulo = REGISTRO[nome]
         try:
             fatos.extend(modulo.coletar(leitor, agora))
+            desfechos[nome] = "ok"
         except LeituraIndisponivel as erro:
-            degradados.append(f"{nome}:{erro}")
+            desfechos[nome] = f"degraded:{erro}"
         except Exception as erro:  # noqa: BLE001 — um check ruim não derruba a execução
-            falhos.append(f"{nome}:{type(erro).__name__}")
+            desfechos[nome] = f"failed:{type(erro).__name__}"
 
-    return fatos, degradados, falhos
+    return fatos, desfechos
 
 
 def emitir_metricas(metricas: dict[str, Any], saida: TextIO) -> None:
     """Formato `chave=valor`, o mesmo já usado pelo ingestor do RAG."""
     for chave, valor in metricas.items():
         print(f"{chave}={valor}", file=saida, flush=True)
+
+
+def imprimir_achados(reconciliacao: Reconciliacao, saida: TextIO) -> None:
+    """Saída de terminal da etapa E2. O relatório de verdade vem em E5."""
+    reportaveis = ordenar_achados(reconciliacao.reportaveis)
+    if reportaveis:
+        for achado in reportaveis:
+            marca = {
+                "novo": "NOVO",
+                "agravado": "AGRAVADO",
+                "reforco": "REFORÇO",
+                "resolvido": "RESOLVIDO",
+            }.get(achado.status, achado.status.upper())
+            print(
+                f"  [{achado.severity:8}] {marca:9} {achado.fingerprint}  {achado.titulo}",
+                file=saida,
+            )
+            if achado.bucket_anterior:
+                print(
+                    f"             faixa {achado.bucket_anterior} → {achado.bucket}"
+                    f" (visto {achado.ocorrencias}x desde {achado.first_seen_at[:10]})",
+                    file=saida,
+                )
+    else:
+        print("  nenhum achado novo", file=saida)
+
+    silenciosos = [a for a in reconciliacao.achados if not a.reportavel]
+    if silenciosos:
+        por_severidade: dict[str, int] = {}
+        for achado in silenciosos:
+            por_severidade[achado.severity] = por_severidade.get(achado.severity, 0) + 1
+        detalhe = ", ".join(f"{qtd} {sev}" for sev, qtd in sorted(por_severidade.items()))
+        print(f"  ● {len(silenciosos)} persistentes ({detalhe})", file=saida)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,7 +121,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="não persiste nem entrega nada (na etapa E1 já é o comportamento único)",
+        help="reconcilia e mostra o que mudaria, sem gravar estado nem execução",
+    )
+    parser.add_argument(
+        "--seed",
+        action="store_true",
+        help="semeia o estado com tudo que existe hoje, sem reportar nada",
+    )
+    parser.add_argument(
+        "--estado-dir",
+        type=Path,
+        default=None,
+        help=f"diretório de estado (padrão: {config.ESTADO_DIR})",
     )
     args = parser.parse_args(argv)
 
@@ -83,63 +146,96 @@ def main(argv: list[str] | None = None) -> int:
 
     metricas: dict[str, Any] = {"started_at": agora.isoformat()}
     fatos: list[Fato] = []
-    degradados: list[str] = []
-    falhos: list[str] = []
-    status = "ok"
+    desfechos: dict[str, str] = {}
+    erro_conexao: str | None = None
 
     try:
         with LeitorWorkdev() as leitor:
-            fatos, degradados, falhos = executar_checks(leitor, nomes, agora)
+            fatos, desfechos = executar_checks(leitor, nomes, agora)
     except Exception as erro:  # noqa: BLE001
         # O Postgres do WorkDev fora do ar não é degradação: é incidente. Já
         # houve um caso de rota pendurando em silêncio por causa disso
         # (CLAUDE.md, 2026-07-21). Aqui ele grita: exit 1 + OnFailure.
-        falhos.append(f"conexao:{type(erro).__name__}")
-        status = "failed"
+        erro_conexao = f"conexao:{type(erro).__name__}"
 
-    fatos = ordenar(redigir_fato(fato) for fato in fatos)
+    fatos = [redigir_fato(fato) for fato in fatos]
 
     # Asserção defensiva: nada sai daqui com aparência de segredo.
     for fato in fatos:
         if contem_segredo(json.dumps(fato.to_dict(), ensure_ascii=False)):
             raise RuntimeError(f"redação falhou no fato {fato.fingerprint}")
 
-    if status != "failed":
-        if falhos:
-            status = "failed"
-        elif degradados:
-            status = "degraded"
+    falhos = [n for n, d in desfechos.items() if d.startswith("failed")]
+    degradados = [n for n, d in desfechos.items() if d.startswith("degraded")]
+    confiaveis = [n for n, d in desfechos.items() if d == "ok"]
 
+    if erro_conexao or falhos:
+        status = "failed"
+    elif degradados:
+        status = "degraded"
+    else:
+        status = "ok"
+
+    estado = Estado(args.estado_dir).carregar()
+    reconciliacao = estado.reconciliar(fatos, agora, confiaveis, semear=args.seed)
+
+    if not args.dry_run:
+        estado.salvar(agora)
+
+    contagens = reconciliacao.contagens
     metricas.update(
         {
             "finished_at": agora_utc().isoformat(),
             "duration_seconds": f"{time.monotonic() - inicio_monotonico:.3f}",
             "checks_executed": len(nomes),
-            "checks_failed": len(falhos),
+            "checks_failed": len(falhos) + (1 if erro_conexao else 0),
             "checks_degraded": len(degradados),
             "facts_detected": len(fatos),
+        }
+    )
+    for status_achado, nome_metrica in METRICA_POR_STATUS.items():
+        metricas[nome_metrica] = contagens.get(status_achado, 0)
+    metricas.update(
+        {
+            "purged_findings": reconciliacao.purgados,
+            "reportable_findings": 0 if args.seed else len(reconciliacao.reportaveis),
+            "estado_recuperado": int(reconciliacao.estado_recuperado),
+            "seed": int(args.seed),
+            "dry_run": int(args.dry_run),
             "status": status,
         }
     )
-    if falhos:
-        metricas["failures"] = ";".join(falhos)
-    if degradados:
-        metricas["degraded"] = ";".join(degradados)
+    problemas = [d for d in desfechos.values() if d != "ok"]
+    if erro_conexao:
+        problemas.append(erro_conexao)
+    if problemas:
+        metricas["failures"] = ";".join(problemas)
+
+    if not args.dry_run:
+        estado.registrar_execucao(metricas)
 
     emitir_metricas(metricas, saida_metricas)
 
     if args.json:
         json.dump(
-            {"metricas": metricas, "fatos": [f.to_dict() for f in fatos]},
+            {
+                "metricas": metricas,
+                "achados": [a.to_dict() for a in ordenar_achados(reconciliacao.achados)],
+            },
             sys.stdout,
             ensure_ascii=False,
             indent=2,
             default=str,
         )
         sys.stdout.write("\n")
+    elif args.seed:
+        print(
+            f"  estado semeado com {len(reconciliacao.achados)} achados — "
+            "nada reportado por design",
+            file=saida_metricas,
+        )
     else:
-        for fato in fatos:
-            print(f"  [{fato.severity:8}] {fato.fingerprint}  {fato.titulo}")
+        imprimir_achados(reconciliacao, saida_metricas)
 
     return 1 if status == "failed" else 0
 

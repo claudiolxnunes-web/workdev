@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from .. import config
-from ..modelo import Fato, dias_desde, faixa
+from ..modelo import Fato, classificar, dias_desde
 
 
 NOME = "critical_stalled"
@@ -75,6 +75,7 @@ def avaliar(linhas: list[dict], agora: datetime) -> list[Fato]:
             if prioridade == "critical" or dias >= config.CRITICAL_STALLED_ESCALA_DIAS
             else "high"
         )
+        bucket, bucket_ordem = classificar(dias, config.FAIXAS_IDADE_TASK)
 
         fatos.append(
             Fato(
@@ -84,7 +85,8 @@ def avaliar(linhas: list[dict], agora: datetime) -> list[Fato]:
                 project_id=linha.get("project_id"),
                 project_name=linha.get("projeto"),
                 severity=severidade,
-                bucket=faixa(dias, config.FAIXAS_IDADE_TASK),
+                bucket=bucket,
+                bucket_ordem=bucket_ordem,
                 titulo=_titulo(linha, prioridade, dias),
                 detected_at=detectado_em,
                 medidas={
