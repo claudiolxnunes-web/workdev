@@ -192,12 +192,19 @@ def main() -> int:
     parser.add_argument("--no-restart", action="store_true", help="não recupera sessões offline")
     args = parser.parse_args()
     previous = read_previous_state()
-    health = [inspect_agent(agent, allow_restart=not args.no_restart) for agent in AGENTS]
+    always_on = {"claude", "codex"}
+    health = [
+        inspect_agent(
+            agent,
+            allow_restart=(not args.no_restart and agent in always_on),
+        )
+        for agent in AGENTS
+    ]
     write_state(health)
     notify_transitions(previous, health)
     for item in health:
         print(f"{item.agent}: {item.status} ({item.process or 'sem processo'})")
-    return 1 if any(item.status == "offline" for item in health) else 0
+    return 1 if any(item.agent in always_on and item.status == "offline" for item in health) else 0
 
 
 if __name__ == "__main__":
