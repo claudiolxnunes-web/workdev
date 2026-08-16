@@ -296,9 +296,10 @@ class UnitsSystemdTest(unittest.TestCase):
     SERVICE = RAIZ / "scripts/workdev-supervisor.service"
     TIMER = RAIZ / "scripts/workdev-supervisor.timer"
     FALHOU = RAIZ / "scripts/workdev-supervisor-falhou.service"
+    SOMBRA = RAIZ / "scripts/workdev-supervisor-sombra.conf"
 
     def test_units_existem_no_repositorio(self):
-        for unit in (self.SERVICE, self.TIMER, self.FALHOU):
+        for unit in (self.SERVICE, self.TIMER, self.FALHOU, self.SOMBRA):
             self.assertTrue(unit.exists(), unit.name)
 
     def test_service_usa_o_venv_oficial_da_api(self):
@@ -330,23 +331,75 @@ class UnitsSystemdTest(unittest.TestCase):
         self.assertIn("Persistent=true", conteudo)
 
     @unittest.skipUnless(shutil.which("systemctl"), "systemd indisponível")
-    def test_timer_continua_desabilitado(self):
-        # E5 entrega os arquivos; habilitar é decisão humana, em E7.
-        for unit in ("workdev-supervisor.timer", "workdev-supervisor.service"):
-            with self.subTest(unit=unit):
-                resultado = subprocess.run(
-                    ["systemctl", "is-enabled", unit],
-                    capture_output=True, text=True, check=False,
-                )
-                self.assertIn(
-                    resultado.stdout.strip(),
-                    ("not-found", "disabled", ""),
-                    f"{unit} está habilitado",
-                )
-                self.assertFalse(
-                    (Path("/etc/systemd/system") / unit).exists(),
-                    f"{unit} foi instalado em /etc/systemd/system",
-                )
+    def test_instalacao_do_timer_e_coerente(self):
+        """Verifica coerência da instalação, não um estado fixo.
+
+        Este teste começou em E5 exigindo que o timer estivesse desabilitado —
+        naquele momento habilitar era decisão humana pendente. E7 habilitou, e
+        a asserção antiga passou a cobrar um estado que já não existe.
+
+        A regra que vale nos dois mundos: o pacote pode não estar instalado
+        (dev, CI); se estiver, quem agenda é o timer, e o service nunca é
+        habilitado direto — ele é `TriggeredBy` o timer. Um service habilitado
+        por conta própria rodaria no boot, fora da janela pretendida.
+        """
+        def habilitado(unit):
+            return subprocess.run(
+                ["systemctl", "is-enabled", unit],
+                capture_output=True, text=True, check=False,
+            ).stdout.strip()
+
+        estado_timer = habilitado("workdev-supervisor.timer")
+        if estado_timer in ("not-found", ""):
+            self.skipTest("units não instaladas nesta máquina")
+
+        self.assertEqual(estado_timer, "enabled", "o timer instalado deve agendar")
+        self.assertIn(
+            habilitado("workdev-supervisor.service"),
+            ("static", "disabled", "indirect"),
+            "o service não deve ser habilitado direto: quem agenda é o timer",
+        )
+
+    @unittest.skipUnless(shutil.which("systemctl"), "systemd indisponível")
+    def test_unit_instalada_nao_divergiu_do_repositorio(self):
+        """O que roda em produção tem de ser o que está versionado."""
+        instalado = Path("/etc/systemd/system/workdev-supervisor.service")
+        if not instalado.exists():
+            self.skipTest("unit não instalada nesta máquina")
+        self.assertEqual(
+            instalado.read_text(encoding="utf-8"),
+            self.SERVICE.read_text(encoding="utf-8"),
+            "a unit instalada divergiu de scripts/workdev-supervisor.service",
+        )
+
+    @unittest.skipUnless(shutil.which("systemctl"), "systemd indisponível")
+    def test_drop_in_de_sombra_nao_divergiu_do_repositorio(self):
+        """Drop-in em produção precisa existir no repositório.
+
+        `deploy_drift` não olha drop-ins de systemd, então uma configuração
+        que só existe em /etc/systemd/system some com a máquina sem ninguém
+        detectar. Este teste é a rede que falta.
+        """
+        instalado = Path(
+            "/etc/systemd/system/workdev-supervisor.service.d/shadow.conf"
+        )
+        if not instalado.exists():
+            self.skipTest("drop-in de sombra não instalado nesta máquina")
+
+        def diretivas(texto):
+            # O arquivo versionado carrega o porquê e o como instalar;
+            # o instalado, só as diretivas. Compara-se o que tem efeito.
+            return [
+                linha.strip()
+                for linha in texto.splitlines()
+                if linha.strip() and not linha.strip().startswith("#")
+            ]
+
+        self.assertEqual(
+            diretivas(instalado.read_text(encoding="utf-8")),
+            diretivas(self.SOMBRA.read_text(encoding="utf-8")),
+            "o drop-in instalado divergiu de scripts/workdev-supervisor-sombra.conf",
+        )
 
 
 if __name__ == "__main__":
