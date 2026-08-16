@@ -4,3 +4,6 @@ export { isErrorMessage } from "./messageUtils";
 export { MarkdownMessage } from "./MarkdownMessage";
 export { CodeBlock, InlineCode } from "./CodeBlock";
 export { PlanningPanel } from "./PlanningPanel";
+export { ProjectSelector } from "./ProjectSelector";
+export type { ProjectOption } from "./ProjectSelector";
+export { ContextDivider } from "./ContextDivider";

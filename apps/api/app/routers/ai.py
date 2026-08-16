@@ -941,6 +941,25 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
         db.add(session)
         db.commit()
         db.refresh(session)
+
+    # E1.3: a sessão é a dona do contexto. Quando o cliente manda um slug (o
+    # chat do workspace sempre manda), o vínculo é gravado aqui — assim uma
+    # conversa iniciada no workspace já volta com o projeto certo depois.
+    slug_efetivo = req.project_slug
+    if session is not None:
+        if req.project_slug:
+            projeto = db.query(Project).filter(
+                Project.slug == req.project_slug).first()
+            if projeto is not None and session.project_id != projeto.id:
+                session.project_id = projeto.id
+                db.commit()
+        elif session.project_id:
+            # Sessão já tem projeto e o cliente não mandou slug: o banco manda.
+            projeto = db.query(Project).filter(
+                Project.id == session.project_id).first()
+            if projeto is not None:
+                slug_efetivo = projeto.slug
+
     if session and messages:
         last = messages[-1]
         if last["role"] == "user":
@@ -950,7 +969,7 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
 
     # E1.2: o contexto passa a ser montado sempre — global quando não há projeto
     # ativo. Antes, o chat global ia ao modelo sem nenhum dado do WorkDev.
-    system = build_system(db, req.project_slug)
+    system = build_system(db, slug_efetivo)
 
     try:
         if provider in COMPAT_PROVIDERS:
@@ -961,7 +980,8 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     except Exception as e:
         reply = f"Erro no provider {provider}: {type(e).__name__} - {e}"
         return {"reply": reply, "provider": provider, "error": True,
-                "session_id": str(session.id) if session else None}
+                "session_id": str(session.id) if session else None,
+                "project_slug": slug_efetivo}
 
     if session:
         try:
@@ -971,5 +991,8 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
             db.commit()
         except Exception:
             db.rollback()
+    # `project_slug` é eco do contexto realmente aplicado, não do que veio no
+    # pedido: quando o cliente omite e a sessão já tem projeto, os dois diferem.
     return {"reply": reply, "provider": provider,
-            "session_id": str(session.id) if session else None}
+            "session_id": str(session.id) if session else None,
+            "project_slug": slug_efetivo}

@@ -1,11 +1,26 @@
 import { useState, useRef, useEffect } from "react";
-import { Trash2 } from "lucide-react";
-import { MessageBubble, PlanningPanel, type Msg } from "@/components/ai-hub";
+import { Trash2, FolderGit2 } from "lucide-react";
+import {
+  MessageBubble,
+  PlanningPanel,
+  ProjectSelector,
+  ContextDivider,
+  type Msg,
+  type ProjectOption,
+} from "@/components/ai-hub";
 
 interface SessionMeta {
   id: string;
   title: string;
   updated_at: string;
+  project_slug?: string | null;
+  project_name?: string | null;
+}
+
+/** Marca visual de troca de contexto, ancorada na posição do fluxo. */
+interface Divider {
+  index: number;
+  label: string;
 }
 
 const MODELOS = [
@@ -23,6 +38,7 @@ const MODELOS = [
   { label: "Qwen3 Coder", provider: "openrouter", model: "qwen/qwen3-coder" },
 ];
 const MODELO_STORAGE_KEY = "workdev_ai_hub_modelo";
+const PROJETO_STORAGE_KEY = "workdev_ai_hub_projeto";
 const DEFAULT_MODELO_LABEL = "Claude Opus 5";
 
 function loadStoredModelo() {
@@ -34,12 +50,24 @@ function loadStoredModelo() {
   return MODELOS.find((m) => m.label === DEFAULT_MODELO_LABEL) || MODELOS[0];
 }
 
+function loadStoredProjeto(): string | null {
+  try {
+    return localStorage.getItem(PROJETO_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export default function AIHub() {
   const [messages, setMessages] = useState<Msg[]>([]);
+  const [dividers, setDividers] = useState<Divider[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(
     () => sessionStorage.getItem("workdev_chat_session")
   );
+  // Projeto ativo. A fonte de verdade é chat_sessions.project_id no banco; o
+  // localStorage só lembra a escolha para a PRÓXIMA conversa nova.
+  const [projectSlug, setProjectSlug] = useState<string | null>(loadStoredProjeto);
   const [input, setInput] = useState("");
   const [modelo, setModelo] = useState(loadStoredModelo);
   const [loading, setLoading] = useState(false);
@@ -75,6 +103,11 @@ export default function AIHub() {
       if (!r.ok) { newChat(); return; }
       const data = await r.json();
       setMessages(data.messages);
+      // Os divisores são marcas da sessão do navegador; ao reabrir do banco a
+      // conversa volta inteira, mas sem eles. O contexto ativo é o que importa
+      // e esse vem do backend.
+      setDividers([]);
+      setProjectSlug(data.project_slug ?? null);
       setSessionId(id);
       sessionStorage.setItem("workdev_chat_session", id);
     } catch { /* silencioso */ }
@@ -82,8 +115,11 @@ export default function AIHub() {
 
   function newChat() {
     setMessages([]);
+    setDividers([]);
     setSessionId(null);
     sessionStorage.removeItem("workdev_chat_session");
+    // O projeto ativo permanece: quem está trabalhando no Feed_BPF e abre uma
+    // conversa nova quase sempre continua no Feed_BPF.
   }
 
   async function deleteSession(id: string, e: React.MouseEvent) {
@@ -94,6 +130,36 @@ export default function AIHub() {
       if (id === sessionId) newChat();
       loadSessions();
     } catch { /* silencioso */ }
+  }
+
+  async function trocarProjeto(projeto: ProjectOption | null) {
+    const slug = projeto?.slug ?? null;
+    if (slug === projectSlug) return;
+
+    setProjectSlug(slug);
+    try {
+      if (slug) localStorage.setItem(PROJETO_STORAGE_KEY, slug);
+      else localStorage.removeItem(PROJETO_STORAGE_KEY);
+    } catch { /* ignore */ }
+
+    // Conversa em andamento: não apaga nada, só marca onde o contexto virou.
+    if (messages.length > 0) {
+      setDividers((atuais) => [
+        ...atuais,
+        { index: messages.length, label: projeto?.name ?? "Global" },
+      ]);
+    }
+
+    if (sessionId) {
+      try {
+        await fetch(`/api/chat/sessions/${sessionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project_id: projeto?.id ?? null }),
+        });
+        loadSessions();
+      } catch { /* silencioso: o próximo turno reenvia o slug mesmo assim */ }
+    }
   }
 
   async function send() {
@@ -107,7 +173,13 @@ export default function AIHub() {
       const r = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next, session_id: sessionId, provider: modelo.provider, model: modelo.model }),
+        body: JSON.stringify({
+          messages: next,
+          session_id: sessionId,
+          provider: modelo.provider,
+          model: modelo.model,
+          project_slug: projectSlug,
+        }),
       });
       const data = await r.json();
       setMessages([
@@ -153,7 +225,18 @@ export default function AIHub() {
                     : "text-slate-400 hover:bg-slate-800"
                 }`}
               >
-                <span className="flex-1 truncate" title={s.title}>{s.title}</span>
+                {s.project_name && (
+                  <FolderGit2
+                    className="h-3 w-3 shrink-0 text-blue-400"
+                    aria-label={`Projeto: ${s.project_name}`}
+                  />
+                )}
+                <span
+                  className="flex-1 truncate"
+                  title={s.project_name ? `${s.project_name} · ${s.title}` : s.title}
+                >
+                  {s.title}
+                </span>
                 <button
                   onClick={(e) => deleteSession(s.id, e)}
                   className="shrink-0 opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-opacity"
@@ -167,18 +250,23 @@ export default function AIHub() {
         </div>
       )}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="mb-3 flex min-w-0 items-center gap-3">
+        <div className="mb-3 flex min-w-0 items-center gap-2 sm:gap-3">
           <button
             onClick={() => setShowSidebar(!showSidebar)}
-            className="text-slate-400 hover:text-white text-xl"
+            className="shrink-0 text-slate-400 hover:text-white text-xl"
             title="Alternar histórico"
           >
             ☰
           </button>
-          <h1 className="truncate text-2xl font-bold sm:text-3xl">AI Hub</h1>
+          <h1 className="hidden truncate text-2xl font-bold sm:block sm:text-3xl">AI Hub</h1>
+          <ProjectSelector
+            value={projectSlug}
+            onChange={trocarProjeto}
+            disabled={loading}
+          />
           <button
             onClick={() => setShowPlans(true)}
-            className="ml-auto rounded-lg border border-violet-700 bg-violet-950/60 px-3 py-2 text-sm text-violet-200 hover:bg-violet-900"
+            className="ml-auto shrink-0 rounded-lg border border-violet-700 bg-violet-950/60 px-3 py-2 text-sm text-violet-200 hover:bg-violet-900"
           >
             Planos
           </button>
@@ -186,13 +274,26 @@ export default function AIHub() {
         <div ref={messagesRef} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-4">
           {messages.length === 0 && (
             <p className="text-slate-500 text-sm">
-              Converse com o WorkDev. Ex: "quantos itens high estão pendentes?",
-              "cria uma task no nutrigestor: ajustar favicon", "status dos projetos"
+              {projectSlug
+                ? `Conversa no contexto do projeto selecionado. Ex: "continue de onde paramos", "qual é o próximo passo?", "veja o backlog".`
+                : `Converse com o WorkDev. Ex: "como estão meus projetos?", "o que precisa da minha atenção?", "status dos projetos". Selecione um projeto acima para focar o contexto.`}
             </p>
           )}
           {messages.map((m, i) => (
-            <MessageBubble key={i} msg={m} />
+            <div key={i} className="space-y-4">
+              {dividers
+                .filter((d) => d.index === i)
+                .map((d, j) => (
+                  <ContextDivider key={`d-${i}-${j}`} label={d.label} />
+                ))}
+              <MessageBubble msg={m} />
+            </div>
           ))}
+          {dividers
+            .filter((d) => d.index >= messages.length)
+            .map((d, j) => (
+              <ContextDivider key={`d-end-${j}`} label={d.label} />
+            ))}
           {loading && (
             <div className="max-w-[75%] rounded-2xl rounded-bl-sm bg-slate-800 px-4 py-2.5 text-sm text-slate-400">
               Pensando...
