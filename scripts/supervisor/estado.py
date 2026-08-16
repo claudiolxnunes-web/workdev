@@ -26,12 +26,12 @@ from __future__ import annotations
 import json
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from . import config
-from .modelo import PESO_SEVERIDADE, Achado, Fato, dias_desde
+from .modelo import PESO_SEVERIDADE, Achado, Fato, como_utc, dias_desde
 
 
 @dataclass
@@ -119,6 +119,64 @@ class Estado:
         self.diretorio.mkdir(parents=True, exist_ok=True)
         with self.arquivo_execucoes.open("a", encoding="utf-8") as arquivo:
             arquivo.write(json.dumps(metricas, ensure_ascii=False, default=str) + "\n")
+
+    def rotacionar_execucoes(
+        self, agora: datetime, dias: int | None = None
+    ) -> tuple[int, int]:
+        """Descarta execuções mais velhas que a janela. Devolve (removidas, inválidas).
+
+        Roda **antes** de gravar a linha da execução atual, para que ela
+        registre a própria limpeza que provocou.
+
+        Escrita atômica (tmp no mesmo diretório + replace) e restrita a
+        runs.jsonl: `state.json` nunca é tocado aqui.
+
+        Linha ilegível é **preservada e contada**, não apagada. Sem
+        `started_at` não há como saber a idade dela, e apagar dado que não se
+        consegue datar seria decidir por conta própria; a contagem no log
+        torna o problema visível se o arquivo começar a acumular lixo.
+        """
+        limite = dias if dias is not None else config.RETENCAO_EXECUCOES_DIAS
+        try:
+            bruto = self.arquivo_execucoes.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return 0, 0
+        except (OSError, UnicodeDecodeError):
+            return 0, 0
+
+        corte = como_utc(agora) - timedelta(days=limite)
+        mantidas: list[str] = []
+        removidas = 0
+        invalidas = 0
+
+        for linha in bruto.splitlines():
+            if not linha.strip():
+                continue
+            try:
+                inicio = como_utc(
+                    datetime.fromisoformat(json.loads(linha)["started_at"])
+                )
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                invalidas += 1
+                mantidas.append(linha)
+                continue
+            if inicio is None or inicio >= corte:
+                mantidas.append(linha)
+            else:
+                removidas += 1
+
+        if removidas == 0:
+            return 0, invalidas
+
+        with tempfile.NamedTemporaryFile(
+            "w", dir=self.diretorio, delete=False, encoding="utf-8"
+        ) as arquivo:
+            for linha in mantidas:
+                arquivo.write(linha + "\n")
+            temporario = Path(arquivo.name)
+        temporario.chmod(0o644)
+        temporario.replace(self.arquivo_execucoes)
+        return removidas, invalidas
 
     # ------------------------------------------------------- reconciliação
 

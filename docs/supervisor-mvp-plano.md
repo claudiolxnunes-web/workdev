@@ -816,7 +816,7 @@ individualmente por `CHECKS_ATIVOS` em `config.py`, sem tocar no resto.
 | E3 | `deploy_drift` + `knowledge_drift` + `agent_health` | os 5 checks produzindo Fatos; RAG derrubado → `degraded` | 4h |
 | E4 | `llm.py`: chamada única, schema, validação, modo degradado | sem `ANTHROPIC_API_KEY` o relatório sai mesmo assim | 2h |
 | E5 | `relatorio.py` + `entrega.py` (Telegram) + units systemd + `OnFailure` | mensagem chega ao Telegram; timer agendado | 1,5h |
-| E6 | Observabilidade completa + suíte de testes | 12 campos no log; `pytest` verde; varredura de segredo limpa | 2h |
+| E6 | Observabilidade completa + suíte de testes | as 11 métricas obrigatórias no log; retenção de 90 dias; `pytest` verde; varredura de segredo limpa | 2h |
 | E7 | **Semana de sombra** — roda diário, entrega só ao Cláudio, mede ruído | 7 dias de `runs.jsonl` para calibrar limiares | 1 semana |
 
 Implementação: **~15,5 horas**. Avaliação: 1 semana de sombra + 3 semanas de
@@ -843,7 +843,9 @@ repetidos.
    `llm_failures=1`, `status=degraded`.
 8. `grep -rE 'sk-|sk-ant-|eyJ|sb_secret|postgres://' /var/lib/workdev-supervisor
    /var/log/…` retorna **0 linhas**.
-9. As 12 métricas obrigatórias presentes em toda linha de `runs.jsonl`.
+9. As 11 métricas obrigatórias presentes em toda linha de `runs.jsonl`
+   (lista em `config.METRICAS_OBRIGATORIAS`; `duration` do enunciado é
+   registrado como `duration_seconds`).
 10. `kimi=offline` e `qwen=offline` não produzem nenhum achado.
 11. Nenhuma escrita em `backlog`, `execution_plans`, `agent_runs`,
     `graph_nodes`, RAG, tmux ou MCP — verificado por revisão do diff e pelo

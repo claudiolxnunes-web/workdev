@@ -275,6 +275,36 @@ SEVERIDADES_COM_REFORCO = ("critical", "high")
 VERSAO_ESTADO = 1
 
 
+# --------------------------------------------------------------------------
+# Observabilidade (etapa E6)
+# --------------------------------------------------------------------------
+
+# Contrato mínimo: estes campos existem em TODA linha de runs.jsonl, em toda
+# execução — sucesso, sem novidade, falha parcial, fallback de LLM, falha de
+# entrega, dry-run e seed. Métricas extras são bem-vindas; a ausência de uma
+# destas é defeito.
+#
+# `duration` do enunciado é registrado como `duration_seconds`, para casar com
+# o formato que o ingestor do RAG já emite.
+METRICAS_OBRIGATORIAS = (
+    "started_at",
+    "finished_at",
+    "duration_seconds",
+    "checks_executed",
+    "facts_detected",
+    "new_findings",
+    "persistent_findings",
+    "resolved_findings",
+    "llm_calls",
+    "llm_failures",
+    "status",
+)
+
+# runs.jsonl guarda 90 dias. A uma execução diária são ~90 linhas: o arquivo
+# não é o problema, mas retenção definida evita que vire depósito silencioso.
+RETENCAO_EXECUCOES_DIAS = 90
+
+
 def normalizar_prioridade(valor: str | None) -> str | None:
     """Reduz o texto livre de backlog.priority ao domínio canônico."""
     if not valor:

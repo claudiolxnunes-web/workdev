@@ -40,7 +40,7 @@ from .estado import Estado, Reconciliacao
 from .llm import ResultadoLLM, priorizar
 from .modelo import Fato, LeituraIndisponivel, agora_utc, ordenar_achados
 from .readers.db_workdev import LeitorWorkdev
-from .redacao import contem_segredo, redigir_fato
+from .redacao import contem_segredo, redigir_fato, redigir_valor
 
 
 METRICA_POR_STATUS = {
@@ -160,18 +160,28 @@ def main(argv: list[str] | None = None) -> int:
         # (CLAUDE.md, 2026-07-21). Aqui ele grita: exit 1 + OnFailure.
         erro_conexao = f"conexao:{type(erro).__name__}"
 
+    # Redação antes de qualquer coisa: o que não passar aqui não entra em
+    # estado, log, payload de LLM nem mensagem.
     fatos = [redigir_fato(fato) for fato in fatos]
 
-    # Asserção defensiva: nada sai daqui com aparência de segredo.
+    # Rede de segurança: um fato que ainda pareça carregar segredo é
+    # descartado e contado. Antes isto levantava exceção — o que matava a
+    # execução sem emitir métrica nenhuma, transformando um problema de
+    # redação em apagão de observabilidade.
+    limpos: list[Fato] = []
+    redacao_falhou = 0
     for fato in fatos:
         if contem_segredo(json.dumps(fato.to_dict(), ensure_ascii=False)):
-            raise RuntimeError(f"redação falhou no fato {fato.fingerprint}")
+            redacao_falhou += 1
+            continue
+        limpos.append(fato)
+    fatos = limpos
 
     falhos = [n for n, d in desfechos.items() if d.startswith("failed")]
     degradados = [n for n, d in desfechos.items() if d.startswith("degraded")]
     confiaveis = [n for n, d in desfechos.items() if d == "ok"]
 
-    if erro_conexao or falhos:
+    if erro_conexao or falhos or redacao_falhou:
         status = "failed"
     elif degradados:
         status = "degraded"
@@ -247,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
             "delivery": resultado_entrega.estado,
             "delivery_chars": resultado_entrega.caracteres,
             "state_persisted": int(deve_persistir),
+            "redaction_failures": redacao_falhou,
             "estado_recuperado": int(reconciliacao.estado_recuperado),
             "seed": int(args.seed),
             "dry_run": int(args.dry_run),
@@ -257,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
         status = "degraded"
         metricas["status"] = status
 
+    if redacao_falhou:
+        metricas["status"] = status
     problemas = [d for d in desfechos.values() if d != "ok"]
     if erro_conexao:
         problemas.append(erro_conexao)
@@ -264,8 +277,28 @@ def main(argv: list[str] | None = None) -> int:
         problemas.append(f"llm:{llm.erro}")
     if resultado_entrega.erro:
         problemas.append(f"entrega:{resultado_entrega.erro}")
+    if redacao_falhou:
+        problemas.append(f"redacao:{redacao_falhou}")
     if problemas:
         metricas["failures"] = ";".join(problemas)
+
+    # Rotação antes de gravar, para que a linha desta execução registre a
+    # limpeza que ela mesma provocou. Só mexe em runs.jsonl.
+    if not args.dry_run:
+        removidas, invalidas = estado.rotacionar_execucoes(agora)
+    else:
+        removidas, invalidas = 0, 0
+    metricas["log_entries_pruned"] = removidas
+    metricas["log_invalid_lines"] = invalidas
+
+    # Última barreira antes de sair para journal e disco: nenhum valor de
+    # métrica pode carregar segredo. `llm_model` vem de --modelo, que é
+    # entrada externa.
+    metricas = redigir_valor(metricas)
+
+    faltando = [c for c in config.METRICAS_OBRIGATORIAS if c not in metricas]
+    if faltando:
+        metricas["missing_required_metrics"] = ",".join(faltando)
 
     if not args.dry_run:
         estado.registrar_execucao(metricas)
