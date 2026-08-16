@@ -1,10 +1,14 @@
 """Ponto de entrada do WorkDev Supervisor.
 
-Etapas E1 + E2 do plano: camada de leitura somente-leitura, os dois checks de
-backlog, e a deduplicação com estado em disco. Ainda sem LLM, sem timer e sem
-entrega — de propósito. A ordem E2 (deduplicação) antes de E5 (entrega) é
-inegociável: notificar antes de deduplicar transforma a primeira semana num
-despejo diário dos mesmos itens.
+Etapas E1 a E3 do plano: camada de leitura somente-leitura, os cinco checks
+determinísticos e a deduplicação com estado em disco. Ainda sem LLM, sem
+timer e sem entrega — de propósito. A ordem E2 (deduplicação) antes de E5
+(entrega) é inegociável: notificar antes de deduplicar transforma a primeira
+semana num despejo diário dos mesmos itens.
+
+Nenhuma requisição de rede sai daqui. As fontes são dois Postgres em modo
+somente leitura, comandos git de leitura, `systemctl show`, `ss -tln` e dois
+arquivos em disco.
 
 Uso (sempre a partir de /opt/workdev, sempre no venv da API):
 
@@ -27,6 +31,7 @@ from typing import Any, TextIO
 
 from . import config
 from .checks import REGISTRO
+from .contexto import Contexto
 from .estado import Estado, Reconciliacao
 from .modelo import Fato, LeituraIndisponivel, agora_utc, ordenar_achados
 from .readers.db_workdev import LeitorWorkdev
@@ -44,7 +49,7 @@ METRICA_POR_STATUS = {
 
 
 def executar_checks(
-    leitor: Any, nomes: list[str], agora: datetime
+    contexto: Contexto, nomes: list[str]
 ) -> tuple[list[Fato], dict[str, str]]:
     """Roda os checks pedidos, isolando a falha de um do resto.
 
@@ -58,7 +63,7 @@ def executar_checks(
     for nome in nomes:
         modulo = REGISTRO[nome]
         try:
-            fatos.extend(modulo.coletar(leitor, agora))
+            fatos.extend(modulo.coletar(contexto))
             desfechos[nome] = "ok"
         except LeituraIndisponivel as erro:
             desfechos[nome] = f"degraded:{erro}"
@@ -151,7 +156,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with LeitorWorkdev() as leitor:
-            fatos, desfechos = executar_checks(leitor, nomes, agora)
+            contexto = Contexto(agora=agora, workdev=leitor)
+            try:
+                fatos, desfechos = executar_checks(contexto, nomes)
+            finally:
+                contexto.fechar()
     except Exception as erro:  # noqa: BLE001
         # O Postgres do WorkDev fora do ar não é degradação: é incidente. Já
         # houve um caso de rota pendurando em silêncio por causa disso

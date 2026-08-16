@@ -9,9 +9,9 @@ testar sem banco.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from .. import config
+from ..contexto import Contexto
 from ..modelo import Fato, classificar, dias_desde
 
 
@@ -44,8 +44,8 @@ SELECT p.name                    AS projeto,
 """
 
 
-def coletar(leitor: Any, agora: datetime) -> list[Fato]:
-    linhas = leitor.consultar(
+def coletar(contexto: Contexto) -> list[Fato]:
+    linhas = contexto.workdev.consultar(
         SQL,
         {
             "status_abertos": list(config.STATUS_ABERTOS),
@@ -53,7 +53,7 @@ def coletar(leitor: Any, agora: datetime) -> list[Fato]:
             "limite_dias": min(config.CRITICAL_STALLED_DIAS.values()),
         },
     )
-    return avaliar(linhas, agora)
+    return avaliar(linhas, contexto.agora)
 
 
 def avaliar(linhas: list[dict], agora: datetime) -> list[Fato]:

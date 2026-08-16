@@ -91,7 +91,101 @@ RUN_TRAVADO_DIAS = 2
 FAIXAS_IDADE_TASK = ((15, "7-14"), (31, "15-30"), (61, "31-60"), (None, "60+"))
 FAIXAS_IDADE_PLANO = ((8, "3-7"), (22, "8-21"), (None, "22+"))
 
-CHECKS_ATIVOS = ("critical_stalled", "plan_without_execution")
+CHECKS_ATIVOS = (
+    "critical_stalled",
+    "plan_without_execution",
+    "deploy_drift",
+    "knowledge_drift",
+    "agent_health",
+)
+
+
+# --------------------------------------------------------------------------
+# deploy_drift
+# --------------------------------------------------------------------------
+
+BRANCH_TRABALHO = "develop"
+BRANCH_PRODUCAO = "main"
+REMOTO = "origin"
+
+# Commits que só existem nesta VPS: risco de perda, não de qualidade. Só
+# vira achado depois de passar da janela — commitar e empurrar no mesmo dia
+# é fluxo normal.
+COMMITS_NAO_ENVIADOS_DIAS = 2
+
+UNIT_API = "workdev-api"
+PORTA_API = 8000
+DIRETORIO_MIGRATIONS = "apps/api/alembic/versions"
+
+# Onde o build e o serviço leem o código. `deploy.sh` builda a partir da
+# árvore de trabalho, não de um commit — por isso arquivo modificado e não
+# commitado já está em produção.
+CAMINHO_BUILD = "apps/web/dist/index.html"
+FONTES_FRONTEND = "apps/web/src"
+FONTES_BACKEND = "apps/api/app"
+
+FAIXAS_CONTAGEM = ((2, "1"), (6, "2-5"), (21, "6-20"), (51, "21-50"), (None, "50+"))
+
+
+# --------------------------------------------------------------------------
+# knowledge_drift
+# --------------------------------------------------------------------------
+
+RAG_ENV_FILE = Path(os.environ.get("SUPERVISOR_RAG_ENV", "/opt/rag-postgres/.env"))
+RAG_HOST = os.environ.get("SUPERVISOR_RAG_HOST", "127.0.0.1")
+RAG_PORTA = int(os.environ.get("SUPERVISOR_RAG_PORTA", "5433"))
+RAG_FONTE = "workdev"
+
+# Espelha ALVOS de /opt/rag-postgres/ingestor.py: (subcaminho, tipo, é_diretório).
+# Cópia com detector de divergência, como ACTIVE_RUN_STATUSES — o ingestor
+# não é importável daqui sem arrastar dependências e credenciais.
+RAG_RAIZES = (
+    ("docs/adr", "adr", True),
+    ("decisions", "decision", True),
+    ("backlog.md", "backlog", False),
+    ("knowledge", "knowledge", True),
+)
+
+ARQUIVO_BACKLOG_EXPORTADO = "backlog.md"
+
+# Tabelas com endpoint ativo e nenhuma linha: estrutura que compete com
+# outra sem ser usada. Achado informativo, reportado uma vez.
+TABELAS_VIGIADAS_VAZIAS = ("decisions", "rfcs")
+
+FAIXAS_REGISTROS = ((6, "1-5"), (21, "6-20"), (101, "21-100"), (None, "100+"))
+BACKLOG_MD_TOLERANCIA_ITENS = 5
+BACKLOG_MD_TOLERANCIA_DIAS = 7
+
+
+# --------------------------------------------------------------------------
+# agent_health
+# --------------------------------------------------------------------------
+
+AGENTS_STATUS_FILE = Path(
+    os.environ.get("SUPERVISOR_AGENTS_STATUS", "/var/lib/agents-healthcheck/status.json")
+)
+
+# Política vigente. Kimi e Qwen offline são decisão, não incidente.
+AGENTES_SEMPRE_ATIVOS = ("claude", "codex")
+AGENTES_STANDBY_PERMITIDO = ("kimi", "qwen")
+
+# O healthcheck roda a cada 5 min. Estado mais velho que isto significa que
+# a supervisão parou — hoje o único sinal disso no sistema inteiro.
+IDADE_MAXIMA_ESTADO_MINUTOS = 20
+
+# Motivos que são problema mesmo em agente de standby: chave recusada não é
+# decisão de política.
+MOTIVOS_DE_CREDENCIAL = ("authentication", "billing", "api_key")
+
+# Agente sempre-ativo ocioso enquanto existe fila parada.
+#
+# Só `queued` conta como fila: é o estado de quem espera alguém pegar. Um run
+# `blocked` espera intervenção humana e já é reportado por
+# plan_without_execution.run_stalled; `running` sem evento também. Incluir os
+# três faria o mesmo problema aparecer em dois checks — verificado contra os
+# dois runs `blocked` do codex de 05-06/08.
+FILA_STATUS = ("queued",)
+FILA_PARADA_HORAS = 6
 
 
 # --------------------------------------------------------------------------

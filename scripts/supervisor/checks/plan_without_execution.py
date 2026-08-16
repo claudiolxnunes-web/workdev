@@ -13,9 +13,9 @@ em 2026-08-16, um pertence a uma task já concluída. Sem ele o check nasce com
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from .. import config
+from ..contexto import Contexto
 from ..modelo import Fato, classificar, dias_desde
 
 
@@ -53,15 +53,15 @@ SELECT pr.name              AS projeto,
 """
 
 
-def coletar(leitor: Any, agora: datetime) -> list[Fato]:
-    linhas = leitor.consultar(
+def coletar(contexto: Contexto) -> list[Fato]:
+    linhas = contexto.workdev.consultar(
         SQL,
         {
             "projetos_ignorados": list(config.PROJETOS_IGNORADOS),
             "ativos": list(config.ACTIVE_RUN_STATUSES),
         },
     )
-    return avaliar(linhas, agora)
+    return avaliar(linhas, contexto.agora)
 
 
 def avaliar(linhas: list[dict], agora: datetime) -> list[Fato]:

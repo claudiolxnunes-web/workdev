@@ -18,7 +18,9 @@ sys.path.insert(0, str(RAIZ / "scripts"))
 
 from supervisor import config  # noqa: E402
 from supervisor.checks import REGISTRO  # noqa: E402
-from supervisor.modelo import agora_utc  # noqa: E402
+from supervisor.contexto import Contexto  # noqa: E402
+from supervisor.modelo import LeituraIndisponivel, agora_utc  # noqa: E402
+from supervisor.readers.db_rag import LeitorRag  # noqa: E402
 from supervisor.readers.db_workdev import LeitorWorkdev  # noqa: E402
 
 
@@ -63,46 +65,79 @@ class SomenteLeituraTest(unittest.TestCase):
 class ContratoDoSqlTest(unittest.TestCase):
     """As queries batem com o schema atual — sem avaliar linha nenhuma."""
 
+    COLUNAS = {
+        "critical_stalled": {
+            "projeto", "project_id", "backlog_id", "titulo", "prioridade",
+            "status", "owner", "updated_at", "subtasks_abertas",
+            "planos_aprovados", "ultima_execucao",
+        },
+        "plan_without_execution": {
+            "projeto", "project_id", "backlog_id", "task", "task_status",
+            "task_priority", "plano_id", "plano", "versao", "approved_at",
+            "run_id", "agente", "run_status", "run_updated_at",
+        },
+    }
+
     def test_queries_executam_e_expoem_as_colunas_esperadas(self):
-        esperado = {
-            "critical_stalled": {
-                "projeto", "project_id", "backlog_id", "titulo", "prioridade",
-                "status", "owner", "updated_at", "subtasks_abertas",
-                "planos_aprovados", "ultima_execucao",
-            },
-            "plan_without_execution": {
-                "projeto", "project_id", "backlog_id", "task", "task_status",
-                "task_priority", "plano_id", "plano", "versao", "approved_at",
-                "run_id", "agente", "run_status", "run_updated_at",
-            },
-        }
+        # Só os checks com uma query principal. deploy_drift e agent_health
+        # leem git, systemd e arquivo; knowledge_drift tem várias queries
+        # pequenas — todos cobertos pelo teste de execução abaixo.
         with LeitorWorkdev() as leitor:
-            for nome, modulo in REGISTRO.items():
-                linhas = leitor.consultar(
-                    f"SELECT * FROM ({modulo.SQL}) AS amostra LIMIT 0", PARAMETROS
+            for nome, colunas in self.COLUNAS.items():
+                sql = REGISTRO[nome].SQL
+                self.assertEqual(
+                    leitor.consultar(f"SELECT * FROM ({sql}) AS amostra LIMIT 0", PARAMETROS),
+                    [],
+                    nome,
                 )
-                self.assertEqual(linhas, [], nome)
-                # LIMIT 0 não devolve linhas; a checagem de colunas usa 1 linha.
                 amostra = leitor.consultar(
-                    f"SELECT * FROM ({modulo.SQL}) AS amostra LIMIT 1", PARAMETROS
+                    f"SELECT * FROM ({sql}) AS amostra LIMIT 1", PARAMETROS
                 )
                 if amostra:
                     self.assertTrue(
-                        esperado[nome].issubset(amostra[0].keys()),
-                        f"{nome}: colunas faltando "
-                        f"{esperado[nome] - set(amostra[0].keys())}",
+                        colunas.issubset(amostra[0].keys()),
+                        f"{nome}: colunas faltando {colunas - set(amostra[0].keys())}",
                     )
 
     def test_checks_completam_contra_dados_reais(self):
         agora = agora_utc()
         with LeitorWorkdev() as leitor:
-            for nome, modulo in REGISTRO.items():
-                fatos = modulo.coletar(leitor, agora)
-                for fato in fatos:
-                    self.assertEqual(fato.check, nome)
-                    self.assertTrue(fato.fingerprint)
-                    self.assertTrue(fato.titulo)
-                    self.assertIn(fato.severity, ("critical", "high", "medium", "info"))
+            contexto = Contexto(agora=agora, workdev=leitor)
+            try:
+                for nome, modulo in REGISTRO.items():
+                    try:
+                        fatos = modulo.coletar(contexto)
+                    except LeituraIndisponivel:
+                        continue  # fonte opcional fora do ar degrada, não falha
+                    for fato in fatos:
+                        self.assertEqual(fato.check, nome)
+                        self.assertTrue(fato.fingerprint)
+                        self.assertTrue(fato.titulo)
+                        self.assertIn(
+                            fato.severity, ("critical", "high", "medium", "info")
+                        )
+                        self.assertTrue(fato.bucket, f"{nome} sem bucket")
+            finally:
+                contexto.fechar()
+
+    def test_todos_os_checks_ativos_estao_registrados(self):
+        for nome in config.CHECKS_ATIVOS:
+            self.assertIn(nome, REGISTRO, f"{nome} está em CHECKS_ATIVOS mas não no REGISTRO")
+
+
+class LeituraDoRagTest(unittest.TestCase):
+    """O índice do RAG também é aberto em modo somente leitura."""
+
+    def test_rag_recusa_escrita_ou_esta_indisponivel(self):
+        import psycopg
+
+        try:
+            with LeitorRag() as leitor:
+                self.assertTrue(leitor.consultar("SELECT 1 AS um"))
+                with self.assertRaises(psycopg.errors.ReadOnlySqlTransaction):
+                    leitor.consultar("CREATE TEMP TABLE supervisor_probe(x int)")
+        except LeituraIndisponivel:
+            self.skipTest("Postgres do RAG indisponível")
 
 
 if __name__ == "__main__":

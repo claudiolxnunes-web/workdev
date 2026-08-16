@@ -8,6 +8,8 @@ recebe Fatos prontos e devolve apenas prioridade e prosa.
 from __future__ import annotations
 
 import hashlib
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
@@ -44,6 +46,29 @@ def dias_desde(momento: datetime | None, agora: datetime) -> int | None:
     if momento is None:
         return None
     return (como_utc(agora) - momento).days
+
+
+_PREFIXO_ADR = re.compile(r"^adr[\s\-—:]*\d*[\s\-—:]*", re.IGNORECASE)
+
+
+def normalizar_titulo(texto: str | None) -> str:
+    """Reduz um título à forma comparável entre stores diferentes.
+
+    O mesmo ADR aparece como linha em `knowledge`, como linha em `adrs` e
+    como arquivo em `decisions/` — com numeração, travessão e acentuação
+    divergentes. A comparação é exata sobre esta forma normalizada: nada de
+    similaridade difusa, que não seria determinística o bastante para virar
+    fingerprint.
+    """
+    if not texto:
+        return ""
+    sem_acento = "".join(
+        caractere
+        for caractere in unicodedata.normalize("NFKD", texto)
+        if not unicodedata.combining(caractere)
+    )
+    limpo = _PREFIXO_ADR.sub("", sem_acento.strip().lower())
+    return " ".join(limpo.replace("—", " ").replace("-", " ").split())
 
 
 def classificar(valor: int, faixas: Sequence[tuple[int | None, str]]) -> tuple[str, int]:
