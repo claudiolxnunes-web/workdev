@@ -58,6 +58,12 @@ def test_unit_api_recebe_grupo_somente_no_processo_do_servico():
     assert "WorkingDirectory=/opt/workdev-runtime/current/apps/api" in unit
 
 
+def test_unit_api_enxerga_socket_tmux_dos_agentes():
+    unit = (ROOT / "scripts/deploy/systemd/workdev-api.service").read_text()
+    assert "PrivateTmp=false" in unit
+    assert "PrivateTmp=true" not in unit
+
+
 def test_agentes_nao_recebem_grupo_do_runtime():
     for name in ("workdev-agents.service", "workdev-agents-health.service"):
         unit = (ROOT / "scripts/deploy/systemd" / name).read_text()

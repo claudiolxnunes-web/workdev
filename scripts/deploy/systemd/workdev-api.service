@@ -14,7 +14,9 @@ ExecStart=/opt/workdev/apps/api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --p
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
-PrivateTmp=true
+# The Agent Hub attaches to the workdev-owned tmux socket in /tmp/tmux-<uid>.
+# A private /tmp would hide that socket from the API process.
+PrivateTmp=false
 
 [Install]
 WantedBy=multi-user.target

@@ -61,7 +61,8 @@ Novos caminhos:
 ## Units candidatas
 
 - `workdev-api.service`: `User=workdev`, release `current`, env externo e
-  `SupplementaryGroups=workdev-runtime`;
+  `SupplementaryGroups=workdev-runtime`; mantém `PrivateTmp=false` porque o
+  Agent Hub precisa acessar o socket tmux do mesmo UID em `/tmp/tmux-<uid>`;
 - `workdev-agents.service` e `workdev-agents-health.service`: `User=workdev` e
   `HOME=/home/workdev`;
 - `workdev-supervisor.service` e `workdev-supervisor-falhou.service`:
