@@ -39,6 +39,19 @@ def test_broker_usa_sudo_nao_interativo_para_restart(monkeypatch):
     )
 
 
+def test_prepare_executa_gate_imutavel_com_privilegio_minimo(monkeypatch):
+    called = Mock(side_effect=RuntimeError("gate executado"))
+    monkeypatch.setattr(broker, "run", called)
+    args = SimpleNamespace()
+
+    with pytest.raises(RuntimeError, match="gate executado"):
+        broker.prepare(args, b"k" * 32)
+
+    called.assert_called_once_with(
+        ["sudo", "-n", "/usr/local/libexec/workdev-predeploy-gate"]
+    )
+
+
 def test_release_manager_exige_grupo_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(broker.grp, "getgrnam", lambda _: SimpleNamespace(gr_gid=4567))
     monkeypatch.setattr(os, "getgroups", lambda: [1234])

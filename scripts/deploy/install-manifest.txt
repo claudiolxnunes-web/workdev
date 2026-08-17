@@ -9,5 +9,6 @@ scripts/deploy/release_manager.py /usr/local/lib/workdev-deploy/release_manager.
 verificar-deploy.sh /usr/local/lib/workdev-deploy/verificar-deploy.sh root:root:0755
 scripts/deploy/workdev-deployctl /usr/local/sbin/workdev-deployctl root:root:0755
 scripts/deploy/workdev-deploy-readcheck /usr/local/libexec/workdev-deploy-readcheck root:root:0755
+scripts/deploy/workdev-predeploy-gate /usr/local/libexec/workdev-predeploy-gate root:root:0755
 scripts/deploy/systemd/workdev-deploy.sudoers /etc/sudoers.d/workdev-deploy root:root:0440
 scripts/deploy/systemd/workdev-supervisor.tmpfiles /etc/tmpfiles.d/workdev-supervisor.conf root:root:0644

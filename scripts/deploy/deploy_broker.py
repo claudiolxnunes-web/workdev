@@ -80,13 +80,7 @@ def load(path: Path) -> dict:
 
 
 def prepare(args, key: bytes) -> str:
-    gate = Path(__file__).resolve().parent / "verificar-deploy.sh"
-    environment = {**os.environ, "WORKDEV_DEPLOY_LIB": str(gate.parent)}
-    subprocess.run(
-        ["timeout", "240", "bash", str(gate), "--testes"],
-        check=True,
-        env=environment,
-    )
+    run(["sudo", "-n", "/usr/local/libexec/workdev-predeploy-gate"])
     proof = issue_proof(args.root, args.artifact, args.project, key, args.ttl)
     proof_id = proof["proof_id"]
     manager = release_manager(args.runtime)

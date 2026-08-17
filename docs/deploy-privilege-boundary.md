@@ -4,7 +4,8 @@ Estado: implementação preparada, ainda não ativada em produção.
 
 ## Fluxo obrigatório
 
-1. `workdev-deployctl prepare` executa testes e `verificar-deploy.sh`.
+1. `workdev-deployctl prepare` chama um helper root-owned sem argumentos, que
+   executa testes e o `verificar-deploy.sh` imutável como `workdev`.
 2. O broker emite prova PASS assinada, limitada ao projeto, commit, conteúdo
    versionado, artefato e prazo.
 3. `workdev-deployctl approve <proof_id> --actor <identidade>` emite aprovação
@@ -99,6 +100,7 @@ todos os objetos da release.
 | `/usr/local/lib/workdev-deploy` | `root:root` | dir `0755`, módulos `0644`/executáveis `0755` | broker lê/executa | nenhum usuário operacional escreve |
 | `/usr/local/sbin/workdev-deployctl` | `root:root` | `0755` | root executa; valida broker | usuários operacionais não alteram; não-root é recusado |
 | `/usr/local/libexec/workdev-deploy-readcheck` | `root:root` | `0755` | sudo restrito do broker | usuários operacionais não alteram; operações fixas |
+| `/usr/local/libexec/workdev-predeploy-gate` | `root:root` | `0755` | broker chama via sudo; gate roda como `workdev` | sem argumentos e sem código da árvore mutável |
 | `/etc/sudoers.d/workdev-deploy` | `root:root` | `0440` | sudo/root lê | usuários operacionais não alteram |
 | `/opt/workdev/deploy.sh` | `root:root` | `0755` + immutable | root chama cliente | `workdev` não altera nem substitui |
 

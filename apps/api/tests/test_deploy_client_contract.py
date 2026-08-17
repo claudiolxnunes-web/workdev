@@ -12,6 +12,9 @@ SUDOERS = (
 READCHECK = (
     ROOT / "scripts/deploy/workdev-deploy-readcheck"
 ).read_text(encoding="utf-8")
+PREDEPLOY = (
+    ROOT / "scripts/deploy/workdev-predeploy-gate"
+).read_text(encoding="utf-8")
 
 
 def test_deploy_cliente_exige_prova_e_usuario_dedicado():
@@ -45,6 +48,14 @@ def test_helper_privilegiado_tem_apenas_leituras_fixadas():
         assert forbidden not in READCHECK
 
 
+def test_helper_predeploy_executa_gate_imutavel_como_workdev():
+    assert '"$#" -eq 0' in PREDEPLOY
+    assert "runuser -u workdev" in PREDEPLOY
+    assert "WORKDEV_DEPLOY_LIB=/usr/local/lib/workdev-deploy" in PREDEPLOY
+    assert "/usr/local/lib/workdev-deploy/verificar-deploy.sh --testes" in PREDEPLOY
+    assert "/opt/workdev/verificar-deploy.sh" not in PREDEPLOY
+
+
 def test_controlador_executa_copia_imutavel_com_usuario_dedicado():
     assert "/usr/local/lib/workdev-deploy/deploy_broker.py" in CONTROLLER
     assert "root:root:755" in CONTROLLER
@@ -57,3 +68,4 @@ def test_manifest_instala_gate_e_broker_fora_da_arvore_mutavel():
     assert "/usr/local/lib/workdev-deploy/deploy_broker.py root:root:0755" in manifest
     assert "/usr/local/lib/workdev-deploy/verificar-deploy.sh root:root:0755" in manifest
     assert "deploy.sh /opt/workdev/deploy.sh root:root:0755+immutable" in manifest
+    assert "/usr/local/libexec/workdev-predeploy-gate root:root:0755" in manifest
