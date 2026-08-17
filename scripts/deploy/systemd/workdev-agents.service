@@ -1,0 +1,19 @@
+[Unit]
+Description=WorkDev agents bootstrap
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=workdev
+Group=workdev
+Environment=HOME=/home/workdev
+Environment=WORKDEV_ENV_FILE=/etc/workdev/workdev-api.env
+Environment=AGENTS_ALERT_ENV=/etc/workdev/agents-alert.env
+WorkingDirectory=/opt/workdev
+RemainAfterExit=yes
+ExecStart=/opt/workdev/scripts/bootstrap_agents.sh
+ExecReload=/opt/workdev/scripts/agents_healthcheck.py --once
+
+[Install]
+WantedBy=multi-user.target

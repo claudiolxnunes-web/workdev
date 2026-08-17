@@ -1,0 +1,10 @@
+title = "WorkDev Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Supabase publishable keys são públicas por definição"
+regexes = [
+  '''sb_publishable_[A-Za-z0-9_-]+'''
+]

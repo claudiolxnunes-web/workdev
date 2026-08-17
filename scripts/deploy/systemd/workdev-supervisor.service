@@ -1,0 +1,28 @@
+[Unit]
+Description=WorkDev Supervisor - observacao somente leitura
+After=network-online.target docker.service workdev-api.service
+Wants=network-online.target
+OnFailure=workdev-supervisor-falhou.service
+
+[Service]
+Type=oneshot
+User=workdev
+Group=workdev
+WorkingDirectory=/opt/workdev
+Environment=HOME=/home/workdev
+Environment=SUPERVISOR_ENV_FILE=/etc/workdev/workdev-api.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/flock -n /run/lock/workdev-supervisor.lock /opt/workdev/apps/api/venv/bin/python -m scripts.supervisor --once
+TimeoutStartSec=300
+Nice=10
+ProtectSystem=strict
+ReadWritePaths=/var/lib/workdev-supervisor /run/lock
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

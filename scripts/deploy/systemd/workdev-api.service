@@ -1,0 +1,19 @@
+[Unit]
+Description=WorkDev API (FastAPI)
+After=network.target docker.service
+
+[Service]
+User=workdev
+Group=workdev
+SupplementaryGroups=workdev-runtime
+Environment=HOME=/home/workdev
+Environment=WORKDEV_API_ENV_FILE=/etc/workdev/workdev-api.env
+WorkingDirectory=/opt/workdev-runtime/current/apps/api
+ExecStart=/opt/workdev/apps/api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

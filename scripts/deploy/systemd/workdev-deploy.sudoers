@@ -1,0 +1,4 @@
+# Validar com visudo -cf antes de instalar em /etc/sudoers.d/workdev-deploy.
+workdev-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart workdev-api.service
+workdev-deploy ALL=(root) NOPASSWD: /usr/local/libexec/workdev-deploy-readcheck port
+workdev-deploy ALL=(root) NOPASSWD: /usr/local/libexec/workdev-deploy-readcheck journal

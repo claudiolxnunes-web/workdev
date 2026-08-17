@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+BROKER=/usr/local/lib/workdev-deploy/deploy_broker.py
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "BLOQUEIA: approval gate administrativo obrigatorio" >&2
+    exit 1
+fi
+if [ ! -f "$BROKER" ] || [ "$(stat -c '%U:%G:%a' "$BROKER")" != "root:root:755" ]; then
+    echo "BLOQUEIA: broker confiavel ausente ou com ownership invalido" >&2
+    exit 1
+fi
+
+exec runuser -u workdev-deploy -- /usr/bin/python3 "$BROKER" "$@"

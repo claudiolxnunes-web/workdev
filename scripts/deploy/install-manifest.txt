@@ -1,0 +1,13 @@
+# Origem versionada -> destino live -> owner:group:mode
+deploy.sh /opt/workdev/deploy.sh root:root:0755+immutable
+scripts/deploy/deploy_broker.py /usr/local/lib/workdev-deploy/deploy_broker.py root:root:0755
+scripts/deploy/deploy_proof.py /usr/local/lib/workdev-deploy/deploy_proof.py root:root:0644
+scripts/deploy/pipeline.py /usr/local/lib/workdev-deploy/pipeline.py root:root:0644
+scripts/deploy/post_deploy_gate.py /usr/local/lib/workdev-deploy/post_deploy_gate.py root:root:0755
+scripts/deploy/predeploy_checks.py /usr/local/lib/workdev-deploy/predeploy_checks.py root:root:0644
+scripts/deploy/release_manager.py /usr/local/lib/workdev-deploy/release_manager.py root:root:0644
+verificar-deploy.sh /usr/local/lib/workdev-deploy/verificar-deploy.sh root:root:0755
+scripts/deploy/workdev-deployctl /usr/local/sbin/workdev-deployctl root:root:0755
+scripts/deploy/workdev-deploy-readcheck /usr/local/libexec/workdev-deploy-readcheck root:root:0755
+scripts/deploy/systemd/workdev-deploy.sudoers /etc/sudoers.d/workdev-deploy root:root:0440
+scripts/deploy/systemd/workdev-supervisor.tmpfiles /etc/tmpfiles.d/workdev-supervisor.conf root:root:0644

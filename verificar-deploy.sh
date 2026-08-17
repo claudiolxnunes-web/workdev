@@ -3,19 +3,20 @@
 # Nao faz deploy. Retorna 0 se liberado, 1 se bloqueado.
 #
 # Uso:
-#   bash /opt/workdev/verificacao.sh
-#   bash /opt/workdev/verificacao.sh --testes     # roda pytest tambem
-#   bash /opt/workdev/verificacao.sh && bash /opt/workdev/deploy.sh
+#   bash /opt/workdev/verificar-deploy.sh
+#   bash /opt/workdev/verificar-deploy.sh --testes     # roda pytest tambem
+#   bash /opt/workdev/verificar-deploy.sh && bash /opt/workdev/deploy.sh
 #
 # BLOQUEIA: build quebrado, sintaxe Python invalida, segredo versionado,
 #           mais de um processo na porta 8000.
-# AVISA:    arquivo nao commitado, alteracao fora de /opt/workdev.
+# AVISA:    arquivo nao commitado ou fora dos diretorios esperados do repo.
 
 set -uo pipefail
 
 RAIZ="/opt/workdev"
 API="$RAIZ/apps/api"
 WEB="$RAIZ/apps/web"
+CHECKS="${WORKDEV_DEPLOY_LIB:-$RAIZ/scripts/deploy}/predeploy_checks.py"
 
 bloqueios=0
 avisos=0
@@ -49,50 +50,63 @@ fi
 # --------------------------------------------------- 2. escopo das alteracoes
 titulo "2. Escopo"
 
-fora=$(git status --porcelain | awk '{print $2}' | grep -v '^apps/\|^scripts/\|^docs/\|^decisions/\|\.md$' || true)
-if [[ -z "$fora" ]]; then
-  ok "alteracoes dentro do escopo esperado"
+# O Git so conhece arquivos dentro do repositorio. Aqui ha duas garantias:
+# nenhum caminho reportado escapa da raiz canonica e mudancas fora dos
+# diretorios usuais sao explicitamente avisadas (nao fingimos observar /opt).
+mapfile -d '' caminhos_sujos < <(git status --porcelain=v1 -z | cut -z -c4-)
+if fora_raiz=$(printf '%s\0' "${caminhos_sujos[@]}" | xargs -0 -r "$API/venv/bin/python" "$CHECKS" scope "$RAIZ" 2>/dev/null); then
+  ok "nenhum caminho do repositorio escapa de $RAIZ"
 else
-  avisa "arquivos fora de apps/, scripts/, docs/:"
-  echo "$fora" | sed 's/^/          /'
+  bloqueia "caminho fora da raiz canonica detectado:"
+  echo "$fora_raiz" | sed 's/^/          /'
+fi
+
+fora_esperado=$(printf '%s\n' "${caminhos_sujos[@]}" | grep -v '^apps/\|^scripts/\|^docs/\|^decisions/\|^[^/]*\.md$\|^deploy\.sh$\|^verificar-deploy\.sh$\|^\.gitleaks\.toml$' || true)
+if [[ -z "$fora_esperado" ]]; then
+  ok "alteracoes dentro dos diretorios esperados"
+else
+  avisa "alteracoes fora dos diretorios esperados do repositorio:"
+  echo "$fora_esperado" | sed 's/^/          /'
 fi
 
 
 # ------------------------------------------------------------- 3. segredos
 titulo "3. Segredos em arquivo versionado"
 
-# Procura padroes de chave apenas no que esta rastreado pelo git,
-# ignorando .env (que nao deve estar versionado) e o proprio script.
-achados=$(git grep -lE "sk-proj-[A-Za-z0-9]{20}|sk-or-v1-[A-Za-z0-9]{20}|eyJhbGciOiJIUzI1NiIs" -- \
-            ':!*.env' ':!verificar-deploy.sh' ':!skills/*' ':!*.lock' ':!pnpm-lock.yaml' 2>/dev/null || true)
+if ! command -v gitleaks >/dev/null 2>&1; then
+  bloqueia "gitleaks nao instalado; varredura principal de secrets indisponivel"
+elif [[ ! -f "$RAIZ/.gitleaks.toml" ]]; then
+  bloqueia ".gitleaks.toml nao encontrado"
+elif saida_gitleaks=$(gitleaks git --no-banner --redact --config "$RAIZ/.gitleaks.toml" \
+                       --log-opts="-1 HEAD" "$RAIZ" 2>&1); then
+  ok "gitleaks nao encontrou secrets no commit candidato"
+else
+  bloqueia "gitleaks encontrou possivel secret (valores redigidos):"
+  echo "$saida_gitleaks" | tail -20 | sed 's/^/          /'
+fi
 
-if [[ -z "$achados" ]]; then
-  ok "nenhuma chave aparente em arquivo versionado"
+# Segunda camada: examina o estado atual de todos os arquivos rastreados. Isso
+# cobre secrets antigos que nao aparecem no diff do ultimo commit e garante que
+# apenas nomes de arquivos, nunca os valores, cheguem a saida.
+if achados=$("$API/venv/bin/python" "$CHECKS" secrets "$RAIZ" 2>/dev/null); then
+  ok "scanner complementar nao encontrou secrets versionados"
 else
   bloqueia "possivel segredo versionado em:"
   echo "$achados" | sed 's/^/          /'
 fi
 
-if git ls-files --error-unmatch apps/api/.env >/dev/null 2>&1; then
-  bloqueia "apps/api/.env esta versionado no git"
-else
-  ok ".env fora do controle de versao"
-fi
-
-
 # ------------------------------------------------------- 4. sintaxe Python
 titulo "4. Sintaxe Python"
 
 if [[ -x "$API/venv/bin/python" ]]; then
-  erros=$("$API/venv/bin/python" -m compileall -q "$API/app" "$RAIZ/scripts" 2>&1 | head -20)
-  if [[ -z "$erros" ]]; then
-    ok "app/ e scripts/ compilam"
+  if erros=$("$API/venv/bin/python" "$CHECKS" python-syntax "$API/app" "$RAIZ/scripts" 2>&1); then
+    ok "app/ e scripts/ tem sintaxe valida"
   else
     bloqueia "erro de sintaxe:"
-    echo "$erros" | sed 's/^/          /'
+    echo "$erros" | head -20 | sed 's/^/          /'
   fi
 else
-  avisa "venv da API nao encontrado, sintaxe nao verificada"
+  bloqueia "venv da API nao encontrado; sintaxe Python nao pode ser validada"
 fi
 
 
@@ -124,11 +138,19 @@ fi
 # -------------------------------------------------------------- 7. porta
 titulo "7. Porta 8000"
 
-qtd=$(ss -tlnp 2>/dev/null | grep -c ':8000 ' || true)
-if [[ "$qtd" -le 1 ]]; then
-  ok "$qtd processo na 8000"
+if ! main_pid=$(systemctl show workdev-api -p MainPID --value 2>/dev/null); then
+  bloqueia "nao foi possivel consultar MainPID de workdev-api"
+  main_pid=0
+fi
+if ! saida_ss=$(ss -H -ltnp 'sport = :8000' 2>/dev/null); then
+  bloqueia "nao foi possivel consultar processos na porta 8000"
+  saida_ss=""
+fi
+if pids=$(printf '%s\n' "$saida_ss" | "$API/venv/bin/python" "$CHECKS" port-pids --main-pid "${main_pid:-0}" 2>/dev/null); then
+  qtd=$(wc -w <<<"$pids")
+  ok "$qtd PID(s) unico(s) na 8000${pids:+: $pids}"
 else
-  bloqueia "$qtd processos na 8000 (padrao de orfao) — rodar: ss -tlnp | grep 8000"
+  bloqueia "PIDs na porta 8000 divergem do MainPID ou ha mais de um processo: ${pids:-desconhecido}"
 fi
 
 

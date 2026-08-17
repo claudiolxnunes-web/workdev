@@ -842,7 +842,10 @@ AI_PROVIDER_KEYS = {
     "openrouter": ("OpenRouter", "OPENROUTER_API_KEY"),
     "ollama": ("Ollama Cloud", "OLLAMA_API_KEY"),
 }
-API_ENV_FILE = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+API_ENV_FILE = os.environ.get(
+    "WORKDEV_API_ENV_FILE",
+    os.path.join(os.path.dirname(__file__), "..", "..", ".env"),
+)
 
 
 class ApiKeyUpdate(BaseModel):
