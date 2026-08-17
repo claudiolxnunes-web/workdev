@@ -29,6 +29,8 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
   const [prompt, setPrompt] = useState("")
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState("")
+  const [sessionAction, setSessionAction] = useState<"start" | "stop" | null>(null)
+  const [sessionError, setSessionError] = useState("")
 
   useEffect(() => {
     const container = containerRef.current
@@ -250,6 +252,44 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
     }
   }
 
+  async function reconnect() {
+    if (sessionAction) return
+    setSessionError("")
+    if (agent === "kimi" || agent === "qwen") {
+      setSessionAction("start")
+      try {
+        const response = await fetch(`/api/agents/${agent}/session`, { method: "POST" })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.detail || "Falha ao iniciar agente")
+      } catch (cause) {
+        setSessionError(cause instanceof Error ? cause.message : "Falha ao iniciar agente")
+        setSessionAction(null)
+        return
+      }
+      setSessionAction(null)
+    }
+    setGeneration((value) => value + 1)
+  }
+
+  async function disconnect() {
+    if (sessionAction || (agent !== "kimi" && agent !== "qwen")) return
+    setSessionAction("stop")
+    setSessionError("")
+    try {
+      const response = await fetch(`/api/agents/${agent}/session`, { method: "DELETE" })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || "Falha ao desligar agente")
+      socketRef.current?.close(1000, "Agente em standby")
+      setStatus("disconnected")
+      setTaskRunning(false)
+      setProcessName("")
+    } catch (cause) {
+      setSessionError(cause instanceof Error ? cause.message : "Falha ao desligar agente")
+    } finally {
+      setSessionAction(null)
+    }
+  }
+
   function downloadHistory() {
     const url = URL.createObjectURL(new Blob([history], { type: "text/plain;charset=utf-8" }))
     const link = document.createElement("a")
@@ -260,6 +300,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
   }
 
   const active = status === "connected"
+  const standby = agent === "kimi" || agent === "qwen"
   return (
     <section className="relative flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
       <div className="flex shrink-0 flex-col border-b border-slate-800">
@@ -294,13 +335,25 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
           </button>
           <button
             type="button"
-            disabled={status === "connecting"}
+            disabled={(!standby && status === "connecting") || sessionAction !== null}
             className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800 hover:text-sky-300 disabled:cursor-wait disabled:text-slate-600"
-            onClick={() => setGeneration((value) => value + 1)}
+            onClick={() => void reconnect()}
             title={active ? "Refazer a conexão com o terminal" : "Reconectar ao terminal"}
           >
-            Reconectar
+            {sessionAction === "start" ? "Religando…" : "Reconectar"}
           </button>
+          {standby && (
+            <button
+              type="button"
+              disabled={sessionAction !== null}
+              className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-red-400 hover:bg-red-950 hover:text-red-300 disabled:cursor-wait disabled:text-slate-600"
+              onClick={() => void disconnect()}
+              title="Encerrar a sessão e manter o agente em standby"
+            >
+              {sessionAction === "stop" ? "Desligando…" : "Desconectar"}
+            </button>
+          )}
+          {sessionError && <span className="text-xs text-red-400">{sessionError}</span>}
         </div>
       </div>
       {awaitingApproval && (

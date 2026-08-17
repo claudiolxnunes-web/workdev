@@ -21,8 +21,12 @@ from app.routers.terminal import (
     _scroll_terminal,
     _send_output,
     _send_text,
+    _start_standby_session,
+    _stop_standby_session,
     agent_send,
     agents_status,
+    start_agent_session,
+    stop_agent_session,
 )
 
 
@@ -167,6 +171,48 @@ class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as ctx:
             await agent_send("codex", AgentSendRequest(text="oi"))
         self.assertEqual(ctx.exception.status_code, 503)
+
+
+class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
+    @patch("app.routers.terminal._current_process", return_value="qwen")
+    @patch("app.routers.terminal.subprocess.run")
+    def test_start_is_idempotent_when_agent_is_running(self, run, _current):
+        self.assertFalse(_start_standby_session("qwen", "qwen"))
+        run.assert_not_called()
+
+    @patch("app.routers.terminal._current_process", return_value="")
+    @patch("app.routers.terminal.subprocess.run")
+    def test_start_uses_the_approved_launcher(self, run, _current):
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+        self.assertTrue(_start_standby_session("kimi", "kimi"))
+        self.assertEqual(run.call_args.args[0], [
+            "tmux", "new-session", "-d", "-s", "kimi", "-c", "/opt/workdev",
+            "/opt/workdev/scripts/start_kimi_agent.sh",
+        ])
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_stop_is_idempotent_when_session_is_absent(self, run):
+        run.return_value.returncode = 1
+        run.return_value.stderr = "can't find session: kimi"
+        self.assertFalse(_stop_standby_session("kimi"))
+
+    async def test_always_on_agents_cannot_be_stopped(self):
+        with self.assertRaises(HTTPException) as ctx:
+            await stop_agent_session("codex")
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    @patch("app.routers.terminal._start_standby_session", return_value=True)
+    async def test_start_endpoint_reconnects_standby_agent(self, start):
+        result = await start_agent_session("qwen")
+        start.assert_called_once_with("qwen", "qwen")
+        self.assertEqual(result, {"agent": "qwen", "running": True, "started": True})
+
+    @patch("app.routers.terminal._stop_standby_session", return_value=True)
+    async def test_stop_endpoint_disconnects_standby_agent(self, stop):
+        result = await stop_agent_session("kimi")
+        stop.assert_called_once_with("kimi")
+        self.assertEqual(result, {"agent": "kimi", "running": False, "stopped": True})
 
 
 class AwaitingApprovalTest(unittest.TestCase):

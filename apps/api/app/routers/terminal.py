@@ -23,6 +23,10 @@ ALLOWED_SESSIONS = {
     "kimi": "kimi",
     "qwen": "qwen",
 }
+STANDBY_COMMANDS = {
+    "kimi": ["/opt/workdev/scripts/start_kimi_agent.sh"],
+    "qwen": ["/opt/workdev/scripts/start_qwen_agent.sh"],
+}
 _active_connections: set[str] = set()
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
@@ -173,6 +177,80 @@ def _current_process(session: str) -> str:
         check=False,
     )
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _start_standby_session(agent: str, session: str) -> bool:
+    current_process = _current_process(session)
+    if current_process and current_process not in _SHELL_PROCESSES:
+        return False
+    if current_process:
+        subprocess.run(
+            ["tmux", "kill-session", "-t", session],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    result = subprocess.run(
+        [
+            "tmux", "new-session", "-d", "-s", session,
+            "-c", "/opt/workdev", *STANDBY_COMMANDS[agent],
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "Falha ao iniciar sessão tmux")
+    return True
+
+
+def _stop_standby_session(session: str) -> bool:
+    result = subprocess.run(
+        ["tmux", "kill-session", "-t", session],
+        capture_output=True,
+        text=True,
+        timeout=3,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+    if "can't find session" in result.stderr or "no server running" in result.stderr:
+        return False
+    raise RuntimeError(result.stderr.strip() or "Falha ao encerrar sessão tmux")
+
+
+def _standby_session(agent: str) -> str:
+    session = ALLOWED_SESSIONS.get(agent)
+    if not session:
+        raise HTTPException(status_code=404, detail="Agente inválido")
+    if agent not in STANDBY_COMMANDS:
+        raise HTTPException(
+            status_code=409,
+            detail="Claude Code e Codex são agentes always-on",
+        )
+    return session
+
+
+@router.post("/api/agents/{agent}/session")
+async def start_agent_session(agent: str):
+    session = _standby_session(agent)
+    try:
+        started = await asyncio.to_thread(_start_standby_session, agent, session)
+    except (RuntimeError, subprocess.TimeoutExpired) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return {"agent": agent, "running": True, "started": started}
+
+
+@router.delete("/api/agents/{agent}/session")
+async def stop_agent_session(agent: str):
+    session = _standby_session(agent)
+    try:
+        stopped = await asyncio.to_thread(_stop_standby_session, session)
+    except (RuntimeError, subprocess.TimeoutExpired) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return {"agent": agent, "running": False, "stopped": stopped}
 
 
 # Heurística, não parsing exato por CLI: cada agente (Claude/Codex/Kimi/Qwen)
