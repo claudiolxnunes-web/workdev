@@ -85,7 +85,8 @@ def run_checks(
         "frontend_public": "https://workdev.bpfconsult.com.br/",
     }.items():
         status = http(url)
-        checks[name] = {"ok": 200 <= status < 400, "http": status}
+        route_exists = name == "api_projects" and status in {401, 403}
+        checks[name] = {"ok": 200 <= status < 400 or route_exists, "http": status}
 
     critical_names = {"service", "port", "orphans", "health", "api_projects"}
     failed_critical = [name for name in critical_names if not checks[name]["ok"]]

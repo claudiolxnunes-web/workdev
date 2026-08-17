@@ -60,3 +60,17 @@ def test_rota_essencial_da_api_falha_deploy():
         return 500 if url.endswith("/api/projects") else 200
 
     assert post.run_checks(command_ok, http)["status"] == "DEPLOY_FAILED"
+
+
+def test_rota_essencial_protegida_aceita_resposta_de_autorizacao():
+    def http(url):
+        return 401 if url.endswith("/api/projects") else 200
+
+    assert post.run_checks(command_ok, http)["status"] == "DEPLOY_SUCCEEDED"
+
+
+def test_rota_essencial_ausente_falha_deploy():
+    def http(url):
+        return 404 if url.endswith("/api/projects") else 200
+
+    assert post.run_checks(command_ok, http)["status"] == "DEPLOY_FAILED"
