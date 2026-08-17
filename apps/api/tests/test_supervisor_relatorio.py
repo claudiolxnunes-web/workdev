@@ -310,7 +310,8 @@ class UnitsSystemdTest(unittest.TestCase):
     def test_service_define_home_e_working_directory(self):
         conteudo = self.SERVICE.read_text(encoding="utf-8")
         self.assertIn("WorkingDirectory=/opt/workdev", conteudo)
-        self.assertIn("Environment=HOME=/root", conteudo)
+        self.assertIn("Environment=HOME=/home/workdev", conteudo)
+        self.assertIn("User=workdev", conteudo)
 
     def test_service_evita_execucao_concorrente(self):
         conteudo = self.SERVICE.read_text(encoding="utf-8")
