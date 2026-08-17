@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -99,8 +100,26 @@ def run_checks(
     return {"status": status, "checks": checks}
 
 
+def wait_for_checks(
+    command: Callable[[list[str]], CommandResult] = system_command,
+    http: Callable[[str], int] = http_status,
+    attempts: int = 15,
+    interval: float = 2,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> dict:
+    """Aguarda o bind/startup sem transformar falha persistente em sucesso."""
+    result: dict = {"status": "DEPLOY_FAILED", "checks": {}}
+    for attempt in range(attempts):
+        result = run_checks(command=command, http=http)
+        if result["status"] == "DEPLOY_SUCCEEDED":
+            return result
+        if attempt + 1 < attempts:
+            sleeper(interval)
+    return result
+
+
 def main() -> int:
-    result = run_checks()
+    result = wait_for_checks()
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0 if result["status"] == "DEPLOY_SUCCEEDED" else 1
 

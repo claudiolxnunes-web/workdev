@@ -20,7 +20,7 @@ from pipeline import (
     atomic_json,
     issue_approval,
 )
-from post_deploy_gate import run_checks
+from post_deploy_gate import wait_for_checks
 from release_manager import ReleaseError, ReleaseManager
 
 
@@ -116,7 +116,7 @@ def deploy(args, key: bytes) -> str:
     callbacks = DeploymentCallbacks(
         promote=lambda: manager.promote(release),
         restart=lambda: privileged(["systemctl", "restart", "workdev-api.service"]),
-        postcheck=lambda: run_checks(command=post_deploy_command),
+        postcheck=lambda: wait_for_checks(command=post_deploy_command),
         rollback=rollback_and_restart,
     )
     lock_path = args.state / "deploy.lock"

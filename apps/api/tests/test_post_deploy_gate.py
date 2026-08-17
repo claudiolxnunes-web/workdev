@@ -74,3 +74,28 @@ def test_rota_essencial_ausente_falha_deploy():
         return 404 if url.endswith("/api/projects") else 200
 
     assert post.run_checks(command_ok, http)["status"] == "DEPLOY_FAILED"
+
+
+def test_retry_aguarda_startup_e_depois_aprova():
+    calls = []
+
+    def http(_url):
+        return 0 if len(calls) == 0 else 200
+
+    def sleep(_interval):
+        calls.append("wait")
+
+    result = post.wait_for_checks(
+        command_ok, http, attempts=2, interval=0, sleeper=sleep
+    )
+
+    assert result["status"] == "DEPLOY_SUCCEEDED"
+    assert calls == ["wait"]
+
+
+def test_retry_persistente_preserva_falha():
+    result = post.wait_for_checks(
+        command_ok, lambda _url: 0, attempts=2, interval=0, sleeper=lambda _: None
+    )
+
+    assert result["status"] == "DEPLOY_FAILED"
