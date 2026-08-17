@@ -13,7 +13,7 @@ from app.models.knowledge import KnowledgeEntry
 from app.models.adr import ADR
 from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
-from app.services import context_engine
+from app.services import autoridade, context_engine
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
 
@@ -99,7 +99,8 @@ def get_db():
         db.close()
 
 
-def build_system(db: Session, project_slug: str | None = None) -> str:
+def build_system(db: Session, project_slug: str | None = None,
+                 nivel: str | None = None) -> str:
     """System prompt com o contexto do WorkDev apurado no banco.
 
     Sem `project_slug`, monta o contexto global. Com um slug desconhecido,
@@ -108,11 +109,12 @@ def build_system(db: Session, project_slug: str | None = None) -> str:
     Uma falha ao ler o contexto nunca derruba a conversa: o chat volta ao
     system base e segue com as ferramentas, que continuam funcionando.
     """
+    modo = autoridade.instrucao_de_nivel(nivel)
     try:
         contexto = context_engine.build_chat_context(db, project_slug)
     except Exception as erro:  # noqa: BLE001 — contexto é melhoria, não requisito
         return (
-            f"{SYSTEM}\n\n"
+            f"{SYSTEM}\n\n{modo}\n\n"
             f"[contexto indisponível: {type(erro).__name__}. "
             f"Use as ferramentas para consultar o estado atual.]"
         )
@@ -123,9 +125,12 @@ def build_system(db: Session, project_slug: str | None = None) -> str:
             f"\n\n[o projeto '{project_slug}' não existe no WorkDev; "
             f"contexto global abaixo]"
         )
-        return f"{SYSTEM}{aviso}\n\n{context_engine.renderizar_contexto(contexto)}"
+        return (
+            f"{SYSTEM}\n\n{modo}{aviso}\n\n"
+            f"{context_engine.renderizar_contexto(contexto)}"
+        )
 
-    partes = [SYSTEM, context_engine.renderizar_contexto(contexto)]
+    partes = [SYSTEM, modo, context_engine.renderizar_contexto(contexto)]
     if contexto.get("escopo") == context_engine.ESCOPO_PROJETO:
         partes.append(FOCO_PROJETO)
     return "\n\n".join(partes)
@@ -156,6 +161,11 @@ class ChatRequest(BaseModel):
     model: str | None = None
     session_id: str | None = None
     project_slug: str | None = None
+    # NÃO AUTORITATIVO. Mantido só por compatibilidade com clientes que ainda
+    # enviam o campo; o servidor o ignora para decidir permissões. A autoridade
+    # efetiva vem de chat_sessions.authority, e só o PATCH da sessão a altera.
+    # Ver ai_chat() e app/services/autoridade.py.
+    authority: str | None = None
 TOOLS = [
     {
         "name": "listar_projetos",
@@ -322,7 +332,25 @@ TOOLS = [
 ]
 
 
-def executar_tool(nome: str, args: dict, db: Session) -> str:
+def executar_tool(nome: str, args: dict, db: Session,
+                  nivel: str = autoridade.NIVEL_PADRAO) -> str:
+    """Executa uma tool, respeitando a autoridade da conversa.
+
+    Camada 2 do gate. `nivel` entra como argumento e nenhuma tool o recebe —
+    não há caminho por onde o modelo eleve a própria autoridade.
+    """
+    try:
+        autoridade.garantir(nivel, nome)
+    except autoridade.AutoridadeInsuficiente as erro:
+        return json.dumps(
+            {"erro": str(erro), "autoridade_atual": erro.nivel,
+             "autoridade_necessaria": erro.exigido, "executado": False},
+            ensure_ascii=False,
+        )
+    return _executar_tool_sem_gate(nome, args, db)
+
+
+def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
     if nome == "listar_projetos":
         ps = db.query(Project).all()
         return json.dumps(
@@ -715,8 +743,12 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
     return json.dumps({"erro": "ferramenta desconhecida"})
 
 
-def chat_anthropic(messages: list, db: Session, model: str | None = None, system: str | None = None) -> str:
+def chat_anthropic(messages: list, db: Session, model: str | None = None,
+                   system: str | None = None,
+                   nivel: str = autoridade.NIVEL_PADRAO) -> str:
     client = get_anthropic()
+    # Camada 1 do gate: o modelo só recebe o catálogo do seu nível.
+    tools = autoridade.tools_para(nivel, TOOLS)
     for _ in range(12):
         # max_tokens limita thinking + texto da resposta juntos: 4096 truncava
         # no meio quando o modelo pensa antes de responder.
@@ -725,7 +757,7 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None, system
             max_tokens=16000,
             output_config={"effort": ANTHROPIC_EFFORT},
             system=system or SYSTEM,
-            tools=TOOLS,
+            tools=tools,
             messages=messages,
         )
         if resp.stop_reason == "max_tokens":
@@ -740,7 +772,7 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None, system
         for block in resp.content:
             if block.type == "tool_use":
                 try:
-                    out = executar_tool(block.name, block.input, db)
+                    out = executar_tool(block.name, block.input, db, nivel)
                 except Exception as e:
                     db.rollback()
                     out = json.dumps({"erro": f"argumentos invalidos: "
@@ -754,7 +786,8 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None, system
         messages.append({"role": "user", "content": results})
     return "Não consegui concluir a operação (limite de passos)."
 
-def tools_openai() -> list:
+def tools_openai(nivel: str = autoridade.NIVEL_PADRAO) -> list:
+    """Mesmo catálogo filtrado da camada 1, no formato dos providers compat."""
     return [
         {
             "type": "function",
@@ -764,18 +797,21 @@ def tools_openai() -> list:
                 "parameters": t["input_schema"],
             },
         }
-        for t in TOOLS
+        for t in autoridade.tools_para(nivel, TOOLS)
     ]
 
 
-def chat_openai(messages: list, db: Session, model: str | None = None, provider: str = "openai", system: str | None = None) -> str:
+def chat_openai(messages: list, db: Session, model: str | None = None,
+                provider: str = "openai", system: str | None = None,
+                nivel: str = autoridade.NIVEL_PADRAO) -> str:
     client = get_openai(provider)
     msgs = [{"role": "system", "content": system or SYSTEM}] + messages
+    tools = tools_openai(nivel)
     for _ in range(12):
         resp = client.chat.completions.create(
             model=model or COMPAT_PROVIDERS[provider]["default_model"],
             max_tokens=1024,
-            tools=tools_openai(),
+            tools=tools,
             messages=msgs,
         )
         msg = resp.choices[0].message
@@ -785,7 +821,7 @@ def chat_openai(messages: list, db: Session, model: str | None = None, provider:
         for tc in msg.tool_calls:
             args = json.loads(tc.function.arguments or "{}")
             try:
-                out = executar_tool(tc.function.name, args, db)
+                out = executar_tool(tc.function.name, args, db, nivel)
             except Exception as e:
                 db.rollback()
                 out = json.dumps({"erro": f"argumentos invalidos: "
@@ -917,8 +953,14 @@ def ai_voz(req: VozRequest, db: Session = Depends(get_db)):
         f"Comando: {req.texto}"
     )
     messages = [{"role": "user", "content": instrucao}]
+    # A ponte de voz não tem sessão, então o nível é fixo e explícito: 'plan'
+    # preserva o uso atual (registrar backlog por voz) sem abrir ação externa.
     try:
-        reply = chat_anthropic(messages, db, system=build_system(db))
+        reply = chat_anthropic(
+            messages, db,
+            system=build_system(db, None, autoridade.PLAN),
+            nivel=autoridade.PLAN,
+        )
     except Exception as e:
         return {"reply": f"Erro ao executar: {type(e).__name__} - {e}",
                 "error": True}
@@ -941,6 +983,26 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
         db.add(session)
         db.commit()
         db.refresh(session)
+
+    # E1.4: a autoridade efetiva vem SEMPRE da sessão persistida no servidor.
+    #
+    # `req.authority` continua no contrato por compatibilidade com clientes que
+    # ainda o enviam, mas é **declaração não autoritativa**: nunca persiste,
+    # nunca eleva, nunca rebaixa e nunca é normalizado para virar o nível
+    # efetivo. Uma mensagem de chat não é um canal de mudança de privilégio —
+    # quem altera autoridade é o PATCH explícito da sessão, e só ele.
+    #
+    # Sessão nova nasce com o default do banco ('plan'); o payload não escolhe.
+    nivel = (
+        autoridade.normalizar(session.authority)
+        if session is not None
+        else autoridade.NIVEL_PADRAO
+    )
+    # Divergência não é erro (o cliente pode estar com a tela defasada), mas a
+    # resposta avisa para que ninguém suponha que o pedido foi acatado.
+    payload_ignorado = (
+        req.authority is not None and str(req.authority).strip().lower() != nivel
+    )
 
     # E1.3: a sessão é a dona do contexto. Quando o cliente manda um slug (o
     # chat do workspace sempre manda), o vínculo é gravado aqui — assim uma
@@ -969,19 +1031,22 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
 
     # E1.2: o contexto passa a ser montado sempre — global quando não há projeto
     # ativo. Antes, o chat global ia ao modelo sem nenhum dado do WorkDev.
-    system = build_system(db, slug_efetivo)
+    system = build_system(db, slug_efetivo, nivel)
 
     try:
         if provider in COMPAT_PROVIDERS:
-            reply = chat_openai(messages, db, req.model, provider, system=system)
+            reply = chat_openai(messages, db, req.model, provider,
+                                system=system, nivel=nivel)
         else:
             provider = "anthropic"
-            reply = chat_anthropic(messages, db, req.model, system=system)
+            reply = chat_anthropic(messages, db, req.model, system=system,
+                                   nivel=nivel)
     except Exception as e:
         reply = f"Erro no provider {provider}: {type(e).__name__} - {e}"
         return {"reply": reply, "provider": provider, "error": True,
                 "session_id": str(session.id) if session else None,
-                "project_slug": slug_efetivo}
+                "project_slug": slug_efetivo, "authority": nivel,
+                "authority_payload_ignorada": payload_ignorado}
 
     if session:
         try:
@@ -995,4 +1060,5 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     # pedido: quando o cliente omite e a sessão já tem projeto, os dois diferem.
     return {"reply": reply, "provider": provider,
             "session_id": str(session.id) if session else None,
-            "project_slug": slug_efetivo}
+            "project_slug": slug_efetivo, "authority": nivel,
+            "authority_payload_ignorada": payload_ignorado}

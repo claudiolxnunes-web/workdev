@@ -5,8 +5,10 @@ import {
   PlanningPanel,
   ProjectSelector,
   ContextDivider,
+  AuthoritySelector,
   type Msg,
   type ProjectOption,
+  type Authority,
 } from "@/components/ai-hub";
 
 interface SessionMeta {
@@ -15,6 +17,7 @@ interface SessionMeta {
   updated_at: string;
   project_slug?: string | null;
   project_name?: string | null;
+  authority?: Authority;
 }
 
 /** Marca visual de troca de contexto, ancorada na posição do fluxo. */
@@ -40,6 +43,7 @@ const MODELOS = [
 const MODELO_STORAGE_KEY = "workdev_ai_hub_modelo";
 const PROJETO_STORAGE_KEY = "workdev_ai_hub_projeto";
 const DEFAULT_MODELO_LABEL = "Claude Opus 5";
+const AUTORIDADE_PADRAO: Authority = "plan";
 
 function loadStoredModelo() {
   try {
@@ -68,6 +72,9 @@ export default function AIHub() {
   // Projeto ativo. A fonte de verdade é chat_sessions.project_id no banco; o
   // localStorage só lembra a escolha para a PRÓXIMA conversa nova.
   const [projectSlug, setProjectSlug] = useState<string | null>(loadStoredProjeto);
+  // Autoridade da conversa. A fonte de verdade é chat_sessions.authority;
+  // conversas novas nascem em PLAN por decisão de produto.
+  const [authority, setAuthority] = useState<Authority>(AUTORIDADE_PADRAO);
   const [input, setInput] = useState("");
   const [modelo, setModelo] = useState(loadStoredModelo);
   const [loading, setLoading] = useState(false);
@@ -108,6 +115,7 @@ export default function AIHub() {
       // e esse vem do backend.
       setDividers([]);
       setProjectSlug(data.project_slug ?? null);
+      setAuthority(data.authority ?? AUTORIDADE_PADRAO);
       setSessionId(id);
       sessionStorage.setItem("workdev_chat_session", id);
     } catch { /* silencioso */ }
@@ -117,6 +125,7 @@ export default function AIHub() {
     setMessages([]);
     setDividers([]);
     setSessionId(null);
+    setAuthority(AUTORIDADE_PADRAO);
     sessionStorage.removeItem("workdev_chat_session");
     // O projeto ativo permanece: quem está trabalhando no Feed_BPF e abre uma
     // conversa nova quase sempre continua no Feed_BPF.
@@ -162,6 +171,25 @@ export default function AIHub() {
     }
   }
 
+  async function trocarAutoridade(nivel: Authority) {
+    if (nivel === authority || !sessionId) return;
+    const anterior = authority;
+    setAuthority(nivel);
+    try {
+      const r = await fetch(`/api/chat/sessions/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authority: nivel }),
+      });
+      if (!r.ok) throw new Error("Falha ao alterar autoridade");
+      const data = await r.json();
+      setAuthority(data.authority ?? anterior);
+    } catch {
+      // O servidor continua sendo a fonte de verdade; desfaz o otimismo local.
+      setAuthority(anterior);
+    }
+  }
+
   async function send() {
     const text = input.trim();
     if (!text || loading) return;
@@ -182,6 +210,9 @@ export default function AIHub() {
         }),
       });
       const data = await r.json();
+      if (data.authority === "observe" || data.authority === "plan") {
+        setAuthority(data.authority);
+      }
       setMessages([
         ...next,
         { role: "assistant" as const, content: data.reply || "Erro na resposta", error: !!data.error },
@@ -264,6 +295,11 @@ export default function AIHub() {
             onChange={trocarProjeto}
             disabled={loading}
           />
+          <AuthoritySelector
+            value={authority}
+            onChange={trocarAutoridade}
+            disabled={loading || !sessionId}
+          />
           <button
             onClick={() => setShowPlans(true)}
             className="ml-auto shrink-0 rounded-lg border border-violet-700 bg-violet-950/60 px-3 py-2 text-sm text-violet-200 hover:bg-violet-900"
@@ -274,7 +310,9 @@ export default function AIHub() {
         <div ref={messagesRef} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-4">
           {messages.length === 0 && (
             <p className="text-slate-500 text-sm">
-              {projectSlug
+              {authority === "observe"
+                ? `Modo Observar: consulta e análise, sem alterar nada. Ex: "o que precisa da minha atenção?", "como está o backlog?". Mude para Planejar para registrar tasks, ADRs e planos.`
+                : projectSlug
                 ? `Conversa no contexto do projeto selecionado. Ex: "continue de onde paramos", "qual é o próximo passo?", "veja o backlog".`
                 : `Converse com o WorkDev. Ex: "como estão meus projetos?", "o que precisa da minha atenção?", "status dos projetos". Selecione um projeto acima para focar o contexto.`}
             </p>

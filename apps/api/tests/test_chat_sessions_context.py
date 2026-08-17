@@ -19,7 +19,7 @@ UUID_VALIDO = UUID("11111111-1111-1111-1111-111111111111")
 
 def _sessao(**kwargs):
     padroes = dict(
-        id="sess-1", title="Conversa", project_id=None,
+        id="sess-1", title="Conversa", project_id=None, authority="plan",
         created_at="2026-08-16 22:00:00", updated_at="2026-08-16 22:10:00",
     )
     padroes.update(kwargs)
@@ -50,13 +50,18 @@ class SessaoOutTest(unittest.TestCase):
     def test_forma_da_sessao_e_estavel(self):
         """Listar e abrir precisam devolver as mesmas chaves."""
         esperadas = {"id", "title", "project_id", "project_slug",
-                     "project_name", "created_at", "updated_at"}
+                     "project_name", "authority", "created_at", "updated_at"}
 
         self.assertEqual(set(cs.sessao_out(_sessao())), esperadas)
 
-    def test_authority_nao_vaza_no_contrato(self):
-        """A coluna existe desde a E1.1, mas sem o gate da E1.4 não é contrato."""
-        self.assertNotIn("authority", cs.sessao_out(_sessao()))
+    def test_authority_entra_no_contrato_a_partir_da_e14(self):
+        """Na E1.3 authority ficava fora; com o gate real, passa a ser contrato."""
+        self.assertEqual(cs.sessao_out(_sessao())["authority"], "plan")
+
+    def test_authority_invalida_no_banco_e_normalizada_na_saida(self):
+        saida = cs.sessao_out(_sessao(authority="prepare"))
+
+        self.assertEqual(saida["authority"], "plan")
 
 
 class AtualizarContextoTest(unittest.TestCase):
@@ -83,10 +88,8 @@ class AtualizarContextoTest(unittest.TestCase):
 
     def test_null_devolve_conversa_ao_escopo_global(self):
         sessao = _sessao(project_id="proj-1")
-        db = Mock()
-        sessao_q = Mock()
-        sessao_q.filter.return_value.first.return_value = sessao
-        db.query.return_value = sessao_q
+        # query 1: a sessão · query 2: o projeto atual, para auditar o "de"
+        db = self._db_com(sessao, _projeto())
 
         payload = SessionUpdate.model_validate({"project_id": None})
         saida = cs.atualizar_contexto("sess-1", payload, db)

@@ -7,6 +7,7 @@ from app.database import SessionLocal
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.project import Project
 from app.schemas.chat import SessionUpdate
+from app.services import autoridade, chat_audit
 
 router = APIRouter()
 
@@ -27,6 +28,7 @@ def sessao_out(sessao: ChatSession, projeto: Project | None = None) -> dict:
         "project_id": str(sessao.project_id) if sessao.project_id else None,
         "project_slug": projeto.slug if projeto else None,
         "project_name": projeto.name if projeto else None,
+        "authority": autoridade.normalizar(sessao.authority),
         "created_at": str(sessao.created_at),
         "updated_at": str(sessao.updated_at),
     }
@@ -70,12 +72,15 @@ def listar_sessoes(
 @router.get("/chat/sessions/{session_id}")
 def carregar_sessao(session_id: str, db: Session = Depends(get_db)):
     sessao = _get_sessao(db, session_id)
-    mensagens = (
+    linhas = (
         db.query(ChatMessageDB)
         .filter(ChatMessageDB.session_id == sessao.id)
         .order_by(ChatMessageDB.created_at.asc())
         .all()
     )
+    # Eventos de auditoria vivem na mesma tabela, mas saem em campo separado:
+    # nunca entram no array que o cliente reenvia ao modelo.
+    conversa, eventos = chat_audit.separar(linhas)
     projeto = (
         db.query(Project).filter(Project.id == sessao.project_id).first()
         if sessao.project_id
@@ -84,8 +89,9 @@ def carregar_sessao(session_id: str, db: Session = Depends(get_db)):
     return {
         **sessao_out(sessao, projeto),
         "messages": [
-            {"role": m.role, "content": m.content} for m in mensagens
+            {"role": m.role, "content": m.content} for m in conversa
         ],
+        "events": [chat_audit.evento_out(e) for e in eventos],
     }
 
 
@@ -95,26 +101,50 @@ def atualizar_contexto(
     payload: SessionUpdate,
     db: Session = Depends(get_db),
 ):
-    """Troca o projeto ativo da conversa.
+    """Troca o projeto ativo e/ou a autoridade da conversa.
 
-    Omitir `project_id` não faz nada; mandar `null` devolve a conversa ao
-    escopo global. A distinção é intencional e vem de `exclude_unset`.
+    Omitir um campo não faz nada; mandar `project_id: null` devolve a conversa
+    ao escopo global. A distinção é intencional e vem de `exclude_unset`.
+
+    Toda troca de autoridade e de projeto deixa evento de auditoria.
     """
     sessao = _get_sessao(db, session_id)
     dados = payload.model_dump(exclude_unset=True)
-    if "project_id" not in dados:
+    if not dados:
         raise HTTPException(status_code=422, detail="Nada a atualizar")
 
-    projeto = None
-    if dados["project_id"] is not None:
-        projeto = (
-            db.query(Project).filter(Project.id == dados["project_id"]).first()
-        )
-        if not projeto:
-            raise HTTPException(status_code=422, detail="Projeto não encontrado")
-        sessao.project_id = projeto.id
-    else:
-        sessao.project_id = None
+    projeto = (
+        db.query(Project).filter(Project.id == sessao.project_id).first()
+        if sessao.project_id
+        else None
+    )
+
+    if "project_id" in dados:
+        anterior = projeto.slug if projeto else None
+        if dados["project_id"] is not None:
+            projeto = (
+                db.query(Project)
+                .filter(Project.id == dados["project_id"])
+                .first()
+            )
+            if not projeto:
+                raise HTTPException(
+                    status_code=422, detail="Projeto não encontrado"
+                )
+            sessao.project_id = projeto.id
+        else:
+            projeto = None
+            sessao.project_id = None
+        novo = projeto.slug if projeto else None
+        if anterior != novo:
+            chat_audit.registrar_troca_projeto(db, sessao, anterior, novo)
+
+    if "authority" in dados and dados["authority"] is not None:
+        anterior = autoridade.normalizar(sessao.authority)
+        novo = dados["authority"]
+        if anterior != novo:
+            chat_audit.registrar_troca_autoridade(db, sessao, anterior, novo)
+            sessao.authority = novo
 
     db.commit()
     db.refresh(sessao)

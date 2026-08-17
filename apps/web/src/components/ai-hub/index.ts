@@ -7,3 +7,5 @@ export { PlanningPanel } from "./PlanningPanel";
 export { ProjectSelector } from "./ProjectSelector";
 export type { ProjectOption } from "./ProjectSelector";
 export { ContextDivider } from "./ContextDivider";
+export { AuthoritySelector } from "./AuthoritySelector";
+export type { Authority } from "./AuthoritySelector";

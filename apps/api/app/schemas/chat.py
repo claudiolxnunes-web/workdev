@@ -8,22 +8,33 @@ uma conversa reaberta volta com o contexto certo.
 sem o gate da E1.4 seria um campo que aceita valor e não muda nada.
 """
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.services.autoridade import NIVEIS
+
 
 class SessionUpdate(BaseModel):
-    """Troca o projeto ativo da conversa.
+    """Troca o projeto ativo e/ou a autoridade da conversa.
 
     `project_id=None` é explícito e significativo: devolve a conversa ao
-    escopo global. Por isso o campo usa `exclude_unset` no router — omitir é
-    diferente de mandar null.
+    escopo global. Por isso o router usa `exclude_unset` — omitir é diferente
+    de mandar null.
+
+    `authority` aceita só os níveis conhecidos; qualquer outro valor é 422.
+    Aqui não vale a tolerância de `normalizar()`: o usuário está declarando uma
+    escolha, e uma escolha inválida precisa falhar em vez de virar o padrão.
     """
 
     project_id: UUID | None = Field(
         default=None,
         description="UUID do projeto; null devolve a conversa ao escopo global",
+    )
+    authority: Literal[NIVEIS] | None = Field(  # type: ignore[valid-type]
+        default=None,
+        description="observe | plan | execute | admin",
     )
 
 
@@ -33,5 +44,6 @@ class SessionOut(BaseModel):
     project_id: str | None = None
     project_slug: str | None = None
     project_name: str | None = None
+    authority: str
     created_at: str
     updated_at: str

@@ -1,13 +1,13 @@
 from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Index, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+
 from app.database import Base
-
-
-# Níveis de autoridade da conversa (E1). `prepare` está reservado: o nome
-# existe no contrato desde já, mas nenhuma tool o exige ainda. `execute` e
-# `autonomous` ficam de fora até existir aprovação explícita por execução.
-AUTORIDADES = ("observe", "plan", "prepare")
-AUTORIDADE_PADRAO = "plan"
+# A definição canônica de autoridade (hierarquia, mapa de tools, rótulos) mora
+# em app/services/autoridade.py. Aqui ficam só os nomes que o schema precisa.
+from app.services.autoridade import (  # noqa: F401
+    NIVEIS as AUTORIDADES,
+    NIVEL_PADRAO as AUTORIDADE_PADRAO,
+)
 
 
 class ChatSession(Base):
