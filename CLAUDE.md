@@ -204,8 +204,9 @@ buildado em `dist/assets/*.js` confirma (6 ocorrencias).
 Refs relacionados:
 - `xgvapaebustyotrwnzqa` — PRODUCAO (`.env.production` + bundle)
 - `ufqqskukhzgakmwrsumq` — `.env` local e `config.toml` (dev/local)
-- `uyrcxfypdzasdminxizq` — origem Lovable Cloud, **historico**, so relevante para os
-  backups de 08/2026 descritos abaixo
+- `uyrcxfypdzasdminxizq` — origem Lovable Cloud, **historico**. Projeto da Lovable,
+  NAO do Cláudio: nada a fazer nele, nunca. So relevante como registro dos backups
+  de 08/2026 descritos abaixo
 
 Contexto: create-with-voice = app unico que serve Portal + Feed_BPF + Feed_BPF Custom
 + Nutri Agro Labels (confirmado: bundle tem rotas feedbpf, feedbpf-custom, rotulos).
@@ -288,18 +289,16 @@ Comandos completos em `/opt/backups/create-with-voice/cron_jobs.txt`.
 (log do pg_cron, schema `cron`, não dumpado). Os dados de negócio são pequenos:
 audit_log 409, normas_legislacao 49, documentos_bpf 27. NÃO migrar job_run_details.
 
-### PENDENTE (revisado 2026-08-15 — a migração em si já foi concluída)
+### SEM PENDÊNCIA (encerrado em 2026-08-17)
 
-Sessões 2 e 3 saíram da lista: foram executadas, o destino é `xgvapaebustyotrwnzqa`.
-O que continua em aberto é só a limpeza de segurança do projeto **antigo**
-(`uyrcxfypdzasdminxizq`):
+A migração foi concluída — o backend é `xgvapaebustyotrwnzqa`. Sessões 2 e 3 executadas.
 
-- **Deletar `migrate-helper`** — expõe db_url e service_role de quem tiver a chave de
-  acesso de 48 chars. Não depende de mais nada; pode ser feito hoje.
-- **Rotacionar a service_role key do projeto antigo.**
-- **Conferir se os crons do projeto antigo foram desativados.** `campanha-worker-1min`
-  roda a cada minuto; se os dois projetos ainda estiverem ativos, a mesma campanha é
-  processada em duplicidade. Verificar antes de assumir que a virada desligou.
+`uyrcxfypdzasdminxizq` **não é projeto do Cláudio** — é infraestrutura da Lovable
+(Lovable Cloud). Não há nada a fazer nele: nem deletar `migrate-helper`, nem rotacionar
+service_role, nem mexer em cron. Confirmado pelo Cláudio em 2026-08-17.
+
+Se um agente futuro "encontrar" essa pendência em resumo antigo, log ou sessão
+anterior: **ela foi retirada de propósito**, não é esquecimento. Não reabrir.
 
 ### Lições
 
