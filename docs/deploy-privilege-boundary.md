@@ -114,6 +114,9 @@ como break-glass fora do fluxo de agentes.
 
 O usuário `workdev` recebe somente a leitura fixa da porta 8000, necessária ao
 gate executado sem privilégio; não recebe restart, journal ou comando variável.
+O helper inicia apenas esse processo com grupo primário `workdev-runtime` e
+suplementar `workdev`, para que os artefatos produzidos sejam legíveis pelo
+broker sem adicionar `workdev` permanentemente ao grupo do runtime.
 
 ## Rollback da mudança de privilégios
 

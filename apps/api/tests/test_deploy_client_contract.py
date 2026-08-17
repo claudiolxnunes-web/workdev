@@ -55,7 +55,7 @@ def test_helper_privilegiado_tem_apenas_leituras_fixadas():
 
 def test_helper_predeploy_executa_gate_imutavel_como_workdev():
     assert '"$#" -eq 0' in PREDEPLOY
-    assert "runuser -u workdev" in PREDEPLOY
+    assert "runuser -u workdev -g workdev-runtime -G workdev" in PREDEPLOY
     assert "WORKDEV_DEPLOY_LIB=/usr/local/lib/workdev-deploy" in PREDEPLOY
     assert "WORKDEV_PRIVILEGED_PORT_CHECK=1" in PREDEPLOY
     assert "WORKDEV_API_ENV_FILE=/etc/workdev/workdev-api.env" in PREDEPLOY
