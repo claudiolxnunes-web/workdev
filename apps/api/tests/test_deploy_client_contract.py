@@ -38,6 +38,11 @@ def test_sudoers_nao_concede_sudo_generico_ou_start_stop():
     assert all(" systemctl start " not in line for line in lines)
     assert all(" systemctl stop " not in line for line in lines)
     assert any("systemctl restart workdev-api.service" in line for line in lines)
+    workdev_lines = [line for line in lines if line.startswith("workdev ")]
+    assert workdev_lines == [
+        "workdev ALL=(root) NOPASSWD: "
+        "/usr/local/libexec/workdev-deploy-readcheck port"
+    ]
 
 
 def test_helper_privilegiado_tem_apenas_leituras_fixadas():
@@ -52,8 +57,18 @@ def test_helper_predeploy_executa_gate_imutavel_como_workdev():
     assert '"$#" -eq 0' in PREDEPLOY
     assert "runuser -u workdev" in PREDEPLOY
     assert "WORKDEV_DEPLOY_LIB=/usr/local/lib/workdev-deploy" in PREDEPLOY
+    assert "WORKDEV_PRIVILEGED_PORT_CHECK=1" in PREDEPLOY
+    assert "WORKDEV_API_ENV_FILE=/etc/workdev/workdev-api.env" in PREDEPLOY
     assert "/usr/local/lib/workdev-deploy/verificar-deploy.sh --testes" in PREDEPLOY
     assert "/opt/workdev/verificar-deploy.sh" not in PREDEPLOY
+
+
+def test_unit_api_usa_env_e_frontend_da_release():
+    unit = (
+        ROOT / "scripts/deploy/systemd/workdev-api.service"
+    ).read_text(encoding="utf-8")
+    assert "WORKDEV_API_ENV_FILE=/etc/workdev/workdev-api.env" in unit
+    assert "WORKDEV_WEB_DIST=/opt/workdev-runtime/current/apps/web/dist" in unit
 
 
 def test_controlador_executa_copia_imutavel_com_usuario_dedicado():

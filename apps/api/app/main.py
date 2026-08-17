@@ -26,11 +26,11 @@ from app.routers.settings import router as settings_router
 from app.routers.system import router as system_router
 from app.auth import request_is_authenticated
 
-load_dotenv()
+load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
 import sentry_sdk
 if os.getenv("SENTRY_DSN"):
     sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), traces_sample_rate=0.0, environment=os.getenv("AMBIENTE", "producao"))
-DIST = "/opt/workdev/apps/web/dist"
+DIST = os.environ.get("WORKDEV_WEB_DIST", "/opt/workdev/apps/web/dist")
 
 app = FastAPI(title="WorkDev API", version="0.7.0")
 

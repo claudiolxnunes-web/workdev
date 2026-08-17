@@ -110,10 +110,17 @@ def test_broker_le_codigo_fonte_sem_poder_altera_lo():
     assert not checkout.allows(permissions.WORKDEV_DEPLOY, "write")
 
 
-def test_sudoers_nao_menciona_workdev_operacional():
+def test_sudoers_workdev_tem_somente_leitura_fixa_da_porta():
     policy = (
         ROOT / "scripts/deploy/systemd/workdev-deploy.sudoers"
     ).read_text()
     effective = [line for line in policy.splitlines() if line and not line.startswith("#")]
     assert effective
-    assert all(line.startswith("workdev-deploy ") for line in effective)
+    workdev_rules = [line for line in effective if line.startswith("workdev ")]
+    assert workdev_rules == [
+        "workdev ALL=(root) NOPASSWD: "
+        "/usr/local/libexec/workdev-deploy-readcheck port"
+    ]
+    assert all(
+        line.startswith(("workdev-deploy ", "workdev ")) for line in effective
+    )

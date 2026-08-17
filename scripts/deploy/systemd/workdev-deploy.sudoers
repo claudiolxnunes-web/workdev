@@ -3,3 +3,4 @@ workdev-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart workdev-api.servi
 workdev-deploy ALL=(root) NOPASSWD: /usr/local/libexec/workdev-predeploy-gate
 workdev-deploy ALL=(root) NOPASSWD: /usr/local/libexec/workdev-deploy-readcheck port
 workdev-deploy ALL=(root) NOPASSWD: /usr/local/libexec/workdev-deploy-readcheck journal
+workdev ALL=(root) NOPASSWD: /usr/local/libexec/workdev-deploy-readcheck port

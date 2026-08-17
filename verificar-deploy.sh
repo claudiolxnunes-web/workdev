@@ -142,7 +142,12 @@ if ! main_pid=$(systemctl show workdev-api -p MainPID --value 2>/dev/null); then
   bloqueia "nao foi possivel consultar MainPID de workdev-api"
   main_pid=0
 fi
-if ! saida_ss=$(ss -H -ltnp 'sport = :8000' 2>/dev/null); then
+if [[ "${WORKDEV_PRIVILEGED_PORT_CHECK:-0}" == "1" ]]; then
+  comando_ss=(sudo -n /usr/local/libexec/workdev-deploy-readcheck port)
+else
+  comando_ss=(ss -H -ltnp 'sport = :8000')
+fi
+if ! saida_ss=$("${comando_ss[@]}" 2>/dev/null); then
   bloqueia "nao foi possivel consultar processos na porta 8000"
   saida_ss=""
 fi

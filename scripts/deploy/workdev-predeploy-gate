@@ -8,4 +8,6 @@ set -eu
 
 exec runuser -u workdev -- env \
     WORKDEV_DEPLOY_LIB=/usr/local/lib/workdev-deploy \
+    WORKDEV_PRIVILEGED_PORT_CHECK=1 \
+    WORKDEV_API_ENV_FILE=/etc/workdev/workdev-api.env \
     timeout 240 bash /usr/local/lib/workdev-deploy/verificar-deploy.sh --testes

@@ -4,7 +4,7 @@ from alembic import context
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
+load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
 
 config = context.config
 config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL"))

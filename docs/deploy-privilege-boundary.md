@@ -112,6 +112,9 @@ a linha de comando exata e leitura do journal recente da unit. Não são
 necessárias capabilities, acesso Docker ou sudo genérico. Root fica reservado
 como break-glass fora do fluxo de agentes.
 
+O usuário `workdev` recebe somente a leitura fixa da porta 8000, necessária ao
+gate executado sem privilégio; não recebe restart, journal ou comando variável.
+
 ## Rollback da mudança de privilégios
 
 1. Interromper timers de agentes durante a janela, sem executar deploy.

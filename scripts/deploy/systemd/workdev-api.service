@@ -8,6 +8,7 @@ Group=workdev
 SupplementaryGroups=workdev-runtime
 Environment=HOME=/home/workdev
 Environment=WORKDEV_API_ENV_FILE=/etc/workdev/workdev-api.env
+Environment=WORKDEV_WEB_DIST=/opt/workdev-runtime/current/apps/web/dist
 WorkingDirectory=/opt/workdev-runtime/current/apps/api
 ExecStart=/opt/workdev/apps/api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 Restart=always
