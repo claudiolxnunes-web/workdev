@@ -22,6 +22,7 @@ from app.models.rfc import RFC  # noqa
 from app.models.decision import Decision  # noqa
 from app.models.chat import ChatSession, ChatMessage  # noqa
 from app.models.handoff import ExecutionPlan, AgentRun, AgentRunEvent  # noqa
+from app.models.ai_routing import AIModelCatalog, AIBudget, AICallLog  # noqa
 
 target_metadata = Base.metadata
 

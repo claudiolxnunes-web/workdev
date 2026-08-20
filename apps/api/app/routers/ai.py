@@ -1,5 +1,10 @@
 import os
 import json
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, SecretStr
 from sqlalchemy.orm import Session
@@ -13,7 +18,9 @@ from app.models.knowledge import KnowledgeEntry
 from app.models.adr import ADR
 from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
+from app.models.ai_routing import AICallLog
 from app.services import autoridade, context_engine
+from app.services import ai_cost_guard
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
 
@@ -35,7 +42,8 @@ def get_anthropic() -> Anthropic:
         # 30s estourava com modelos que pensam (thinking conta no tempo da
         # request). Cada passo do loop de tools usa esse timeout inteiro.
         _anthropic_client = Anthropic(
-            timeout=float(os.getenv("ANTHROPIC_TIMEOUT", "120"))
+            timeout=float(os.getenv("ANTHROPIC_TIMEOUT", "120")),
+            max_retries=int(os.getenv("AI_PROVIDER_MAX_RETRIES", "0")),
         )
     return _anthropic_client
 
@@ -70,7 +78,11 @@ def get_openai(provider: str = "openai") -> OpenAI:
         kwargs = {"api_key": os.getenv(cfg["env_key"])}
         if cfg["base_url"]:
             kwargs["base_url"] = cfg["base_url"]
-        _compat_clients[provider] = OpenAI(timeout=30, **kwargs)
+        _compat_clients[provider] = OpenAI(
+            timeout=float(os.getenv("AI_PROVIDER_TIMEOUT", "30")),
+            max_retries=int(os.getenv("AI_PROVIDER_MAX_RETRIES", "0")),
+            **kwargs,
+        )
     return _compat_clients[provider]
 
 
@@ -166,6 +178,13 @@ class ChatRequest(BaseModel):
     # efetiva vem de chat_sessions.authority, e só o PATCH da sessão a altera.
     # Ver ai_chat() e app/services/autoridade.py.
     authority: str | None = None
+    task_type: str = "conversation"
+    requested_mode: str | None = None
+    reasoning_effort: str | None = None
+    estimated_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+    correlation_id: str | None = None
+    user_confirmation: bool = False
 TOOLS = [
     {
         "name": "listar_projetos",
@@ -743,30 +762,52 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
     return json.dumps({"erro": "ferramenta desconhecida"})
 
 
+@dataclass
+class ProviderResult:
+    text: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+def _provider_result(value) -> ProviderResult:
+    # Compatibilidade com testes e extensões que ainda devolvem apenas texto.
+    return value if isinstance(value, ProviderResult) else ProviderResult(str(value))
+
+
 def chat_anthropic(messages: list, db: Session, model: str | None = None,
                    system: str | None = None,
-                   nivel: str = autoridade.NIVEL_PADRAO) -> str:
+                   nivel: str = autoridade.NIVEL_PADRAO,
+                   max_output_tokens: int = 16000,
+                   reasoning_effort: str | None = None) -> ProviderResult:
     client = get_anthropic()
     # Camada 1 do gate: o modelo só recebe o catálogo do seu nível.
     tools = autoridade.tools_para(nivel, TOOLS)
-    for _ in range(12):
+    input_tokens = output_tokens = 0
+    for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
         # max_tokens limita thinking + texto da resposta juntos: 4096 truncava
-        # no meio quando o modelo pensa antes de responder.
+        # no meio quando o modelo pensa antes de responder. Hoje o valor vem do
+        # cost guard (AI_MAX_OUTPUT_TOKENS, default 16000) em vez de fixo aqui.
         resp = client.messages.create(
             model=model or ANTHROPIC_MODEL,
-            max_tokens=16000,
-            output_config={"effort": ANTHROPIC_EFFORT},
+            max_tokens=max_output_tokens,
+            output_config={"effort": reasoning_effort or ANTHROPIC_EFFORT},
             system=system or SYSTEM,
             tools=tools,
             messages=messages,
         )
+        input_tokens += int(getattr(resp.usage, "input_tokens", 0) or 0)
+        output_tokens += int(getattr(resp.usage, "output_tokens", 0) or 0)
         if resp.stop_reason == "max_tokens":
             txt = "".join(b.text for b in resp.content if b.type == "text")
-            return (txt + "\n\n[resposta truncada — limite de tokens]") \
+            final = (txt + "\n\n[resposta truncada — limite de tokens]") \
                 if txt else ("Resposta truncada pelo limite de tokens — "
                              "tente um pedido menor ou dividido.")
+            return ProviderResult(final, input_tokens, output_tokens)
         if resp.stop_reason != "tool_use":
-            return "".join(b.text for b in resp.content if b.type == "text")
+            return ProviderResult(
+                "".join(b.text for b in resp.content if b.type == "text"),
+                input_tokens, output_tokens,
+            )
         messages.append({"role": "assistant", "content": resp.content})
         results = []
         for block in resp.content:
@@ -784,7 +825,8 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
                     "content": out,
                 })
         messages.append({"role": "user", "content": results})
-    return "Não consegui concluir a operação (limite de passos)."
+    return ProviderResult("Não consegui concluir a operação (limite de passos).",
+                          input_tokens, output_tokens)
 
 def tools_openai(nivel: str = autoridade.NIVEL_PADRAO) -> list:
     """Mesmo catálogo filtrado da camada 1, no formato dos providers compat."""
@@ -803,20 +845,29 @@ def tools_openai(nivel: str = autoridade.NIVEL_PADRAO) -> list:
 
 def chat_openai(messages: list, db: Session, model: str | None = None,
                 provider: str = "openai", system: str | None = None,
-                nivel: str = autoridade.NIVEL_PADRAO) -> str:
+                nivel: str = autoridade.NIVEL_PADRAO,
+                max_output_tokens: int = 4096,
+                reasoning_effort: str | None = None) -> ProviderResult:
     client = get_openai(provider)
     msgs = [{"role": "system", "content": system or SYSTEM}] + messages
     tools = tools_openai(nivel)
-    for _ in range(12):
-        resp = client.chat.completions.create(
+    input_tokens = output_tokens = 0
+    for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
+        kwargs = dict(
             model=model or COMPAT_PROVIDERS[provider]["default_model"],
-            max_tokens=1024,
+            max_tokens=max_output_tokens,
             tools=tools,
             messages=msgs,
         )
+        if reasoning_effort and provider == "openai":
+            kwargs["reasoning_effort"] = reasoning_effort
+        resp = client.chat.completions.create(**kwargs)
+        usage = getattr(resp, "usage", None)
+        input_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
+        output_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
         msg = resp.choices[0].message
         if not msg.tool_calls:
-            return msg.content or ""
+            return ProviderResult(msg.content or "", input_tokens, output_tokens)
         msgs.append(msg)
         for tc in msg.tool_calls:
             args = json.loads(tc.function.arguments or "{}")
@@ -832,7 +883,8 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
                 "tool_call_id": tc.id,
                 "content": out,
             })
-    return "Não consegui concluir a operação (limite de passos)."
+    return ProviderResult("Não consegui concluir a operação (limite de passos).",
+                          input_tokens, output_tokens)
 
 AI_PROVIDER_KEYS = {
     "anthropic": ("Claude (Anthropic)", "ANTHROPIC_API_KEY"),
@@ -967,7 +1019,45 @@ def ai_voz(req: VozRequest, db: Session = Depends(get_db)):
     except Exception as e:
         return {"reply": f"Erro ao executar: {type(e).__name__} - {e}",
                 "error": True}
-    return {"reply": reply}
+    return {"reply": _provider_result(reply).text}
+
+
+def _record_ai_call(db: Session, *, correlation: uuid.UUID, session,
+                    project_id, provider: str, requested_model: str | None,
+                    selected_model: str, req: ChatRequest,
+                    effort: str | None, reason: str, policy,
+                    estimated_cost: Decimal | None, result: ProviderResult,
+                    duration_ms: int, success: bool,
+                    error_type: str | None = None) -> None:
+    """Audita metadados da chamada, nunca prompt, resposta, chave ou CoT."""
+    db.add(AICallLog(
+        correlation_id=correlation,
+        session_id=session.id if session else None,
+        project_id=project_id,
+        user_id=os.getenv("WORKDEV_OPERATOR_ID", "authenticated-user"),
+        task_type=req.task_type,
+        requested_mode=req.requested_mode,
+        requested_model=requested_model,
+        selected_model=selected_model,
+        provider=provider,
+        reasoning_effort=effort,
+        selection_reason=reason,
+        fallback_occurred=False,
+        input_tokens=result.input_tokens or None,
+        output_tokens=result.output_tokens or None,
+        estimated_cost_usd=estimated_cost,
+        actual_cost_usd=None,
+        is_free=policy.is_free,
+        duration_ms=duration_ms,
+        success=success,
+        error_type=error_type,
+        premium_confirmed=bool(req.user_confirmation and policy.requires_confirmation),
+        confirmed_by=(os.getenv("WORKDEV_OPERATOR_ID", "authenticated-user")
+                      if req.user_confirmation and policy.requires_confirmation else None),
+        confirmed_at=(datetime.now(timezone.utc)
+                      if req.user_confirmation and policy.requires_confirmation else None),
+    ))
+    db.commit()
 
 
 @router.post("/ai/chat")
@@ -1036,32 +1126,132 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     # ativo. Antes, o chat global ia ao modelo sem nenhum dado do WorkDev.
     system = build_system(db, slug_efetivo, nivel)
 
+    if provider in COMPAT_PROVIDERS:
+        selected_model = req.model or COMPAT_PROVIDERS[provider]["default_model"]
+    elif provider == "anthropic":
+        selected_model = req.model or ANTHROPIC_MODEL
+    else:
+        return {
+            "reply": f"Provider não permitido: {provider}", "provider": provider,
+            "error": True, "error_code": "unknown_provider",
+            "session_id": str(session.id) if session else None,
+            "project_slug": slug_efetivo, "authority": nivel,
+            "authority_payload_ignorada": payload_ignorado,
+        }
+
+    try:
+        policy = ai_cost_guard.policy_for(
+            provider, selected_model, db if isinstance(db, Session) else None
+        )
+        correlation = ai_cost_guard.correlation_id(req.correlation_id)
+        if isinstance(db, Session):
+            ai_cost_guard.reject_duplicate(db, correlation)
+        max_output = ai_cost_guard.output_limit(req.max_output_tokens)
+        server_estimate = ai_cost_guard.estimate_tokens(messages, system)
+        # A estimativa do cliente é apenas um piso informativo; nunca pode
+        # reduzir o valor calculado pelo servidor para contornar custo/limite.
+        estimated_input = max(req.estimated_input_tokens or 0, server_estimate)
+        ai_cost_guard.input_limit(estimated_input)
+        effort = ai_cost_guard.normalize_effort(policy, req.reasoning_effort)
+        estimated_cost = ai_cost_guard.estimate_cost(
+            policy, estimated_input, max_output
+        )
+        ai_cost_guard.enforce_per_call_limit(estimated_cost)
+        ai_cost_guard.require_premium_confirmation(
+            policy, req.user_confirmation, estimated_cost
+        )
+        alerts = (ai_cost_guard.enforce_budgets(
+            db, provider=provider,
+            project_id=session.project_id if session else None,
+            estimated_cost=estimated_cost,
+        ) if isinstance(db, Session) else [])
+    except ai_cost_guard.CostGuardError as exc:
+        return {
+            "reply": exc.message, "provider": provider, "model": selected_model,
+            "error": True, "error_code": exc.code,
+            "confirmation_required": exc.code in {
+                "premium_confirmation_required", "max_effort_confirmation_required"
+            },
+            "cost": exc.details,
+            "correlation_id": str(locals().get("correlation", "")) or None,
+            "session_id": str(session.id) if session else None,
+            "project_slug": slug_efetivo, "authority": nivel,
+            "authority_payload_ignorada": payload_ignorado,
+        }
+
+    started = time.monotonic()
     try:
         if provider in COMPAT_PROVIDERS:
-            reply = chat_openai(messages, db, req.model, provider,
-                                system=system, nivel=nivel)
+            raw_result = chat_openai(
+                messages, db, selected_model, provider, system=system,
+                nivel=nivel, max_output_tokens=max_output,
+                reasoning_effort=effort,
+            )
         else:
-            provider = "anthropic"
-            reply = chat_anthropic(messages, db, req.model, system=system,
-                                   nivel=nivel)
+            raw_result = chat_anthropic(
+                messages, db, selected_model, system=system, nivel=nivel,
+                max_output_tokens=max_output, reasoning_effort=effort,
+            )
+        result = _provider_result(raw_result)
+        reply = result.text
     except Exception as e:
+        duration_ms = int((time.monotonic() - started) * 1000)
         reply = f"Erro no provider {provider}: {type(e).__name__} - {e}"
+        try:
+            _record_ai_call(
+                db, correlation=correlation, session=session,
+                project_id=session.project_id if session else None,
+                provider=provider, requested_model=req.model,
+                selected_model=selected_model, req=req, effort=effort,
+                reason="modelo solicitado pelo cliente ou configuração atual",
+                policy=policy, estimated_cost=estimated_cost,
+                result=ProviderResult(""), duration_ms=duration_ms,
+                success=False, error_type=type(e).__name__,
+            )
+        except Exception:
+            db.rollback()
         return {"reply": reply, "provider": provider, "error": True,
+                "model": selected_model, "reasoning_effort": effort,
+                "correlation_id": str(correlation),
                 "session_id": str(session.id) if session else None,
                 "project_slug": slug_efetivo, "authority": nivel,
                 "authority_payload_ignorada": payload_ignorado}
 
+    duration_ms = int((time.monotonic() - started) * 1000)
     if session:
         try:
             db.add(ChatMessageDB(session_id=session.id,
-                                 role="assistant", content=reply))
+                                 role="assistant", content=reply,
+                                 provider=provider, model=selected_model))
             session.updated_at = __import__("datetime").datetime.utcnow()
             db.commit()
         except Exception:
             db.rollback()
+    try:
+        _record_ai_call(
+            db, correlation=correlation, session=session,
+            project_id=session.project_id if session else None,
+            provider=provider, requested_model=req.model,
+            selected_model=selected_model, req=req, effort=effort,
+            reason="modelo solicitado pelo cliente ou configuração atual",
+            policy=policy, estimated_cost=estimated_cost, result=result,
+            duration_ms=duration_ms, success=True,
+        )
+    except Exception:
+        db.rollback()
     # `project_slug` é eco do contexto realmente aplicado, não do que veio no
     # pedido: quando o cliente omite e a sessão já tem projeto, os dois diferem.
-    return {"reply": reply, "provider": provider,
+    return {"reply": reply, "provider": provider, "model": selected_model,
+            "reasoning_effort": effort,
+            "selection_reason": "modelo solicitado pelo cliente ou configuração atual",
+            "cost_category": policy.category,
+            "estimated_cost_usd": (str(estimated_cost)
+                                   if estimated_cost is not None else None),
+            "input_tokens": result.input_tokens or None,
+            "output_tokens": result.output_tokens or None,
+            "actual_cost_usd": None,
+            "fallback_occurred": False, "budget_alerts": alerts,
+            "correlation_id": str(correlation),
             "session_id": str(session.id) if session else None,
             "project_slug": slug_efetivo, "authority": nivel,
             "authority_payload_ignorada": payload_ignorado}

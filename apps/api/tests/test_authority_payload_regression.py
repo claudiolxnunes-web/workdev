@@ -35,7 +35,7 @@ class _Capturado:
         self.nivel = None
 
     def __call__(self, messages, db, model=None, system=None,
-                 nivel=aut.NIVEL_PADRAO):
+                 nivel=aut.NIVEL_PADRAO, **kwargs):
         self.nivel = nivel
         return "resposta"
 
@@ -49,6 +49,8 @@ def _chamar(payload_authority, sessao):
         messages=[{"role": "user", "content": "cria uma task"}],
         session_id="sess-1",
         authority=payload_authority,
+        provider="anthropic",
+        model="claude-haiku-4-5",
     )
     with patch.object(ai, "chat_anthropic", capturado), \
          patch.object(ai, "build_system", return_value="system"):
@@ -173,6 +175,8 @@ class SessaoNovaTest(unittest.TestCase):
             messages=[{"role": "user", "content": "oi"}],
             session_id=None,
             authority="admin",
+            provider="anthropic",
+            model="claude-haiku-4-5",
         )
         with patch.object(ai, "chat_anthropic", capturado), \
              patch.object(ai, "build_system", return_value="system"):
