@@ -8,7 +8,8 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
 - Frontend: `apps/web` — React + TypeScript + Vite + Tailwind + shadcn/ui
 - Backend: `apps/api` — FastAPI + SQLAlchemy + psycopg3 (Python), Alembic para migrations
 - Package manager: pnpm workspace + Turborepo
-- Deploy: `bash /opt/workdev/deploy.sh` → `pnpm build && systemctl restart workdev-api`
+- Deploy: pipeline com prova assinada — `prepare` → `approve` → `bash /opt/workdev/deploy.sh <proof_id>` (ver seção Deploy abaixo).
+  NÃO é mais `pnpm build && systemctl restart`.
 - Domínio: https://workdev.bpfconsult.com.br (HTTPS via Traefik + Let's Encrypt)
 
 ## Infraestrutura
@@ -146,17 +147,99 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
   testes, vitest.config.ts, scripts/setup-config.sh, docs/settings-system.md)
   — o backend já foi revisado e commitado (42ce003), falta essa parte.
 - Dar tools de grafo (`graph_nodes`/`graph_edges`) para o Fable no AI Hub.
+- **Ownership root residual em `/opt/workdev` (causa raiz, adiado em 2026-08-20).**
+  Depois do `7d14fab feat(agents): run workdev services unprivileged` os serviços
+  passaram a rodar como `workdev`, mas vários diretórios continuaram `root:root`,
+  criados quando tudo era root. Sintomas já vistos: `pnpm install` morre com
+  `EACCES rmdir` nos `node_modules`, `pytest` não escreve `.pytest_cache`, e o
+  `apps/api/.env` residual é `root:root 600`. Contornado na marra rodando
+  `pnpm install` com `sudo`, o que **recria `node_modules` como root e realimenta
+  o problema**. Correção de verdade: varrer o repo inteiro
+  (`sudo find /opt/workdev -user root -not -path '*/venv/*'`) e decidir caso a
+  caso o que passa para `workdev:workdev` — não sair dando `chown -R` no
+  `/opt/workdev` todo às cegas, porque `venv/` e os `.env` têm dono e modo
+  propositais.
 
 
 ## workdev-api.service
-- Unit SEM EnvironmentFile — o .env é lido pela app (dotenv), não pelo systemd
-- Arquivo real: /opt/workdev/apps/api/.env  (o /opt/workdev/.env NÃO é lido)
-- venv: /opt/workdev/apps/api/venv  (sem ponto)
-- ExecStart: venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
-- User=root
-- Teste de carga da variável (NÃO usar /proc/PID/environ — dá 0 mesmo funcionando):
-  /opt/workdev/apps/api/venv/bin/python -c "from dotenv import load_dotenv; import os; load_dotenv('/opt/workdev/apps/api/.env'); v=os.getenv('VAR'); print('OK', len(v)) if v else print('AUSENTE')"
+
+> ⚠️ Atualizado em 2026-08-20. A versão anterior desta seção dizia `User=root` e
+> apontava o env para `/opt/workdev/apps/api/.env` — as duas coisas ficaram falsas
+> depois do commit `7d14fab feat(agents): run workdev services unprivileged`.
+> Seguir a nota velha faz `pytest` e qualquer script quebrarem com
+> `PermissionError` no `.env`.
+
+- Roda **sem privilégio**: `User=workdev`, `Group=workdev`,
+  `SupplementaryGroups=workdev-runtime`, `NoNewPrivileges=true`
+- Unit SEM `EnvironmentFile` — o dotenv é carregado pela app, mas o **caminho vem
+  da variável de ambiente** `WORKDEV_API_ENV_FILE`, setada via `Environment=` no unit:
+  ```python
+  # app/main.py e app/database.py
+  load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
+  ```
+- **Arquivo real do env: `/etc/workdev/workdev-api.env`** (`workdev:workdev 600`)
+- `/opt/workdev/apps/api/.env` é **resíduo** (`root:root 600`, ilegível pelo user
+  `workdev`). Não é lido pelo serviço. Se `WORKDEV_API_ENV_FILE` não estiver setada,
+  o `load_dotenv(None)` cai no auto-discovery, acha esse resíduo e estoura
+  `PermissionError` — foi exatamente o que aconteceu em 2026-08-20
+- `WORKDEV_WEB_DIST=/opt/workdev-runtime/current/apps/web/dist` e
+  `WorkingDirectory=/opt/workdev-runtime/current/apps/api` — produção **não serve
+  de `/opt/workdev`**, serve da release promovida (ver seção Deploy)
+- venv: `/opt/workdev/apps/api/venv` (sem ponto) — este continua no caminho antigo
+- ExecStart: `/opt/workdev/apps/api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`
+- `PrivateTmp=false` de propósito: o Agent Hub precisa enxergar o socket tmux em
+  `/tmp/tmux-<uid>`. Um /tmp privado esconderia o socket do processo da API
+- Rodar a suíte de testes como `workdev` (o `.env` residual não é legível):
+  ```
+  printf 'DATABASE_URL=postgresql+psycopg://u:p@127.0.0.1:5432/fake\n' > /tmp/test.env
+  cd /opt/workdev/apps/api
+  WORKDEV_API_ENV_FILE=/tmp/test.env venv/bin/python -m pytest tests/ -q -p no:cacheprovider
+  ```
+  (`-p no:cacheprovider` porque `.pytest_cache` também é root. DSN falso basta:
+  os testes não conectam, mas `app/database.py` cria o engine na importação.)
+- Teste de carga de uma variável (NÃO usar `/proc/PID/environ` — dá 0 mesmo funcionando):
+  ```
+  /opt/workdev/apps/api/venv/bin/python -c "from dotenv import load_dotenv; import os; load_dotenv('/etc/workdev/workdev-api.env'); v=os.getenv('VAR'); print('OK', len(v)) if v else print('AUSENTE')"
+  ```
 - GITHUB_TOKEN: fine-grained, All repos, Contents+Metadata Read-only, sem expiracao
+
+## Deploy — pipeline com prova assinada
+
+`deploy.sh` não builda nada. Ele é um wrapper que exige root + um `proof_id` e
+delega para `/usr/local/sbin/workdev-deployctl`, que por sua vez roda o broker
+como o usuário `workdev-deploy`:
+
+```
+/opt/workdev/deploy.sh <proof_id>
+  └─ /usr/local/sbin/workdev-deployctl deploy <proof_id>   (exige root)
+      └─ runuser -u workdev-deploy -- /usr/local/lib/workdev-deploy/deploy_broker.py
+```
+
+Três etapas, nesta ordem:
+
+| Etapa | Comando | O que faz |
+|---|---|---|
+| 1 | `workdev-deployctl prepare` | roda o predeploy-gate, emite prova assinada com fingerprint de `apps/web/dist`, monta a release em `/opt/workdev-runtime`. Imprime o `proof_id`. TTL padrão 900s |
+| 2 | `workdev-deployctl approve <proof_id> --actor <nome>` | emite o approval assinado |
+| 3 | `bash /opt/workdev/deploy.sh <proof_id>` | revalida o fingerprint, promove a release, reinicia a API, roda o postcheck; **rollback automático** se o postcheck falhar |
+
+- O **build tem que existir antes do `prepare`** — o fingerprint é tirado de
+  `/opt/workdev/apps/web/dist`. Buildar depois do `prepare` invalida a prova
+  (`artefato preparado diverge da prova`).
+- Deploys são serializados por `flock` em `/var/lib/workdev-deploy/deploy.lock`.
+- O único `systemctl` que o broker executa é `restart workdev-api.service`.
+  **Não toca em `workdev-agents.service`** — as sessões tmux dos agentes
+  (codex/kimi/qwen) sobrevivem ao deploy.
+
+## Sessões tmux dos agentes — cuidado ao reiniciar units
+
+Existe **um único tmux server** (dono `workdev`, socket `/tmp/tmux-999/default`)
+servindo TODAS as sessões, e ele vive no cgroup de `workdev-agents.service`
+(`Type=oneshot`, `RemainAfterExit=yes`).
+
+Consequência: `systemctl restart|stop workdev-agents.service` mata o cgroup
+inteiro e derruba **todas as sessões de uma vez**. `workdev-api` pode ser
+reiniciado à vontade — é outro cgroup.
 
 ## Build do frontend
 - .env.local do Vite tem precedencia e vaza VITE_API_URL=localhost no bundle de producao
