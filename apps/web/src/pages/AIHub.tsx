@@ -26,7 +26,9 @@ interface Divider {
   label: string;
 }
 
-const MODELOS = [
+export const MODELOS = [
+  { label: "Gemini 3.5 Flash", provider: "gemini", model: "gemini-3.5-flash" },
+  { label: "GPT-OSS 20B (Ollama Cloud)", provider: "ollama", model: "gpt-oss:20b" },
   { label: "GPT-5.6 Luna", provider: "openai", model: "gpt-5.6-luna" },
   { label: "Qwen3 Coder", provider: "openrouter", model: "qwen/qwen3-coder" },
   { label: "Nemotron Ultra 550B (free)", provider: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b:free" },
@@ -34,8 +36,6 @@ const MODELOS = [
   { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
   { label: "GPT-4o", provider: "openai", model: "gpt-4o" },
   { label: "Claude Haiku 4.5", provider: "anthropic", model: "claude-haiku-4-5-20251001" },
-  { label: "GPT-OSS 20B (Ollama Cloud)", provider: "ollama", model: "gpt-oss:20b" },
-  { label: "Gemini 3.5 Flash", provider: "gemini", model: "gemini-3.5-flash" },
   { label: "Kimi K2.6", provider: "kimi", model: "kimi-k2.6" },
   { label: "Kimi K2.7 Code", provider: "kimi", model: "kimi-k2.7-code" },
   { label: "Kimi K3 (OpenRouter)", provider: "openrouter", model: "moonshotai/kimi-k3" },
@@ -43,7 +43,7 @@ const MODELOS = [
 ];
 const MODELO_STORAGE_KEY = "workdev_ai_hub_modelo";
 const PROJETO_STORAGE_KEY = "workdev_ai_hub_projeto";
-const DEFAULT_MODELO_LABEL = "GPT-5.6 Luna";
+export const DEFAULT_MODELO_LABEL = "Gemini 3.5 Flash";
 const AUTORIDADE_PADRAO: Authority = "plan";
 
 function loadStoredModelo() {
