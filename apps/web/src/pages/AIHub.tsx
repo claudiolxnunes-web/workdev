@@ -210,7 +210,11 @@ export default function AIHub() {
           project_slug: projectSlug,
         }),
       });
-      const data = await r.json();
+      let data = await r.json();
+      if (data.confirmation_required && window.confirm(`${data.reply}\n\nContinuar mesmo assim?`)) {
+        const r2 = await fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: next, session_id: sessionId, provider: modelo.provider, model: modelo.model, project_slug: projectSlug, user_confirmation: true }) });
+        data = await r2.json();
+      }
       if (data.authority === "observe" || data.authority === "plan") {
         setAuthority(data.authority);
       }

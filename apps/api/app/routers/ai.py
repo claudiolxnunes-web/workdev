@@ -790,7 +790,7 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
         resp = client.messages.create(
             model=model or ANTHROPIC_MODEL,
             max_tokens=max_output_tokens,
-            output_config={"effort": reasoning_effort or ANTHROPIC_EFFORT},
+            **({"output_config": {"effort": reasoning_effort}} if reasoning_effort else {}),
             system=system or SYSTEM,
             tools=tools,
             messages=messages,
