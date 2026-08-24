@@ -129,8 +129,8 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
               <details className="mb-3 text-sm text-slate-400">
                 <summary className="cursor-pointer text-sky-400">Ver critérios e validações</summary>
                 <div className="mt-2 space-y-3 border-l border-slate-700 pl-3">
-                  <div><p className="font-medium text-slate-300">Critérios de aceite</p><ul className="list-disc pl-5">{plan.acceptance_criteria.map((item) => <li key={item}>{item}</li>)}</ul></div>
-                  <div><p className="font-medium text-slate-300">Validações</p><ul className="list-disc pl-5">{plan.validation_steps.map((item) => <li key={item}>{item}</li>)}</ul></div>
+                  <div><p className="font-medium text-slate-300">Critérios de aceite</p><ul className="list-disc pl-5">{plan.acceptance_criteria.map((item) => <li key={typeof item === "string" ? item : JSON.stringify(item)}>{typeof item === "string" ? item : (item as {item?: string}).item ?? JSON.stringify(item)}</li>)}</ul></div>
+                  <div><p className="font-medium text-slate-300">Validações</p><ul className="list-disc pl-5">{plan.validation_steps.map((item) => <li key={typeof item === "string" ? item : JSON.stringify(item)}>{typeof item === "string" ? item : (item as {item?: string}).item ?? JSON.stringify(item)}</li>)}</ul></div>
                 </div>
               </details>
               <div className="flex flex-wrap gap-2">
