@@ -21,3 +21,4 @@ supabase/.temp/
 # Backups e locais
 *.bak
 .local/
+.backups/
