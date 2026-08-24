@@ -211,7 +211,7 @@ def _arquivos_nao_indexados(arquivos, fontes_indexadas, agora):
             "medium",
             bucket,
             ordem,
-            f"{len(ausentes)} arquivo(s) markdown sob as raízes do ingestor não estão "
+            f"{len(ausentes)} arquivo(s) textual(is) sob as raízes do ingestor não estão "
             "no índice",
             agora,
             {"ausentes": len(ausentes), "exemplos": ausentes[:5]},

@@ -7,6 +7,7 @@ de o que é achado é pura.
 
 import ast
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ sys.path.insert(0, str(RAIZ / "scripts"))
 
 from supervisor import config  # noqa: E402
 from supervisor.checks import agent_health, deploy_drift, knowledge_drift  # noqa: E402
+from supervisor.readers.repo import LeitorRepositorio  # noqa: E402
 
 
 AGORA = datetime(2026, 8, 16, 12, 0, 0, tzinfo=timezone.utc)
@@ -359,6 +361,27 @@ class ParidadeComIngestorTest(unittest.TestCase):
         self.assertEqual(
             [tuple(item) for item in valor], [tuple(i) for i in config.RAG_RAIZES]
         )
+
+
+class ArquivosTextuaisDoRagTest(unittest.TestCase):
+    def test_supervisor_enxerga_markdown_e_txt_com_o_mesmo_titulo_do_ingestor(self):
+        with tempfile.TemporaryDirectory() as temporario:
+            raiz = Path(temporario)
+            pasta = raiz / "knowledge"
+            pasta.mkdir()
+            (pasta / "arquitetura.md").write_text("# Arquitetura\n", encoding="utf-8")
+            (pasta / "operacao.txt").write_text("texto simples\n", encoding="utf-8")
+            (pasta / "ignorar.json").write_text("{}\n", encoding="utf-8")
+            leitor = LeitorRepositorio(raiz)
+
+            self.assertEqual(
+                leitor.arquivos_markdown("knowledge", True),
+                ["knowledge/arquitetura.md", "knowledge/operacao.txt"],
+            )
+            self.assertEqual(leitor.titulo_markdown("knowledge/arquitetura.md"),
+                             "Arquitetura")
+            self.assertEqual(leitor.titulo_markdown("knowledge/operacao.txt"),
+                             "operacao")
 
 
 # ---------------------------------------------------------------- agent_health

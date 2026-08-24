@@ -122,15 +122,18 @@ class LeitorRepositorio:
         return datetime.fromtimestamp(mais_novo[0], tz=timezone.utc), mais_novo[1]
 
     def arquivos_markdown(self, subcaminho: str, e_diretorio: bool) -> list[str]:
-        """Caminhos relativos dos .md sob uma raiz do ingestor do RAG."""
+        """Caminhos relativos dos .md e .txt aceitos pelo ingestor do RAG.
+
+        O nome histórico é preservado para não quebrar consumidores externos.
+        """
         alvo = self.raiz / subcaminho
         try:
             if not e_diretorio:
                 return [subcaminho] if alvo.is_file() else []
             return sorted(
                 str(arquivo.relative_to(self.raiz))
-                for arquivo in alvo.rglob("*.md")
-                if arquivo.is_file()
+                for arquivo in alvo.rglob("*")
+                if arquivo.is_file() and arquivo.suffix in {".md", ".txt"}
             )
         except OSError:
             return []
@@ -182,12 +185,12 @@ class LeitorRepositorio:
         return revisoes, revisoes - anteriores
 
     def titulo_markdown(self, subcaminho: str) -> str:
-        """Primeiro cabeçalho H1 do arquivo, que é o título que o RAG indexa."""
+        """Título calculado do mesmo modo que o ingestor para .md e .txt."""
         for linha in self.ler_texto(subcaminho, limite=2000).splitlines():
             limpa = linha.strip()
             if limpa.startswith("# "):
                 return limpa[2:].strip()
-        return ""
+        return Path(subcaminho).stem
 
     def ler_texto(self, subcaminho: str, limite: int = 4000) -> str:
         try:
