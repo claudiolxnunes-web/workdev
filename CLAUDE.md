@@ -83,13 +83,24 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
      o UUID antigo). Sync testado ponta a ponta: criar um ADR via
      `POST /api/adrs` gera o nó correspondente em `graph_nodes` em
      background, confirmado por leitura direta no Supabase.
-   - Pendência restante: `POST /api/engineering/graph/sync` (backfill do
-     histórico existente) ainda não foi executado — só sincroniza dali pra
-     frente. Não confirmado se o enum `node_type`/`relationship_type` do
-     Postgres do grafo aceita os valores novos usados pelo código
-     (`Decision`, `HAS_DECISION`, `BELONGS_TO`, `DEPENDS_ON` etc.) — se não
-     aceitar, esses syncs específicos falham graciosamente (logado, não
-     quebra a API) até alguém rodar `ALTER TYPE` no Supabase.
+   - ✅ **Backfill executado em 2026-08-26: 798 sincronizados, 0 falhas.**
+     A primeira tentativa falhou em 150 operações, todas `23503` (FK
+     violation): faltavam 11 linhas na tabela `projects` do grafo. Inseridas
+     todas as 19, com os MESMOS uuids do Postgres — é isso que a FK de
+     `graph_nodes.project_id` exige. Todo projeto novo no Postgres precisa da
+     linha correspondente no grafo antes de qualquer sync, senão volta a
+     falhar.
+   - ✅ **Enums confirmados em 2026-08-26.** `node_type` aceita `Project,
+     Feature, Task, Subtask, Knowledge, ADR, RFC, Commit, Deployment, Release,
+     AIConversation, Monitoring, Decision, Plan, AgentRun, AgentEvent`;
+     `relationship_type` aceita os 19 valores usados pelo código, incluindo
+     `HAS_DECISION`, `BELONGS_TO`, `DEPENDS_ON`, `HAS_PLAN`, `HAS_RUN` e
+     `HAS_EVENT`. O `ALTER TYPE` já havia sido feito e nunca registrado — não
+     é mais preciso verificar.
+   - Rodar o backfill: `POST /api/engineering/graph/sync` com header
+     `X-API-Key` (valor em `WORKDEV_API_KEY`). Exige `SUPABASE_SECRET_KEY`
+     configurada, senão devolve 503. É idempotente (upsert por tipo +
+     entity_id), pode rodar de novo sem duplicar.
 2. **NutriGestor CRM** (`ngrepqqlvglzqnoswfug`): projeto separado, não relacionado
    ao WorkDev.
 - Postgres principal do WorkDev (backlog, projects, chat) é o container `postgres`
@@ -134,15 +145,26 @@ monitorar seu portfólio de projetos de software. Monorepo pnpm em `/opt/workdev
   no frontend. Se uma secret aparecer em terminal/log, sinalizar para rotação.
 - Idioma de trabalho: português (Brasil).
 
+## Projetos — consolidação Feed_BPF → BPF Suite (2026-08-26)
+
+O projeto `Feed_BPF` (`slug=feed-bpf`, id `8b55932c-…`) **não existe mais**.
+Era registro duplicado do mesmo sistema que o `BPF Suite` (`slug=bpf-suite`,
+id `378f90b4-…`): apontava para um Supabase inexistente (`tebrkrbfsjquqpckslks`,
+que na verdade é do FeedOptimize/NutriControle) e tinha stack errada
+("React + FastAPI", copiada do WorkDev Core).
+
+O registro errado é que tinha os dados. Migrados para o `BPF Suite`: 24 itens
+de backlog (3 duplicatas removidas), 4 ADRs, 3 decisions, 2 knowledge. No
+grafo, os 21 nós foram movidos junto e a linha órfã removida — as arestas
+referenciam ids de nó, não `project_id`, então sobreviveram intactas.
+
+Se algum resumo antigo ou log citar o projeto `feed-bpf`, é este: procurar em
+`bpf-suite`. O repositório continua se chamando `feed-bpf`, só o registro no
+WorkDev que mudou.
+
 ## Pendências conhecidas (não fazer sem pedir)
-- Cadastrar os outros 5 projetos (Agente Pessoal, OpenClaw, Feed_BPF,
-  NutriControle, NutriGestor CRM) na tabela `projects` do grafo Supabase —
-  hoje só o WorkDev Core tem linha lá, o backfill falha pros outros por FK.
 - Cascade de exclusão Postgres → grafo (deletar ADR/RFC/Decision não limpa o
   nó órfão em `graph_nodes`).
-- Confirmar se o enum `node_type`/`relationship_type` do Supabase aceita os
-  valores novos usados pelo `graph_sync` (`Decision`, `HAS_DECISION`,
-  `BELONGS_TO` etc.) — não verificado ainda.
 - Revisar e commitar o lote "Settings system" do frontend (SettingsPanel,
   testes, vitest.config.ts, scripts/setup-config.sh, docs/settings-system.md)
   — o backend já foi revisado e commitado (42ce003), falta essa parte.

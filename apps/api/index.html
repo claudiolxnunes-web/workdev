@@ -1,0 +1,2936 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FeedOptimize</title>
+<!-- Supabase JS SDK -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3/dist/jszip.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --green:#3B9B6E;--green-l:rgba(59,155,110,.12);--green-m:#2E7D57;
+  --earth:#D4A04A;--earth-l:rgba(212,160,74,.1);
+  --bg:#0C1220;--surface:#151E2F;--surface-alt:#1A2740;--border:#253352;
+  --text:#D8E2F0;--muted:#7A8FAB;
+  --red:#E85454;--red-l:rgba(232,84,84,.1);
+  --blue:#4A90E2;--blue-l:rgba(74,144,226,.12);
+  --warn:#E8A838;--warn-l:rgba(232,168,56,.1);
+  --accent:#4A90E2;--accent-glow:rgba(74,144,226,.2);
+  --header:#101B2E;--card-shadow:0 2px 12px rgba(0,0,0,.35);
+}
+body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);background:var(--bg);min-height:100vh}
+header{background:var(--header);color:#fff;height:56px;display:flex;align-items:center;padding:0 22px;gap:16px;box-shadow:0 2px 16px rgba(0,0,0,.45);position:sticky;top:0;z-index:100;border-bottom:1px solid var(--border)}
+.logo{font-size:19px;font-weight:700;letter-spacing:-.5px;white-space:nowrap;color:#7EB8F0}
+.logo span{font-size:11px;opacity:.5;font-weight:400;margin-left:6px;color:var(--muted)}
+nav{display:flex;gap:2px;margin-left:auto;flex-wrap:wrap}
+nav button{padding:6px 13px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:500;background:transparent;color:rgba(255,255,255,.6);transition:all .2s}
+nav button.active{background:var(--accent);color:#fff;box-shadow:0 1px 6px rgba(74,144,226,.35)}
+nav button:hover:not(.active){background:rgba(255,255,255,.08);color:rgba(255,255,255,.9)}
+main{max-width:1400px;margin:0 auto;padding:20px 16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:visible;box-shadow:var(--card-shadow)}
+.card-hdr{padding:12px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface-alt);border-radius:10px 10px 0 0;gap:8px}
+.card-title{font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.05em}
+.tab{display:none}.tab.active{display:block}
+input,select{width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text);background:var(--surface-alt);outline:none;font-family:inherit;transition:border-color .2s,box-shadow .2s}
+input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-glow)}
+select option{background:var(--surface);color:var(--text)}
+/* Remover spinner dos inputs numéricos */
+input[type=number]{-moz-appearance:textfield;text-align:right}
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+table{width:100%;border-collapse:collapse}
+th{padding:8px 10px;text-align:left;border-bottom:2px solid var(--border);color:var(--muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;background:var(--surface-alt);position:sticky;top:0;z-index:2}
+td{padding:7px 10px;border-bottom:1px solid rgba(37,51,82,.6);vertical-align:middle}
+/* Linhas da fórmula com altura generosa */
+#fml-linhas td{padding:5px 8px}
+.btn{padding:6px 13px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit;transition:all .2s}
+.btn-green{background:var(--green);color:#fff}.btn-green:hover{opacity:.88;box-shadow:0 2px 8px rgba(59,155,110,.3)}
+.btn-blue{background:var(--accent);color:#fff}.btn-blue:hover{opacity:.88;box-shadow:0 2px 8px rgba(74,144,226,.3)}
+.btn-earth{background:var(--earth);color:#fff}.btn-earth:hover{opacity:.88}
+.btn-ghost{background:var(--surface-alt);color:var(--muted);border:1px solid var(--border)}.btn-ghost:hover{background:rgba(74,144,226,.1);color:var(--text);border-color:var(--accent)}
+.btn-danger{background:var(--red);color:#fff}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.tag{display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700}
+.tag-green{background:var(--green-l);color:var(--green);border:1px solid rgba(59,155,110,.25)}
+.tag-earth{background:var(--earth-l);color:var(--earth);border:1px solid rgba(212,160,74,.25)}
+.badge{display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700}
+.badge-ok{background:var(--green-l);color:var(--green)}
+.badge-low{background:var(--red-l);color:var(--red)}
+.badge-high{background:var(--warn-l);color:var(--warn)}
+.row-flex{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.flex-auto{flex:1 1 340px;min-width:0}
+.flex-fixed{flex:0 1 320px}
+.scroll-y{overflow-y:auto}
+.solver-panel{border-left:4px solid var(--accent);margin-bottom:16px;overflow:visible}
+.solver-result{padding:9px 14px;border-radius:6px;font-size:12px;font-weight:600;margin:0 18px 14px}
+.solver-ok{background:var(--green-l);color:var(--green)}
+.solver-warn{background:var(--warn-l);color:var(--warn)}
+.solver-err{background:var(--red-l);color:var(--red)}
+.fml-tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+.fml-tab{padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit}
+.fml-tab.active{background:var(--accent);color:#fff;box-shadow:0 1px 6px rgba(74,144,226,.3)}
+.fml-tab:not(.active){background:var(--surface-alt);color:var(--muted);border:1px solid var(--border)}
+.fml-tab:not(.active):hover{background:rgba(74,144,226,.1);color:var(--text)}
+/* Autocomplete — z-index alto para ficar sobre tudo */
+.autocomplete{position:relative;z-index:10}
+.ac-list{position:absolute;top:calc(100% + 2px);left:0;min-width:100%;width:max-content;max-width:520px;z-index:9999;background:var(--surface-alt);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.4);max-height:260px;overflow-y:auto;display:none}
+.ac-list.open{display:block}
+.ac-item{padding:8px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid rgba(37,51,82,.5);display:flex;justify-content:space-between;align-items:center;gap:12px;white-space:nowrap;transition:background .15s}
+.ac-item:last-child{border-bottom:none}
+.ac-item:hover{background:var(--accent-glow)}
+.ac-item.selected{background:var(--accent-glow);font-weight:600;color:var(--accent)}
+.ac-nome{flex:1;overflow:hidden;text-overflow:ellipsis}
+.ac-price{font-size:11px;color:var(--muted);flex-shrink:0}
+.ac-empty{padding:10px 14px;font-size:12px;color:var(--muted);font-style:italic}
+/* Campo de busca do ingrediente — destaque visual */
+.ac-inp{font-size:13px!important;padding:8px 12px!important;border:1.5px solid var(--border)!important}
+.ac-inp:focus{border-color:var(--accent)!important;box-shadow:0 0 0 3px var(--accent-glow)!important}
+details summary{cursor:pointer;font-size:12px;color:var(--muted);margin-bottom:6px;user-select:none}
+.nut-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:5px;margin-top:6px}
+.nut-row{display:flex;align-items:center;gap:4px}
+.nut-label{flex:1;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.nut-label.filled{color:var(--text)}
+.nut-label.empty{color:var(--muted)}
+.nut-unit{font-size:10px;color:var(--muted);width:46px;flex-shrink:0}
+.nut-input{width:82px!important;flex-shrink:0}
+.exig-panel{display:flex;flex-direction:column;gap:14px;max-width:900px;margin:0 auto;width:66%}
+.exig-list{width:100%}
+.exig-edit{width:100%}
+.exig-item{padding:10px 14px}
+.exig-item>div:first-child{min-width:0;flex:1}
+.exig-item{padding:9px 14px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.exig-item.sel{background:var(--accent-glow)}
+.exig-item:hover:not(.sel){background:rgba(255,255,255,.03)}
+.row-low td{background:var(--red-l)!important}
+.row-high td{background:var(--warn-l)!important}
+.info-badge{font-size:10px;background:var(--accent-glow);color:var(--accent);padding:2px 6px;border-radius:4px;border:1px solid rgba(74,144,226,.2)}
+.cost-big{font-size:14px;font-weight:700;color:var(--earth)}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(74,144,226,.3);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* Linha zebrada na tabela de ingredientes */
+#fml-linhas tr:nth-child(even){background:rgba(255,255,255,.02)}
+#fml-linhas tr:hover{background:var(--accent-glow)!important}
+/* Coluna ingrediente ocupa todo espaço restante */
+#fml-linhas td:first-child{min-width:280px}
+/* Botão deletar linha */
+.btn-del-linha{background:none;border:none;cursor:pointer;color:#ccc;font-size:18px;line-height:1;padding:2px 4px;border-radius:4px;transition:color .15s}
+.btn-del-linha:hover{color:var(--red)}
+
+/* ─── SYNC BADGE ─────────────────────────────────── */
+#sync-badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:rgba(74,144,226,.15);color:var(--muted);cursor:default;white-space:nowrap;transition:all .3s;border:1px solid rgba(74,144,226,.2)}
+#sync-badge.ok{background:rgba(59,155,110,.15);color:#6BD4A0;border-color:rgba(59,155,110,.3)}
+#sync-badge.syncing{background:rgba(74,144,226,.15);color:#7EB8F0;border-color:rgba(74,144,226,.3)}
+#sync-badge.offline{background:rgba(232,168,56,.12);color:#E8C878;border-color:rgba(232,168,56,.25)}
+#sync-badge.error{background:rgba(232,84,84,.12);color:#F08888;border-color:rgba(232,84,84,.25)}
+#sync-badge.pending{background:rgba(232,168,56,.12);color:#E8C878;border-color:rgba(232,168,56,.25)}
+
+/* ─── USER MENU ──────────────────────────────────── */
+#user-menu{position:relative}
+#user-btn{background:rgba(74,144,226,.15);border:1px solid rgba(74,144,226,.25);color:#7EB8F0;border-radius:6px;padding:5px 11px;cursor:pointer;font-size:12px;font-weight:500;font-family:inherit;white-space:nowrap;transition:all .2s}
+#user-btn:hover{background:rgba(74,144,226,.25);color:#fff}
+#user-dropdown{display:none;position:absolute;top:calc(100% + 6px);right:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.45);min-width:220px;z-index:999;overflow:hidden}
+#user-dropdown.open{display:block}
+.ud-info{padding:12px 14px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)}
+.ud-info strong{display:block;color:var(--text);font-size:13px;margin-bottom:2px}
+.ud-item{padding:9px 14px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:8px;transition:background .15s;color:var(--text)}
+.ud-item:hover{background:var(--accent-glow)}
+.ud-item.danger{color:var(--red)}
+
+/* ─── MODAL LOGIN ────────────────────────────────── */
+#login-overlay{display:none;position:fixed;inset:0;background:rgba(8,14,26,.8);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(6px)}
+#login-overlay.open{display:flex}
+#login-box{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:36px 32px;width:100%;max-width:400px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+.login-logo{font-size:22px;font-weight:700;color:#7EB8F0;letter-spacing:-.5px;margin-bottom:4px}
+.login-sub{font-size:13px;color:var(--muted);margin-bottom:28px}
+.login-tabs{display:flex;gap:0;margin-bottom:22px;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.login-tab{flex:1;padding:8px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:500;font-family:inherit;color:var(--muted);transition:all .2s}
+.login-tab.active{background:var(--accent);color:#fff}
+.login-field{margin-bottom:14px}
+.login-field label{font-size:11px;font-weight:700;color:var(--muted);display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em}
+.login-field input{width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none;transition:border-color .2s,box-shadow .2s;background:var(--surface-alt);color:var(--text)}
+.login-field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+#login-btn{width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:7px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;margin-top:6px;transition:all .2s}
+#login-btn:hover{opacity:.88;box-shadow:0 2px 12px rgba(74,144,226,.35)}
+#login-btn:disabled{opacity:.4;cursor:not-allowed}
+#login-msg{margin-top:12px;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:600;display:none}
+#login-msg.ok{background:var(--green-l);color:var(--green);display:block;border:1px solid rgba(59,155,110,.25)}
+#login-msg.err{background:var(--red-l);color:var(--red);display:block;border:1px solid rgba(232,84,84,.25)}
+.login-skip{text-align:center;margin-top:16px;font-size:12px;color:var(--muted)}
+.login-skip a{color:var(--accent);cursor:pointer;text-decoration:underline}
+
+/* ─── SUPABASE CONFIG BADGE ──────────────────────── */
+#sb-config-warn{display:none;background:rgba(232,168,56,.08);color:var(--warn);padding:10px 18px;font-size:12px;font-weight:600;border-bottom:1px solid rgba(232,168,56,.2);text-align:center}
+
+/* ─── TOAST ──────────────────────────────────────── */
+#toast{position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast-item{background:var(--surface-alt);color:var(--text);padding:10px 16px;border-radius:8px;font-size:12px;font-weight:500;box-shadow:0 4px 24px rgba(0,0,0,.4);border:1px solid var(--border);opacity:0;transform:translateY(8px);transition:all .25s;pointer-events:none}
+.toast-item.show{opacity:1;transform:translateY(0)}
+.toast-item.ok{border-left:3px solid var(--green)}
+.toast-item.err{border-left:3px solid var(--red)}
+.toast-item.info{border-left:3px solid var(--accent)}
+
+/* ─── HISTÓRICO ──────────────────────────────────── */
+#tab-historico table td:first-child{font-size:11px;color:var(--muted)}
+.hist-status{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700}
+.hist-ok{background:var(--green-l);color:var(--green);border:1px solid rgba(59,155,110,.2)}
+.hist-err{background:var(--red-l);color:var(--red);border:1px solid rgba(232,84,84,.2)}
+
+/* ─── DRAG HANDLE ────────────────────────────────── */
+.drag-handle{color:var(--muted);font-size:14px;cursor:grab;user-select:none;opacity:.4;transition:opacity .2s;line-height:1;flex-shrink:0}
+.drag-handle:hover{opacity:.9;color:var(--accent)}
+tr[draggable]:active{cursor:grabbing}
+tr.drag-over{border-top:2px solid var(--accent)!important}
+
+/* ─── SCROLLBAR DARK ────────────────────────────── */
+::-webkit-scrollbar{width:7px;height:7px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(74,144,226,.25);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:rgba(74,144,226,.4)}
+::selection{background:rgba(74,144,226,.3);color:#fff}
+
+/* ─── SMOOTH TRANSITIONS ────────────────────────── */
+.card,.btn,.fml-tab,.exig-item,.ac-item,.ud-item{transition:all .2s ease}
+
+/* ─── MOBILE RESPONSIVE ─────────────────────────── */
+@media(max-width:768px){
+  header{height:auto;min-height:52px;flex-wrap:wrap;padding:8px 12px;gap:8px}
+  .logo{font-size:16px;width:100%;text-align:center}
+  .logo span{display:none}
+  nav{width:100%;justify-content:center;gap:1px;order:3}
+  nav button{padding:5px 8px;font-size:11px}
+  #sync-badge{order:1;font-size:10px}
+  #user-menu{order:2}
+  main{padding:10px 8px}
+  .row-flex{flex-direction:column}
+  .flex-auto,.flex-fixed{flex:1 1 100%!important;min-width:0!important}
+  .exig-panel{flex-direction:column}
+  .exig-list,.exig-edit{flex:1 1 100%!important}
+  .fml-tabs{gap:4px}
+  .fml-tab{padding:5px 10px;font-size:11px}
+  #fml-linhas td:first-child{min-width:160px!important}
+  .nut-grid{grid-template-columns:1fr!important}
+  .card-hdr{flex-wrap:wrap;gap:6px}
+  #comp-panel{margin-top:12px}
+  .solver-panel .card-hdr{flex-direction:column;align-items:stretch}
+  #solver-panel>div{flex-direction:column!important}
+  .drag-handle{display:none}
+  .cost-big{font-size:13px}
+  #cmp-editors{flex-direction:column}
+  #user-dropdown{right:-40px;min-width:260px}
+  #login-box{padding:24px 16px;margin:0 10px}
+}
+
+@media(max-width:480px){
+  nav button{padding:4px 6px;font-size:10px}
+  .card-hdr{padding:8px 10px}
+  td,th{padding:5px 6px;font-size:12px}
+  .btn{padding:5px 10px;font-size:11px}
+  #fml-linhas input[type=number]{width:60px!important}
+}
+
+/* ─── SHORTCUT HINTS ─────────────────────────────── */
+.shortcut-hint{font-size:10px;color:var(--muted);opacity:.6;margin-left:4px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">FeedOptimize <span>Formulação Animal</span></div>
+  <nav>
+    <button class="active" data-tab="formular" onclick="goTab('formular',this)">🌾 Formular</button>
+    <button data-tab="exigencias" onclick="goTab('exigencias',this)">🧬 Exigências</button>
+    <button data-tab="alimentos" onclick="goTab('alimentos',this)">📋 Alimentos</button>
+    <button data-tab="nutrientes" onclick="goTab('nutrientes',this)">⚗️ Nutrientes</button>
+    <button data-tab="racoes" onclick="goTab('racoes',this)">📁 Rações</button>
+    <button data-tab="comparar" onclick="goTab('comparar',this)">⚖️ Comparar</button>
+    <button data-tab="historico" onclick="goTab('historico',this)">📊 Histórico</button>
+  </nav>
+  <!-- Sync badge -->
+  <div id="sync-badge" class="offline" title="Status de sincronização">⚡ Offline</div>
+  <!-- User menu -->
+  <div id="user-menu">
+    <button id="user-btn" onclick="toggleUserMenu()">👤 Entrar</button>
+    <div id="user-dropdown">
+      <div class="ud-info"><strong id="ud-email">—</strong><span id="ud-sync-info"></span></div>
+      <div class="ud-item" onclick="forcSync()">🔄 Sincronizar agora</div>
+      <div class="ud-item" onclick="exportBackup()">📥 Backup (baixar dados)</div>
+      <div class="ud-item" onclick="document.getElementById('restore-file').click()">📤 Restaurar backup</div>
+      <input type="file" id="restore-file" accept=".json" style="display:none" onchange="importBackup(this.files[0]);this.value=''">
+      <div class="ud-item" onclick="showLogin()">🔑 Trocar conta</div>
+      <div class="ud-item danger" onclick="doSignOut()">↩ Sair</div>
+    </div>
+  </div>
+</header>
+
+<!-- Aviso de configuração Supabase -->
+<div id="sb-config-warn">
+  ⚠️ Supabase não configurado — rodando apenas com localStorage.
+  Edite a constante <code>SUPABASE_URL</code> no código para habilitar sync na nuvem.
+</div>
+
+<!-- Modal Login -->
+<div id="login-overlay">
+  <div id="login-box">
+    <div class="login-logo">FeedOptimize</div>
+    <div class="login-sub">Formulação Animal — BPF Consult</div>
+    <div class="login-tabs">
+      <button class="login-tab active" onclick="setLoginTab('login',this)">Entrar</button>
+      <button class="login-tab" onclick="setLoginTab('signup',this)">Criar conta</button>
+    </div>
+    <div class="login-field">
+      <label>E-mail</label>
+      <input type="email" id="l-email" placeholder="seu@email.com" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <div class="login-field">
+      <label>Senha</label>
+      <input type="password" id="l-senha" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button id="login-btn" onclick="doLogin()">Entrar</button>
+    <div id="login-msg"></div>
+    <div class="login-skip">
+      <a onclick="closeLogin()">Usar sem conta (só localStorage)</a>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast"></div>
+
+<main>
+
+<!-- ═══ FORMULAR ═══ -->
+<div id="tab-formular" class="tab active">
+  <div class="fml-tabs" id="fml-tabs"></div>
+
+  <!-- Solver Panel -->
+  <div class="card solver-panel" id="solver-panel" style="display:none">
+    <div class="card-hdr">
+      <span class="card-title">🔬 Solver — Mínimo Custo (Simplex Exato)</span>
+      <button class="btn btn-earth" onclick="toggleSolver()">▲ Fechar</button>
+    </div>
+    <div style="padding:12px 16px;display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end">
+      <div style="flex:0 1 280px">
+        <label style="font-size:11px;font-weight:700;color:var(--muted);display:block;margin-bottom:4px">EXIGÊNCIA NUTRICIONAL</label>
+        <select id="sel-exig" onchange="updateExigInfo()">
+          <option value="">— Sem restrições nutricionais —</option>
+        </select>
+        <div id="exig-info" style="font-size:11px;color:var(--muted);margin-top:3px"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Defina Min/Max kg/t por ingrediente nas colunas da tabela</div>
+        <button class="btn btn-green" id="btn-solve" onclick="runSolver()" style="padding:8px 22px;font-size:13px">▶ Otimizar</button>
+      </div>
+    </div>
+    <div id="solver-result" style="display:none"></div>
+  </div>
+
+  <div class="row-flex" id="fml-body"></div>
+</div>
+
+<!-- ═══ EXIGÊNCIAS ═══ -->
+<div id="tab-exigencias" class="tab">
+  <div class="exig-panel">
+    <div class="exig-list card">
+      <div class="card-hdr"><span class="card-title">🧬 Exigências</span><button class="btn btn-ghost" onclick="exportExigenciasPDF()" style="font-size:11px">🖨️ Relatório PDF</button></div>
+      <div style="padding:10px 12px;display:flex;flex-direction:column;gap:5px">
+        <input id="busca-exig" placeholder="🔍 Filtrar exigências..." oninput="renderExigList()">
+        <input id="nova-esp" placeholder="Espécie (ex: Bovinos)">
+        <input id="nova-fase" placeholder="Fase (ex: Engorda)" onkeydown="if(event.key==='Enter')addExig()">
+        <button class="btn btn-green" onclick="addExig()">+ Criar Exigência</button>
+        <button class="btn btn-blue" onclick="loadExigPadrao()" style="font-size:11px">📋 Carregar Tabelas Padrão</button>
+      </div>
+      <div id="exig-list-body" style="max-height:600px" class="scroll-y"></div>
+    </div>
+    <div class="exig-edit card" id="exig-edit-panel" style="display:none">
+      <div class="card-hdr">
+        <span class="card-title" id="exig-edit-title"></span>
+        <div style="display:flex;gap:6px" id="exig-edit-btns"></div>
+      </div>
+      <div style="max-height:520px" class="scroll-y">
+        <table id="exig-nut-table">
+          <thead><tr>
+            <th>Nutriente</th><th style="width:60px">Unid.</th>
+            <th style="width:110px">Mínimo</th><th style="width:110px">Máximo</th>
+          </tr></thead>
+          <tbody id="exig-nut-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ALIMENTOS ═══ -->
+<div id="tab-alimentos" class="tab">
+  <div style="display:flex;flex-direction:column;gap:14px;max-width:900px;margin:0 auto;width:66%">
+    <div class="card">
+      <div class="card-hdr"><span class="card-title" id="alim-count">📋 Alimentos</span><button class="btn btn-ghost" onclick="exportAlimentosPDF()" style="font-size:11px">🖨️ Relatório PDF</button></div>
+      <div style="padding:10px 12px;display:flex;flex-direction:column;gap:5px">
+        <input id="busca-alim" placeholder="🔍 Buscar..." oninput="renderAlimList()">
+        <div style="display:flex;gap:5px">
+          <input id="novo-alim-nome" placeholder="Nome do novo alimento..." style="flex:1" onkeydown="if(event.key==='Enter')addAlimento()">
+          <button class="btn btn-green" onclick="addAlimento()">+</button>
+        </div>
+        <label class="btn btn-blue" style="text-align:center;cursor:pointer;font-size:11px">
+          📦 Importar SuperCrac (.zip)
+          <input type="file" accept=".zip" style="display:none" onchange="importSupercracZip(this.files[0]);this.value=''">
+        </label>
+      </div>
+      <div style="max-height:600px" class="scroll-y">
+        <table><thead><tr>
+          <th>Nome</th><th style="width:80px">R$/kg</th><th style="width:28px"></th>
+        </tr></thead>
+        <tbody id="alim-list-body"></tbody></table>
+      </div>
+    </div>
+    <div class="card" id="alim-edit-panel" style="display:none">
+      <div class="card-hdr">
+        <span class="card-title" id="alim-edit-title"></span>
+        <button class="btn btn-green" onclick="saveAlimento()">💾 Salvar</button>
+      </div>
+      <div style="padding:12px 14px">
+        <div style="margin-bottom:12px">
+          <label style="font-size:11px;font-weight:700;color:var(--muted);display:block;margin-bottom:3px">PREÇO (R$/kg)</label>
+          <input type="number" step="0.01" id="alim-preco" style="width:130px" placeholder="0,00">
+        </div>
+        <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:8px;text-transform:uppercase">Nutrientes (por kg do ingrediente)</div>
+        <div id="alim-nuts-filled"></div>
+        <details style="margin-top:8px">
+          <summary>+ Adicionar outros nutrientes</summary>
+          <div id="alim-nuts-empty"></div>
+        </details>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ NUTRIENTES ═══ -->
+<div id="tab-nutrientes" class="tab">
+  <div class="row-flex">
+    <div class="flex-auto card">
+      <div class="card-hdr">
+        <span class="card-title" id="nut-count">⚗️ Nutrientes</span>
+        <button class="btn btn-green" onclick="openNutForm(null)">+ Novo</button>
+      </div>
+      <div style="max-height:520px" class="scroll-y">
+        <table><thead><tr>
+          <th>Chave</th><th>Nome</th><th>Unidade</th><th></th>
+        </tr></thead>
+        <tbody id="nut-list-body"></tbody></table>
+      </div>
+    </div>
+    <div class="flex-fixed card" id="nut-form-panel" style="display:none">
+      <div class="card-hdr"><span class="card-title" id="nut-form-title">Novo Nutriente</span></div>
+      <div style="padding:14px;display:flex;flex-direction:column;gap:9px">
+        <div>
+          <label style="font-size:11px;font-weight:700;color:var(--muted);display:block;margin-bottom:3px">CHAVE (sem espaços)</label>
+          <input id="nut-k" placeholder="ex: VitC">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:var(--muted);display:block;margin-bottom:3px">NOME EXIBIÇÃO</label>
+          <input id="nut-l" placeholder="ex: Vitamina C">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:var(--muted);display:block;margin-bottom:3px">UNIDADE</label>
+          <select id="nut-u">
+            <option>g/kg</option><option>mg/kg</option><option>UI/kg</option>
+            <option>mcg/kg</option><option>UFC/kg</option><option>kcal/kg</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="btn btn-green" onclick="saveNut()">Salvar</button>
+          <button class="btn btn-ghost" onclick="closeNutForm()">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ RAÇÕES (Banco de Fórmulas) ═══ -->
+<div id="tab-racoes" class="tab">
+  <div style="display:flex;flex-direction:column;gap:14px;max-width:1100px;margin:0 auto;width:80%">
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">📁 Banco de Rações / Fórmulas</span>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost" onclick="exportFormulasPDF()" style="font-size:11px">🖨️ Relatório PDF</button>
+        </div>
+      </div>
+      <div style="padding:10px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="racoes-busca" placeholder="🔍 Buscar ração por nome..." oninput="renderRacoesList()" style="flex:1;min-width:200px">
+        <select id="racoes-especie-filtro" onchange="renderRacoesList()" style="width:160px;font-size:12px">
+          <option value="">Todas espécies</option>
+        </select>
+        <span id="racoes-count" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <div style="max-height:600px" class="scroll-y">
+        <table>
+          <thead><tr>
+            <th style="width:36px">#</th>
+            <th>Nome da Fórmula</th>
+            <th style="width:70px" class="r">Ing.</th>
+            <th style="width:70px" class="r">Total</th>
+            <th style="width:100px" class="r">Custo/t</th>
+            <th style="width:90px">Espécie</th>
+            <th style="width:80px"></th>
+          </tr></thead>
+          <tbody id="racoes-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" id="racao-detail" style="display:none">
+      <div class="card-hdr">
+        <span class="card-title" id="racao-detail-title"></span>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-blue" id="racao-abrir-btn" style="font-size:11px">✏️ Abrir no Formulador</button>
+          <button class="btn btn-ghost" onclick="document.getElementById('racao-detail').style.display='none'" style="font-size:11px">✕ Fechar</button>
+        </div>
+      </div>
+      <div id="racao-detail-body" style="padding:12px 16px"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ COMPARAR ═══ -->
+<div id="tab-comparar" class="tab">
+  <div style="overflow-x:auto;margin-bottom:16px">
+    <table id="cmp-table" style="min-width:600px"></table>
+  </div>
+  <button class="btn btn-ghost" style="font-size:11px;margin-bottom:14px" onclick="toggleCmpNuts()">▼ Todos os nutrientes</button>
+  <div class="row-flex" id="cmp-editors"></div>
+</div>
+
+<!-- ═══ HISTÓRICO ═══ -->
+<div id="tab-historico" class="tab">
+  <div class="card">
+    <div class="card-hdr">
+      <span class="card-title">📊 Histórico de Otimizações</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="hist-count" style="font-size:11px;color:var(--muted)"></span>
+        <button class="btn btn-ghost" onclick="loadHistorico()">↺ Atualizar</button>
+      </div>
+    </div>
+    <div id="hist-body" class="scroll-y" style="max-height:600px">
+      <div style="padding:32px;text-align:center;color:var(--muted);font-size:13px">
+        Faça login para ver o histórico de otimizações salvo na nuvem.
+      </div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<script>
+// ══════════════════════════════════════════════════════
+// DADOS INICIAIS
+// ══════════════════════════════════════════════════════
+const DB_INITIAL = {"nd":[{"k":"UM","l":"Umidade","u":"g/kg"},{"k":"PB","l":"Proteína Bruta","u":"g/kg"},{"k":"NNP","l":"NNP Eq. PB","u":"g/kg"},{"k":"PDR","l":"PDR","u":"g/kg"},{"k":"PNDR","l":"PNDR","u":"g/kg"},{"k":"EE","l":"Extrato Etéreo","u":"g/kg"},{"k":"FB","l":"Fibra Bruta","u":"g/kg"},{"k":"FDA","l":"FDA","u":"g/kg"},{"k":"FDN","l":"FDN","u":"g/kg"},{"k":"MM","l":"Matéria Mineral","u":"g/kg"},{"k":"NDT","l":"NDT","u":"g/kg"},{"k":"ED","l":"En. Digestível","u":"kcal/kg"},{"k":"EMAaves","l":"EMA Aves","u":"kcal/kg"},{"k":"EMAsuinos","l":"EMA Suínos","u":"kcal/kg"},{"k":"CNF","l":"CNF","u":"g/kg"},{"k":"Amido","l":"Amido","u":"g/kg"},{"k":"Ca_min","l":"Ca (mín)","u":"g/kg"},{"k":"Ca_max","l":"Ca (máx)","u":"g/kg"},{"k":"P","l":"Fósforo","u":"g/kg"},{"k":"Mg","l":"Magnésio","u":"g/kg"},{"k":"S","l":"Enxofre","u":"g/kg"},{"k":"K","l":"Potássio","u":"g/kg"},{"k":"Na","l":"Sódio","u":"g/kg"},{"k":"Cl","l":"Cloro","u":"g/kg"},{"k":"Cu","l":"Cobre","u":"mg/kg"},{"k":"Co","l":"Cobalto","u":"mg/kg"},{"k":"I","l":"Iodo","u":"mg/kg"},{"k":"Fe","l":"Ferro","u":"mg/kg"},{"k":"Mn","l":"Manganês","u":"mg/kg"},{"k":"MnOrg","l":"Mn Org.","u":"mg/kg"},{"k":"Zn","l":"Zinco","u":"mg/kg"},{"k":"ZnOrg","l":"Zn Org.","u":"mg/kg"},{"k":"Se","l":"Selênio","u":"mg/kg"},{"k":"SeOrg","l":"Se Org.","u":"mg/kg"},{"k":"Cr","l":"Cromo","u":"mg/kg"},{"k":"CrOrg","l":"Cr Org.","u":"mg/kg"},{"k":"F","l":"Flúor","u":"mg/kg"},{"k":"Mo","l":"Molibdênio","u":"mg/kg"},{"k":"Sacch","l":"Sacch. cerevisiae","u":"UFC/kg"},{"k":"Lis","l":"Lisina","u":"g/kg"},{"k":"Met","l":"Metionina","u":"g/kg"},{"k":"Biotina","l":"Biotina","u":"mg/kg"},{"k":"Colina","l":"Colina","u":"g/kg"},{"k":"Niacina","l":"Niacina","u":"mg/kg"},{"k":"VitA","l":"Vitamina A","u":"UI/kg"},{"k":"VitD3","l":"Vitamina D3","u":"UI/kg"},{"k":"VitE","l":"Vitamina E","u":"UI/kg"},{"k":"VitB1","l":"Vitamina B1","u":"mg/kg"},{"k":"VitB2","l":"Vitamina B2","u":"mg/kg"},{"k":"VitB6","l":"Vitamina B6","u":"mg/kg"},{"k":"VitB12","l":"Vitamina B12","u":"mcg/kg"},{"k":"VitK3","l":"Vitamina K3","u":"mg/kg"},{"k":"AcPantot","l":"Ác. Pantotênico","u":"mg/kg"},{"k":"AcFolico","l":"Ác. Fólico","u":"mg/kg"}],"ings":[{"id":1,"nome":"Abóbora integral","preco":0.0,"n":{"UM":130.0,"PB":60.0,"EE":2.7,"FB":11.4,"FDA":10.0,"FDN":70.0,"MM":28.0,"NDT":650.0}},{"id":2,"nome":"Açúcar","preco":0.0,"n":{"UM":10.0,"MM":0.14,"NDT":889.74,"ED":3873.0,"EMAaves":3831.0,"EMAsuinos":3737.0}},{"id":3,"nome":"Açúcar mascavo","preco":0.0,"n":{"UM":130.0,"PB":4.7,"EE":0.1,"FB":1.4,"MM":4.0,"NDT":930.0,"Ca_min":0.8,"Ca_max":0.8,"P":0.6}},{"id":4,"nome":"Alfafa, farelo (FDN 51,54)","preco":0.0,"n":{"UM":130.0,"PB":205.8,"EE":17.0,"FB":280.0,"NDT":606.1,"Ca_min":14.0,"Ca_max":14.0,"P":3.7,"Mg":0.23,"K":1.84}},{"id":5,"nome":"Algaroba integral","preco":0.0,"n":{"UM":130.0,"PB":86.0,"EE":5.4,"FB":182.0,"FDA":350.0,"FDN":550.0,"MM":30.0,"NDT":450.0,"Ca_min":3.1,"Ca_max":3.1,"P":1.4}},{"id":6,"nome":"Algodão, Caroço","preco":0.0,"n":{"UM":100.0,"PB":212.0,"PDR":170.0,"PNDR":41.0,"EE":171.0,"FB":230.0,"FDA":306.0,"FDN":390.0,"MM":39.5,"NDT":722.7,"ED":3400.0,"CNF":79.0,"Amido":5.8,"Ca_min":2.4,"Ca_max":2.6,"P":6.7,"Mg":4.9,"S":0.9,"K":9.1,"Na":0.8,"Cu":23.6,"Co":0.19,"Fe":111.8,"Zn":56.9}},{"id":7,"nome":"Algodão, Farelo 28% PB","preco":0.0,"n":{"UM":110.0,"PB":277.0,"PDR":194.0,"PNDR":83.0,"EE":19.0,"FB":187.0,"FDA":267.0,"FDN":354.0,"MM":49.0,"NDT":590.0,"ED":2690.0,"CNF":176.0,"Amido":7.8,"Ca_min":2.3,"Ca_max":2.8,"P":7.2,"Mg":4.6,"S":3.05,"K":11.7,"Na":0.3,"Cu":11.0,"Co":0.73,"Fe":145.0,"Mn":24.1,"Zn":44.5,"Lis":12.8,"Met":2.6}},{"id":8,"nome":"Algodão, Farelo 38% PB","preco":1.0,"n":{"UM":120.0,"PB":346.4,"PDR":242.8,"PNDR":103.5,"EE":12.7,"FB":148.0,"FDA":198.0,"FDN":314.0,"MM":56.7,"NDT":607.0,"ED":3210.0,"CNF":151.0,"Amido":57.7,"Ca_min":2.0,"Ca_max":2.1,"P":8.6,"Mg":4.4,"S":3.2,"K":15.3,"Na":0.4,"Cu":17.7,"Co":0.15,"Fe":55.3,"Mn":21.2,"Zn":10.4,"Lis":15.9,"Met":2.57}},{"id":9,"nome":"Amendoim, Farelo","preco":0.0,"n":{"UM":130.0,"PB":440.0,"EE":3.0,"FB":45.0,"FDA":110.0,"FDN":138.0,"MM":63.0,"NDT":770.0,"Ca_min":1.4,"Ca_max":1.4,"P":7.0}},{"id":10,"nome":"Amido-milho","preco":0.0,"n":{"UM":130.0,"PB":5.5,"EE":1.8,"NDT":840.0}},{"id":11,"nome":"Arroz grão","preco":0.0,"n":{"UM":130.0,"PB":85.0,"EE":5.3,"FB":4.0,"NDT":780.0,"Ca_min":0.6,"Ca_max":0.6,"P":0.8}},{"id":12,"nome":"Arroz integral c/ casca","preco":0.0,"n":{"UM":130.0,"PB":73.0,"EE":19.0,"FB":90.0,"NDT":700.0,"Ca_min":0.4,"Ca_max":0.4,"P":2.6}},{"id":13,"nome":"Arroz polidura","preco":0.0,"n":{"UM":130.0,"PB":120.0,"EE":195.0,"FB":80.0,"NDT":900.0,"Ca_min":0.5,"Ca_max":0.5,"P":18.0}},{"id":14,"nome":"Arroz, Casca","preco":0.0,"n":{"UM":130.0,"PB":45.0,"EE":11.0,"FB":293.0,"FDA":380.0,"FDN":820.0,"NDT":400.0,"Ca_min":0.8,"Ca_max":0.8,"P":1.4}},{"id":15,"nome":"Arroz, Farelo c/ casca","preco":0.0,"n":{"UM":130.0,"PB":81.0,"EE":61.2,"FB":232.0,"NDT":550.0,"Ca_min":1.0,"Ca_max":1.0,"P":8.0}},{"id":16,"nome":"Arroz, Farelo desengordurado","preco":0.0,"n":{"UM":130.0,"PB":163.0,"EE":15.0,"FB":111.0,"NDT":600.0,"Ca_min":1.1,"Ca_max":1.1,"P":14.6}},{"id":17,"nome":"Arroz, Farelo Integral","preco":0.0,"n":{"UM":130.0,"PB":120.0,"EE":130.0,"FB":85.0,"NDT":730.0,"Ca_min":0.7,"Ca_max":0.7,"P":15.0}},{"id":18,"nome":"Aveia, Grão","preco":0.0,"n":{"UM":130.0,"PB":130.0,"EE":45.0,"FB":75.0,"FDA":230.0,"FDN":277.0,"MM":23.7,"NDT":750.0,"Ca_min":1.0,"Ca_max":1.0,"P":3.4,"Mg":1.4,"S":2.2,"K":0.5}},{"id":19,"nome":"Aveia, Grão c/ casca","preco":0.0,"n":{"UM":130.0,"PB":98.0,"EE":45.0,"FB":105.0,"NDT":700.0,"Ca_min":1.0,"Ca_max":1.0,"P":3.3}},{"id":20,"nome":"Babaçu, Farelo","preco":0.0,"n":{"UM":130.0,"PB":173.0,"EE":30.0,"FB":259.0,"NDT":600.0,"Ca_min":1.1,"Ca_max":1.1,"P":6.9}},{"id":21,"nome":"Batata doce integral","preco":0.0,"n":{"UM":130.0,"PB":64.0,"EE":4.0,"FB":33.0,"NDT":700.0,"Ca_min":0.8,"Ca_max":0.8,"P":1.5}},{"id":22,"nome":"Biscoito, Resíduo","preco":0.0,"n":{"UM":130.0,"PB":80.0,"EE":90.0,"FB":20.0,"NDT":850.0,"Ca_min":2.0,"Ca_max":2.0,"P":2.0}},{"id":23,"nome":"Cacau,farelo c/ casca","preco":0.0,"n":{"UM":130.0,"PB":160.0,"EE":30.0,"FB":170.0,"NDT":540.0,"Ca_min":2.5,"Ca_max":2.5,"P":4.0}},{"id":24,"nome":"Cacau,farelo s/ casca","preco":0.0,"n":{"UM":130.0,"PB":220.0,"EE":30.0,"FB":50.0,"NDT":620.0,"Ca_min":2.5,"Ca_max":2.5,"P":4.5}},{"id":25,"nome":"Café, cascas","preco":0.0,"n":{"UM":130.0,"PB":75.0,"EE":30.0,"FB":500.0,"NDT":350.0,"Ca_min":3.5,"Ca_max":3.5,"P":0.7}},{"id":26,"nome":"Cama de frango","preco":0.0,"n":{"UM":130.0,"PB":200.0,"EE":25.0,"FB":170.0,"NDT":450.0,"Ca_min":50.0,"Ca_max":50.0,"P":15.0}},{"id":27,"nome":"Carne 36, farinha","preco":0.0,"n":{"UM":130.0,"PB":360.0,"EE":90.0,"FB":20.0,"FDA":100.0,"FDN":40.0,"NDT":400.0,"Ca_min":164.0,"Ca_max":164.0,"P":76.0}},{"id":28,"nome":"Carne 40, farinha","preco":0.0,"n":{"UM":130.0,"PB":400.0,"EE":100.0,"FB":20.0,"FDA":100.0,"FDN":40.0,"NDT":440.0,"Ca_min":146.0,"Ca_max":146.0,"P":68.0}},{"id":29,"nome":"Carne 42, farinha","preco":0.0,"n":{"UM":130.0,"PB":420.0,"EE":110.0,"FB":20.0,"FDA":100.0,"FDN":40.0,"NDT":470.0,"Ca_min":138.0,"Ca_max":138.0,"P":65.0}},{"id":30,"nome":"Carne 45, farinha","preco":0.0,"n":{"UM":130.0,"PB":450.0,"EE":120.0,"FB":20.0,"FDA":100.0,"FDN":40.0,"NDT":500.0,"Ca_min":125.0,"Ca_max":125.0,"P":59.0}},{"id":31,"nome":"Carne 50, farinha","preco":0.0,"n":{"UM":130.0,"PB":500.0,"EE":130.0,"FB":20.0,"FDA":100.0,"FDN":40.0,"NDT":550.0,"Ca_min":105.0,"Ca_max":105.0,"P":51.0}},{"id":32,"nome":"Carne/Ossos, farinha","preco":0.0,"n":{"UM":130.0,"PB":550.0,"EE":108.0,"FB":19.0,"NDT":610.0,"Ca_min":84.0,"Ca_max":84.0,"P":42.0}},{"id":33,"nome":"Centeio, grãos","preco":0.0,"n":{"UM":130.0,"PB":126.0,"EE":18.0,"FB":28.0,"NDT":760.0,"Ca_min":0.8,"Ca_max":0.8,"P":3.0}},{"id":34,"nome":"Cevada cerveja","preco":0.0,"n":{"UM":130.0,"PB":200.0,"EE":57.0,"FB":130.0,"NDT":570.0,"Ca_min":3.0,"Ca_max":3.0,"P":6.0}},{"id":35,"nome":"Cevada, grãos","preco":0.0,"n":{"UM":130.0,"PB":130.0,"EE":22.0,"FB":60.0,"FDA":300.0,"MM":29.0,"NDT":750.0,"Ca_min":2.3,"Ca_max":2.3,"P":4.0}},{"id":36,"nome":"Côco, farelo","preco":0.0,"n":{"UM":130.0,"PB":216.0,"EE":80.0,"FB":118.0,"NDT":670.0,"Ca_min":1.2,"Ca_max":1.2,"P":5.8}},{"id":37,"nome":"Colza, farelo","preco":0.0,"n":{"UM":130.0,"PB":372.0,"EE":25.0,"FB":134.0,"NDT":720.0,"Ca_min":5.1,"Ca_max":5.1,"P":11.1,"Cu":6.9,"Fe":431.0,"Mn":54.3,"Zn":81.8}},{"id":38,"nome":"Colza, grão inteiro","preco":0.0,"n":{"UM":130.0,"PB":223.0,"EE":264.5,"FB":116.0,"NDT":920.0,"Ca_min":3.6,"Ca_max":3.6,"P":7.1}},{"id":39,"nome":"Destiller Dry Grain  S","preco":0.0,"n":{"UM":130.0,"PB":280.0,"EE":119.0,"FB":156.0,"FDA":110.0,"FDN":405.0,"MM":80.0,"NDT":800.0,"Ca_min":0.6,"Ca_max":0.6,"P":9.4,"Mg":3.0,"S":2.0,"K":6.0,"Na":1.3,"Cl":2.0}},{"id":40,"nome":"Ervilha, grãos","preco":0.0,"n":{"UM":130.0,"PB":230.0,"EE":20.0,"FB":55.0,"NDT":760.0,"Ca_min":1.0,"Ca_max":1.0,"P":4.0}},{"id":41,"nome":"Fava, sementes","preco":0.0,"n":{"UM":130.0,"PB":260.0,"EE":20.0,"FB":75.0,"NDT":760.0,"Ca_min":1.0,"Ca_max":1.0,"P":5.0}},{"id":42,"nome":"Gergelim, grão","preco":0.0,"n":{"UM":130.0,"PB":450.0,"EE":25.0,"FB":70.0,"NDT":570.0,"Ca_min":20.0,"Ca_max":20.0,"P":12.0}},{"id":43,"nome":"Girassol, Farelo","preco":0.0,"n":{"UM":130.0,"PB":340.0,"EE":13.0,"FB":210.0,"NDT":680.0,"Ca_min":4.0,"Ca_max":4.0,"P":12.5}},{"id":44,"nome":"Gordura aves","preco":0.0,"n":{"UM":130.0,"EE":980.0,"NDT":1500.0}},{"id":45,"nome":"Gordura bovina","preco":0.0,"n":{"UM":130.0,"EE":990.0,"NDT":1890.0}},{"id":46,"nome":"Gordura protegida, Beef Fat Vaccinar","preco":0.0,"n":{"UM":50.0,"EE":820.0,"MM":190.0,"NDT":1476.0,"Ca_min":75.0,"Ca_max":125.0}},{"id":47,"nome":"Gordura protegida, DairyFat Vaccinar","preco":0.0,"n":{"UM":50.0,"EE":820.0,"MM":150.0,"NDT":1476.0,"Ca_min":75.0,"Ca_max":125.0}},{"id":48,"nome":"Gordura protegida, Megalac-E Vaccinar","preco":0.0,"n":{"UM":50.0,"EE":850.0,"MM":190.0,"NDT":1530.0,"Ca_min":75.0,"Ca_max":125.0}},{"id":49,"nome":"Gordura vegetal","preco":0.0,"n":{"UM":130.0,"EE":995.0,"MM":5.0,"NDT":1800.0}},{"id":50,"nome":"Lecitina, soja","preco":0.0,"n":{"UM":130.0,"PB":30.0,"EE":950.0,"NDT":1550.0,"Ca_min":1.5,"Ca_max":1.5,"P":11.0}},{"id":51,"nome":"Leite em pó desnatado","preco":0.0,"n":{"UM":130.0,"PB":330.0,"EE":11.0,"FB":10.0,"NDT":800.0,"Ca_min":13.0,"Ca_max":13.0,"P":10.0}},{"id":52,"nome":"Leite em pó integral","preco":0.0,"n":{"UM":130.0,"PB":210.0,"EE":260.0,"FB":6.0,"MM":59.0,"NDT":1200.0,"Ca_min":10.0,"Ca_max":10.0,"P":6.3}},{"id":53,"nome":"Leite em pó, Soro","preco":0.0,"n":{"UM":130.0,"PB":150.0,"EE":48.0,"FB":20.0,"NDT":800.0,"Ca_min":6.3,"Ca_max":6.3,"P":5.5}},{"id":54,"nome":"Levedura seca de cana","preco":0.0,"n":{"UM":130.0,"PB":300.0,"EE":15.0,"FB":9.0,"NDT":720.0,"Ca_min":2.4,"Ca_max":2.4,"P":5.7}},{"id":55,"nome":"Linhaça farelo","preco":0.0,"n":{"UM":130.0,"PB":320.0,"EE":25.0,"FB":110.0,"NDT":700.0,"Ca_min":3.5,"Ca_max":3.5,"P":8.3}},{"id":56,"nome":"Malte, radícula","preco":0.0,"n":{"UM":130.0,"PB":250.0,"EE":74.0,"FB":117.0,"NDT":730.0,"Ca_min":3.0,"Ca_max":3.0,"P":6.6}},{"id":57,"nome":"Mamona, farelo","preco":0.0,"n":{"UM":130.0,"PB":390.0,"EE":15.0,"FB":190.0,"FDA":180.0,"FDN":250.0,"NDT":500.0,"Ca_min":6.2,"Ca_max":6.2,"P":6.2}},{"id":58,"nome":"Mandioca","preco":0.0,"n":{"UM":130.0,"PB":26.0,"EE":3.0,"FB":80.0,"FDA":20.0,"FDN":120.0,"NDT":720.0,"Ca_min":1.5,"Ca_max":1.5,"P":1.0}},{"id":59,"nome":"Mandioca c/casca","preco":0.0,"n":{"UM":130.0,"PB":30.0,"EE":3.0,"FB":50.0,"FDA":220.0,"FDN":460.0,"NDT":670.0,"Ca_min":1.5,"Ca_max":1.5,"P":0.9}},{"id":60,"nome":"Mandioca, só casca","preco":0.0,"n":{"UM":130.0,"PB":25.0,"EE":3.0,"FB":100.0,"FDA":340.0,"FDN":640.0,"NDT":650.0,"Ca_min":1.4,"Ca_max":1.4,"P":0.8}},{"id":61,"nome":"Melaço em pó","preco":0.0,"n":{"UM":130.0,"PB":25.0,"FDA":20.0,"FDN":60.0,"NDT":590.0,"Ca_min":62.0,"Ca_max":62.0,"P":2.1}},{"id":62,"nome":"Milheto","preco":0.67,"n":{"UM":130.0,"PB":130.0,"EE":46.0,"FB":93.0,"FDA":110.0,"FDN":190.0,"NDT":760.0,"Ca_min":0.3,"Ca_max":0.3,"P":2.2,"S":0.1,"K":0.35,"Na":0.8}},{"id":63,"nome":"Milho, Gérmem","preco":0.0,"n":{"UM":130.0,"PB":100.0,"EE":70.0,"FB":38.0,"FDA":53.0,"FDN":80.0,"MM":38.0,"NDT":840.0,"Ca_min":0.2,"Ca_max":0.2,"P":3.1,"Mg":2.0,"K":5.6}},{"id":64,"nome":"Milho, Gérmen desengordurado","preco":0.0,"n":{"UM":130.0,"PB":104.0,"EE":13.0,"FB":30.0,"FDA":68.0,"FDN":160.0,"MM":65.0,"NDT":740.0,"Ca_min":7.4,"Ca_max":7.4,"P":2.5,"Mg":5.0,"K":5.0}},{"id":65,"nome":"Milho, Glúten 21 - Promill ou Refinazil","preco":0.0,"n":{"UM":130.0,"PB":210.0,"EE":15.0,"FB":90.0,"FDA":110.0,"FDN":405.0,"MM":80.0,"NDT":770.0,"ED":3066.67,"EMAaves":1813.0,"Ca_min":1.0,"Ca_max":1.0,"P":6.0,"Mg":3.0,"S":2.0,"K":6.0,"Na":1.3,"Cl":2.0}},{"id":66,"nome":"Milho, Glúten 60 - Glutenose","preco":0.0,"n":{"UM":130.0,"PB":370.0,"EE":20.0,"FB":150.0,"FDA":40.0,"FDN":80.0,"MM":45.0,"NDT":850.0,"Ca_min":2.5,"Ca_max":2.5,"P":0.25,"Mg":0.5,"S":6.0,"K":1.8,"Na":0.5,"Cl":1.0}},{"id":67,"nome":"Milho, Grão 7,5% PB","preco":1.3,"n":{"UM":130.0,"PB":79.5,"PDR":40.4,"PNDR":26.4,"EE":35.4,"FB":24.4,"FDA":26.4,"FDN":122.3,"MM":14.2,"NDT":781.0,"ED":3418.0,"EMAaves":3381.0,"CNF":615.0,"Amido":584.0,"Ca_min":0.2,"Ca_max":0.35,"P":2.6,"Mg":1.2,"S":0.88,"K":3.7,"Na":0.17,"Cl":0.7,"Cu":3.3,"Fe":49.3,"Mn":8.6,"Zn":20.9,"Se":0.07,"Lis":2.5,"Met":1.7,"Biotina":0.06,"Colina":0.49,"Niacina":22.0,"VitA":660.0,"VitE":6.0,"VitB1":3.6,"VitB2":1.07,"VitB6":6.8,"AcPantot":4.9,"AcFolico":0.29}},{"id":68,"nome":"Milho, Rolão (MDPS)","preco":0.0,"n":{"UM":130.0,"PB":65.0,"EE":30.0,"FB":150.0,"FDA":123.0,"FDN":280.0,"NDT":700.0,"Ca_min":0.6,"Ca_max":0.6,"P":2.6}},{"id":69,"nome":"Milho, s/ gérmen","preco":0.0,"n":{"UM":130.0,"PB":90.0,"EE":12.0,"FB":8.0,"FDA":70.0,"FDN":120.0,"NDT":820.0,"Ca_min":0.1,"Ca_max":0.1,"P":2.6}},{"id":70,"nome":"Óleo de soja  (embalagem de 900 ml)","preco":0.0,"n":{"UM":999.0,"EE":1000.0,"NDT":1770.0}},{"id":71,"nome":"Ouricuri, farelo","preco":0.0,"n":{"UM":130.0,"PB":230.0,"EE":8.2,"FB":176.0,"FDA":130.0,"FDN":190.0,"NDT":450.0,"Ca_min":1.0,"Ca_max":1.0,"P":7.0}},{"id":72,"nome":"Palma, torta","preco":0.0,"n":{"UM":130.0,"PB":180.0,"EE":15.0,"FB":130.0,"FDA":80.0,"FDN":230.0,"NDT":650.0,"Ca_min":3.6,"Ca_max":3.6,"P":6.0}},{"id":73,"nome":"Peixe, farinha","preco":0.0,"n":{"UM":130.0,"PB":570.0,"EE":60.0,"FB":10.0,"NDT":560.0,"Ca_min":61.0,"Ca_max":61.0,"P":30.0}},{"id":74,"nome":"Pena hid., farinh","preco":0.0,"n":{"UM":130.0,"PB":840.0,"EE":56.0,"FB":11.0,"NDT":520.0,"Ca_min":5.2,"Ca_max":5.2,"P":5.6}},{"id":75,"nome":"Pena/Vísceras","preco":0.0,"n":{"UM":130.0,"PB":650.0,"EE":90.0,"FB":16.0,"NDT":610.0,"Ca_min":15.1,"Ca_max":15.1,"P":10.2}},{"id":76,"nome":"Polpa Citrus, Farelo peletizado","preco":0.0,"n":{"UM":130.0,"PB":55.0,"EE":20.0,"FB":120.0,"FDA":240.0,"FDN":260.0,"MM":70.0,"NDT":650.0,"Ca_min":18.4,"Ca_max":18.4,"P":1.6,"Mg":1.0,"S":0.7,"K":7.0}},{"id":77,"nome":"Sangue, farinha","preco":0.0,"n":{"UM":130.0,"PB":800.0,"EE":6.3,"FB":4.0,"NDT":630.0,"Ca_min":2.0,"Ca_max":2.0,"P":1.5}},{"id":78,"nome":"Soja Grão","preco":0.0,"n":{"UM":130.0,"PB":360.0,"EE":180.0,"FB":50.0,"FDA":92.0,"FDN":123.0,"NDT":900.0,"Ca_min":2.5,"Ca_max":2.5,"P":5.0,"Mg":2.9,"S":2.7,"K":19.0,"Na":0.2}},{"id":79,"nome":"Soja Integral Extrusada","preco":0.0,"n":{"UM":130.0,"PB":380.0,"EE":170.0,"FB":50.0,"FDA":100.0,"FDN":150.0,"NDT":900.0,"Ca_min":2.2,"Ca_max":2.2,"P":5.5,"Mg":2.9,"S":2.7,"K":19.0,"Na":0.2}},{"id":80,"nome":"Soja, Casquinha","preco":0.6,"n":{"UM":130.0,"PB":98.0,"EE":16.0,"FB":398.0,"FDA":500.0,"FDN":684.0,"MM":47.9,"NDT":670.0,"ED":2031.5,"EMAaves":858.0,"Ca_min":5.0,"Ca_max":5.0,"P":2.0,"Mg":2.0,"S":1.0,"K":15.0}},{"id":81,"nome":"Soja, Farelo 45% PB","preco":1.45,"n":{"UM":130.0,"PB":460.0,"EE":10.0,"FB":60.0,"FDA":90.0,"FDN":135.0,"MM":60.0,"NDT":800.0,"ED":3136.0,"EMAaves":2254.0,"Ca_min":3.0,"Ca_max":3.0,"P":6.0,"Mg":2.5,"S":3.0,"K":17.0,"Lis":55.95,"Met":12.919}},{"id":82,"nome":"Soja, Farelo extrusado gordo","preco":0.0,"n":{"UM":130.0,"PB":440.0,"EE":80.0,"FB":40.0,"FDA":60.0,"FDN":110.0,"MM":63.0,"NDT":810.0,"Ca_min":3.6,"Ca_max":3.6,"P":6.0,"Mg":0.2,"K":2.0}},{"id":83,"nome":"Soja, Farelo SOY PASS","preco":0.0,"n":{"UM":130.0,"PB":470.0,"EE":5.0,"FB":70.0,"FDA":60.0,"FDN":110.0,"MM":70.0,"NDT":810.0,"Ca_min":3.6,"Ca_max":3.6,"P":6.0,"Mg":0.2,"K":2.0}},{"id":84,"nome":"Soja, Resíduo","preco":0.0,"n":{"UM":130.0,"PB":240.0,"EE":70.0,"FB":120.0,"FDA":280.0,"FDN":370.0,"NDT":700.0,"Ca_min":2.0,"Ca_max":2.0,"P":4.0,"Mg":2.4,"S":2.7,"K":16.0,"Na":0.2}},{"id":85,"nome":"Sorgo, Grão moído","preco":1.09,"n":{"UM":130.0,"PB":100.0,"EE":25.0,"FB":27.0,"FDA":81.0,"FDN":162.0,"NDT":760.0,"ED":3253.96,"EMAaves":2956.0,"Ca_min":0.4,"Ca_max":0.4,"P":3.0,"Mg":1.8,"S":1.0,"K":4.0,"Na":0.1}},{"id":86,"nome":"Trigo, Farelo","preco":0.0,"n":{"UM":130.0,"PB":130.0,"EE":30.0,"FB":95.0,"FDA":135.0,"FDN":453.0,"MM":60.0,"NDT":670.0,"ED":2737.83,"EMAaves":1795.0,"Ca_min":1.5,"Ca_max":1.5,"P":10.0,"Mg":4.0,"S":2.0,"K":11.0}},{"id":87,"nome":"Trigo, Gérmem","preco":0.0,"n":{"UM":130.0,"PB":250.0,"EE":70.0,"FB":35.0,"FDA":30.0,"FDN":70.0,"NDT":840.0,"EMAaves":3381.0,"Ca_min":0.1,"Ca_max":0.1,"P":10.0}},{"id":88,"nome":"Triguilho","preco":0.0,"n":{"UM":130.0,"PB":140.0,"EE":22.0,"FB":30.0,"FDA":60.0,"FDN":140.0,"NDT":790.0,"Ca_min":0.6,"Ca_max":0.6,"P":2.6}},{"id":89,"nome":"Ureia Pecuária","preco":4.87,"n":{"UM":130.0,"PB":2810.0,"NNP":2810.0,"PDR":2810.0}},{"id":90,"nome":"Víscera, farinha","preco":0.0,"n":{"UM":130.0,"PB":550.0,"EE":140.0,"FB":25.0,"NDT":740.0,"Ca_min":30.0,"Ca_max":30.0,"P":17.0}},{"id":91,"nome":"Urucum, semente moída","preco":0.6,"n":{"UM":70.0,"PB":165.5,"EE":14.3,"FB":170.4,"FDA":188.139,"FDN":341.496,"MM":75.9,"NDT":730.0,"ED":2199.45,"EMAaves":2890.068,"Ca_min":2.0,"Ca_max":2.511,"P":3.162,"Lis":7.254,"Met":1.302,"VitA":27.9,"VitE":139.5}},{"id":92,"nome":"Soja Farelo 46% PB","preco":2.45,"n":{"UM":130.0,"PB":460.0,"EE":10.0,"FB":60.0,"FDA":90.0,"FDN":135.0,"MM":60.0,"NDT":800.0,"ED":3136.0,"EMAaves":2254.0,"Ca_min":3.0,"Ca_max":3.0,"P":6.0,"Mg":2.5,"S":3.0,"K":17.0,"Lis":55.95,"Met":12.919}},{"id":93,"nome":"Milho Grão 8,8% PB","preco":1.3,"n":{"UM":130.0,"PB":88.0,"PDR":40.4,"PNDR":26.4,"EE":35.4,"FB":24.4,"FDA":26.4,"FDN":122.3,"MM":14.2,"NDT":781.0,"ED":3418.0,"EMAaves":3381.0,"CNF":615.0,"Amido":584.0,"Ca_min":0.2,"Ca_max":0.35,"P":2.6,"Mg":1.2,"S":0.88,"K":3.7,"Na":0.17,"Cl":0.7,"Cu":3.3,"Fe":49.3,"Mn":8.6,"Zn":20.9,"Se":0.07,"Lis":2.5,"Met":1.7,"Biotina":0.06,"Colina":0.49,"Niacina":22.0,"VitA":660.0,"VitE":6.0,"VitB1":3.6,"VitB2":1.07,"VitB6":6.8,"AcPantot":4.9,"AcFolico":0.29}},{"id":94,"nome":"Bicarbonato Sódio","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Na":270.0}},{"id":95,"nome":"Calcario Calcítico","preco":0.32,"n":{"UM":30.0,"MM":970.0,"Ca_min":360.0,"Ca_max":360.0,"Mg":10.0}},{"id":96,"nome":"CAULIM","preco":0.0,"n":{"UM":30.0,"MM":970.0}},{"id":97,"nome":"Endox 5X Concentrate Dry (KEMIN)","preco":0.0,"n":{"UM":40.0,"MM":50.0}},{"id":98,"nome":"Enxofre elementar 99% (flor de enxofre)","preco":5.34,"n":{"UM":30.0,"MM":970.0,"S":970.0}},{"id":99,"nome":"Fosfato Bicálcico 18%P microgranulado","preco":5.9,"n":{"UM":30.0,"MM":970.0,"Ca_min":237.0,"Ca_max":250.0,"P":180.0,"F":800.0}},{"id":100,"nome":"Fosfato Bicálcico 19,5%P pó ou micro","preco":5.9,"n":{"UM":50.0,"MM":950.0,"Ca_min":220.0,"Ca_max":260.0,"P":195.0,"F":1950.0}},{"id":101,"nome":"L-Metionina 99% Pó","preco":0.0,"n":{"UM":5.0,"MM":1.0,"Met":990.0}},{"id":102,"nome":"Lysoforte Booster Dry (KEMIN)","preco":0.0,"n":{"UM":50.0,"MM":50.0,"Na":74.0}},{"id":103,"nome":"Monensina sódica 10%","preco":0.0,"n":{"UM":30.0}},{"id":104,"nome":"Monensina sódica 20%","preco":45.0,"n":{"UM":30.0}},{"id":105,"nome":"Monensina sódica 40% (POULCOX)","preco":43.1,"n":{"UM":30.0}},{"id":106,"nome":"Óxido de Magnésio","preco":4.4,"n":{"UM":30.0,"MM":970.0,"Mg":600.0}},{"id":107,"nome":"Sal comum (NaCl)","preco":0.82,"n":{"UM":30.0,"MM":970.0,"Na":390.0,"Cl":610.0}},{"id":108,"nome":"Shield Base FeedGrade Dry (KEMIN)","preco":0.0,"n":{"UM":40.0,"MM":50.0}},{"id":109,"nome":"Optigen","preco":9.45,"n":{"UM":130.0,"PB":2560.0,"NNP":2560.0,"PDR":2560.0}},{"id":110,"nome":"Fosfato Bicálcico 19%P pó ou micro","preco":5.9,"n":{"UM":50.0,"MM":950.0,"Ca_min":220.0,"Ca_max":260.0,"P":190.0,"F":1900.0}},{"id":111,"nome":"Flavomicyn 80","preco":76.4,"n":{}},{"id":112,"nome":"Taurotec 15%","preco":47.0,"n":{}},{"id":113,"nome":"Stafac 500 (Virginiamicina 50%)","preco":0.0,"n":{}},{"id":114,"nome":"Power Arome","preco":92.0,"n":{}},{"id":115,"nome":"1412500 - MASTERNÚCLEO POSTURA FIT","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":250.0,"Ca_max":270.0,"P":67.0,"Na":39.5,"Cu":225.0,"I":20.0,"Fe":1500.0,"Mn":2800.0,"Zn":2000.0,"Se":6.0,"F":615.0,"Met":23.43,"Biotina":1.5,"Colina":8.0,"Niacina":800.0,"VitA":333000.0,"VitD3":80000.0,"VitE":500.0,"VitB1":35.0,"VitB2":100.0,"VitB6":100.0,"VitB12":350.0,"VitK3":60.0,"AcPantot":350.0,"AcFolico":15.0}},{"id":116,"nome":"1424300 - MASTERNÚCLEO FRANGO INICIAL FIT","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":260.0,"Ca_max":280.0,"P":51.8,"Na":51.87,"Cu":333.33,"I":28.33,"Fe":1666.67,"Mn":2333.33,"Zn":2000.0,"Se":10.0,"F":492.0,"Met":42.9,"Biotina":0.833,"Colina":10.0,"Niacina":1666.67,"VitA":186669.0,"VitD3":66667.0,"VitE":333.33,"VitB1":50.0,"VitB2":166.67,"VitB6":93.33,"VitB12":400.0,"VitK3":60.0,"AcPantot":400.0,"AcFolico":25.0}},{"id":117,"nome":"1425201 - VACCI-MIX FRANGO INICIAL FIT","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Cu":2500.0,"I":250.0,"Fe":12500.0,"Mn":17500.0,"Zn":15000.0,"Se":75.0,"Met":371.25,"Biotina":6.25,"Colina":45.0,"Niacina":8750.0,"VitA":2250000.0,"VitD3":562500.0,"VitE":3750.0,"VitB1":375.0,"VitB2":1500.0,"VitB6":700.0,"VitB12":3000.0,"VitK3":500.0,"AcPantot":3000.0,"AcFolico":187.5}},{"id":118,"nome":"1425300 - VACCI-MIX FRANGO INICIAL SM","preco":25.77,"n":{"UM":10.0,"MM":990.0,"Cu":2500.0,"I":250.0,"Fe":12500.0,"Mn":17500.0,"Zn":15000.0,"Se":75.0,"Biotina":6.25,"Colina":45.0,"Niacina":8750.0,"VitA":2250000.0,"VitD3":562500.0,"VitE":3750.0,"VitB1":375.0,"VitB2":1500.0,"VitB6":700.0,"VitB12":3000.0,"VitK3":500.0,"AcPantot":3000.0,"AcFolico":187.5}},{"id":119,"nome":"1425301 - VACCI-MIX FRANGO INICIAL SM FIT","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Cu":2500.0,"I":250.0,"Fe":12500.0,"Mn":17500.0,"Zn":15000.0,"Se":75.0,"Biotina":6.25,"Colina":45.0,"Niacina":8750.0,"VitA":2250000.0,"VitD3":562500.0,"VitE":3750.0,"VitB1":375.0,"VitB2":1500.0,"VitB6":700.0,"VitB12":3000.0,"VitK3":500.0,"AcPantot":3000.0,"AcFolico":187.0}},{"id":120,"nome":"1444300 - MASTERNÚCLEO FRANGO CRESCIMENTO FIT","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":255.0,"Ca_max":275.0,"P":50.87,"Na":51.87,"Cu":333.33,"I":28.33,"Fe":1666.67,"Mn":2333.33,"Zn":2000.0,"Se":10.0,"F":483.0,"Met":39.6,"Biotina":0.5,"Colina":9.05,"Niacina":1000.0,"VitA":159000.0,"VitD3":50000.0,"VitE":333.33,"VitB1":33.33,"VitB2":133.33,"VitB6":66.67,"VitB12":333.33,"VitK3":53.33,"AcPantot":333.33,"AcFolico":23.33}},{"id":121,"nome":"1445201 - VACCI-MIX FRANGO CRESCIMENTO FIT","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Cu":2500.0,"I":250.0,"Fe":12500.0,"Mn":17500.0,"Zn":15000.0,"Se":75.0,"Met":346.5,"Biotina":3.75,"Colina":37.5,"Niacina":7500.0,"VitA":1875000.0,"VitD3":500000.0,"VitE":3000.0,"VitB1":250.0,"VitB2":1200.0,"VitB6":500.0,"VitB12":2500.0,"VitK3":450.0,"AcPantot":2500.0,"AcFolico":175.0}},{"id":122,"nome":"1445300 - VACCI-MIX FRANGO CRESCIMENTO SM","preco":16.368,"n":{"UM":10.0,"MM":990.0,"Cu":2500.0,"I":250.0,"Fe":12500.0,"Mn":17500.0,"Zn":15000.0,"Se":75.0,"Biotina":3.75,"Colina":37.5,"Niacina":7500.0,"VitA":1875000.0,"VitD3":500000.0,"VitE":3000.0,"VitB1":250.0,"VitB2":1200.0,"VitB6":500.0,"VitB12":2500.0,"VitK3":450.0,"AcPantot":2500.0,"AcFolico":175.0}},{"id":123,"nome":"1445301 - VACCI-MIX FRANGO CRESCIMENTO SM FIT","preco":16.67,"n":{"UM":10.0,"MM":990.0,"Cu":2500.0,"I":250.0,"Fe":12500.0,"Mn":17500.0,"Zn":15000.0,"Se":75.0,"Biotina":3.75,"Colina":37.5,"Niacina":7500.0,"VitA":1875000.0,"VitD3":500000.0,"VitE":3000.0,"VitB1":250.0,"VitB2":1200.0,"VitB6":500.0,"VitB12":2500.0,"VitK3":450.0,"AcPantot":2500.0,"AcFolico":175.0}},{"id":124,"nome":"1484300 - MASTERNÚCLEO FRANGO FINAL FIT","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":260.0,"Ca_max":280.0,"P":39.8,"Na":51.87,"Cu":333.33,"I":28.33,"Fe":1666.67,"Mn":2333.33,"Zn":2000.0,"Se":10.0,"F":378.0,"Met":16.5,"Biotina":0.167,"Colina":6.0,"Niacina":500.0,"VitA":93333.0,"VitD3":26667.0,"VitE":266.67,"VitB1":3.33,"VitB2":66.67,"VitB6":3.33,"VitB12":166.67,"VitK3":26.67,"AcPantot":166.67,"AcFolico":5.0}},{"id":125,"nome":"1485201 - VACCI-MIX FRANGO FINAL FIT","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Cu":5000.0,"I":500.0,"Fe":25000.0,"Mn":35000.0,"Zn":30000.0,"Se":150.0,"Met":183.25,"Biotina":2.5,"Colina":55.0,"Niacina":7500.0,"VitA":2000000.0,"VitD3":500000.0,"VitE":4000.0,"VitB1":50.0,"VitB2":1250.0,"VitB6":50.0,"VitB12":2500.0,"VitK3":400.0,"AcPantot":2500.0,"AcFolico":75.0}},{"id":126,"nome":"1485301 - VACCI-MIX FRANGO FINAL SM FIT","preco":16.67,"n":{"UM":10.0,"MM":990.0,"Cu":4700.0,"I":500.0,"Fe":25000.0,"Mn":36167.0,"Zn":29000.0,"Se":150.0,"Biotina":2.5,"Colina":55.0,"Niacina":7500.0,"VitA":2000000.0,"VitD3":500000.0,"VitE":4000.0,"VitB1":50.0,"VitB2":1250.0,"VitB6":50.0,"VitB12":2500.0,"VitK3":400.0,"AcPantot":2500.0,"AcFolico":75.0}},{"id":127,"nome":"1494350 - FRANGOMASTER","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":250.0,"Ca_max":260.0,"P":51.0,"Na":47.28,"Cu":333.0,"I":28.33,"Fe":1666.67,"Mn":2333.0,"Zn":2000.0,"Se":10.0,"F":468.36,"Lis":9.8,"Met":40.0,"Biotina":0.5,"Colina":6.0,"Niacina":1000.0,"VitA":159000.0,"VitD3":50000.0,"VitE":333.33,"VitB1":33.33,"VitB2":133.33,"VitB6":66.67,"VitB12":333.33,"VitK3":53.33,"AcPantot":333.33,"AcFolico":23.33}},{"id":128,"nome":"1500306 - QUALINÚCLEO ÚNICO","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":190.0,"Ca_max":210.0,"P":54.0,"Na":47.2,"Cu":3000.0,"Co":5.0,"I":33.0,"Fe":3333.0,"Mn":1333.0,"Zn":3333.0,"Se":10.0,"F":506.0,"Biotina":5.0,"Colina":5.0,"Niacina":733.0,"VitA":175000.0,"VitD3":33330.0,"VitE":1000.0,"VitB1":23.0,"VitB2":100.0,"VitB6":23.0,"VitB12":500.0,"VitK3":50.0,"AcPantot":333.0,"AcFolico":7.0}},{"id":129,"nome":"1520050 - QUALIMIX INICIAL COMPLETO","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Cu":2000.0,"Co":40.0,"I":200.0,"Fe":20000.0,"Mn":14000.0,"Zn":20000.0,"Se":80.0,"Biotina":40.0,"Colina":60.0,"Niacina":6000.0,"VitA":1400000.0,"VitD3":400000.0,"VitE":10000.0,"VitB1":300.0,"VitB2":1000.0,"VitB6":400.0,"VitB12":4000.0,"AcPantot":3200.0,"AcFolico":120.0}},{"id":130,"nome":"1520055 - QUALIMIX RI","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Cu":2000.0,"Co":40.0,"I":200.0,"Fe":20000.0,"Mn":14000.0,"Zn":20000.0,"Se":80.0,"Biotina":40.0,"Colina":60.0,"Niacina":6000.0,"VitA":2000000.0,"VitD3":400000.0,"VitE":10000.0,"VitB1":300.0,"VitB2":1000.0,"VitB6":400.0,"VitB12":4000.0,"VitK3":400.0,"AcPantot":3200.0,"AcFolico":120.0}},{"id":131,"nome":"1530050 - QUALIMIX CT COMPLETO","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Cu":4000.0,"Co":40.0,"I":200.0,"Fe":20000.0,"Mn":14000.0,"Zn":20000.0,"Se":60.0,"Biotina":20.0,"Colina":30.0,"Niacina":5000.0,"VitA":1050000.0,"VitD3":200000.0,"VitE":5000.0,"VitB1":240.0,"VitB2":900.0,"VitB6":240.0,"VitB12":3000.0,"VitK3":400.0,"AcPantot":2400.0,"AcFolico":60.0}},{"id":132,"nome":"1530306 - QUALINÚCLEO CT","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":230.0,"Ca_max":240.0,"P":34.67,"Na":58.5,"Cu":4000.0,"Co":6.66,"I":33.33,"Fe":3333.0,"Mn":1333.0,"Zn":3333.0,"Se":10.0,"F":332.0,"Biotina":3.33,"Colina":3.33,"Niacina":500.0,"VitA":116800.0,"VitD3":25000.0,"VitE":833.33,"VitB1":16.7,"VitB2":66.7,"VitB6":16.7,"VitB12":333.0,"VitK3":40.0,"AcPantot":267.0,"AcFolico":5.0}},{"id":133,"nome":"1648006 - SUPLEMENTO MICROMINERAL TPC","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Mg":137.5,"S":175.0,"Cu":27500.0,"Co":1875.0,"I":2250.0,"Mn":37500.0,"Zn":85000.0,"Se":500.0}},{"id":134,"nome":"1667340 - LACMASTER PRÉ-PARTO R 250","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":50.0,"Ca_max":95.0,"P":14.0,"Mg":95.0,"S":80.0,"Na":30.0,"Cl":128.0,"Cu":680.0,"Co":20.0,"I":30.0,"Mn":1500.0,"Zn":2500.0,"Se":14.0,"Cr":20.0,"F":128.0,"Sacch":210000000000.0,"Biotina":60.0,"VitA":300000.0,"VitD3":80000.0,"VitE":6000.0}},{"id":135,"nome":"1676010 - SABOR-UP","preco":0.0,"n":{"UM":30.0,"MM":970.0}},{"id":136,"nome":"1677000 - PREMIX VITAMÍNICO BOVINO LACTAÇÃO","preco":12.792,"n":{"UM":10.0,"MM":990.0,"VitA":10000000.0,"VitD3":2000000.0,"VitE":48000.0}},{"id":137,"nome":"1677002 - PREMIX VITAMÍNICO BOVINO LACTAÇÃO ME","preco":0.0,"n":{"UM":10.0,"MM":990.0,"VitA":8000000.0,"VitD3":1600000.0,"VitE":15000.0}},{"id":138,"nome":"1677060 - PREMIX VITAMÍNICO MINERAL BOV. LACTAÇÃO","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Mg":15.0,"Cu":10000.0,"Co":300.0,"I":500.0,"Fe":15000.0,"Mn":24500.0,"Zn":37500.0,"Se":250.0,"VitA":5000000.0,"VitD3":1000000.0,"VitE":24000.0}},{"id":139,"nome":"1677080 - PREMIX VITAMÍNICO MINERAL BOV. LACTAÇÃO R","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Mg":15.0,"Cu":10000.0,"Co":300.0,"I":500.0,"Mn":24500.0,"Zn":37500.0,"Se":250.0,"VitA":5000000.0,"VitD3":1000000.0,"VitE":24000.0}},{"id":140,"nome":"1677220 - VACCI-PHOS 156 + ADE","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":200.0,"Ca_max":230.0,"P":156.0,"Mg":30.0,"S":33.0,"Cu":2000.0,"Co":150.0,"I":200.0,"Mn":5000.0,"Zn":11900.0,"Se":82.0,"F":1600.0,"VitA":1000000.0,"VitD3":220000.0,"VitE":6250.0}},{"id":141,"nome":"1677224 - VACCI-PHOS 156 + ADE R","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":200.0,"Ca_max":230.0,"P":156.0,"Mg":30.0,"S":33.0,"Cu":2000.0,"Co":150.0,"I":200.0,"Mn":5000.0,"Zn":11900.0,"Se":82.0,"F":1600.0,"VitA":1000000.0,"VitD3":220000.0,"VitE":6250.0}},{"id":142,"nome":"1677280 - VACCI-PHOS 156 + ADE R & BIOTINA","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":192.0,"Ca_max":230.0,"P":156.0,"Mg":30.0,"S":33.0,"Cu":2000.0,"Co":150.0,"I":200.0,"Mn":5000.0,"Zn":11900.0,"Se":82.0,"F":1433.0,"Biotina":250.0,"VitA":1000000.0,"VitD3":220000.0,"VitE":6250.0}},{"id":143,"nome":"1677330 - BOVIMASTER LEITE R","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":250.0,"Ca_max":280.0,"P":44.0,"Mg":15.0,"S":15.0,"Na":65.0,"Cu":650.0,"Co":30.0,"I":40.0,"Mn":1450.0,"Zn":2500.0,"Se":20.0,"F":403.0,"VitA":220000.0,"VitD3":50000.0,"VitE":1000.0}},{"id":144,"nome":"1688068 - TECNOBOV CONF R","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":150.0,"Ca_max":190.0,"P":30.0,"Mg":30.0,"S":30.0,"Na":75.0,"Cu":750.0,"Co":30.0,"I":40.0,"Mn":1500.0,"Zn":3000.0,"Se":12.0,"F":275.0,"VitA":150000.0,"VitD3":15000.0,"VitE":500.0}},{"id":145,"nome":"1688192 - CONCENTRADO MICROMINERAL TPC R","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Mg":31.33,"S":39.9,"Cu":6265.0,"Co":430.0,"I":515.0,"Mn":8545.0,"Zn":19365.0,"Se":115.0}},{"id":146,"nome":"1691100 - MEGALAC-E (gordura protegida soja)","preco":0.0,"n":{"UM":50.0,"EE":850.0,"MM":200.0,"NDT":1530.0,"Ca_min":75.0,"Ca_max":125.0}},{"id":147,"nome":"1692100 - BEEF FAT  (gordura protegida soja)","preco":0.0,"n":{"UM":50.0,"EE":820.0,"MM":200.0,"NDT":1476.0,"Ca_min":75.0,"Ca_max":125.0}},{"id":148,"nome":"1693100 - DAIRYFAT (gordura protegida palma)","preco":0.0,"n":{"UM":50.0,"EE":820.0,"MM":230.0,"NDT":1476.0,"Ca_min":75.0,"Ca_max":125.0}},{"id":149,"nome":"1688446 - VACCIMIX IND R","preco":10.07,"n":{"UM":10.0,"MM":990.0,"Mg":134.0,"S":167.0,"Cu":15600.0,"Co":900.0,"I":1000.0,"Mn":13400.0,"Zn":50000.0,"Se":280.0}},{"id":150,"nome":"1688563 - VACCIMIX IND S","preco":6.13,"n":{"UM":10.0,"MM":990.0,"Mg":134.0,"S":167.0,"Cu":15600.0,"Co":900.0,"I":1000.0,"Mn":13400.0,"Zn":50000.0,"Se":280.0}},{"id":151,"nome":"1530055 - QUALIMIX CT","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Cu":4000.0,"Co":40.0,"I":200.0,"Fe":20000.0,"Mn":14000.0,"Zn":20000.0,"Se":60.0,"Biotina":20.0,"Colina":30.0,"Niacina":5000.0,"VitA":1050000.0,"VitD3":200000.0,"VitE":5000.0,"VitB1":240.0,"VitB2":900.0,"VitB6":240.0,"VitB12":3000.0,"VitK3":400.0,"AcPantot":2400.0,"AcFolico":60.0}},{"id":152,"nome":"1688447 - VACCIMIX FAB","preco":10.07,"n":{"UM":10.0,"MM":990.0,"Mg":134.0,"S":167.0,"Cu":15600.0,"Co":900.0,"I":1000.0,"Mn":13400.0,"Zn":50000.0,"Se":280.0}},{"id":153,"nome":"PX MICROMIN COMPLEM","preco":21.29,"n":{"UM":1.0,"MM":990.0,"Cu":62400.0,"Co":3600.0,"I":4000.0,"Mn":53400.0,"Zn":200000.0,"Se":1120.0}},{"id":154,"nome":"PX MICROMIN COMPLEM TEC","preco":21.55,"n":{"UM":1.0,"MM":990.0,"Cu":45000.0,"Co":2500.0,"I":3000.0,"Mn":40000.0,"Zn":150000.0,"ZnOrg":39200.0,"Se":745.0,"SeOrg":250.0,"CrOrg":335.0}},{"id":155,"nome":"PX MICROMIN COMPLEM TEC VITAMINADO","preco":24.7,"n":{"UM":1.0,"MM":990.0,"Cu":45000.0,"Co":2500.0,"I":3000.0,"Mn":40000.0,"Zn":150000.0,"ZnOrg":39200.0,"Se":745.0,"SeOrg":250.0,"CrOrg":335.0,"VitA":3350000.0}},{"id":156,"nome":"PX MINERAL COMPLEM 95","preco":18.1044,"n":{"UM":1.0,"MM":990.0,"Mg":230.0,"Cu":34100.0,"Co":2960.0,"I":1820.0,"Mn":28410.0,"Zn":181820.0,"Se":685.0}},{"id":157,"nome":"PX MIN CRESCIMENTO COMPLEM","preco":24.2927,"n":{"UM":1.0,"MM":990.0,"Mg":1.0,"Cu":85330.0,"Co":3334.0,"I":1995.0,"Mn":33340.0,"Zn":213360.0,"Se":321.0}},{"id":158,"nome":"PX MICROMIN COMPLEM (teste novo)","preco":21.29,"n":{"UM":1.0,"MM":990.0,"Cu":70000.0,"Co":3600.0,"I":4000.0,"Mn":70000.0,"Zn":200000.0,"Se":1200.0}},{"id":159,"nome":"Adethor Premix (Vit. A, D e E)","preco":0.0,"n":{"UM":30.0,"MM":970.0,"VitA":4000000.0,"VitD3":1000000.0,"VitE":30000.0}},{"id":160,"nome":"BCA Pré-parto","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":66.0,"Ca_max":66.0,"Mg":45.0,"S":160.0,"Cl":89.0,"Cu":400.0,"Cr":16.0,"VitA":50000.0,"VitD3":10000.0,"VitE":4000.0}},{"id":161,"nome":"Bovigold Pré-Parto","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":145.0,"Ca_max":145.0,"P":30.0,"Mg":20.0,"S":90.0,"Na":31.0,"Cl":130.0,"Cu":400.0,"Co":8.0,"Fe":600.0,"Mn":800.0,"Zn":1600.0,"Se":12.0,"Cr":24.0,"VitA":120000.0,"VitD3":50000.0,"VitE":4000.0}},{"id":162,"nome":"Bovipasto","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":145.0,"Ca_max":145.0,"P":78.0,"Mg":20.0,"S":26.0,"Na":114.0,"Cl":193.8,"Cu":1238.0,"Co":90.0,"I":80.0,"Fe":2000.0,"Mn":2057.0,"Zn":4896.0,"Se":27.5,"Cr":20.0}},{"id":163,"nome":"Boviprima","preco":0.0,"n":{"UM":30.0,"PB":300.0,"EE":60.0,"FB":45.0,"FDA":90.0,"FDN":150.0,"MM":300.0,"NDT":700.0,"Ca_min":50.0,"Ca_max":50.0,"P":15.0,"Mg":5.0,"S":7.0,"K":10.0,"Na":17.0,"Cl":7.9,"Cu":74.0,"Co":10.0,"I":10.4,"Fe":210.0,"Mn":137.0,"Zn":290.0,"Se":2.25,"Cr":2.0,"VitA":60000.0,"VitD3":12000.0,"VitE":150.0}},{"id":164,"nome":"Fosbovi 30","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":180.0,"Ca_max":180.0,"P":130.0,"Cu":1250.0,"Co":100.0,"I":90.0,"Fe":2200.0,"Mn":2000.0,"Zn":5270.0,"Se":15.0}},{"id":165,"nome":"Fosbovi 40","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":240.0,"Ca_max":240.0,"P":174.0,"Cu":1250.0,"Co":100.0,"I":90.0,"Fe":1795.0,"Mn":2000.0,"Zn":5270.0,"Se":15.0}},{"id":166,"nome":"Fosbovi Confinamento","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":103.0,"Ca_max":103.0,"P":45.0,"Mg":44.0,"S":40.0,"K":61.5,"Na":114.5,"Cl":195.0,"Cu":516.0,"Co":48.5,"I":30.0,"Mn":760.0,"Zn":2516.5,"Se":9.0}},{"id":167,"nome":"Fosbovi Confinamento 10","preco":0.0,"n":{"UM":30.0,"PB":1000.0,"EE":10.0,"FB":50.0,"FDA":10.0,"MM":360.0,"NDT":150.0,"Ca_min":60.0,"Ca_max":60.0,"P":15.0,"Mg":14.0,"S":12.0,"Na":34.0,"Cu":187.0,"Co":10.0,"I":9.15,"Mn":300.0,"Zn":755.0,"Se":3.4,"VitA":60000.0}},{"id":168,"nome":"Fosbovi Confinamento Levedura","preco":0.0,"n":{"UM":30.0,"PB":562.5,"MM":970.0,"Ca_min":81.0,"Ca_max":81.0,"P":17.6,"Mg":21.0,"S":42.0,"K":15.0,"Na":60.0,"Cu":500.0,"Co":7.0,"I":25.0,"Fe":535.0,"Mn":704.0,"Zn":2000.0,"Se":5.0,"VitA":140000.0}},{"id":169,"nome":"Fosbovi Confinamento Plus","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":103.0,"Ca_max":103.0,"P":45.0,"Mg":44.0,"S":40.0,"K":61.56,"Na":114.4,"Cl":195.0,"Cu":516.22,"Co":48.58,"I":30.0,"Mn":760.06,"Zn":2516.53,"Se":9.0}},{"id":170,"nome":"Fosbovi Seca","preco":0.0,"n":{"UM":30.0,"PB":616.5,"MM":970.0,"Ca_min":572.0,"Ca_max":572.0,"P":418.0,"S":20.0,"Na":95.0,"Cu":400.0,"Co":28.0,"I":32.0,"Fe":456.0,"Mn":1024.0,"Zn":2564.0,"Se":10.0}},{"id":171,"nome":"Fosbovinho","preco":0.0,"n":{"UM":30.0,"PB":180.0,"MM":450.0,"Ca_min":35.5,"Ca_max":35.5,"P":26.0,"Na":32.0,"Cl":49.0,"Cu":1200.0,"Co":30.0,"I":80.5,"Fe":1100.0,"Mn":2288.0,"Zn":4900.0,"Se":11.0,"Cr":10.0}},{"id":172,"nome":"Fosbovinho Proteico ADE","preco":0.0,"n":{"UM":30.0,"PB":266.0,"EE":10.0,"FB":10.0,"MM":450.0,"NDT":602.0,"Ca_min":56.0,"Ca_max":56.0,"P":33.6,"S":16.6,"Na":13.3,"Cu":250.0,"Co":2.55,"I":20.0,"Mn":500.0,"Zn":750.0,"Se":2.5,"Cr":3.9,"VitA":31000.0,"VitD3":4000.0,"VitE":525.0}},{"id":173,"nome":"Kromium","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":130.0,"Ca_max":130.0,"P":75.0,"S":5.0,"Na":150.0,"Cu":1000.0,"Co":14.0,"I":90.0,"Fe":2500.0,"Mn":2000.0,"Zn":3700.0,"Se":11.0,"Cr":40.0}},{"id":174,"nome":"LACTHOR","preco":0.0,"n":{"UM":130.0,"PB":225.0,"EE":170.0,"FB":2.0,"MM":95.0,"NDT":1200.0,"Ca_min":10.0,"Ca_max":10.0,"P":6.3,"Cu":9.0,"VitA":55000.0,"VitD3":4500.0,"VitE":80.0}},{"id":175,"nome":"Lactobovi","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":156.0,"Ca_max":156.0,"P":51.0,"Mg":33.0,"S":20.0,"K":28.0,"Na":93.0,"Cu":400.0,"Co":30.0,"I":40.0,"Fe":2000.0,"Mn":1350.0,"Zn":1700.0,"Se":15.0,"Cr":10.0,"VitA":135000.0,"VitD3":68000.0,"VitE":450.0}},{"id":176,"nome":"Lactobovi Top","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":156.0,"Ca_max":156.0,"P":51.0,"Mg":33.0,"S":20.0,"K":28.0,"Na":93.0,"Cu":400.0,"Co":30.0,"I":40.0,"Fe":2000.0,"Mn":1350.0,"Zn":1700.0,"Se":15.0,"Cr":10.0,"VitA":135000.0,"VitD3":68000.0,"VitE":450.0}},{"id":177,"nome":"NAC Biotina","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":100.0,"Ca_max":100.0,"P":42.0,"Mg":45.0,"S":18.0,"K":20.0,"Na":123.0,"Cl":93.0,"Cu":500.0,"Co":14.0,"I":28.0,"Fe":1050.0,"Mn":1400.0,"Zn":2800.0,"Se":18.0,"Cr":20.0,"Biotina":80.0,"VitA":200000.0,"VitD3":40000.0,"VitE":1200.0}},{"id":178,"nome":"NAC Biotina SB","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":190.0,"Ca_max":190.0,"P":76.0,"S":35.0,"K":38.0,"Na":19.0,"Cu":900.0,"Co":27.0,"I":100.0,"Mn":2700.0,"Zn":5400.0,"Se":35.0,"Cr":38.0,"Biotina":150.0,"VitA":770000.0,"VitD3":75000.0,"VitE":2300.0}},{"id":179,"nome":"NBE","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":142.5,"Ca_max":142.5,"P":75.0,"Mg":30.0,"S":30.0,"K":60.0,"Na":15.0,"Cu":1000.0,"Co":17.0,"I":18.0,"Mn":1700.0,"Zn":2500.0,"Se":25.0,"Cr":20.0,"VitA":150000.0,"VitD3":60000.0,"VitE":1500.0}},{"id":180,"nome":"NN Bovigold INDUSTRIAL","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":200.0,"Ca_max":200.0,"P":152.0,"Mg":9.0,"S":40.0,"Cu":2750.0,"Co":65.0,"I":132.0,"Mn":9100.0,"Zn":11900.0,"Se":80.0,"Cr":25.0,"VitA":2000000.0,"VitD3":250000.0,"VitE":6250.0}},{"id":181,"nome":"NN Bovigold INDUSTRIAL ITB","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":200.0,"Ca_max":200.0,"P":152.0,"Mg":9.0,"S":40.0,"Cu":2750.0,"Co":65.0,"I":132.0,"Mn":9100.0,"Zn":11900.0,"Se":80.0,"Cr":25.0,"VitA":2000000.0,"VitD3":250000.0,"VitE":3125.0}},{"id":182,"nome":"NN Bovigold INDUSTRIAL M","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":200.0,"Ca_max":200.0,"P":152.0,"Mg":9.0,"S":40.0,"Cu":2750.0,"Co":65.0,"I":132.0,"Mn":9100.0,"Zn":11900.0,"Se":80.0,"Cr":25.0,"VitA":2000000.0,"VitD3":250000.0,"VitE":6250.0}},{"id":183,"nome":"NN Bovigold INDUSTRIAL MB","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":200.0,"Ca_max":200.0,"P":152.0,"Mg":9.0,"S":40.0,"Cu":2750.0,"Co":65.0,"I":132.0,"Mn":9100.0,"Zn":11900.0,"Se":80.0,"Cr":25.0,"Biotina":300.0,"VitA":2000000.0,"VitD3":250000.0,"VitE":6250.0}},{"id":184,"nome":"NN Bovigold INDUSTRIAL SV","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":200.0,"Ca_max":200.0,"P":152.0,"Mg":9.0,"S":40.0,"Cu":2750.0,"Co":65.0,"I":132.0,"Mn":9100.0,"Zn":11900.0,"Se":80.0}},{"id":185,"nome":"Novo Bovigold","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":200.0,"Ca_max":200.0,"P":60.0,"Mg":20.0,"S":20.0,"K":35.0,"Na":70.0,"Cl":110.0,"Cu":700.0,"Co":15.0,"I":40.0,"Fe":700.0,"Mn":1600.0,"Zn":2500.0,"Se":19.0,"Cr":9.7,"VitA":200000.0,"VitD3":50000.0,"VitE":1500.0}},{"id":186,"nome":"Novo Bovigold Plus","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":200.0,"Ca_max":200.0,"P":60.0,"Mg":20.0,"S":20.0,"K":35.0,"Na":70.0,"Cl":110.0,"Cu":700.0,"Co":15.0,"I":40.0,"Fe":700.0,"Mn":1600.0,"Zn":2500.0,"Se":19.0,"Cr":9.7,"VitA":200000.0,"VitD3":50000.0,"VitE":1500.0}},{"id":187,"nome":"Nucleo Bovipasto","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":214.0,"Ca_max":214.0,"P":115.2,"Mg":29.0,"S":38.0,"Cu":1868.0,"Co":133.0,"I":118.0,"Mn":3045.0,"Zn":7231.0,"Se":40.0,"Cr":29.0}},{"id":188,"nome":"Nucleo Bovipasto INDUSTRIAL","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":206.0,"Ca_max":206.0,"P":156.0,"Mg":39.0,"S":52.0,"Cu":2480.0,"Co":180.0,"I":160.0,"Mn":4117.0,"Zn":9800.0,"Se":55.0,"Cr":40.0}},{"id":189,"nome":"Nucleo BV Crescimento","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":179.0,"Ca_max":179.0,"P":131.0,"S":18.0,"Cu":2283.0,"Co":82.0,"I":112.0,"Fe":2686.0,"Mn":1940.0,"Zn":5417.0,"Se":22.0,"Cr":15.0}},{"id":190,"nome":"Nucleo BV Engorda","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":132.5,"Ca_max":132.5,"P":96.8,"S":38.0,"Cu":1810.0,"Co":66.0,"I":89.5,"Fe":2846.0,"Mn":1774.5,"Zn":4298.5,"Se":14.9}},{"id":191,"nome":"Nucleo BV Reprodução","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":184.5,"Ca_max":184.5,"P":135.0,"S":27.0,"Cu":2250.0,"Co":90.0,"I":112.5,"Fe":2700.0,"Mn":2700.0,"Zn":6750.0,"Se":25.5,"Cr":30.0}},{"id":192,"nome":"NUCLEO INDUSTRIAL PASTO - NIP","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":220.0,"Ca_max":220.0,"P":150.0,"Mg":40.0,"Cu":3000.0,"Co":180.0,"I":180.0,"Fe":3000.0,"Mn":6000.0,"Zn":10000.0,"Se":50.0}},{"id":193,"nome":"Núcleo Novo Bovigold","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":165.0,"Ca_max":165.0,"P":120.0,"Mg":4.0,"S":4.0,"K":7.0,"Cu":1400.0,"Co":30.0,"I":80.0,"Mn":3200.0,"Zn":5000.0,"Se":38.0,"Cr":40.0,"VitA":400.0,"VitD3":100.0,"VitE":3000.0}},{"id":194,"nome":"Nutrigold Núcleo","preco":0.0,"n":{"UM":30.0,"PB":963.0,"EE":5.0,"FB":10.0,"MM":970.0,"NDT":150.0,"Ca_min":55.0,"Ca_max":55.0,"P":40.0,"Mg":8.0,"S":20.0,"Na":100.0,"Cl":200.0,"Cu":400.0,"Co":30.0,"I":30.0,"Fe":500.0,"Mn":1050.0,"Zn":2706.0,"Se":10.0}},{"id":195,"nome":"Ovinofós COM MONENSINA","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":120.0,"Ca_max":120.0,"P":87.0,"S":18.0,"Na":147.0,"Cl":240.0,"Cu":590.0,"Co":40.0,"I":80.0,"Fe":1800.0,"Mn":1300.0,"Zn":3800.0,"Se":15.0,"Cr":20.0,"Mo":300.0}},{"id":196,"nome":"Ovinofós núcleo produçao Monensina","preco":0.0,"n":{"UM":30.0,"MM":970.0,"Ca_min":267.0,"Ca_max":267.0,"P":61.0,"Mg":20.0,"S":35.0,"Cu":350.0,"Co":20.0,"I":80.0,"Fe":3000.0,"Mn":2000.0,"Zn":6000.0,"Se":23.0,"Cr":60.0,"Mo":500.0}},{"id":197,"nome":"PX MILK PERFORMA L FOS","preco":0.0,"n":{"UM":30.0,"MM":970.0,"P":65.0,"S":32.0,"Cu":2100.0,"Co":50.0,"I":100.0,"Mn":7000.0,"Zn":9000.0,"Se":60.0,"VitA":800000.0,"VitD3":250000.0,"VitE":2500.0}},{"id":198,"nome":"Activo Premium (AROMA)","preco":0.0,"n":{"UM":30.0,"MM":970.0}},{"id":199,"nome":"Nattimilk E","preco":0.0,"n":{"UM":40.0,"PB":220.0,"EE":200.0,"MM":90.0,"Ca_min":70.0,"Ca_max":70.0,"P":70.0,"Mg":15.0,"Cu":10.0,"Fe":110.0,"Zn":145.0,"Se":0.5,"VitA":55000.0,"VitD3":4500.0,"VitE":80.0}},{"id":200,"nome":"NUTRON Probeef pasto bom 160","preco":0.0,"n":{"UM":30.0,"Ca_min":190.0,"Ca_max":190.0,"P":160.0,"S":40.0,"Cu":2500.0,"Co":150.0,"I":150.0,"Mn":5000.0,"Zn":8500.0,"Se":40.0}},{"id":201,"nome":"NUTRON TOP BEEF (CONF.)","preco":0.0,"n":{"UM":30.0,"Mg":100.0,"S":250.0,"Cu":4800.0,"Co":290.0,"I":290.0,"Fe":5770.0,"Mn":9730.0,"Zn":16000.0,"Se":80.0}},{"id":202,"nome":"PCS NÚCLEO M48","preco":0.0,"n":{"UM":30.0,"Ca_min":198.0,"Ca_max":198.0,"P":38.0,"Mg":34.0,"S":120.0,"Cu":8000.0,"Co":360.0,"I":590.0,"Mn":5044.0,"Zn":30100.0,"Se":135.0}},{"id":203,"nome":"Polinucleo Bov. Lactação FATEC","preco":0.0,"n":{"UM":30.0,"Ca_min":136.0,"Ca_max":136.0,"P":102.0,"Mg":48.0,"S":36.0,"Cu":800.0,"Co":60.0,"I":74.0,"Fe":2800.0,"Mn":2400.0,"Zn":3380.0,"Se":45.0,"Biotina":4.0,"VitA":267000.0,"VitD3":53000.0,"VitE":130.0}},{"id":204,"nome":"Vialac Fos ADE Socil","preco":0.0,"n":{"UM":30.0,"Ca_min":200.0,"Ca_max":200.0,"P":100.0,"Mg":22.0,"S":30.0,"Cu":2000.0,"Co":160.0,"I":300.0,"Fe":2000.0,"Mn":3000.0,"Zn":7200.0,"Se":24.0,"VitA":230000.0,"VitD3":54000.0,"VitE":842.0}},{"id":205,"nome":"PX FAB MINERTHAL","preco":0.0,"n":{"UM":10.0,"MM":990.0,"Ca_min":150.0,"Ca_max":190.0,"P":115.0,"Mg":60.0,"S":120.0,"Cu":3024.0,"Co":90.0,"I":180.0,"Mn":8994.0,"Zn":12096.0,"Se":90.0,"F":1150.0,"Biotina":210.0,"VitA":1200000.0,"VitD3":120000.0,"VitE":4350.0}}]};
+
+// ══════════════════════════════════════════════════════
+// ESTADO GLOBAL
+// ══════════════════════════════════════════════════════
+let allNuts = DB_INITIAL.nd.map(n=>({...n}));
+// Nutrientes obrigatórios que podem não estar no DB_INITIAL
+const NUTS_EXTRAS=[
+  {k:'EM_aves',l:'Energia Metab. Aves',u:'kcal/kg'},
+  {k:'EM_bov',l:'Energia Metab. Bovinos',u:'kcal/kg'},
+  {k:'EM_sui',l:'Energia Metab. Suínos',u:'kcal/kg'},
+  {k:'EM_cod',l:'Energia Metab. Codornas',u:'kcal/kg'},
+  {k:'ED_bov',l:'Energia Digest. Bovinos',u:'kcal/kg'},
+  {k:'ED_sui',l:'Energia Digest. Suínos',u:'kcal/kg'},
+  {k:'P_disp',l:'Fósforo Disponível',u:'g/kg'},
+  {k:'Lis',l:'Lisina Total',u:'g/kg'},
+  {k:'Met',l:'Metionina Total',u:'g/kg'},
+  {k:'Met_Cis',l:'Metionina + Cistina',u:'g/kg'},
+  {k:'Tre',l:'Treonina Total',u:'g/kg'},
+  {k:'Trp',l:'Triptofano Total',u:'g/kg'},
+  {k:'Arg',l:'Arginina Total',u:'g/kg'},
+  {k:'Val',l:'Valina Total',u:'g/kg'},
+  {k:'Leu',l:'Leucina Total',u:'g/kg'},
+  {k:'His',l:'Histidina Total',u:'g/kg'},
+  {k:'Ile',l:'Isoleucina Total',u:'g/kg'},
+  {k:'VitC',l:'Vitamina C',u:'mg/kg'},
+  {k:'Co',l:'Cobalto',u:'mg/kg'},
+  {k:'I',l:'Iodo',u:'mg/kg'},
+  {k:'K',l:'Potássio',u:'g/kg'},
+  {k:'Amido',l:'Amido',u:'g/kg'},
+  {k:'FDN',l:'FDN',u:'g/kg'},
+  {k:'FDA',l:'FDA',u:'g/kg'},
+  {k:'Fe',l:'Ferro',u:'mg/kg'},
+];
+NUTS_EXTRAS.forEach(n=>{if(!allNuts.find(x=>x.k===n.k))allNuts.push(n);});
+let ings = DB_INITIAL.ings.map(i=>({...i, nutrientes:{...i.n||{}}}));
+let exigs = [];
+let formulas = [{id:1,nome:'Fórmula 1',linhas:[{id:1,ing:null,qtd:0,qtdMin:0,qtdMax:0}]}];
+let formulaAtiva = 1;
+let fmlEditando = false; // modo visualização por padrão
+let solverAberto = false;
+let exigSelecionada = ''; // preserva exigência selecionada entre re-renders
+let exigEditId = null;
+let exigEditando = false;
+let exigEditBuffer = {};
+let alimSelId = null;
+let alimEditBuffer = {};
+let nutEditKey = null;
+let cmpNutsAll = false;
+let cmpFmls = [
+  {id:1,nome:'Fórmula A',linhas:[]},
+  {id:2,nome:'Fórmula B',linhas:[]}
+];
+
+const MAIN_NUTS = ["PB","EE","FB","MM","NDT","Ca_min","Ca_max","P","Na","Mg","S","Cu","Zn","Se","Mn","VitA","VitD3","VitE"];
+
+// Perfis de nutrientes obrigatórios por espécie (legislação brasileira / MAPA)
+const NUTS_POR_ESPECIE = {
+  'Aves Poedeiras':["PB","EE","FB","MM","EM_aves","Ca_min","P","P_disp","Na","Lis","Met","Met_Cis","Tre","Trp","Cu","Zn","Se","Mn","Fe","VitA","VitD3","VitE"],
+  'Frangos de Corte':["PB","EE","FB","MM","EM_aves","Ca_min","P","P_disp","Na","Lis","Met","Met_Cis","Tre","Trp","Cu","Zn","Se","Mn","Fe","VitA","VitD3","VitE"],
+  'Codornas':["PB","EE","FB","MM","EM_aves","Ca_min","P","P_disp","Na","Lis","Met","Met_Cis","Tre","Cu","Zn","Se","Mn","VitA","VitD3","VitE"],
+  'Suínos':["PB","EE","FB","MM","Ca_min","P","P_disp","Na","Lis","Met","Met_Cis","Tre","Trp","Cu","Zn","Se","Mn","Fe","VitA","VitD3","VitE"],
+  'Bovinos de Corte':["PB","EE","FB","MM","NDT","Ca_min","Ca_max","P","Na","Mg","S","K","Cu","Zn","Se","Mn","Fe","Co","I","VitA","VitD3","VitE","FDN","FDA"],
+  'Bovinos de Leite':["PB","EE","FB","MM","NDT","Ca_min","Ca_max","P","Na","Mg","S","K","Cu","Zn","Se","Mn","Fe","Co","I","VitA","VitD3","VitE","FDN","FDA"],
+  'Eqüínos':["PB","EE","FB","NDT","Ca_min","P","Na","Mg","K","Cu","Zn","Se","Mn","Fe","VitA","VitD3","VitE"],
+  'Caprinos':["PB","EE","FB","MM","NDT","Ca_min","P","Na","Mg","S","Cu","Zn","Se","Mn","VitA","VitD3","VitE","FDN"],
+  'Ovinos':["PB","EE","FB","MM","NDT","Ca_min","P","Na","Mg","S","Cu","Zn","Se","Mn","VitA","VitD3","VitE","FDN"],
+  'Peixes':["PB","EE","FB","MM","Ca_min","P","Na","Cu","Zn","Se","Mn","Fe","VitA","VitD3","VitE","VitC","Lis","Met"],
+  'Cães':["PB","EE","FB","MM","Ca_min","P","Na","Cu","Zn","Se","Mn","Fe","VitA","VitD3","VitE"],
+  'Gatos':["PB","EE","FB","MM","Ca_min","P","Na","Cu","Zn","Se","Mn","Fe","VitA","VitD3","VitE"],
+  'Coelhos':["PB","EE","FB","MM","NDT","Ca_min","P","Na","Cu","Zn","VitA","VitD3","VitE"],
+};
+
+// Nutrientes classificados como aditivos/medicamentos (aparecem separados no rótulo)
+const NUTS_ADITIVOS = [
+  'MonSod','VirMic','SalNom','BhtAnt','BacZin','FitFtu','HalClo','EnrEna','MadMad','ColHid',
+  'NicNic','LinLin','SacSac','BacSub','BifBif','EntFae','LacAci','LacCas','LacLac','LacBuc',
+  'BacLic','BacCer','RumAmy','RumSuc','SucDex',
+  'MonSodica','Monensina','Salinomicina','Virginiamicina','Bacitracina',
+  'Halquinol','Enramicina','Maduramicina','Nicarbazina','Lincomicina','Colistina',
+  'COLINA','NIACINA','BIOTINA','INOSITOL',
+  'MOS','BETAGLUCANA','BENTONITA','CURCUMA','BIOCOLINA',
+  'ETOXIQUIN','BHT','SACARINA','NEOESPERIDINA','AROMA',
+  'NnpEqP','MetPro','GluMan','BetCar',
+];
+
+function isAditivo(k){
+  const kn=norm(k);
+  return NUTS_ADITIVOS.some(a=>norm(a)===kn)||
+    kn.includes('monensin')||kn.includes('salinomi')||kn.includes('virginiami')||
+    kn.includes('bacitracin')||kn.includes('halquin')||kn.includes('enramici')||
+    kn.includes('nicarbaz')||kn.includes('lincomici')||kn.includes('colistin')||
+    kn.includes('maduramici')||kn.includes('saccharom')||kn.includes('bacillus')||
+    kn.includes('lactobac')||kn.includes('bifidobac')||kn.includes('enterococ')||
+    kn.includes('fitase')||kn.includes('protease')||kn.includes('celulase')||
+    kn.includes('colina')||kn.includes('biotina')||kn.includes('niacina')||
+    kn.includes('inositol')||kn.includes('bht')||kn.includes('etoxiquin')||
+    kn.includes('mos')||kn.includes('betagluc')||kn.includes('bentonit');
+}
+
+function getNutsParaEspecie(especie){
+  if(!especie)return MAIN_NUTS;
+  const esp=Object.keys(NUTS_POR_ESPECIE).find(k=>norm(k).includes(norm(especie))||norm(especie).includes(norm(k)));
+  return esp?NUTS_POR_ESPECIE[esp]:MAIN_NUTS;
+}
+const KEYS = {ings:'feedmix_ings',nuts:'feedmix_nuts',exig:'feedmix_exig',fmls:'feedmix_formulas'};
+
+// ══════════════════════════════════════════════════════
+// STORAGE
+// ══════════════════════════════════════════════════════
+function sGet(k){try{const v=localStorage.getItem(k);return v?JSON.parse(v):null;}catch{return null;}}
+function sSet(k,v){
+  try{
+    localStorage.setItem(k,JSON.stringify(v));
+  }catch(e){
+    if(e.name==='QuotaExceededError'||e.code===22){
+      toast('Armazenamento cheio! Dados podem não ter sido salvos. Considere limpar fórmulas antigas.','err',5000);
+    }
+  }
+}
+function loadStorage(){
+  const sN=sGet(KEYS.nuts);if(sN)allNuts=sN;
+  const sI=sGet(KEYS.ings);if(sI)ings=sI;
+  const sE=sGet(KEYS.exig);if(sE)exigs=sE;
+  const sF=sGet(KEYS.fmls);if(sF&&sF.length){
+    formulas=sF;formulaAtiva=formulas[0].id;
+    // Reconectar ingredientes das linhas com o array ings atualizado
+    for(const f of formulas){
+      if(!f.linhas)continue;
+      for(const l of f.linhas){
+        if(!l.ing)continue;
+        const fresh=ings.find(i=>i.id===l.ing.id)||ings.find(i=>i.nome===l.ing.nome);
+        if(fresh) l.ing={id:fresh.id,nome:fresh.nome,preco:fresh.preco,nutrientes:fresh.nutrientes};
+      }
+    }
+  }
+}
+function saveNuts(){sSet(KEYS.nuts,allNuts);}
+function saveIngs(){sSet(KEYS.ings,ings);}
+function saveFormulas(){
+  // Salvar fórmulas compactas (sem duplicar nutrientes dos ingredientes)
+  const compact=formulas.map(f=>({
+    ...f,
+    linhas:f.linhas.map(l=>({
+      id:l.id,qtd:l.qtd,qtdMin:l.qtdMin,qtdMax:l.qtdMax,fixado:l.fixado,
+      ing:l.ing?{id:l.ing.id,nome:l.ing.nome,preco:l.ing.preco}:null
+    }))
+  }));
+  sSet(KEYS.fmls,compact);
+}
+function saveExigs(){sSet(KEYS.exig,exigs);}
+
+// ══════════════════════════════════════════════════════
+// UTILIDADES
+// ══════════════════════════════════════════════════════
+function pN(s){const n=parseFloat(String(s||'').replace(',','.'));return isNaN(n)?0:n;}
+function norm(s){return(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();}
+function fmtN(v,d=2){if(!v||v===0)return'—';return Number(v).toLocaleString('pt-BR',{maximumFractionDigits:d});}
+function fmtR(v){return'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function h(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function getNutDef(k){return allNuts.find(n=>n.k===k)||{k,l:k,u:''};}
+
+function calcFmla(linhas){
+  const tot=linhas.reduce((s,l)=>s+(l.qtd||0),0);
+  if(!tot)return{totalG:0,custo:0,nutrientes:{}};
+  const custo=linhas.reduce((s,l)=>!l.ing?s:s+(l.ing.preco||0)*(l.qtd||0)/1000,0);
+  const nutrientes={};
+  for(const nd of allNuts){
+    const soma=linhas.reduce((s,l)=>!l.ing?s:s+(l.ing.nutrientes[nd.k]||0)*(l.qtd||0),0);
+    nutrientes[nd.k]=soma/tot;
+  }
+  return{totalG:tot,custo,nutrientes};
+}
+
+// ══════════════════════════════════════════════════════
+// SIMPLEX EM DUAS FASES — Programação Linear Exata
+// ══════════════════════════════════════════════════════
+function simplexSolve(lp){
+  // lp = {n, c:[custo/var], constraints:[{coeffs,rhs,type:"<="|">="|"="}], lb, ub}
+  const EPS=1e-9, BIG_M=1e8, MAX_ITER=5000;
+  const n=lp.n, m=lp.constraints.length;
+  if(n===0||m===0)return{status:'error',msg:'Problema vazio'};
+
+  // Converter UB para restrições de desigualdade: xi <= ubi → xi + si = ubi
+  // Expandir com folgas, excessos e artificiais
+  let cols=n;
+  const slacks=[], arts=[];
+  for(let i=0;i<m;i++){
+    const c=lp.constraints[i];
+    if(c.type==='<='){slacks.push(cols);arts.push(-1);cols++;}
+    else if(c.type==='>='){slacks.push(cols);cols++;arts.push(cols);cols++;}
+    else{slacks.push(-1);arts.push(cols);cols++;}
+  }
+
+  // Tableau (m+1) × (cols+1): linhas 0..m-1 = restrições, linha m = objetivo
+  const T=[];
+  for(let i=0;i<=m;i++)T.push(new Float64Array(cols+1));
+
+  for(let i=0;i<m;i++){
+    const c=lp.constraints[i];
+    let rhs=c.rhs;
+    const sign=rhs<0?-1:1;
+    rhs=Math.abs(rhs);
+    for(let j=0;j<n;j++)T[i][j]=c.coeffs[j]*sign||0;
+    if(c.type==='<='){T[i][slacks[i]]=sign;}
+    else if(c.type==='>='){T[i][slacks[i]]=-sign;T[i][arts[i]]=1;}
+    else{T[i][arts[i]]=1;}
+    T[i][cols]=rhs;
+    if(sign<0)for(let j=0;j<=cols;j++)T[i][j]*=-1;
+  }
+
+  const basis=new Int32Array(m);
+  for(let i=0;i<m;i++)basis[i]=arts[i]>=0?arts[i]:(slacks[i]>=0?slacks[i]:n+i);
+
+  function pivot(row,col){
+    const p=T[row][col];
+    for(let j=0;j<=cols;j++)T[row][j]/=p;
+    for(let i=0;i<=m;i++){
+      if(i===row)continue;
+      const f=T[i][col];
+      if(Math.abs(f)<EPS)continue;
+      for(let j=0;j<=cols;j++)T[i][j]-=f*T[row][j];
+    }
+    basis[row]=col;
+  }
+
+  function iterate(objRow){
+    for(let it=0;it<MAX_ITER;it++){
+      let col=-1,minV=-EPS;
+      for(let j=0;j<cols;j++)if(T[objRow][j]<minV){minV=T[objRow][j];col=j;}
+      if(col<0)return'optimal';
+      let row=-1,minR=Infinity;
+      for(let i=0;i<m;i++){
+        if(T[i][col]>EPS){const r=T[i][cols]/T[i][col];if(r<minR){minR=r;row=i;}}
+      }
+      if(row<0)return'unbounded';
+      pivot(row,col);
+    }
+    return'iter_limit';
+  }
+
+  const hasArt=arts.some(a=>a>=0);
+  if(hasArt){
+    T[m].fill(0);
+    for(let i=0;i<m;i++)if(arts[i]>=0)T[m][arts[i]]=1;
+    for(let i=0;i<m;i++){
+      if(arts[i]>=0&&basis[i]===arts[i]){
+        const f=T[m][arts[i]];
+        if(Math.abs(f)>EPS)for(let j=0;j<=cols;j++)T[m][j]-=f*T[i][j];
+      }
+    }
+    const s1=iterate(m);
+    if(s1!=='optimal'||T[m][cols]>1e-6)return{status:'infeasible',msg:'Problema inviável: as restrições nutricionais e de ingredientes são incompatíveis entre si. Afrouxe algum limite.'};
+  }
+
+  T[m].fill(0);
+  for(let j=0;j<n;j++)T[m][j]=lp.c[j];
+  for(let i=0;i<m;i++)if(arts[i]>=0)T[m][arts[i]]=BIG_M;
+  for(let i=0;i<m;i++){
+    const bv=basis[i];
+    const f=T[m][bv];
+    if(Math.abs(f)>EPS)for(let j=0;j<=cols;j++)T[m][j]-=f*T[i][j];
+  }
+  const s2=iterate(m);
+  if(s2==='unbounded')return{status:'unbounded',msg:'Problema ilimitado: adicione um limite máximo para os ingredientes.'};
+
+  const x=new Float64Array(n).fill(0);
+  for(let i=0;i<m;i++)if(basis[i]<n)x[basis[i]]=Math.max(0,T[i][cols]);
+  const obj=lp.c.reduce((s,ci,i)=>s+ci*x[i],0);
+  return{status:'optimal',x:Array.from(x),obj};
+}
+
+// ══════════════════════════════════════════════════════
+// SOLVER DE FORMULAÇÃO
+// ══════════════════════════════════════════════════════
+function buildAndSolve(candidatos, exigNuts){
+  // Solver trabalha em % (0-100) para estabilidade numérica
+  // xi = percentual do ingrediente i. sum(xi) = 100
+  const S=10000; // fator: interno_g = pct * S
+  const n=candidatos.length;
+  const c=candidatos.map(c=>(c.ing.preco||0)*10); // custo por % (preco/kg * 10kg por %)
+  const constraints=[];
+
+  // Restrições nutricionais linearizadas
+  // nutriente_resultado = sum(nut_i * xi) / sum(xi) >= min
+  // => sum((nut_i - min) * xi) >= 0
+  for(const[k,lim] of Object.entries(exigNuts)){
+    const vals=candidatos.map(c=>c.ing.nutrientes[k]||0);
+    const hasVal=vals.some(v=>v>0);
+    if(!hasVal)continue;
+    const mn=pN(lim.min), mx=pN(lim.max);
+    if(mn>0)constraints.push({coeffs:vals.map(v=>v-mn),rhs:0,type:'>='});
+    if(mx>0)constraints.push({coeffs:vals.map(v=>v-mx),rhs:0,type:'<='});
+  }
+
+  // Restrições de min/max por ingrediente (em %)
+  for(let i=0;i<n;i++){
+    const mn=candidatos[i].qtdMin?gToPct(candidatos[i].qtdMin):0;
+    const mx=candidatos[i].qtdMax?gToPct(candidatos[i].qtdMax):0;
+    const row0=new Array(n).fill(0); row0[i]=1;
+    if(mn>0)constraints.push({coeffs:[...row0],rhs:mn,type:'>='});
+    if(mx>0)constraints.push({coeffs:[...row0],rhs:mx,type:'<='});
+  }
+
+  // Soma total = 100%
+  constraints.push({coeffs:new Array(n).fill(1),rhs:100,type:'='});
+
+  const res=simplexSolve({n,c,constraints});
+  if(res.status!=='optimal'){
+    // Identificar nutrientes problemáticos
+    const problemas=[];
+    for(const[k,lim] of Object.entries(exigNuts)){
+      const mn=pN(lim.min),mx=pN(lim.max);
+      if(mn&&mx&&mn>mx)problemas.push(getNutDef(k).l+': mín('+mn+') > máx('+mx+')');
+    }
+    const dica=problemas.length?' Conflitos: '+problemas.join(', ')
+      :' Tente adicionar mais ingredientes ou afrouxar os limites nutricionais.';
+    return{...res,msg:(res.msg||'Problema inviável.')+dica};
+  }
+
+  // Validar resultado: soma deve ser ~100%
+  const soma=res.x.reduce((s,v)=>s+v,0);
+  if(soma<5){
+    return{status:'infeasible',msg:'Solver retornou quantidades zero. As restrições nutricionais são incompatíveis com os ingredientes disponíveis. Verifique os limites Mín/Máx na exigência — algum pode estar muito restritivo.'};
+  }
+
+  // Normalizar para exatamente 100% se estiver próximo
+  const fator=100/soma;
+  const xNorm=res.x.map(v=>v*fator);
+
+  // Converter de volta: % -> g interno
+  const linhas=candidatos.map((cand,i)=>({...cand,qtd:Math.round(xNorm[i]*S)}));
+  const custo=xNorm.reduce((s,xi,i)=>s+c[i]*xi,0); // R$/t
+  return{status:'optimal',linhas,custo,msg:'Otimização concluída — Custo: '+fmtR(custo)+'/t'};
+}
+
+// ══════════════════════════════════════════════════════
+// AUTOCOMPLETE INGREDIENTE — robusto para browser local
+// ══════════════════════════════════════════════════════
+function makeAC(container, onSelect){
+  let selIng=null;
+  let hiIdx=-1;
+  let _debounce=null;
+  const inp=container.querySelector('.ac-inp');
+  const list=container.querySelector('.ac-list');
+
+  function getItems(q){
+    const raw=(q||'').trim();
+    if(!raw) return ings.slice(0,20);
+    const words=norm(raw).split(/\s+/).filter(Boolean);
+    return ings.filter(i=>{
+      const n=norm(i.nome);
+      return words.every(w=>n.includes(w));
+    }).slice(0,30);
+  }
+
+  function renderList(q){
+    const items=getItems(q);
+    hiIdx=-1;
+    if(items.length===0){
+      list.innerHTML=`<div class="ac-empty">Nenhum ingrediente encontrado para "${h(q)}"</div>`;
+    } else {
+      list.innerHTML=items.map((i,idx)=>`
+        <div class="ac-item${idx===0?' selected':''}" data-id="${i.id}" data-idx="${idx}">
+          <span class="ac-nome">${h(i.nome)}</span>
+          ${i.preco>0?`<span class="ac-price">${fmtR(i.preco)}/kg</span>`:''}
+        </div>`).join('');
+      hiIdx=0;
+      list.querySelectorAll('.ac-item[data-id]').forEach(el=>{
+        el.addEventListener('mousedown',e=>{
+          e.preventDefault();
+          select(ings.find(i=>i.id==el.dataset.id));
+        });
+      });
+    }
+    list.classList.add('open');
+  }
+
+  function select(ing){
+    selIng=ing;
+    inp.value=ing?ing.nome:'';
+    list.classList.remove('open');
+    hiIdx=-1;
+    onSelect(ing);
+  }
+
+  function autoSelect(){
+    const items=list.querySelectorAll('.ac-item[data-id]');
+    if(items.length>0){
+      const idx=hiIdx>=0?hiIdx:0;
+      const id=items[idx]?.dataset.id;
+      if(id) select(ings.find(i=>i.id==id));
+    }
+  }
+
+  function highlight(idx){
+    const items=list.querySelectorAll('.ac-item[data-id]');
+    items.forEach(el=>el.classList.remove('selected'));
+    if(idx>=0&&idx<items.length){
+      items[idx].classList.add('selected');
+      items[idx].scrollIntoView({block:'nearest'});
+      hiIdx=idx;
+    }
+  }
+
+  inp.addEventListener('focus',()=>{
+    inp.select();
+    renderList(inp.value);
+  });
+
+  inp.addEventListener('input',()=>{
+    selIng=null;
+    renderList(inp.value);
+    clearTimeout(_debounce);
+    if(inp.value.trim().length>=2){
+      _debounce=setTimeout(()=>{
+        const items=getItems(inp.value);
+        if(items.length===1) select(items[0]);
+      },800);
+    }
+  });
+
+  inp.addEventListener('keydown',e=>{
+    if(e.key==='Tab'){
+      if(list.classList.contains('open')){autoSelect();}
+      return;
+    }
+    if(!list.classList.contains('open'))return;
+    const items=list.querySelectorAll('.ac-item[data-id]');
+    if(e.key==='ArrowDown'){e.preventDefault();highlight(Math.min(hiIdx+1,items.length-1));}
+    else if(e.key==='ArrowUp'){e.preventDefault();highlight(Math.max(hiIdx-1,0));}
+    else if(e.key==='Enter'){
+      e.preventDefault();
+      autoSelect();
+    } else if(e.key==='Escape'){list.classList.remove('open');}
+  });
+
+  inp.addEventListener('blur',()=>{
+    clearTimeout(_debounce);
+    setTimeout(()=>{
+      if(list.classList.contains('open')&&inp.value.trim()&&!selIng) autoSelect();
+      list.classList.remove('open');
+    },200);
+  });
+
+  return{
+    set(ing){selIng=ing;inp.value=ing?ing.nome:'';list.classList.remove('open');},
+    get(){return selIng;}
+  };
+}
+
+// ══════════════════════════════════════════════════════
+// ABA: FORMULAR
+// ══════════════════════════════════════════════════════
+const acMap={};
+
+function getFml(){return formulas.find(f=>f.id===formulaAtiva)||formulas[0];}
+
+function renderFmlTabs(){
+  const el=document.getElementById('fml-tabs');
+  const fmlAtiva=getFml();
+
+  el.innerHTML=`
+    <div style="display:flex;gap:8px;align-items:center;flex:1;flex-wrap:wrap">
+      <input id="fml-search" type="text" placeholder="🔍 Buscar fórmula... (${formulas.length})" value=""
+        style="width:220px;font-size:12px;padding:6px 10px" oninput="renderFmlDropdown(this.value)" onfocus="renderFmlDropdown(this.value)">
+      <div id="fml-dropdown" style="position:relative;display:inline-block">
+        <button class="fml-tab active" id="fml-current" onclick="document.getElementById('fml-dd-list').classList.toggle('open');renderFmlDropdown('')" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${h(fmlAtiva?.nome||'Selecione')}
+        </button>
+        <div id="fml-dd-list" class="ac-list" style="display:none;min-width:320px;max-height:300px;top:calc(100% + 4px);left:0"></div>
+      </div>
+      <button class="btn btn-green" onclick="salvarFormula()" title="Salvar fórmula">💾 Salvar</button>
+      <button class="btn btn-ghost" onclick="addFml()" title="Nova fórmula vazia">+ Nova</button>
+      <button class="btn btn-ghost" onclick="cloneFml()" title="Clonar fórmula atual">📋 Clonar</button>
+      <button class="btn btn-ghost" onclick="delFml(formulaAtiva)" style="color:var(--red)" title="Excluir">🗑</button>
+      <button class="btn${solverAberto?' btn-earth':' btn-blue'}" style="margin-left:auto" onclick="toggleSolver()">
+        ${solverAberto?'▲ Fechar Solver':'🔬 Solver'}
+      </button>
+    </div>`;
+    renderFmlDropdown('');
+  document.getElementById('fml-search').addEventListener('keydown',e=>{
+    if(e.key==='Enter'){
+      const list=document.querySelectorAll('#fml-dd-list .ac-item');
+      if(list.length>0) list[0].click();
+    }
+  });
+}
+
+function renderFmlDropdown(q){
+  const ddList=document.getElementById('fml-dd-list');
+  if(!ddList)return;
+  const lw=norm(q||'');
+  const words=lw.split(/\s+/).filter(Boolean);
+  const filtered=words.length?formulas.filter(f=>words.every(w=>norm(f.nome).includes(w))):formulas.slice(0,50);
+  ddList.innerHTML=filtered.length===0?
+    '<div class="ac-empty">Nenhuma fórmula encontrada</div>':
+    filtered.slice(0,50).map(f=>`
+      <div class="ac-item${f.id===formulaAtiva?' selected':''}" data-fid="${f.id}" style="cursor:pointer">
+        <span class="ac-nome">${h(f.nome)}</span>
+        <span class="ac-price">${f.linhas?.length||0} ing.</span>
+      </div>`).join('')+
+    (filtered.length>50?`<div class="ac-empty">${filtered.length-50} mais... refine a busca</div>`:'');
+  ddList.style.display='block';
+  ddList.classList.add('open');
+  ddList.querySelectorAll('.ac-item[data-fid]').forEach(el=>{
+    el.addEventListener('mousedown',e=>{
+      e.preventDefault();
+      const fid=Number(el.dataset.fid)||el.dataset.fid;
+      const found=formulas.find(f=>f.id==fid);
+      if(found){setFml(found.id);ddList.style.display='none';}
+    });
+  });
+}
+
+document.addEventListener('click',e=>{
+  const dd=document.getElementById('fml-dd-list');
+  if(dd&&!dd.parentElement?.contains(e.target)&&!document.getElementById('fml-search')?.contains(e.target))dd.style.display='none';
+})
+
+function cloneFmlById(id){
+  const orig=formulas.find(f=>f.id===id);if(!orig)return;
+  const nid=Date.now();
+  const linhas=orig.linhas.map(l=>({...l,id:Date.now()+Math.floor(Math.random()*99999),ing:l.ing?{...l.ing}:null}));
+  formulas.push({id:nid,nome:orig.nome+' (cópia)',linhas,especie:orig.especie});
+  saveFormulas();renderBanco();toast('Fórmula clonada','ok');
+}
+function setFml(id){formulaAtiva=id;fmlEditando=false;Object.keys(acMap).forEach(k=>delete acMap[k]);renderFml();}
+function addFml(){const id=Date.now();formulas.push({id,nome:`Fórmula ${formulas.length+1}`,linhas:[{id:1,ing:null,qtd:0,qtdMin:0,qtdMax:0}]});saveFormulas();fmlEditando=true;setFml(id);toast('Nova fórmula criada','ok');}
+function cloneFml(){
+  const orig=getFml();if(!orig)return;
+  const id=Date.now();
+  const linhas=orig.linhas.map(l=>({...l,id:Date.now()+Math.floor(Math.random()*99999),ing:l.ing?{...l.ing}:null}));
+  formulas.push({id,nome:orig.nome+' (cópia)',linhas});
+  saveFormulas();setFml(id);
+  toast('Fórmula clonada: '+orig.nome,'ok');
+}
+function delFml(id){
+  if(formulas.length<=1){toast('Não é possível excluir a última fórmula','err');return;}
+  const f=formulas.find(x=>x.id===id);
+  if(!confirm('Excluir "'+(f?.nome||'fórmula')+ '"?'))return;
+  formulas=formulas.filter(f=>f.id!==id);
+  if(formulaAtiva===id)formulaAtiva=formulas[0]?.id;
+  saveFormulas();renderFml();
+  toast('Fórmula excluída','info');
+}
+
+function addLinha(){
+  const f=getFml();f.linhas.push({id:Date.now(),ing:null,qtd:0,qtdMin:0,qtdMax:0});
+  saveFormulas();renderFmlBody();
+}
+function delLinha(lid){
+  const f=getFml();f.linhas=f.linhas.filter(l=>l.id!==lid);saveFormulas();renderFmlBody();
+}
+function fixLinha(lid){
+  const f=getFml();const l=f.linhas.find(x=>x.id===lid);
+  if(!l)return;
+  if(l.fixado){
+    l.fixado=false;l.qtdMin=0;l.qtdMax=0;
+    toast('Ingrediente destravado','info');
+  } else {
+    if(!l.qtd||l.qtd<=0){toast('Preencha a quantidade antes de fixar','err');return;}
+    l.fixado=true;l.qtdMin=l.qtd;l.qtdMax=l.qtd;
+    toast('Fixado em '+fmtN(gToPct(l.qtd),2)+'% — Solver não altera','ok');
+  }
+  saveFormulas();renderFmlLinhas();
+}
+let batchSize=1000; // kg do misturador
+function updBatch(val){batchSize=pN(val)||1000;renderFmlLinhas();}
+function pctToG(pct){return pct*10000;}
+function gToPct(g){return g/10000;}
+function updLinhaPct(lid,field,val){
+  const f=getFml();const l=f.linhas.find(x=>x.id===lid);
+  if(l)l[field]=pctToG(pN(val));
+  saveFormulas();renderComposicao();
+}
+function updLinhaPreco(lid,val){
+  const f=getFml();const l=f.linhas.find(x=>x.id===lid);
+  if(!l||!l.ing)return;
+  const preco=pN(val);
+  l.ing.preco=preco;
+  const ingGlobal=ings.find(i=>i.id===l.ing.id);
+  if(ingGlobal)ingGlobal.preco=preco;
+  saveFormulas();saveIngs();renderComposicao();
+}
+function updLinhaQtd(lid,field,val){
+  const f=getFml();const l=f.linhas.find(x=>x.id===lid);
+  if(l)l[field]=pN(val);
+  saveFormulas();renderComposicao();
+}
+
+// ── ADITIVOS ──
+function addAditivo(){
+  const f=getFml();if(!f.aditivos)f.aditivos=[];
+  f.aditivos.push({id:Date.now(),nome:'',dosagem:0,unidade:'g/t',preco:0});
+  saveFormulas();renderFmlBody();
+}
+function delAditivo(aid){
+  const f=getFml();f.aditivos=(f.aditivos||[]).filter(a=>a.id!==aid);
+  saveFormulas();renderFmlBody();
+}
+function updAditivo(aid,field,val){
+  const f=getFml();const a=(f.aditivos||[]).find(x=>x.id===aid);
+  if(!a)return;
+  a[field]=field==='nome'||field==='unidade'?val:pN(val);
+  saveFormulas();
+}
+function renderAditivos(){
+  const f=getFml();
+  const tbody=document.getElementById('fml-aditivos');if(!tbody)return;
+  const ads=f.aditivos||[];
+  const ed=fmlEditando;
+  tbody.innerHTML=ads.map(a=>`<tr>
+    <td>${ed?`<input style="width:100%" value="${h(a.nome)}" placeholder="Nome do aditivo..." oninput="updAditivo(${a.id},'nome',this.value)">`:`<span>${a.nome||'—'}</span>`}</td>
+    <td class="r">${ed?`<input type="number" step="any" style="width:100%;text-align:right" value="${a.dosagem||''}" placeholder="0" oninput="updAditivo(${a.id},'dosagem',this.value)">`:`${a.dosagem||'—'}`}</td>
+    <td>${ed?`<select onchange="updAditivo(${a.id},'unidade',this.value)" style="font-size:11px">
+      <option value="g/t"${a.unidade==='g/t'?' selected':''}>g/t</option>
+      <option value="kg/t"${a.unidade==='kg/t'?' selected':''}>kg/t</option>
+      <option value="mg/kg"${a.unidade==='mg/kg'?' selected':''}>mg/kg</option>
+      <option value="ppm"${a.unidade==='ppm'?' selected':''}>ppm</option>
+      <option value="%"${a.unidade==='%'?' selected':''}>%</option>
+    </select>`:`${a.unidade||''}`}</td>
+    <td class="r">${ed?`<input type="number" step="0.01" style="width:100%;text-align:right" value="${a.preco||''}" placeholder="0" oninput="updAditivo(${a.id},'preco',this.value)">`:`${a.preco?fmtR(a.preco):'—'}`}</td>
+    ${ed?`<td><button onclick="delAditivo(${a.id})" style="background:none;border:none;cursor:pointer;color:var(--red);font-size:13px">×</button></td>`:''}</tr>`).join('');
+}
+
+function renderFml(){renderFmlTabs();renderFmlBody();}
+
+function renderFmlBody(){
+  const f=getFml();
+  const res=calcFmla(f.linhas);
+  const body=document.getElementById('fml-body');
+
+  let leftHtml=`<div class="flex-auto card" style="overflow:visible">
+    <div class="card-hdr">
+      ${fmlEditando?
+        `<input style="font-size:14px;font-weight:700;border:none;padding:0;background:transparent;width:220px;font-family:inherit;color:var(--text)" value="${h(f.nome)}" oninput="getFml().nome=this.value;saveFormulas()">`
+        :`<span style="font-size:14px;font-weight:700;color:var(--text)">${h(f.nome)}</span>`}
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${res.custo>0?`<span class="cost-big">${fmtR(res.custo)}<span style="font-weight:400;color:var(--muted);font-size:11px">/t</span></span>`:''}
+        <span class="tag ${Math.abs(gToPct(res.totalG)-100)<0.1?'tag-green':'tag-earth'}">${fmtN(gToPct(res.totalG),2)}%</span>
+        ${fmlEditando?`
+          <button class="btn btn-ghost" onclick="fmlEditando=false;renderFmlBody()" style="font-size:11px;padding:4px 8px">✓ Fechar Edição</button>
+        `:`
+          <button class="btn btn-blue" onclick="fmlEditando=true;renderFmlBody()" title="Editar fórmula" style="font-size:11px;padding:4px 10px">✏️ Editar</button>
+        `}
+        <button class="btn btn-ghost" onclick="exportCSV()" title="Exportar CSV (Ctrl+E)" style="font-size:11px;padding:4px 8px">📄 CSV</button>
+        <button class="btn btn-ghost" onclick="exportPDF()" title="Exportar PDF (Ctrl+Shift+P)" style="font-size:11px;padding:4px 8px">🖨️ PDF</button>
+      </div>
+    </div>
+    <div style="padding:12px 16px">
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:10px;font-size:12px;flex-wrap:wrap">
+      <label style="color:var(--muted);font-weight:600">Espécie:</label>
+      <select onchange="getFml().especie=this.value;saveFormulas();renderComposicao()" style="width:180px;font-size:12px">
+        <option value="">— Geral —</option>
+        ${Object.keys(NUTS_POR_ESPECIE).map(e=>`<option value="${e}"${f.especie===e?' selected':''}>${e}</option>`).join('')}
+      </select>
+      <label style="color:var(--muted);font-weight:600;margin-left:12px">Misturador:</label>
+      <input type="number" min="1" step="1" value="${batchSize}" oninput="updBatch(this.value)"
+        style="width:80px;text-align:right;font-weight:700"> <span style="color:var(--muted)">kg</span>
+      ${!fmlEditando?'<span style="font-size:11px;color:var(--accent);margin-left:auto">👁 Modo visualização — clique ✏️ Editar para alterar</span>':''}
+    </div>
+    <table style="table-layout:fixed">
+      <colgroup>
+        <col style="width:auto">
+        <col style="width:72px">
+        <col style="width:68px">
+        <col style="width:72px">
+        <col style="width:62px">
+        <col style="width:62px">
+        <col style="width:28px">
+        <col style="width:36px">
+      </colgroup>
+      <thead><tr>
+        <th>Ingrediente</th>
+        <th style="text-align:right">R$/kg</th>
+        <th style="text-align:right">%</th>
+        <th style="text-align:right">kg</th>
+        <th style="text-align:right">Min%</th>
+        <th style="text-align:right">Max%</th>
+        <th title="Fixar quantidade">🔒</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="fml-linhas" style="position:relative"></tbody>
+    </table>
+    ${fmlEditando?'<button class="btn btn-ghost" style="margin-top:10px;width:100%;border:1px dashed var(--border);padding:8px" onclick="addLinha()">+ Ingrediente</button>':''}
+    </div></div>`;
+
+  body.innerHTML=leftHtml+`
+    <div class="flex-fixed card" id="comp-panel" style="overflow:visible;min-width:360px">
+      <div class="card-hdr" id="comp-hdr"></div>
+      <div style="padding:8px 12px;border-bottom:1px solid var(--border)">
+        <label style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:3px">Exigência Nutricional</label>
+        <select id="sel-exig-comp" onchange="renderComposicao()" style="width:100%;font-size:12px">
+          <option value="">— Sem exigência —</option>
+        </select>
+      </div>
+      <div style="max-height:520px" class="scroll-y">
+        <table id="comp-table">
+          <thead><tr>
+            <th>Nutriente</th>
+            <th style="text-align:right;width:62px">Valor</th>
+            <th style="text-align:right;width:50px" id="comp-min-th"></th>
+            <th style="text-align:right;width:50px" id="comp-max-th"></th>
+            <th style="width:42px">Unid.</th>
+            <th style="width:24px" id="comp-badge-th"></th>
+          </tr></thead>
+          <tbody id="comp-body"></tbody>
+        </table>
+      </div>
+    </div>`;
+
+  // Popular linhas e aditivos
+  renderFmlLinhas();
+  renderAditivos();
+  renderComposicao();
+}
+
+let showAllNuts=false;
+function renderFmlLinhas(){
+  const f=getFml();
+  const res=calcFmla(f.linhas);
+  const tbody=document.getElementById('fml-linhas');
+  if(!tbody)return;
+  const ed=fmlEditando;
+  tbody.innerHTML=f.linhas.map(l=>`
+    <tr id="fml-row-${l.id}" ${ed?`draggable="true" ondragstart="onDragStart(event,${l.id})" ondragend="onDragEnd(event)" ondragover="onDragOver(event)" ondrop="onDrop(event,${l.id})" style="position:relative;cursor:grab"`:'style="position:relative"'}>
+      <td style="overflow:visible;padding-right:6px">
+        ${ed?`<div style="display:flex;align-items:center;gap:6px">
+          <span class="drag-handle" title="Arrastar para reordenar">⠿</span>
+          <div class="autocomplete" id="ac-${l.id}" style="min-width:200px;flex:1">
+            <input class="ac-inp" style="width:100%" placeholder="🔍 Digite para buscar ingrediente...">
+            <div class="ac-list"></div>
+          </div>
+        </div>`:`<span style="font-size:13px;font-weight:500">${l.ing?h(l.ing.nome):'—'}</span>`}
+      </td>
+      <td>${ed?`<input type="number" min="0" step="0.01" style="width:100%" value="${l.ing?.preco||''}" placeholder="0,00" oninput="updLinhaPreco(${l.id},this.value)">`:`<span style="font-size:12px;color:var(--muted)">${l.ing?.preco?fmtN(l.ing.preco,2):'—'}</span>`}</td>
+      <td>${ed?`<input type="number" min="0" step="0.01" style="width:100%" value="${l.qtd?gToPct(l.qtd):''}" placeholder="0" oninput="updLinhaPct(${l.id},'qtd',this.value)">`:`<span style="font-size:12px;font-weight:600">${l.qtd?fmtN(gToPct(l.qtd),2):'—'}</span>`}</td>
+      <td style="text-align:right;color:var(--muted);font-size:12px;font-weight:600">${l.qtd>0?fmtN(gToPct(l.qtd)*batchSize/100,2):'—'}</td>
+      <td>${ed?`<input type="number" min="0" step="0.01" style="width:100%" value="${l.qtdMin?gToPct(l.qtdMin):''}" placeholder="0" oninput="updLinhaPct(${l.id},'qtdMin',this.value)">`:`<span style="font-size:11px;color:var(--muted)">${l.qtdMin?fmtN(gToPct(l.qtdMin),2):'—'}</span>`}</td>
+      <td>${ed?`<input type="number" min="0" step="0.01" style="width:100%" value="${l.qtdMax?gToPct(l.qtdMax):''}" placeholder="∞" oninput="updLinhaPct(${l.id},'qtdMax',this.value)">`:`<span style="font-size:11px;color:var(--muted)">${l.qtdMax?fmtN(gToPct(l.qtdMax),2):'—'}</span>`}</td>
+      <td style="text-align:center">${ed?`<button onclick="fixLinha(${l.id})" title="${l.fixado?'Destravar':'Fixar (Min=Max)'}" style="background:none;border:none;cursor:pointer;font-size:14px;opacity:${l.fixado?1:.4}">${l.fixado?'🔒':'🔓'}</button>`:
+        (l.fixado?'🔒':'')}</td>
+      <td style="text-align:center">${ed?`<button class="btn-del-linha" onclick="delLinha(${l.id})" title="Remover ingrediente">×</button>`:''}</td>
+    </tr>`).join('');
+
+  // Linha de totais
+  const linhasComIng=f.linhas.filter(l=>l.ing&&l.qtd>0);
+  if(linhasComIng.length>0){
+    const totalPct=f.linhas.reduce((s,l)=>s+gToPct(l.qtd||0),0);
+    const totalKg=totalPct*batchSize/100;
+    const okColor=Math.abs(totalPct-100)<0.1?'var(--green)':'var(--red)';
+    tbody.innerHTML+=`<tr style="font-weight:700;border-top:2px solid var(--accent);background:var(--surface-alt)">
+      <td style="color:var(--accent)">TOTAL</td>
+      <td></td>
+      <td style="text-align:right;color:${okColor}">${fmtN(totalPct,2)}%</td>
+      <td style="text-align:right;color:var(--accent)">${fmtN(totalKg,1)} kg</td>
+      <td></td><td></td><td></td>
+      <td></td>
+    </tr>`;
+  }
+
+  // Recriar autocompletes (DOM foi reconstruído)
+  Object.keys(acMap).forEach(k=>delete acMap[k]);
+  f.linhas.forEach(l=>{
+    const cont=document.getElementById(`ac-${l.id}`);
+    if(!cont)return;
+    acMap[l.id]=makeAC(cont,ing=>{l.ing=ing;saveFormulas();renderComposicao();});
+    if(l.ing)acMap[l.id].set(l.ing);
+  });
+}
+
+function renderComposicao(){
+  const f=getFml();
+  const res=calcFmla(f.linhas);
+  const selComp=document.getElementById('sel-exig-comp');
+  const selSolver=document.getElementById('sel-exig');
+  // Preservar seleção entre re-renders
+  if(selComp?.value) exigSelecionada=selComp.value;
+  else if(selSolver?.value) exigSelecionada=selSolver.value;
+  const exigId=exigSelecionada;
+  const exigSel=exigs.find(e=>e.id==exigId);
+  const especieNuts=getNutsParaEspecie(f.especie);
+  // Nutrientes da espécie + todos que têm valor calculado > 0
+  const nutsComValor=allNuts.filter(n=>(res.nutrientes[n.k]||0)>0);
+  const nutsPrimarios=allNuts.filter(n=>especieNuts.includes(n.k));
+  const nutsExtras=nutsComValor.filter(n=>!especieNuts.includes(n.k));
+  const nuts=showAllNuts?allNuts:nutsPrimarios;
+  const compBody=document.getElementById('comp-body');
+  const compHdr=document.getElementById('comp-hdr');
+  const compBadgeTh=document.getElementById('comp-badge-th');
+  const compMinTh=document.getElementById('comp-min-th');
+  const compMaxTh=document.getElementById('comp-max-th');
+  if(!compBody)return;
+
+  // Popular seletor de exigência no painel composição
+  if(selComp){
+    selComp.innerHTML='<option value="">— Sem exigência —</option>'+
+      exigs.map(e=>`<option value="${e.id}"${e.id==exigId?' selected':''}>${h(e.especie)} — ${h(e.fase)}</option>`).join('');
+  }
+
+  // Sincronizar com seletor do solver
+  if(selSolver&&selComp&&selComp.value)selSolver.value=selComp.value;
+
+  if(compHdr)compHdr.innerHTML=`
+    <span class="card-title">🧪 Composição${exigSel?' vs Exigência':''}</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      ${exigSel?`<span class="info-badge">${h(exigSel.especie)}/${h(exigSel.fase)}</span>`:''}
+      <button class="btn btn-ghost" style="font-size:11px;padding:3px 7px" onclick="showAllNuts=!showAllNuts;renderComposicao()">${showAllNuts?'▲':'▼ Tudo'}</button>
+    </div>`;
+
+  if(compMinTh)compMinTh.textContent=exigSel?'Mín':'';
+  if(compMaxTh)compMaxTh.textContent=exigSel?'Máx':'';
+  if(compBadgeTh)compBadgeTh.textContent=exigSel?'':'';
+
+  function statusNut(k){
+    if(!exigSel||!exigSel.nuts||!exigSel.nuts[k])return'none';
+    const v=res.nutrientes[k]||0;
+    const mn=pN(exigSel.nuts[k]?.min), mx=pN(exigSel.nuts[k]?.max);
+    if(mn&&v<mn)return'low';if(mx&&v>mx)return'high';return'ok';
+  }
+
+  compBody.innerHTML=nuts.map(n=>{
+    const v=res.nutrientes[n.k]||0;const st=statusNut(n.k);
+    const rowCls=st==='low'?'row-low':st==='high'?'row-high':'';
+    const exigNut=exigSel?.nuts?.[n.k];
+    const mn=exigNut?pN(exigNut.min):0;
+    const mx=exigNut?pN(exigNut.max):0;
+    const badge=exigNut?`<span class="badge badge-${st==='ok'?'ok':st==='low'?'low':'high'}">${st==='ok'?'✓':st==='low'?'↓':'↑'}</span>`:'';
+    return`<tr class="${rowCls}">
+      <td>${h(n.l)}</td>
+      <td style="text-align:right;font-weight:${v>0?700:400};color:${v>0?'var(--accent)':'var(--muted)'}">${fmtN(v,3)}</td>
+      ${exigSel?`<td><input type="number" step="any" style="width:48px;font-size:11px;text-align:right;padding:2px 4px;background:${mn&&v<mn?'var(--red-l)':'transparent'};color:${mn&&v<mn?'var(--red)':'var(--muted)'}" value="${mn||''}" placeholder="—" onchange="updExigNut('${exigId}','${n.k}','min',this.value)"></td>`:'<td></td>'}
+      ${exigSel?`<td><input type="number" step="any" style="width:48px;font-size:11px;text-align:right;padding:2px 4px;background:${mx&&v>mx?'var(--warn-l)':'transparent'};color:${mx&&v>mx?'var(--warn)':'var(--muted)'}" value="${mx||''}" placeholder="—" onchange="updExigNut('${exigId}','${n.k}','max',this.value)"></td>`:'<td></td>'}
+      <td style="font-size:10px;color:var(--muted)">${h(n.u)}</td>
+      ${exigSel?`<td>${badge}</td>`:'<td></td>'}
+    </tr>`;
+  }).join('');
+
+  // Seção "Aditivos & Medicamentos" (nutrientes de premix/aditivos)
+  if(!showAllNuts){
+    const aditivosPresentes=nutsExtras.filter(n=>(res.nutrientes[n.k]||0)>0&&isAditivo(n.k));
+    const outrosPresentes=nutsExtras.filter(n=>(res.nutrientes[n.k]||0)>0&&!isAditivo(n.k));
+
+    if(aditivosPresentes.length>0){
+      compBody.innerHTML+=`<tr><td colspan="6" style="padding:10px 0 4px;font-size:10px;font-weight:700;color:var(--warn);text-transform:uppercase;letter-spacing:.04em;border-bottom:2px solid rgba(232,168,56,.3)">💊 Aditivos & Medicamentos (${aditivosPresentes.length})</td></tr>`;
+      compBody.innerHTML+=aditivosPresentes.map(n=>{
+        const v=res.nutrientes[n.k]||0;
+        return`<tr style="background:var(--warn-l)">
+          <td style="font-size:11px;font-weight:600">${h(n.l)}</td>
+          <td style="text-align:right;font-weight:700;color:var(--warn)">${fmtN(v,3)}</td>
+          <td></td><td></td>
+          <td style="font-size:10px;color:var(--muted)">${h(n.u)}</td>
+          <td></td>
+        </tr>`;
+      }).join('');
+    }
+
+    if(outrosPresentes.length>0){
+      compBody.innerHTML+=`<tr><td colspan="6" style="padding:10px 0 4px;font-size:10px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.04em;border-bottom:2px solid rgba(59,155,110,.3)">📊 Outros Nutrientes (${outrosPresentes.length})</td></tr>`;
+      compBody.innerHTML+=outrosPresentes.map(n=>{
+        const v=res.nutrientes[n.k]||0;
+        return`<tr>
+          <td style="font-size:11px">${h(n.l)}</td>
+          <td style="text-align:right;font-weight:600;color:var(--green)">${fmtN(v,3)}</td>
+          <td></td><td></td>
+          <td style="font-size:10px;color:var(--muted)">${h(n.u)}</td>
+          <td></td>
+        </tr>`;
+      }).join('');
+    }
+  }
+}
+
+function updExigNut(exigId,nutKey,campo,val){
+  const exig=exigs.find(e=>e.id==exigId);if(!exig)return;
+  if(!exig.nuts)exig.nuts={};
+  if(!exig.nuts[nutKey])exig.nuts[nutKey]={};
+  const v=pN(val);
+  if(v>0) exig.nuts[nutKey][campo]=v;
+  else delete exig.nuts[nutKey][campo];
+  if(!exig.nuts[nutKey].min&&!exig.nuts[nutKey].max) delete exig.nuts[nutKey];
+  saveExigs();renderComposicao();
+}
+
+function toggleSolver(){
+  solverAberto=!solverAberto;
+  document.getElementById('solver-panel').style.display=solverAberto?'':'none';
+  document.getElementById('solver-result').style.display='none';
+  renderFmlTabs();renderFmlBody();
+  updateExigSelect();
+}
+
+function updateExigSelect(){
+  const sel=document.getElementById('sel-exig');if(!sel)return;
+  const cur=sel.value;
+  sel.innerHTML='<option value="">— Sem restrições nutricionais —</option>'+
+    exigs.map(e=>`<option value="${e.id}"${e.id==cur?' selected':''}>${h(e.especie)} — ${h(e.fase)}</option>`).join('');
+  updateExigInfo();
+}
+
+function updateExigInfo(){
+  const sel=document.getElementById('sel-exig');if(!sel)return;
+  const exig=exigs.find(e=>e.id==sel.value);
+  const info=document.getElementById('exig-info');if(!info)return;
+  info.textContent=exig?`📌 ${Object.keys(exig.nuts||{}).length} nutrientes com limites`:'';
+  renderComposicao();
+}
+
+function runSolver(){
+  const f=getFml();
+  const btn=document.getElementById('btn-solve');
+  const resEl=document.getElementById('solver-result');
+  const candidatos=f.linhas.filter(l=>l.ing!=null);
+  if(!candidatos.length){showSolverResult('error','Adicione ingredientes à fórmula primeiro.');return;}
+
+  btn.disabled=true;
+  btn.innerHTML='<span class="spinner"></span>Calculando...';
+  resEl.style.display='none';
+
+  const t0=Date.now();
+  setTimeout(()=>{
+    try{
+      const exigId=document.getElementById('sel-exig')?.value;
+      const exigSel=exigs.find(e=>e.id==exigId);
+      const exigNuts=exigSel?.nuts||{};
+      const r=buildAndSolve(candidatos,exigNuts);
+      const tempo_ms=Date.now()-t0;
+
+      if(r.status==='optimal'){
+        const linhasAtuais=f.linhas.map(l=>{
+          const c=r.linhas.find(x=>x.id===l.id);
+          return c?{...l,qtd:c.qtd}:l;
+        });
+        f.linhas=linhasAtuais;
+        Object.keys(acMap).forEach(k=>delete acMap[k]);
+        saveFormulas();renderFmlBody();
+        showSolverResult('ok',`✅ ${r.msg}`);
+        toast('Otimização concluída — '+fmtR(r.custo)+'/t','ok');
+        // Salvar histórico
+        const res=calcFmla(f.linhas);
+        syncSaveOtim({
+          especie:exigSel?.especie||null, fase:exigSel?.fase||null,
+          status:'optimal', custo_t:r.custo,
+          total_g_t:f.linhas.reduce((s,l)=>s+(l.qtd||0),0),
+          tempo_ms, msg:r.msg,
+          candidatos:candidatos.map(c=>({nome:c.ing.nome,preco:c.ing.preco,qtdMin:c.qtdMin,qtdMax:c.qtdMax})),
+          exig_nuts:exigNuts,
+          resultado:{linhas:r.linhas.map(l=>({nome:l.ing?.nome,qtd:l.qtd})),composicao:res.nutrientes}
+        });
+      } else {
+        showSolverResult('err',`⚠️ ${r.msg||r.status}`);
+        toast(r.msg||'Solver: problema inviável','err');
+        syncSaveOtim({
+          especie:exigSel?.especie||null, fase:exigSel?.fase||null,
+          status:r.status, tempo_ms, msg:r.msg,
+          candidatos:candidatos.map(c=>({nome:c.ing.nome,preco:c.ing.preco})),
+          exig_nuts:exigNuts, resultado:{}
+        });
+      }
+    }catch(e){
+      showSolverResult('err','Erro: '+e.message);
+      toast('Erro no solver: '+e.message,'err');
+    }
+    btn.disabled=false;
+    btn.innerHTML='▶ Otimizar';
+  },60);
+}
+
+function showSolverResult(type,msg){
+  const el=document.getElementById('solver-result');
+  el.style.display='block';
+  el.innerHTML=`<div class="solver-result solver-${type}">${h(msg)}</div>`;
+}
+
+// ══════════════════════════════════════════════════════
+// EXIGÊNCIAS PADRÃO — Tabelas Brasileiras (CQBAL/NRC)
+// ══════════════════════════════════════════════════════
+const EXIG_PADRAO = [
+  // ─── BOVINOS ────────────────────
+  {especie:'Bovinos',fase:'Cria/Recria (Pasto)',nuts:{PB:{min:120},NDT:{min:550},Ca_min:{min:4},Ca_max:{max:10},P:{min:2.5},Na:{min:1},Mg:{min:1},S:{min:1.5},Cu:{min:10},Zn:{min:30},Se:{min:0.1},Mn:{min:40},VitA:{min:2200},VitD3:{min:300},VitE:{min:15}}},
+  {especie:'Bovinos',fase:'Engorda (Confinamento)',nuts:{PB:{min:130},NDT:{min:680},Ca_min:{min:3.5},Ca_max:{max:9},P:{min:2.8},Na:{min:1.5},Mg:{min:1.2},S:{min:1.5},Cu:{min:10},Zn:{min:30},Se:{min:0.1},Mn:{min:40},VitA:{min:2200},VitD3:{min:300},VitE:{min:25}}},
+  {especie:'Bovinos',fase:'Vacas Lactação',nuts:{PB:{min:140},NDT:{min:650},Ca_min:{min:5.5},Ca_max:{max:12},P:{min:3.5},Na:{min:1.8},Mg:{min:2},S:{min:2},Cu:{min:10},Zn:{min:40},Se:{min:0.1},Mn:{min:40},VitA:{min:3900},VitD3:{min:500},VitE:{min:25}}},
+  {especie:'Bovinos',fase:'Vacas Secas/Gestação',nuts:{PB:{min:100},NDT:{min:520},Ca_min:{min:3},Ca_max:{max:8},P:{min:2},Na:{min:1},Mg:{min:1.6},S:{min:1.5},Cu:{min:10},Zn:{min:30},Se:{min:0.1},Mn:{min:40},VitA:{min:2800},VitD3:{min:400},VitE:{min:20}}},
+  {especie:'Bovinos',fase:'Bezerros (até 120d)',nuts:{PB:{min:180},NDT:{min:720},Ca_min:{min:7},Ca_max:{max:14},P:{min:4},Na:{min:1.5},Mg:{min:1},S:{min:1.5},Cu:{min:10},Zn:{min:40},Se:{min:0.1},Mn:{min:40},VitA:{min:2200},VitD3:{min:300},VitE:{min:25}}},
+
+  // ─── IN 12/2004 MAPA — Supl. Mineral Simples ──
+  {especie:'Bovinos (IN12/2004)',fase:'Supl. Mineral — Corte',nuts:{P:{min:40},Mg:{min:5},Cu:{min:0.4},Zn:{min:2},Se:{min:0.005},Mn:{min:0.5},VitA:{min:100000},VitD3:{min:10000},VitE:{min:1000}}},
+  {especie:'Bovinos (IN12/2004)',fase:'Supl. Mineral — Leite Lactação',nuts:{P:{min:73},Mg:{min:15},Cu:{min:0.65},Zn:{min:2.5},Se:{min:0.01},Mn:{min:1},VitA:{min:100000},VitD3:{min:10000},VitE:{min:1000}}},
+
+  // ─── IN 12/2004 — Supl. Mineral Protéico (por 100kg PV) ──
+  {especie:'Bovinos (IN12/2004)',fase:'Supl. Protéico — Corte (g/100kgPV)',nuts:{PB:{min:200},P:{min:0.6},Mg:{min:0.1},Cu:{min:0.006},Zn:{min:0.0311},Se:{min:0.0001},Mn:{min:0.0078},VitA:{min:1500},VitD3:{min:150},VitE:{min:15}}},
+  {especie:'Bovinos (IN12/2004)',fase:'Supl. Protéico — Leite Lact. (g/100kgPV)',nuts:{PB:{min:200},P:{min:1.1},Mg:{min:0.2},Cu:{min:0.01},Zn:{min:0.039},Se:{min:0.0002},Mn:{min:0.016},VitA:{min:1500},VitD3:{min:150},VitE:{min:15}}},
+  {especie:'Bovinos (IN12/2004)',fase:'Supl. Prot-Energ — Corte (g/100kgPV)',nuts:{PB:{min:200},NDT:{min:100},P:{min:0.6},Mg:{min:0.1},Cu:{min:0.006},Zn:{min:0.0311},Se:{min:0.0001},Mn:{min:0.0078},VitA:{min:1500},VitD3:{min:150},VitE:{min:15}}},
+  {especie:'Bovinos (IN12/2004)',fase:'Supl. Prot-Energ — Leite Lact. (g/100kgPV)',nuts:{PB:{min:200},NDT:{min:100},P:{min:1.1},Mg:{min:0.2},Cu:{min:0.01},Zn:{min:0.039},Se:{min:0.0002},Mn:{min:0.016},VitA:{min:1500},VitD3:{min:150},VitE:{min:15}}},
+
+  // ─── SUÍNOS ─────────────────────
+  {especie:'Suínos',fase:'Leitões Pré-Inicial (5-10kg)',nuts:{PB:{min:210},EE:{min:25,max:60},FB:{max:35},Ca_min:{min:8},Ca_max:{max:10},P:{min:6},P_disp:{min:4.5},Na:{min:2.5},Lis:{min:14},Met:{min:4},Met_Cis:{min:8},Tre:{min:9},Trp:{min:2.5},Cu:{min:6},Zn:{min:80},Se:{min:0.3},Mn:{min:4},VitA:{min:8000},VitD3:{min:1500},VitE:{min:30}}},
+  {especie:'Suínos',fase:'Inicial (10-25kg)',nuts:{PB:{min:200},EE:{min:20,max:55},FB:{max:40},Ca_min:{min:7.5},Ca_max:{max:9.5},P:{min:5.5},P_disp:{min:4},Na:{min:2},Lis:{min:12},Met:{min:3.5},Met_Cis:{min:7},Tre:{min:7.8},Trp:{min:2.2},Cu:{min:6},Zn:{min:80},Se:{min:0.3},Mn:{min:4},VitA:{min:6000},VitD3:{min:1200},VitE:{min:25}}},
+  {especie:'Suínos',fase:'Crescimento (25-60kg)',nuts:{PB:{min:175},EE:{min:20,max:50},FB:{max:45},Ca_min:{min:6.5},Ca_max:{max:8.5},P:{min:4.5},P_disp:{min:3.2},Na:{min:1.8},Lis:{min:10},Met:{min:3},Met_Cis:{min:6},Tre:{min:6.5},Trp:{min:1.8},Cu:{min:5},Zn:{min:60},Se:{min:0.25},Mn:{min:3},VitA:{min:5000},VitD3:{min:1000},VitE:{min:20}}},
+  {especie:'Suínos',fase:'Terminação (60-100kg)',nuts:{PB:{min:150},EE:{min:20,max:50},FB:{max:50},Ca_min:{min:5.5},Ca_max:{max:7.5},P:{min:3.5},P_disp:{min:2.5},Na:{min:1.5},Lis:{min:8.5},Met:{min:2.5},Met_Cis:{min:5.2},Tre:{min:5.5},Trp:{min:1.5},Cu:{min:4},Zn:{min:50},Se:{min:0.2},Mn:{min:3},VitA:{min:4000},VitD3:{min:800},VitE:{min:15}}},
+  {especie:'Suínos',fase:'Gestação',nuts:{PB:{min:140},EE:{min:20,max:45},FB:{max:70},Ca_min:{min:7.5},Ca_max:{max:10},P:{min:5.5},P_disp:{min:4},Na:{min:2},Lis:{min:6.5},Met:{min:2},Met_Cis:{min:4.2},Tre:{min:4.5},Trp:{min:1.2},Cu:{min:5},Zn:{min:80},Se:{min:0.3},Mn:{min:8},VitA:{min:8000},VitD3:{min:1500},VitE:{min:40}}},
+  {especie:'Suínos',fase:'Lactação',nuts:{PB:{min:185},EE:{min:30,max:60},FB:{max:50},Ca_min:{min:8.5},Ca_max:{max:11},P:{min:6},P_disp:{min:4.5},Na:{min:2.5},Lis:{min:10.5},Met:{min:3},Met_Cis:{min:6},Tre:{min:6.5},Trp:{min:1.8},Cu:{min:6},Zn:{min:80},Se:{min:0.3},Mn:{min:8},VitA:{min:8000},VitD3:{min:1500},VitE:{min:40}}},
+
+  // ─── AVES ───────────────────────
+  {especie:'Aves',fase:'Frangos Pré-Inicial (1-7d)',nuts:{PB:{min:225},EE:{min:25,max:55},FB:{max:35},EM_aves:{min:2960},Ca_min:{min:9.2},Ca_max:{max:10.5},P:{min:4.5},P_disp:{min:4.5},Na:{min:2.2},Lis:{min:13.1},Met:{min:5.2},Met_Cis:{min:9.4},Tre:{min:8.6},Trp:{min:2.1},Cu:{min:8},Zn:{min:60},Se:{min:0.3},Mn:{min:65},VitA:{min:9000},VitD3:{min:2200},VitE:{min:30}}},
+  {especie:'Aves',fase:'Frangos Inicial (8-21d)',nuts:{PB:{min:215},EE:{min:25,max:55},FB:{max:38},EM_aves:{min:3050},Ca_min:{min:8.4},Ca_max:{max:9.9},P:{min:4},P_disp:{min:3.9},Na:{min:2.1},Lis:{min:12.2},Met:{min:4.8},Met_Cis:{min:8.8},Tre:{min:8},Trp:{min:2},Cu:{min:8},Zn:{min:60},Se:{min:0.3},Mn:{min:65},VitA:{min:8000},VitD3:{min:2000},VitE:{min:25}}},
+  {especie:'Aves',fase:'Frangos Crescimento (22-35d)',nuts:{PB:{min:195},EE:{min:25,max:55},FB:{max:40},EM_aves:{min:3150},Ca_min:{min:7.6},Ca_max:{max:8.8},P:{min:3.5},P_disp:{min:3.4},Na:{min:2},Lis:{min:11},Met:{min:4.4},Met_Cis:{min:7.9},Tre:{min:7.2},Trp:{min:1.8},Cu:{min:8},Zn:{min:55},Se:{min:0.3},Mn:{min:60},VitA:{min:7000},VitD3:{min:1800},VitE:{min:22}}},
+  {especie:'Aves',fase:'Frangos Abate (36-42d)',nuts:{PB:{min:185},EE:{min:25,max:55},FB:{max:42},EM_aves:{min:3200},Ca_min:{min:6.8},Ca_max:{max:8.2},P:{min:3.2},P_disp:{min:3},Na:{min:1.9},Lis:{min:10.4},Met:{min:4.1},Met_Cis:{min:7.5},Tre:{min:6.8},Trp:{min:1.7},Cu:{min:8},Zn:{min:50},Se:{min:0.3},Mn:{min:55},VitA:{min:6000},VitD3:{min:1500},VitE:{min:20}}},
+  {especie:'Aves',fase:'Poedeiras Produção',nuts:{PB:{min:165},EE:{min:20,max:50},FB:{max:45},EM_aves:{min:2750},Ca_min:{min:38},Ca_max:{max:42},P:{min:3.5},P_disp:{min:3},Na:{min:2.2},Lis:{min:7.6},Met:{min:3.5},Met_Cis:{min:6.3},Tre:{min:5.4},Trp:{min:1.7},Cu:{min:6},Zn:{min:50},Se:{min:0.2},Mn:{min:60},VitA:{min:8000},VitD3:{min:2500},VitE:{min:15}}},
+  {especie:'Aves',fase:'Poedeiras Pré-Postura',nuts:{PB:{min:175},EE:{min:20,max:50},FB:{max:40},EM_aves:{min:2800},Ca_min:{min:20},Ca_max:{max:25},P:{min:4},P_disp:{min:3.5},Na:{min:2},Lis:{min:8},Met:{min:3.6},Met_Cis:{min:6.5},Tre:{min:5.7},Trp:{min:1.8},Cu:{min:6},Zn:{min:50},Se:{min:0.2},Mn:{min:60},VitA:{min:8000},VitD3:{min:2000},VitE:{min:15}}},
+
+  // ─── EQUINOS ────────────────────
+  {especie:'Equinos',fase:'Manutenção (adulto)',nuts:{PB:{min:80},NDT:{min:500},Ca_min:{min:2},Ca_max:{max:6},P:{min:1.4},Na:{min:1},Mg:{min:0.9},Cu:{min:10},Zn:{min:40},Se:{min:0.1},Mn:{min:40},VitA:{min:2000},VitD3:{min:300},VitE:{min:50}}},
+  {especie:'Equinos',fase:'Trabalho Leve/Moderado',nuts:{PB:{min:100},NDT:{min:600},Ca_min:{min:3},Ca_max:{max:7},P:{min:2},Na:{min:2.8},Mg:{min:1.1},Cu:{min:10},Zn:{min:40},Se:{min:0.1},Mn:{min:40},VitA:{min:2000},VitD3:{min:300},VitE:{min:80}}},
+  {especie:'Equinos',fase:'Éguas Lactação',nuts:{PB:{min:130},NDT:{min:620},Ca_min:{min:4.5},Ca_max:{max:9},P:{min:2.8},Na:{min:1.5},Mg:{min:1},Cu:{min:10},Zn:{min:40},Se:{min:0.1},Mn:{min:40},VitA:{min:3000},VitD3:{min:600},VitE:{min:80}}},
+
+  // ─── CAPRINOS/OVINOS ────────────
+  {especie:'Caprinos',fase:'Crescimento',nuts:{PB:{min:140},NDT:{min:600},Ca_min:{min:5},Ca_max:{max:10},P:{min:2.5},Na:{min:1},Mg:{min:1.5},S:{min:2},Cu:{min:8},Zn:{min:35},Se:{min:0.2},Mn:{min:40},VitA:{min:3000},VitD3:{min:500},VitE:{min:20}}},
+  {especie:'Caprinos',fase:'Lactação',nuts:{PB:{min:160},NDT:{min:650},Ca_min:{min:6},Ca_max:{max:12},P:{min:3.5},Na:{min:1.5},Mg:{min:2},S:{min:2},Cu:{min:8},Zn:{min:40},Se:{min:0.2},Mn:{min:40},VitA:{min:4000},VitD3:{min:600},VitE:{min:25}}},
+  {especie:'Ovinos',fase:'Crescimento/Engorda',nuts:{PB:{min:140},NDT:{min:620},Ca_min:{min:4},Ca_max:{max:9},P:{min:2.2},Na:{min:1},Mg:{min:1.2},S:{min:1.5},Cu:{min:7},Zn:{min:25},Se:{min:0.1},Mn:{min:25},VitA:{min:2500},VitD3:{min:500},VitE:{min:20}}},
+  {especie:'Ovinos',fase:'Ovelhas Lactação',nuts:{PB:{min:155},NDT:{min:650},Ca_min:{min:5.5},Ca_max:{max:10},P:{min:3},Na:{min:1.2},Mg:{min:1.8},S:{min:2},Cu:{min:7},Zn:{min:30},Se:{min:0.1},Mn:{min:30},VitA:{min:3500},VitD3:{min:600},VitE:{min:25}}},
+
+  // ─── PEIXES ─────────────────────
+  {especie:'Peixes',fase:'Tilápia Alevinos',nuts:{PB:{min:360},EE:{min:50,max:80},FB:{max:40},Ca_min:{min:10},Ca_max:{max:18},P:{min:8},Cu:{min:5},Zn:{min:80},Se:{min:0.25},Mn:{min:15},VitA:{min:5000},VitD3:{min:1000},VitE:{min:50}}},
+  {especie:'Peixes',fase:'Tilápia Engorda',nuts:{PB:{min:280},EE:{min:40,max:70},FB:{max:50},Ca_min:{min:8},Ca_max:{max:15},P:{min:6},Cu:{min:4},Zn:{min:60},Se:{min:0.2},Mn:{min:12},VitA:{min:4000},VitD3:{min:800},VitE:{min:40}}},
+];
+
+function loadExigPadrao(){
+  const existentes=exigs.map(e=>norm(e.especie+'|'+e.fase));
+  let adicionadas=0;
+  for(const ep of EXIG_PADRAO){
+    const chave=norm(ep.especie+'|'+ep.fase);
+    if(existentes.includes(chave)) continue;
+    const id=Date.now()+Math.random();
+    const newExig={id,especie:ep.especie,fase:ep.fase,nuts:{...ep.nuts},fonte:'FO'};
+    exigs.push(newExig);
+    existentes.push(chave);
+    adicionadas++;
+  }
+  if(adicionadas>0){
+    saveExigs();updateExigSelect();renderExigList();
+    toast(adicionadas+' exigências padrão carregadas!','ok');
+  } else {
+    toast('Todas as exigências padrão já existem','info');
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// ABA: EXIGÊNCIAS
+// ══════════════════════════════════════════════════════
+function addExig(){
+  const esp=document.getElementById('nova-esp').value.trim();
+  const fase=document.getElementById('nova-fase').value.trim();
+  if(!esp||!fase)return;
+  const id=Date.now();
+  const newExig={id,especie:esp,fase,nuts:{},fonte:'USR'};
+  exigs.push(newExig);
+  document.getElementById('nova-esp').value='';
+  document.getElementById('nova-fase').value='';
+  syncSaveExig(newExig);updateExigSelect();
+  selectExig(id,true);renderExigList();
+}
+
+function selectExig(id,editMode=false){
+  exigEditId=id;exigEditando=editMode;
+  const exig=exigs.find(e=>e.id===id);
+  if(!exig)return;
+  exigEditBuffer={...exig.nuts};
+  renderExigEdit();
+}
+
+function renderExigList(){
+  const body=document.getElementById('exig-list-body');
+  const busca=(document.getElementById('busca-exig')?.value||'').toLowerCase();
+  const filtradas=busca?exigs.filter(e=>
+    e.especie.toLowerCase().includes(busca)||
+    e.fase.toLowerCase().includes(busca)||
+    (e.fonte||'').toLowerCase().includes(busca)
+  ):exigs;
+  const fonteBadge=f=>{
+    if(f==='FO')return'<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:rgba(59,155,110,.15);color:var(--green);font-weight:700">FO</span>';
+    if(f==='SPC')return'<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:rgba(212,160,74,.15);color:var(--earth);font-weight:700">SPC</span>';
+    if(f==='USR')return'<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:rgba(74,144,226,.15);color:var(--accent);font-weight:700">USR</span>';
+    return'';
+  };
+  body.innerHTML=filtradas.length===0?`<div style="padding:14px 12px;color:var(--muted);font-size:12px;text-align:center">${exigs.length?'Nenhuma encontrada':'Nenhuma cadastrada'}</div>`:
+    filtradas.map(e=>`
+      <div class="exig-item${e.id===exigEditId?' sel':''}" onclick="selectExig(${e.id})">
+        <div><div style="font-size:12px;font-weight:700;color:var(--accent)">${h(e.especie)} ${fonteBadge(e.fonte)}</div>
+          <div style="font-size:11px;color:var(--muted)">${h(e.fase)}</div></div>
+        <div style="display:flex;gap:4px;align-items:center">
+          <span style="font-size:10px;color:var(--muted)">${Object.keys(e.nuts||{}).length} nut.</span>
+          <button onclick="event.stopPropagation();delExig(${e.id})" style="background:none;border:none;cursor:pointer;color:var(--red);font-size:13px">×</button>
+        </div>
+      </div>`).join('');
+}
+
+function delExig(id){
+  if(!confirm('Excluir exigência?'))return;
+  const _exDel=exigs.find(e=>e.id===id);
+  exigs=exigs.filter(e=>e.id!==id);
+  if(exigEditId===id){exigEditId=null;document.getElementById('exig-edit-panel').style.display='none';}
+  syncDelExig(_exDel||{id});updateExigSelect();renderExigList();
+  toast('Exigência removida','info');
+}
+
+function renderExigEdit(){
+  const exig=exigs.find(e=>e.id===exigEditId);if(!exig)return;
+  const panel=document.getElementById('exig-edit-panel');
+  panel.style.display='';
+  document.getElementById('exig-edit-title').textContent=`${exig.especie} — ${exig.fase}`;
+  const btns=document.getElementById('exig-edit-btns');
+  if(exigEditando){
+    btns.innerHTML=`<button class="btn btn-green" onclick="saveExig()">💾 Salvar</button>
+      <button class="btn btn-ghost" onclick="exigEditando=false;renderExigEdit()">Cancelar</button>`;
+  }else{
+    btns.innerHTML=`<button class="btn btn-blue" onclick="exigEditando=true;renderExigEdit()">✏️ Editar</button>`;
+  }
+  const tbody=document.getElementById('exig-nut-body');
+  tbody.innerHTML=allNuts.map(n=>{
+    const v=exigEditando?exigEditBuffer[n.k]:exig.nuts[n.k];
+    const mn=v?.min||'', mx=v?.max||'';
+    const tem=mn||mx;
+    if(!exigEditando&&!tem)return'';
+    return`<tr style="background:${tem&&!exigEditando?'var(--accent-glow)':'transparent'}">
+      <td style="font-weight:${tem?700:400}">${h(n.l)}</td>
+      <td style="font-size:10px;color:var(--muted)">${h(n.u)}</td>
+      <td>${exigEditando?`<input type="number" step="any" value="${mn}" oninput="setExigNut('${n.k}','min',this.value)">`:
+        `<span style="color:${mn?'var(--green)':'var(--muted)'}">${mn||'—'}</span>`}</td>
+      <td>${exigEditando?`<input type="number" step="any" value="${mx}" oninput="setExigNut('${n.k}','max',this.value)">`:
+        `<span style="color:${mx?'var(--red)':'var(--muted)'}">${mx||'—'}</span>`}</td>
+    </tr>`;
+  }).join('');
+}
+
+function setExigNut(k,campo,val){
+  if(!exigEditBuffer[k])exigEditBuffer[k]={};
+  exigEditBuffer[k][campo]=val;
+}
+
+function saveExig(){
+  const exig=exigs.find(e=>e.id===exigEditId);if(!exig)return;
+  const nuts={};
+  for(const[k,v] of Object.entries(exigEditBuffer)){
+    const mn=pN(v?.min), mx=pN(v?.max);
+    if(mn||mx)nuts[k]={min:mn||undefined,max:mx||undefined};
+  }
+  exig.nuts=nuts;exigEditando=false;
+  syncSaveExig(exig);updateExigSelect();renderExigEdit();renderExigList();
+  toast('Exigência salva!','ok');
+}
+
+// ══════════════════════════════════════════════════════
+// ABA: ALIMENTOS
+// ══════════════════════════════════════════════════════
+function renderAlimList(){
+  const busca=(document.getElementById('busca-alim')?.value||'').toLowerCase();
+  const filtrados=busca?ings.filter(i=>i.nome.toLowerCase().includes(busca)):ings;
+  document.getElementById('alim-count').textContent=`📋 Alimentos (${ings.length})`;
+  document.getElementById('alim-list-body').innerHTML=filtrados.map(i=>`
+    <tr onclick="selectAlim(${i.id})" style="cursor:pointer;background:${alimSelId===i.id?'var(--accent-glow)':'transparent'}">
+      <td style="font-size:11px"><strong>${h(i.nome)}</strong></td>
+      <td>${i.preco>0?fmtR(i.preco):'—'}</td>
+      <td><button onclick="event.stopPropagation();delAlim(${i.id})" style="background:none;border:none;cursor:pointer;color:var(--red);font-size:13px">×</button></td>
+    </tr>`).join('');
+}
+
+function selectAlim(id){
+  alimSelId=id;
+  const ing=ings.find(i=>i.id===id);if(!ing)return;
+  alimEditBuffer={...ing.nutrientes};
+  document.getElementById('alim-preco').value=ing.preco||'';
+  document.getElementById('alim-edit-title').textContent=ing.nome;
+  document.getElementById('alim-edit-panel').style.display='';
+  renderAlimNuts();renderAlimList();
+}
+
+function renderAlimNuts(){
+  const filled=allNuts.filter(n=>pN(alimEditBuffer[n.k])>0);
+  const empty=allNuts.filter(n=>!(pN(alimEditBuffer[n.k])>0));
+  const makeRow=n=>`<div class="nut-row">
+    <span class="nut-label ${pN(alimEditBuffer[n.k])>0?'filled':'empty'}">${h(n.l)}</span>
+    <input type="number" class="nut-input" value="${alimEditBuffer[n.k]||''}"
+      oninput="alimEditBuffer['${n.k}']=this.value;renderAlimNuts()">
+    <span class="nut-unit">${h(n.u)}</span>
+  </div>`;
+  document.getElementById('alim-nuts-filled').innerHTML=
+    `<div style="font-size:11px;color:var(--muted);margin-bottom:5px">Preenchidos:</div>
+    <div class="nut-grid">${filled.map(makeRow).join('')}</div>`;
+  document.getElementById('alim-nuts-empty').innerHTML=
+    `<div class="nut-grid" style="margin-top:6px">${empty.map(makeRow).join('')}</div>`;
+}
+
+function saveAlimento(){
+  const ing=ings.find(i=>i.id===alimSelId);if(!ing)return;
+  const n={};
+  for(const[k,v] of Object.entries(alimEditBuffer)){const val=pN(v);if(val>0)n[k]=val;}
+  ing.preco=pN(document.getElementById('alim-preco').value);
+  ing.nutrientes=n;
+  syncSaveIng(ing);
+  renderAlimList();
+  toast('Alimento salvo!','ok');
+}
+
+function addAlimento(){
+  const nome=document.getElementById('novo-alim-nome').value.trim();if(!nome)return;
+  const id=Date.now();
+  const _newIng={id,nome,preco:0,nutrientes:{}};
+  ings.push(_newIng);
+  document.getElementById('novo-alim-nome').value='';
+  syncSaveIng(_newIng);selectAlim(id);renderAlimList();
+}
+
+function delAlim(id){
+  if(!confirm('Excluir alimento?'))return;
+  const _ingDel=ings.find(i=>i.id===id);
+  ings=ings.filter(i=>i.id!==id);
+  if(alimSelId===id){alimSelId=null;document.getElementById('alim-edit-panel').style.display='none';}
+  syncDelIng(_ingDel||{id});renderAlimList();
+  toast('Alimento removido','info');
+}
+
+// ══════════════════════════════════════════════════════
+// ABA: NUTRIENTES
+// ══════════════════════════════════════════════════════
+function renderNutList(){
+  document.getElementById('nut-count').textContent=`⚗️ Nutrientes (${allNuts.length})`;
+  document.getElementById('nut-list-body').innerHTML=allNuts.map(n=>`
+    <tr>
+      <td style="font-family:monospace;font-size:11px;color:var(--muted)">${h(n.k)}</td>
+      <td>${h(n.l)}</td>
+      <td><span style="font-size:10px;background:var(--accent-glow);color:var(--accent);padding:1px 5px;border-radius:3px;font-weight:700">${h(n.u)}</span></td>
+      <td style="display:flex;gap:3px">
+        <button class="btn btn-ghost" onclick="openNutForm('${h(n.k)}')">✏️</button>
+        <button class="btn btn-danger" onclick="delNut('${h(n.k)}')">×</button>
+      </td>
+    </tr>`).join('');
+}
+
+function openNutForm(k){
+  nutEditKey=k;
+  const panel=document.getElementById('nut-form-panel');
+  panel.style.display='';
+  document.getElementById('nut-form-title').textContent=k?'Editar Nutriente':'Novo Nutriente';
+  if(k){
+    const n=allNuts.find(x=>x.k===k);
+    document.getElementById('nut-k').value=n?.k||'';
+    document.getElementById('nut-k').disabled=true;
+    document.getElementById('nut-l').value=n?.l||'';
+    document.getElementById('nut-u').value=n?.u||'g/kg';
+  }else{
+    document.getElementById('nut-k').value='';
+    document.getElementById('nut-k').disabled=false;
+    document.getElementById('nut-l').value='';
+    document.getElementById('nut-u').value='g/kg';
+  }
+}
+
+function closeNutForm(){document.getElementById('nut-form-panel').style.display='none';nutEditKey=null;}
+
+function saveNut(){
+  const k=document.getElementById('nut-k').value.trim().replace(/\s/g,'_');
+  const l=document.getElementById('nut-l').value.trim();
+  const u=document.getElementById('nut-u').value;
+  if(!k||!l)return;
+  let savedNut;
+  if(nutEditKey){allNuts=allNuts.map(n=>n.k===nutEditKey?{...n,k,l,u}:n);savedNut=allNuts.find(n=>n.k===k);}
+  else{if(allNuts.find(n=>n.k===k)){alert('Chave já existe!');return;}savedNut={k,l,u};allNuts.push(savedNut);}
+  syncSaveNut(savedNut);renderNutList();closeNutForm();
+  toast('Nutriente salvo!','ok');
+}
+
+function delNut(k){
+  if(!confirm('Excluir nutriente '+k+'?'))return;
+  allNuts=allNuts.filter(n=>n.k!==k);
+  saveNuts();renderNutList();
+  toast('Nutriente removido','info');
+}
+
+// ══════════════════════════════════════════════════════
+// ABA: COMPARAR
+// ══════════════════════════════════════════════════════
+const cmpAcMap={};
+
+function renderComparar(){
+  const nuts=cmpNutsAll?allNuts:allNuts.filter(n=>MAIN_NUTS.includes(n.k));
+  const ress=cmpFmls.map(f=>({...calcFmla(f.linhas),id:f.id,nome:f.nome}));
+  const nc=cmpFmls.length;
+
+  let tbl=`<thead>
+    <tr><th style="width:160px">Nutriente</th>
+    ${cmpFmls.map(f=>`<th style="min-width:120px"><input style="font-size:12px;font-weight:700;border:none;background:transparent;padding:0;width:100%" value="${h(f.nome)}" oninput="cmpFmls.find(x=>x.id===${f.id}).nome=this.value"></th>`).join('')}
+    <th><button class="btn btn-ghost" onclick="addCmpCol()">+ Col</button></th></tr>
+    <tr><td style="font-style:italic;color:var(--muted);font-size:11px">Custo/t</td>${ress.map(r=>`<td style="font-weight:700;color:var(--earth)">${r.custo>0?fmtR(r.custo):'—'}</td>`).join('')}<td></td></tr>
+    <tr><td style="font-style:italic;color:var(--muted);font-size:11px">Total g/t</td>${ress.map(r=>`<td>${fmtN(r.totalG,0)}</td>`).join('')}<td></td></tr>
+    </thead><tbody>`;
+
+  tbl+=nuts.map(n=>`<tr><td><strong>${h(n.l)}</strong> <span style="color:var(--muted);font-size:10px">${h(n.u)}</span></td>
+    ${ress.map(r=>{const v=r.nutrientes[n.k]||0;return`<td style="font-weight:${v>0?600:400};color:${v>0?'var(--text)':'var(--muted)'}">${fmtN(v,3)}</td>`;}).join('')}
+    <td></td></tr>`).join('');
+  tbl+='</tbody>';
+  document.getElementById('cmp-table').innerHTML=tbl;
+
+  document.getElementById('cmp-editors').innerHTML=cmpFmls.map(f=>`
+    <div class="card flex-auto" style="min-width:260px">
+      <div class="card-hdr"><span class="card-title">${h(f.nome)}</span></div>
+      <div id="cmp-ed-${f.id}" style="padding:10px 12px"></div>
+    </div>`).join('');
+
+  cmpFmls.forEach(f=>{
+    const cont=document.getElementById(`cmp-ed-${f.id}`);if(!cont)return;
+    renderCmpEditor(f,cont);
+  });
+}
+
+function renderCmpEditor(f,cont){
+  const tot=f.linhas.reduce((s,l)=>s+(l.qtd||0),0);
+  cont.innerHTML=f.linhas.map(l=>`
+    <div style="display:flex;gap:5px;margin-bottom:5px;align-items:center">
+      <div style="flex:1" class="autocomplete" id="cac-${f.id}-${l.id}">
+        <input class="ac-inp" style="width:100%" placeholder="Buscar ingrediente...">
+        <div class="ac-list"></div>
+      </div>
+      <input type="number" min="0" style="width:78px" value="${l.qtd||''}" oninput="updCmpQtd(${f.id},${l.id},this.value)">
+      <span style="font-size:11px;color:var(--muted);width:28px;text-align:right">${tot>0?Math.round(l.qtd/tot*100)+'%':''}</span>
+      <button onclick="delCmpLinha(${f.id},${l.id})" style="background:none;border:none;cursor:pointer;color:var(--red);font-size:14px">×</button>
+    </div>`).join('')+
+    `<button class="btn btn-ghost" style="width:100%;border:1px dashed var(--border);font-size:12px" onclick="addCmpLinha(${f.id})">+ Ingrediente</button>`;
+
+  f.linhas.forEach(l=>{
+    const acId=`cac-${f.id}-${l.id}`;
+    const acCont=document.getElementById(acId);if(!acCont)return;
+    const key=`${f.id}_${l.id}`;
+    if(!cmpAcMap[key])cmpAcMap[key]=makeAC(acCont,ing=>{l.ing=ing;renderComparar();});
+    if(l.ing)cmpAcMap[key].set(l.ing);
+  });
+}
+
+function updCmpQtd(fid,lid,val){
+  const f=cmpFmls.find(x=>x.id===fid);if(!f)return;
+  const l=f.linhas.find(x=>x.id===lid);if(l)l.qtd=pN(val);
+  renderComparar();
+}
+function addCmpLinha(fid){
+  const f=cmpFmls.find(x=>x.id===fid);if(!f)return;
+  f.linhas.push({id:Date.now(),ing:null,qtd:0});renderComparar();
+}
+function delCmpLinha(fid,lid){
+  const f=cmpFmls.find(x=>x.id===fid);if(!f)return;
+  f.linhas=f.linhas.filter(l=>l.id!==lid);renderComparar();
+}
+function addCmpCol(){
+  const id=Date.now();
+  cmpFmls.push({id,nome:`Fórmula ${String.fromCharCode(64+cmpFmls.length+1)}`,linhas:[]});
+  renderComparar();
+}
+function toggleCmpNuts(){cmpNutsAll=!cmpNutsAll;renderComparar();}
+
+// ══════════════════════════════════════════════════════
+// NAVEGAÇÃO DE ABAS
+// ══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// ABA: RAÇÕES (Banco de Fórmulas)
+// ══════════════════════════════════════════════════════
+function renderRacoesList(){
+  const body=document.getElementById('racoes-body');if(!body)return;
+  const busca=norm(document.getElementById('racoes-busca')?.value||'');
+  const espFiltro=document.getElementById('racoes-especie-filtro')?.value||'';
+  const words=busca.split(/\s+/).filter(Boolean);
+
+  // Popular filtro de espécies
+  const selEsp=document.getElementById('racoes-especie-filtro');
+  if(selEsp){
+    const especies=[...new Set(formulas.map(f=>f.especie).filter(Boolean))].sort();
+    const curVal=selEsp.value;
+    selEsp.innerHTML='<option value="">Todas espécies</option>'+especies.map(e=>`<option value="${e}"${e===curVal?' selected':''}>${e}</option>`).join('');
+  }
+
+  let filtered=formulas;
+  if(words.length) filtered=filtered.filter(f=>words.every(w=>norm(f.nome).includes(w)));
+  if(espFiltro) filtered=filtered.filter(f=>f.especie===espFiltro);
+
+  document.getElementById('racoes-count').textContent=filtered.length+' de '+formulas.length+' fórmulas';
+
+  body.innerHTML=filtered.length===0?'<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px">Nenhuma fórmula encontrada</td></tr>':
+    filtered.slice(0,200).map((f,i)=>{
+      const nIng=f.linhas.filter(l=>l.ing).length;
+      const totalPct=gToPct(f.linhas.reduce((s,l)=>s+(l.qtd||0),0));
+      const res=calcFmla(f.linhas);
+      const isAtiva=f.id===formulaAtiva;
+      return`<tr style="cursor:pointer;${isAtiva?'background:var(--accent-glow)':''}" onclick="showRacaoDetail(${f.id})">
+        <td style="color:var(--muted);font-size:11px">${i+1}</td>
+        <td style="font-weight:600">${h(f.nome)}</td>
+        <td class="r">${nIng}</td>
+        <td class="r" style="color:${Math.abs(totalPct-100)<0.1?'var(--green)':'var(--muted)'}">${totalPct>0?totalPct.toFixed(1)+'%':'—'}</td>
+        <td class="r" style="color:var(--earth);font-weight:600">${res.custo>0?fmtR(res.custo):'—'}</td>
+        <td style="font-size:11px;color:var(--muted)">${f.especie||'—'}</td>
+        <td style="display:flex;gap:4px">
+          <button class="btn btn-ghost" style="font-size:10px;padding:2px 6px" onclick="event.stopPropagation();abrirRacaoNoFormulador(${f.id})" title="Abrir no formulador">✏️</button>
+          <button class="btn btn-ghost" style="font-size:10px;padding:2px 6px" onclick="event.stopPropagation();cloneFmlById(${f.id})" title="Clonar">📋</button>
+        </td>
+      </tr>`;
+    }).join('');
+}
+
+function showRacaoDetail(id){
+  const f=formulas.find(x=>x.id===id);if(!f)return;
+  const panel=document.getElementById('racao-detail');
+  panel.style.display='';
+  document.getElementById('racao-detail-title').textContent=f.nome;
+  document.getElementById('racao-abrir-btn').onclick=()=>abrirRacaoNoFormulador(id);
+  const res=calcFmla(f.linhas);
+  const totalPct=gToPct(f.linhas.reduce((s,l)=>s+(l.qtd||0),0));
+  const linhasComIng=f.linhas.filter(l=>l.ing&&l.qtd>0);
+  let html=`<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;font-size:12px">
+    <div><b>Espécie:</b> ${f.especie||'—'}</div>
+    <div><b>Ingredientes:</b> ${linhasComIng.length}</div>
+    <div><b>Total:</b> ${totalPct.toFixed(1)}%</div>
+    <div><b>Custo:</b> ${res.custo>0?fmtR(res.custo)+'/t':'—'}</div>
+  </div>`;
+  if(linhasComIng.length){
+    html+=`<table style="font-size:12px"><thead><tr><th>Ingrediente</th><th class="r">%</th><th class="r">kg (${batchSize})</th><th class="r">R$/kg</th></tr></thead><tbody>`;
+    html+=linhasComIng.sort((a,b)=>b.qtd-a.qtd).map(l=>{
+      const pct=gToPct(l.qtd);
+      return`<tr><td>${l.ing.nome}</td><td class="r">${pct.toFixed(2)}</td><td class="r">${(pct*batchSize/100).toFixed(1)}</td><td class="r">${l.ing.preco?fmtR(l.ing.preco):'—'}</td></tr>`;
+    }).join('');
+    html+=`<tr style="font-weight:700;border-top:2px solid var(--accent)"><td>TOTAL</td><td class="r">${totalPct.toFixed(2)}%</td><td class="r">${(totalPct*batchSize/100).toFixed(1)} kg</td><td class="r">${res.custo>0?fmtR(res.custo)+'/t':'—'}</td></tr></tbody></table>`;
+  }
+  document.getElementById('racao-detail-body').innerHTML=html;
+}
+
+function abrirRacaoNoFormulador(id){
+  formulaAtiva=id;fmlEditando=false;
+  Object.keys(acMap).forEach(k=>delete acMap[k]);
+  goTab('formular',document.querySelector('[data-tab=formular]'));
+}
+
+function goTab(id,btn){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+id)?.classList.add('active');
+  if(btn)btn.classList.add('active');
+  if(id==='exigencias'){renderExigList();}
+  if(id==='alimentos'){renderAlimList();}
+  if(id==='nutrientes'){renderNutList();}
+  if(id==='comparar'){renderComparar();}
+  if(id==='formular'){renderFml();}
+  if(id==='racoes'){renderRacoesList();}
+  if(id==='historico'){loadHistorico();}
+}
+
+// ══════════════════════════════════════════════════════
+// SUPABASE — configuração
+// ══════════════════════════════════════════════════════
+const SUPABASE_URL     = 'https://tebrkrbfsjquqpckslks.supabase.co'
+const SUPABASE_ANON_KEY= 'sb_publishable_nVRaqEfhT4oBCWg7QbGpzw_bXb-DJC-'
+
+const SB_CONFIGURED = !SUPABASE_URL.includes('SEU_PROJETO')
+let _sb = null
+function getSB(){
+  if(!_sb && SB_CONFIGURED)
+    _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  return _sb
+}
+
+// ══════════════════════════════════════════════════════
+// TOAST
+// ══════════════════════════════════════════════════════
+function toast(msg, type='info', ms=3200){
+  const el=document.createElement('div')
+  el.className=`toast-item ${type}`
+  el.textContent=msg
+  document.getElementById('toast').appendChild(el)
+  requestAnimationFrame(()=>{ requestAnimationFrame(()=>el.classList.add('show')) })
+  setTimeout(()=>{
+    el.classList.remove('show')
+    setTimeout(()=>el.remove(), 300)
+  }, ms)
+}
+
+// ══════════════════════════════════════════════════════
+// SYNC BADGE
+// ══════════════════════════════════════════════════════
+const SYNC_Q_KEY  = 'fo_sync_queue'
+const LAST_SYNC_K = 'fo_last_sync'
+let _isSyncing = false
+let _isOnline  = navigator.onLine
+let _currentUser = null
+
+window.addEventListener('online',  ()=>{ _isOnline=true;  setSyncBadge('pending'); processSyncQueue() })
+window.addEventListener('offline', ()=>{ _isOnline=false; setSyncBadge('offline') })
+
+function setSyncBadge(status){
+  const el=document.getElementById('sync-badge')
+  if(!el)return
+  el.className=status
+  const labels={
+    ok:'✓ Sincronizado', syncing:'⟳ Sincronizando...', offline:'⚡ Offline',
+    error:'✗ Erro sync', pending:'● Pendente', local:'💾 Local'
+  }
+  el.textContent = labels[status] || status
+}
+
+// ══════════════════════════════════════════════════════
+// AUTH
+// ══════════════════════════════════════════════════════
+let _loginMode = 'login'
+
+function setLoginTab(mode, btn){
+  _loginMode = mode
+  document.querySelectorAll('.login-tab').forEach(b=>b.classList.remove('active'))
+  btn.classList.add('active')
+  document.getElementById('login-btn').textContent = mode==='login'?'Entrar':'Criar conta'
+  document.getElementById('login-msg').style.display='none'
+}
+
+function showLogin(){
+  closeUserMenu()
+  document.getElementById('login-overlay').classList.add('open')
+  setTimeout(()=>document.getElementById('l-email').focus(), 100)
+}
+function closeLogin(){
+  document.getElementById('login-overlay').classList.remove('open')
+  document.getElementById('login-msg').style.display='none'
+}
+
+async function doLogin(){
+  if(!SB_CONFIGURED){
+    showLoginMsg('Supabase não configurado. Configure SUPABASE_URL e SUPABASE_ANON_KEY.','err')
+    return
+  }
+  const email = document.getElementById('l-email').value.trim()
+  const senha  = document.getElementById('l-senha').value
+  if(!email||!senha){ showLoginMsg('Preencha e-mail e senha.','err'); return }
+
+  const btn = document.getElementById('login-btn')
+  btn.disabled=true; btn.textContent='Aguarde...'
+  document.getElementById('login-msg').style.display='none'
+
+  try{
+    let data, error
+    if(_loginMode==='login'){
+      ({data,error} = await getSB().auth.signInWithPassword({email,password:senha}))
+    } else {
+      ({data,error} = await getSB().auth.signUp({email,password:senha}))
+    }
+    if(error) throw error
+
+    if(_loginMode==='signup' && !data.session){
+      showLoginMsg('Conta criada! Verifique seu e-mail para confirmar.','ok')
+    } else {
+      closeLogin()
+      await onAuthChange(data.session)
+    }
+  } catch(e){
+    showLoginMsg(e.message || 'Erro ao autenticar','err')
+  } finally {
+    btn.disabled=false
+    btn.textContent=_loginMode==='login'?'Entrar':'Criar conta'
+  }
+}
+
+function showLoginMsg(msg, type){
+  const el=document.getElementById('login-msg')
+  el.textContent=msg; el.className=type; el.style.display='block'
+}
+
+async function doSignOut(){
+  closeUserMenu()
+  if(getSB()) await getSB().auth.signOut()
+  _currentUser=null
+  updateUserUI(null)
+  setSyncBadge('local')
+  toast('Sessão encerrada','info')
+}
+
+// ══════════════════════════════════════════════════════
+// BACKUP & RESTAURAR
+// ══════════════════════════════════════════════════════
+function exportBackup(){
+  closeUserMenu();
+  const data={
+    versao:'1.0',
+    data:new Date().toISOString(),
+    allNuts,ings,exigs,formulas,
+    batchSize,
+    stats:{nutrientes:allNuts.length,ingredientes:ings.length,exigencias:exigs.length,formulas:formulas.length}
+  };
+  const json=JSON.stringify(data);
+  const blob=new Blob([json],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='FeedOptimize_backup_'+new Date().toISOString().slice(0,10)+'.json';
+  a.click();URL.revokeObjectURL(a.href);
+  const sizeMB=(json.length/1024/1024).toFixed(1);
+  toast('Backup salvo! ('+sizeMB+'MB) — '+data.stats.ingredientes+' alimentos, '+data.stats.exigencias+' exigências, '+data.stats.formulas+' fórmulas','ok',4000);
+}
+
+function importBackup(file){
+  closeUserMenu();
+  if(!file)return;
+  if(!confirm('Restaurar backup?\n\nIsso vai SUBSTITUIR todos os dados atuais (alimentos, exigências, fórmulas) pelos dados do backup.\n\nDeseja continuar?'))return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const data=JSON.parse(e.target.result);
+      if(!data.allNuts||!data.ings){toast('Arquivo inválido — não é um backup do FeedOptimize','err');return;}
+      allNuts=data.allNuts||allNuts;
+      ings=data.ings||ings;
+      exigs=data.exigs||exigs;
+      formulas=data.formulas||formulas;
+      if(data.batchSize)batchSize=data.batchSize;
+      formulaAtiva=formulas[0]?.id;
+      // Reconectar ingredientes
+      for(const f of formulas){
+        if(!f.linhas)continue;
+        for(const l of f.linhas){
+          if(!l.ing)continue;
+          const fresh=ings.find(i=>i.id===l.ing.id)||ings.find(i=>i.nome===l.ing.nome);
+          if(fresh)l.ing={id:fresh.id,nome:fresh.nome,preco:fresh.preco,nutrientes:fresh.nutrientes};
+        }
+      }
+      saveNuts();saveIngs();saveExigs();saveFormulas();
+      updateExigSelect();renderFml();
+      const s=data.stats||{};
+      toast('Backup restaurado! '+
+        (s.ingredientes||ings.length)+' alimentos, '+
+        (s.exigencias||exigs.length)+' exigências, '+
+        (s.formulas||formulas.length)+' fórmulas','ok',5000);
+    }catch(err){
+      toast('Erro ao restaurar: '+err.message,'err');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function toggleUserMenu(){
+  document.getElementById('user-dropdown').classList.toggle('open')
+}
+function closeUserMenu(){
+  document.getElementById('user-dropdown').classList.remove('open')
+}
+document.addEventListener('click', e=>{
+  if(!document.getElementById('user-menu')?.contains(e.target)) closeUserMenu()
+})
+
+function updateUserUI(user){
+  const btn = document.getElementById('user-btn')
+  const email = document.getElementById('ud-email')
+  if(user){
+    btn.textContent = '👤 '+user.email.split('@')[0]
+    email.textContent = user.email
+  } else {
+    btn.textContent = '👤 Entrar'
+    email.textContent = '—'
+  }
+}
+
+async function onAuthChange(session){
+  _currentUser = session?.user || null
+  updateUserUI(_currentUser)
+  if(_currentUser){
+    toast(`Bem-vindo, ${_currentUser.email.split('@')[0]}!`,'ok')
+    localStorage.setItem('fo_teve_sessao','1')
+    setSyncBadge('syncing')
+    await syncFromSupabase()
+    processSyncQueue()
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// SYNC QUEUE
+// ══════════════════════════════════════════════════════
+function getSyncQ(){ try{return JSON.parse(localStorage.getItem(SYNC_Q_KEY)||'[]')}catch{return[]} }
+function addToQ(op){
+  const q=getSyncQ().filter(x=>!(x.table===op.table && x.data?.local_id===op.data?.local_id))
+  q.push({...op, ts:Date.now()})
+  localStorage.setItem(SYNC_Q_KEY, JSON.stringify(q))
+  setSyncBadge('pending')
+}
+function clearQ(){ localStorage.removeItem(SYNC_Q_KEY) }
+
+async function processSyncQueue(){
+  if(!_isOnline||_isSyncing||!_currentUser||!getSB()) return
+  const q=getSyncQ()
+  if(!q.length){ setSyncBadge('ok'); return }
+  _isSyncing=true; setSyncBadge('syncing')
+  try{
+    for(const op of q){
+      try{
+        if(op.type==='upsert'){
+          if(op.table==='ingredientes') await _sbUpsertIng(op.data)
+          else if(op.table==='nutrientes') await _sbUpsertNut(op.data)
+          else if(op.table==='exigencias') await _sbUpsertExig(op.data)
+          else if(op.table==='formulas') await _sbSaveFormula(op.data, op.linhas||[], op.comp||{})
+          else if(op.table==='otimizacoes') await _sbSaveOtim(op.data)
+        } else if(op.type==='delete'){
+          if(op.sb_id) await getSB().from(op.table).update({ativo:false}).eq('id',op.sb_id)
+        }
+      } catch(e){ console.warn('[Sync] op falhou:',op.table, e.message) }
+    }
+    clearQ()
+    localStorage.setItem(LAST_SYNC_K, new Date().toISOString())
+    setSyncBadge('ok')
+    document.getElementById('ud-sync-info').textContent=
+      'Sync: '+new Date().toLocaleTimeString('pt-BR')
+  } catch(e){
+    console.error('[Sync]',e)
+    setSyncBadge('error')
+    toast('Erro ao sincronizar: '+e.message,'err')
+  } finally { _isSyncing=false }
+}
+
+async function forcSync(){
+  closeUserMenu()
+  if(!_currentUser){ toast('Faça login para sincronizar','info'); return }
+  setSyncBadge('syncing')
+  await syncFromSupabase()
+  await processSyncQueue()
+  renderFml()
+  toast('Sincronização concluída','ok')
+}
+
+// ══════════════════════════════════════════════════════
+// SUPABASE CRUD
+// ══════════════════════════════════════════════════════
+async function syncFromSupabase(){
+  if(!getSB()||!_currentUser) return
+  try{
+    const [rN,rI,rE] = await Promise.all([
+      getSB().from('nutrientes').select('*').eq('ativo',true).order('ordem'),
+      getSB().from('ingredientes').select('*').eq('ativo',true).order('nome'),
+      getSB().from('exigencias').select('*').eq('ativo',true).order('especie,fase')
+    ])
+    if(rN.data) _mergeNuts(rN.data)
+    if(rI.data) _mergeIngs(rI.data)
+    if(rE.data) _mergeExigs(rE.data)
+    setSyncBadge('ok')
+  } catch(e){
+    setSyncBadge(_isOnline?'error':'offline')
+    console.warn('[syncFromSupabase]',e.message)
+  }
+}
+
+function _mergeNuts(sbList){
+  const merged=[...allNuts]
+  for(const sb of sbList){
+    const idx=merged.findIndex(n=>n.sb_id===sb.id||n.k===sb.k)
+    if(idx>=0) merged[idx]={...merged[idx],k:sb.k,l:sb.l,u:sb.u,sb_id:sb.id}
+    else merged.push({k:sb.k,l:sb.l,u:sb.u,sb_id:sb.id})
+  }
+  allNuts=merged; saveNuts()
+}
+function _mergeIngs(sbList){
+  const merged=[...ings]
+  for(const sb of sbList){
+    const idx=merged.findIndex(i=>i.sb_id===sb.id)
+    if(idx>=0) merged[idx]={...merged[idx],nome:sb.nome,preco:parseFloat(sb.preco)||0,nutrientes:sb.nutrientes||{},sb_id:sb.id}
+    else merged.push({id:Date.now()+Math.random(),sb_id:sb.id,nome:sb.nome,preco:parseFloat(sb.preco)||0,nutrientes:sb.nutrientes||{}})
+  }
+  ings=merged; saveIngs()
+}
+function _mergeExigs(sbList){
+  const merged=[...exigs]
+  for(const sb of sbList){
+    const idx=merged.findIndex(e=>e.sb_id===sb.id)
+    if(idx>=0) merged[idx]={...merged[idx],especie:sb.especie,fase:sb.fase,nuts:sb.nuts||{},sb_id:sb.id}
+    else merged.push({id:Date.now()+Math.random(),sb_id:sb.id,especie:sb.especie,fase:sb.fase,nuts:sb.nuts||{}})
+  }
+  exigs=merged; saveExigs()
+}
+
+async function _sbUpsertIng(ing){
+  const {data,error}=await getSB().from('ingredientes').upsert({
+    id:ing.sb_id||undefined, user_id:_currentUser.id,
+    nome:ing.nome, preco:ing.preco||0, nutrientes:ing.nutrientes||{}, ativo:true,
+    updated_at:new Date().toISOString()
+  },{onConflict:'id'}).select().single()
+  if(error)throw error
+  // Atualizar sb_id local
+  const idx=ings.findIndex(i=>i.id==ing.local_id||i.sb_id===data.id)
+  if(idx>=0){ings[idx].sb_id=data.id; saveIngs()}
+  return data
+}
+async function _sbUpsertNut(nut){
+  const {data,error}=await getSB().from('nutrientes').upsert({
+    id:nut.sb_id||undefined, user_id:_currentUser.id,
+    k:nut.k, l:nut.l, u:nut.u, ativo:true, updated_at:new Date().toISOString()
+  },{onConflict:'id'}).select().single()
+  if(error)throw error
+  const idx=allNuts.findIndex(n=>n.k===nut.k)
+  if(idx>=0){allNuts[idx].sb_id=data.id; saveNuts()}
+  return data
+}
+async function _sbUpsertExig(exig){
+  const {data,error}=await getSB().from('exigencias').upsert({
+    id:exig.sb_id||undefined, user_id:_currentUser.id,
+    especie:exig.especie, fase:exig.fase, nuts:exig.nuts||{}, ativo:true,
+    updated_at:new Date().toISOString()
+  },{onConflict:'id'}).select().single()
+  if(error)throw error
+  const idx=exigs.findIndex(e=>e.id==exig.local_id||e.sb_id===data.id)
+  if(idx>=0){exigs[idx].sb_id=data.id; saveExigs()}
+  return data
+}
+async function _sbSaveFormula(formula, linhas, comp){
+  const sb=getSB()
+  const {data:fml,error:fe}=await sb.from('formulas').upsert({
+    id:formula.sb_id||undefined, user_id:_currentUser.id,
+    nome:formula.nome, total_g_t:linhas.reduce((s,l)=>s+(l.qtd||0),0),
+    custo_t:formula.custo||0, composicao:comp||{}, ativo:true,
+    updated_at:new Date().toISOString()
+  },{onConflict:'id'}).select().single()
+  if(fe)throw fe
+  await sb.from('formula_linhas').delete().eq('formula_id',fml.id)
+  if(linhas.length){
+    await sb.from('formula_linhas').insert(linhas.map((l,i)=>({
+      formula_id:fml.id, user_id:_currentUser.id,
+      ingrediente_id:l.ing?.sb_id||null,
+      ingrediente_nome:l.ing?.nome||'',
+      ingrediente_preco:l.ing?.preco||0,
+      qtd_g_t:l.qtd||0, qtd_min_g_t:l.qtdMin||null, qtd_max_g_t:l.qtdMax||null,
+      pct:l.pct||null, ordem:i
+    })))
+  }
+  return fml
+}
+async function _sbSaveOtim(data){
+  const {error}=await getSB().from('otimizacoes').insert({
+    ...data, user_id:_currentUser.id
+  })
+  if(error)throw error
+}
+
+// ══════════════════════════════════════════════════════
+// WRAPPERS DE SAVE COM SYNC
+// ══════════════════════════════════════════════════════
+function syncSaveIng(ing){
+  saveIngs()
+  addToQ({type:'upsert',table:'ingredientes',data:{...ing,local_id:ing.id}})
+  processSyncQueue()
+}
+function syncDelIng(ing){
+  saveIngs()
+  if(ing.sb_id) addToQ({type:'delete',table:'ingredientes',sb_id:ing.sb_id})
+  processSyncQueue()
+}
+function syncSaveExig(exig){
+  saveExigs()
+  addToQ({type:'upsert',table:'exigencias',data:{...exig,local_id:exig.id}})
+  processSyncQueue()
+}
+function syncDelExig(exig){
+  saveExigs()
+  if(exig.sb_id) addToQ({type:'delete',table:'exigencias',sb_id:exig.sb_id})
+  processSyncQueue()
+}
+function syncSaveNut(nut){
+  saveNuts()
+  addToQ({type:'upsert',table:'nutrientes',data:nut})
+  processSyncQueue()
+}
+function syncSaveFormula(formula, linhas, comp){
+  addToQ({type:'upsert',table:'formulas',data:formula,linhas,comp})
+  processSyncQueue()
+}
+function syncSaveOtim(data){
+  addToQ({type:'upsert',table:'otimizacoes',data})
+  processSyncQueue()
+}
+
+// ══════════════════════════════════════════════════════
+// SALVAR FÓRMULA NA NUVEM (botão explícito)
+// ══════════════════════════════════════════════════════
+function salvarFormula(){
+  const f=getFml()
+  const res=calcFmla(f.linhas)
+  syncSaveFormula(f, f.linhas, res.nutrientes)
+  toast('Fórmula salva!','ok')
+}
+
+// ══════════════════════════════════════════════════════
+// EXPORT CSV
+// ══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// ESTILO BASE DOS RELATÓRIOS
+// ══════════════════════════════════════════════════════
+const RPT_CSS=`*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:#1a1a2e;padding:28px 36px;max-width:900px;margin:0 auto}
+.header{border-bottom:3px solid #1a3a5c;padding-bottom:12px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:flex-end}
+.header h1{font-size:20px;color:#1a3a5c;letter-spacing:-.5px;margin:0}
+.header .sub{font-size:11px;color:#888;margin-top:2px}
+.header .logo{font-size:14px;color:#1a3a5c;font-weight:700;text-align:right}
+.header .logo span{display:block;font-size:9px;color:#aaa;font-weight:400}
+.meta{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px;padding:8px 12px;background:#f0f4f8;border-radius:6px;font-size:11px;color:#555}
+.meta b{color:#1a3a5c}
+h2{font-size:12px;color:#1a3a5c;margin:20px 0 6px;text-transform:uppercase;letter-spacing:.06em;border-bottom:2px solid #e0e4ea;padding-bottom:4px}
+table{width:100%;border-collapse:collapse;margin-bottom:10px}
+th{padding:6px 8px;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#fff;background:#1a3a5c}
+td{padding:5px 8px;border-bottom:1px solid #e8ecf0;font-size:11px}
+tr:nth-child(even){background:#f8fafc}
+.r{text-align:right}.c{text-align:center}
+.total td{font-weight:700;background:#e8ecf0;border-top:2px solid #1a3a5c}
+.ok{color:#0a7c42}.low{color:#c0392b}.high{color:#d4880a}
+.tag{display:inline-block;padding:2px 6px;border-radius:3px;font-size:9px;font-weight:700}
+.tag-ok{background:#e6f5ec;color:#0a7c42}.tag-low{background:#fdecea;color:#c0392b}.tag-high{background:#fef5e4;color:#d4880a}.tag-info{background:#e3f0f8;color:#1a5f8a}
+.footer{margin-top:28px;padding-top:8px;border-top:1px solid #ddd;display:flex;justify-content:space-between;font-size:9px;color:#aaa}
+.badge{font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700}
+@media print{body{padding:12px}@page{margin:10mm 12mm}.header{page-break-after:avoid}table{page-break-inside:auto}tr{page-break-inside:avoid}}`;
+
+function openReport(title,html){
+  const win=window.open('','_blank');
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title} — FeedOptimize</title><style>${RPT_CSS}</style></head><body>${html}<script>window.onload=()=>{window.print()}<\/script></body></html>`);
+  win.document.close();
+}
+
+// ══════════════════════════════════════════════════════
+// RELATÓRIO 1: FÓRMULA (ingredientes + composição)
+// ══════════════════════════════════════════════════════
+function exportCSV(){
+  const f=getFml()
+  const res=calcFmla(f.linhas)
+  const linhasComIng=f.linhas.filter(l=>l.ing)
+  if(!linhasComIng.length){toast('Adicione ingredientes primeiro','err');return}
+  let csv='Ingrediente;%;kg ('+batchSize+'kg);R$/kg;Custo R$/t\n'
+  linhasComIng.forEach(l=>{
+    const pct=gToPct(l.qtd)
+    const kg=pct*batchSize/100
+    const custoP=(l.ing.preco||0)*pct*10
+    csv+=`"${l.ing.nome}";${pct.toFixed(2)};${kg.toFixed(2)};${(l.ing.preco||0).toFixed(2)};${custoP.toFixed(2)}\n`
+  })
+  const totalPct=linhasComIng.reduce((s,l)=>s+gToPct(l.qtd),0)
+  csv+=`\nTOTAL;${totalPct.toFixed(2)};${(totalPct*batchSize/100).toFixed(2)};—;${res.custo.toFixed(2)}\n`
+  csv+='\nComposição Nutricional\nNutriente;Valor;Mín;Máx;Unidade;Status\n'
+  const exigSel=exigs.find(e=>e.id==exigSelecionada)
+  allNuts.forEach(n=>{
+    const v=res.nutrientes[n.k]||0; if(!v)return
+    const ex=exigSel?.nuts?.[n.k]
+    const mn=ex?pN(ex.min):0,mx=ex?pN(ex.max):0
+    const st=mn&&v<mn?'ABAIXO':mx&&v>mx?'ACIMA':'OK'
+    csv+=`"${n.l}";${v.toFixed(4)};${mn||'—'};${mx||'—'};${n.u};${ex?st:'—'}\n`
+  })
+  const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8;'})
+  const url=URL.createObjectURL(blob)
+  const a=document.createElement('a');a.href=url
+  a.download=`${f.nome.replace(/[^a-zA-Z0-9À-ú ]/g,'_')}.csv`
+  a.click();URL.revokeObjectURL(url)
+  toast('CSV exportado!','ok')
+}
+
+function exportPDF(){
+  const f=getFml()
+  const res=calcFmla(f.linhas)
+  const linhasComIng=f.linhas.filter(l=>l.ing)
+  if(!linhasComIng.length){toast('Adicione ingredientes primeiro','err');return}
+  const exigSel=exigs.find(e=>e.id==exigSelecionada)
+  const totalPct=linhasComIng.reduce((s,l)=>s+gToPct(l.qtd),0)
+
+  let ingRows=linhasComIng.map((l,i)=>{
+    const pct=gToPct(l.qtd),kg=pct*batchSize/100,custoP=(l.ing.preco||0)*pct*10
+    return`<tr><td>${i+1}</td><td>${l.ing.nome}</td><td class="r">${pct.toFixed(2)}%</td><td class="r">${kg.toFixed(1)}</td><td class="r">${(l.ing.preco||0).toFixed(2)}</td><td class="r">${custoP.toFixed(2)}</td>${l.fixado?'<td class="c">🔒</td>':'<td></td>'}</tr>`
+  }).join('')
+  ingRows+=`<tr class="total"><td></td><td>TOTAL</td><td class="r">${totalPct.toFixed(2)}%</td><td class="r">${(totalPct*batchSize/100).toFixed(1)}</td><td></td><td class="r">${res.custo.toFixed(2)}</td><td></td></tr>`
+
+  const especieKeys=getNutsParaEspecie(f.especie)
+  const nutGarantia=allNuts.filter(n=>(res.nutrientes[n.k]||0)>0&&especieKeys.includes(n.k)&&!isAditivo(n.k))
+  const nutAditivos=allNuts.filter(n=>(res.nutrientes[n.k]||0)>0&&isAditivo(n.k))
+  const nutOutros=allNuts.filter(n=>(res.nutrientes[n.k]||0)>0&&!especieKeys.includes(n.k)&&!isAditivo(n.k))
+
+  function makeNutRow(n){
+    const v=res.nutrientes[n.k],ex=exigSel?.nuts?.[n.k]
+    const mn=ex?pN(ex.min):0,mx=ex?pN(ex.max):0
+    let cls='',badge=''
+    if(ex){
+      if(mn&&v<mn){cls='low';badge='<span class="tag tag-low">↓ ABAIXO</span>'}
+      else if(mx&&v>mx){cls='high';badge='<span class="tag tag-high">↑ ACIMA</span>'}
+      else{cls='ok';badge='<span class="tag tag-ok">✓ OK</span>'}
+    }
+    return`<tr><td>${n.l}</td><td class="r ${cls}" style="font-weight:700">${v.toFixed(3)}</td><td class="r">${mn||'—'}</td><td class="r">${mx||'—'}</td><td>${n.u}</td><td class="c">${badge}</td></tr>`
+  }
+  const garantiaRows=nutGarantia.map(makeNutRow).join('')
+  const aditivoRows=nutAditivos.map(n=>`<tr><td>${n.l}</td><td class="r" style="font-weight:700;color:#d4880a">${res.nutrientes[n.k].toFixed(3)}</td><td></td><td></td><td>${n.u}</td><td></td></tr>`).join('')
+  const outrosRows=nutOutros.map(n=>`<tr><td>${n.l}</td><td class="r">${res.nutrientes[n.k].toFixed(3)}</td><td></td><td></td><td>${n.u}</td><td></td></tr>`).join('')
+
+  openReport(f.nome,`
+    <div class="header"><div><h1>${f.nome}</h1><div class="sub">Relatório de Formulação</div></div><div class="logo">FeedOptimize<span>Formulação Animal</span></div></div>
+    <div class="meta"><div><b>Data:</b> ${new Date().toLocaleDateString('pt-BR')}</div>${f.especie?`<div><b>Espécie:</b> ${f.especie}</div>`:''}<div><b>Misturador:</b> ${batchSize} kg</div>${exigSel?`<div><b>Exigência:</b> ${exigSel.especie} — ${exigSel.fase}</div>`:''}<div><b>Custo:</b> R$ ${res.custo.toFixed(2)}/t</div></div>
+    <h2>Composição de Ingredientes</h2>
+    <table><thead><tr><th>#</th><th>Ingrediente</th><th class="r">%</th><th class="r">kg (${batchSize})</th><th class="r">R$/kg</th><th class="r">R$/t</th><th class="c">Fix</th></tr></thead><tbody>${ingRows}</tbody></table>
+    <h2>Níveis de Garantia${f.especie?' — '+f.especie:''}${exigSel?' (Exigência: '+exigSel.especie+' / '+exigSel.fase+')':''}</h2>
+    <table><thead><tr><th>Nutriente</th><th class="r">Valor</th><th class="r">Mín</th><th class="r">Máx</th><th>Unidade</th><th class="c">Status</th></tr></thead><tbody>${garantiaRows}</tbody></table>
+    ${aditivoRows?`<h2>💊 Aditivos & Medicamentos</h2>
+    <table><thead><tr><th>Aditivo</th><th class="r">Nível na Ração</th><th></th><th></th><th>Unidade</th><th></th></tr></thead><tbody>${aditivoRows}</tbody></table>`:''}
+    ${outrosRows?`<h2>Outros Nutrientes Calculados</h2>
+    <table><thead><tr><th>Nutriente</th><th class="r">Valor</th><th></th><th></th><th>Unidade</th><th></th></tr></thead><tbody>${outrosRows}</tbody></table>`:''}
+    <div class="footer"><div>FeedOptimize — Formulação Animal</div><div>Gerado em ${new Date().toLocaleString('pt-BR')}</div></div>`)
+  toast('Relatório PDF gerado','ok')
+}
+
+// ══════════════════════════════════════════════════════
+// RELATÓRIO 2: LISTA DE ALIMENTOS
+// ══════════════════════════════════════════════════════
+function exportAlimentosPDF(){
+  const sorted=[...ings].sort((a,b)=>a.nome.localeCompare(b.nome))
+  const mainNuts=allNuts.filter(n=>MAIN_NUTS.includes(n.k))
+  let rows=sorted.map((ing,i)=>{
+    const nutCells=mainNuts.map(n=>`<td class="r">${ing.nutrientes[n.k]?fmtN(ing.nutrientes[n.k],2):'—'}</td>`).join('')
+    return`<tr><td>${i+1}</td><td><b>${ing.nome}</b></td><td class="r">${ing.preco?'R$ '+ing.preco.toFixed(2):'—'}</td>${nutCells}</tr>`
+  }).join('')
+  const nutHeaders=mainNuts.map(n=>`<th class="r" title="${n.l}">${n.k}</th>`).join('')
+  openReport('Alimentos',`
+    <div class="header"><div><h1>Cadastro de Alimentos</h1><div class="sub">${ings.length} ingredientes registrados</div></div><div class="logo">FeedOptimize<span>Formulação Animal</span></div></div>
+    <div class="meta"><div><b>Data:</b> ${new Date().toLocaleDateString('pt-BR')}</div><div><b>Total:</b> ${ings.length} alimentos</div></div>
+    <h2>Lista de Alimentos e Composição Nutricional</h2>
+    <table style="font-size:9px"><thead><tr><th>#</th><th>Alimento</th><th class="r">R$/kg</th>${nutHeaders}</tr></thead><tbody>${rows}</tbody></table>
+    <div class="footer"><div>FeedOptimize — Formulação Animal</div><div>Gerado em ${new Date().toLocaleString('pt-BR')}</div></div>`)
+  toast('Relatório de Alimentos gerado','ok')
+}
+
+// ══════════════════════════════════════════════════════
+// RELATÓRIO 3: LISTA DE EXIGÊNCIAS
+// ══════════════════════════════════════════════════════
+function exportExigenciasPDF(){
+  const sorted=[...exigs].sort((a,b)=>(a.especie+a.fase).localeCompare(b.especie+b.fase))
+  const mainNuts=allNuts.filter(n=>MAIN_NUTS.includes(n.k))
+  let espAtual='',html=''
+  sorted.forEach((e,i)=>{
+    if(e.especie!==espAtual){espAtual=e.especie;html+=`<h2>${e.especie} ${e.fonte?'<span class="badge tag-info">'+e.fonte+'</span>':''}</h2>`}
+    const nutCells=mainNuts.map(n=>{
+      const ex=e.nuts[n.k]
+      if(!ex)return'<td class="c" style="color:#ccc">—</td>'
+      const mn=pN(ex.min),mx=pN(ex.max)
+      return`<td class="c">${mn?mn:'—'} / ${mx?mx:'—'}</td>`
+    }).join('')
+    html+=`${i===0||e.especie!==sorted[i-1]?.especie?`<table style="font-size:9px;margin-bottom:14px"><thead><tr><th>Fase</th><th class="c">Fonte</th>${mainNuts.map(n=>`<th class="c" title="${n.l}">${n.k}<br><span style="font-weight:400;font-size:8px">mín/máx</span></th>`).join('')}</tr></thead><tbody>`:''}<tr><td><b>${e.fase}</b></td><td class="c"><span class="badge tag-info">${e.fonte||'—'}</span></td>${nutCells}</tr>${i===sorted.length-1||sorted[i+1]?.especie!==e.especie?'</tbody></table>':''}`
+  })
+  openReport('Exigências',`
+    <div class="header"><div><h1>Tabela de Exigências Nutricionais</h1><div class="sub">${exigs.length} exigências cadastradas</div></div><div class="logo">FeedOptimize<span>Formulação Animal</span></div></div>
+    <div class="meta"><div><b>Data:</b> ${new Date().toLocaleDateString('pt-BR')}</div><div><b>Total:</b> ${exigs.length} exigências</div><div><b>Fontes:</b> FO (FeedOptimize), SPC (SuperCrac), USR (Manual)</div></div>
+    ${html}
+    <div class="footer"><div>FeedOptimize — Formulação Animal</div><div>Gerado em ${new Date().toLocaleString('pt-BR')}</div></div>`)
+  toast('Relatório de Exigências gerado','ok')
+}
+
+// ══════════════════════════════════════════════════════
+// RELATÓRIO 4: LISTA DE RAÇÕES/FÓRMULAS
+// ══════════════════════════════════════════════════════
+function exportFormulasPDF(){
+  let rows=formulas.map((f,i)=>{
+    const res=calcFmla(f.linhas)
+    const nIng=f.linhas.filter(l=>l.ing).length
+    const totalPct=gToPct(f.linhas.reduce((s,l)=>s+(l.qtd||0),0))
+    const tops=f.linhas.filter(l=>l.ing&&l.qtd>0).sort((a,b)=>b.qtd-a.qtd).slice(0,3).map(l=>l.ing.nome+' '+gToPct(l.qtd).toFixed(1)+'%').join(', ')
+    return`<tr><td>${i+1}</td><td><b>${f.nome}</b></td><td class="r">${nIng}</td><td class="r">${totalPct.toFixed(1)}%</td><td class="r">${res.custo>0?'R$ '+res.custo.toFixed(2):'—'}</td><td class="r">${res.nutrientes.PB?res.nutrientes.PB.toFixed(1):'—'}</td><td class="r">${res.nutrientes.NDT?res.nutrientes.NDT.toFixed(1):'—'}</td><td style="font-size:9px;color:#666">${tops||'—'}</td></tr>`
+  }).join('')
+  openReport('Rações',`
+    <div class="header"><div><h1>Lista de Rações / Fórmulas</h1><div class="sub">${formulas.length} fórmulas cadastradas</div></div><div class="logo">FeedOptimize<span>Formulação Animal</span></div></div>
+    <div class="meta"><div><b>Data:</b> ${new Date().toLocaleDateString('pt-BR')}</div><div><b>Total:</b> ${formulas.length} fórmulas</div></div>
+    <h2>Resumo de Todas as Fórmulas</h2>
+    <table><thead><tr><th>#</th><th>Nome da Fórmula</th><th class="r">Ing.</th><th class="r">Total</th><th class="r">Custo/t</th><th class="r">PB</th><th class="r">NDT</th><th>Principais Ingredientes</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="footer"><div>FeedOptimize — Formulação Animal</div><div>Gerado em ${new Date().toLocaleString('pt-BR')}</div></div>`)
+  toast('Relatório de Rações gerado','ok')
+}
+
+// ══════════════════════════════════════════════════════
+// DRAG-AND-DROP INGREDIENTES
+// ══════════════════════════════════════════════════════
+let _dragId=null
+function onDragStart(e,lid){_dragId=lid;e.dataTransfer.effectAllowed='move';e.target.closest('tr').style.opacity='.4'}
+function onDragEnd(e){_dragId=null;e.target.closest('tr').style.opacity='1'}
+function onDragOver(e){e.preventDefault();e.dataTransfer.dropEffect='move'}
+function onDrop(e,targetId){
+  e.preventDefault()
+  if(_dragId===null||_dragId===targetId)return
+  const f=getFml()
+  const fromIdx=f.linhas.findIndex(l=>l.id===_dragId)
+  const toIdx=f.linhas.findIndex(l=>l.id===targetId)
+  if(fromIdx<0||toIdx<0)return
+  const [moved]=f.linhas.splice(fromIdx,1)
+  f.linhas.splice(toIdx,0,moved)
+  saveFormulas();renderFmlBody()
+}
+
+// ══════════════════════════════════════════════════════
+// ATALHOS DE TECLADO
+// ══════════════════════════════════════════════════════
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT'||e.target.tagName==='TEXTAREA'){
+    if(e.key==='Escape'){e.target.blur();return}
+    if(!(e.ctrlKey||e.metaKey))return
+  }
+  if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();salvarFormula()}
+  if((e.ctrlKey||e.metaKey)&&e.key==='o'){e.preventDefault();if(solverAberto)runSolver();else{toggleSolver();setTimeout(()=>document.getElementById('btn-solve')?.focus(),200)}}
+  if((e.ctrlKey||e.metaKey)&&e.key==='e'){e.preventDefault();exportCSV()}
+  if((e.ctrlKey||e.metaKey)&&e.key==='p'&&e.shiftKey){e.preventDefault();exportPDF()}
+})
+
+// ══════════════════════════════════════════════════════
+// HISTÓRICO DE OTIMIZAÇÕES
+// ══════════════════════════════════════════════════════
+async function loadHistorico(){
+  const body=document.getElementById('hist-body')
+  const cnt=document.getElementById('hist-count')
+  if(!_currentUser||!getSB()){
+    body.innerHTML='<div style="padding:32px;text-align:center;color:var(--muted)">Faça login para ver o histórico.</div>'
+    return
+  }
+  body.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted)">Carregando...</div>'
+  try{
+    const {data,error}=await getSB().from('otimizacoes')
+      .select('id,status,custo_t,total_g_t,especie,fase,tempo_ms,msg,created_at,candidatos,exig_nuts')
+      .order('created_at',{ascending:false}).limit(100)
+    if(error)throw error
+    cnt.textContent=data.length+' registros'
+    if(!data.length){
+      body.innerHTML='<div style="padding:32px;text-align:center;color:var(--muted)">Nenhuma otimização registrada ainda.</div>'
+      return
+    }
+    body.innerHTML=`<table>
+      <thead><tr>
+        <th>Data/Hora</th><th>Espécie/Fase</th><th>Status</th>
+        <th style="text-align:right">Custo/t</th><th style="text-align:right">Total g/t</th>
+        <th style="text-align:right">Tempo</th><th>Msg</th>
+      </tr></thead>
+      <tbody>${data.map(r=>`<tr>
+        <td>${new Date(r.created_at).toLocaleString('pt-BR')}</td>
+        <td>${h(r.especie||'—')} / ${h(r.fase||'—')}</td>
+        <td><span class="hist-status hist-${r.status==='optimal'?'ok':'err'}">${r.status==='optimal'?'✓ Ótimo':'✗ Inviável'}</span></td>
+        <td style="text-align:right;font-weight:700;color:var(--earth)">${r.custo_t?fmtR(r.custo_t):'—'}</td>
+        <td style="text-align:right">${r.total_g_t?fmtN(r.total_g_t,0):'—'}</td>
+        <td style="text-align:right;color:var(--muted)">${r.tempo_ms?r.tempo_ms+'ms':'—'}</td>
+        <td style="font-size:11px;color:var(--muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(r.msg||'')}</td>
+      </tr>`).join('')}</tbody>
+    </table>`
+  } catch(e){
+    body.innerHTML=`<div style="padding:20px;color:var(--red)">Erro: ${h(e.message)}</div>`
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// IMPORTAR SuperCrac ZIP
+// ══════════════════════════════════════════════════════
+async function importSupercracZip(file){
+  if(!file)return;
+  if(typeof JSZip==='undefined'){toast('JSZip nao carregado. Verifique conexao.','err');return;}
+  toast('Lendo arquivo ZIP...','info');
+
+  // CSV parser with quoted-field support
+  function parseCSV(text){
+    const rows=[];let r=[],f='',inQ=false;
+    for(let i=0;i<text.length;i++){
+      const c=text[i];
+      if(inQ){if(c==='"'){if(text[i+1]==='"'){f+='"';i++;}else inQ=false;}else f+=c;}
+      else{
+        if(c==='"')inQ=true;
+        else if(c===','){r.push(f.trim());f='';}
+        else if(c==='\n'||c==='\r'){if(c==='\r'&&text[i+1]==='\n')i++;r.push(f.trim());if(r.length>1||r[0]!=='')rows.push(r);r=[];f='';}
+        else f+=c;
+      }
+    }
+    r.push(f.trim());if(r.length>1||r[0]!=='')rows.push(r);
+    return rows;
+  }
+
+  // Read a named CSV from the zip (case-insensitive, ignores folder path)
+  async function readCSV(zip,name){
+    const fn=Object.keys(zip.files).find(k=>k.toLowerCase().replace(/.*[\/\\]/,'')===name.toLowerCase());
+    if(!fn)return[];
+    const txt=await zip.files[fn].async('string');
+    const rows=parseCSV(txt);if(rows.length<2)return[];
+    const hdr=rows[0].map(h=>h.toLowerCase().replace(/\s/g,'_'));
+    return rows.slice(1).map(r=>{const o={};hdr.forEach((h,i)=>o[h]=r[i]||'');return o;});
+  }
+
+  // SuperCrac cod_nutriente -> FeedOptimize key
+  const COD_MAP={
+    '1':'Ca_min','27':'PB','10':'FB','13':'EE','230':'EE',
+    '11':'P','12':'P_disp','28':'Na','90':'Mg','88':'S','53':'Cl',
+    '87':'Cu','93':'Zn','92':'Se','91':'Mn','44':'Fe',
+    '86':'Co','89':'I',
+    '41':'VitA','123':'VitD3','124':'VitE','110':'VitC',
+    '19':'NDT','7':'EM_aves','8':'EM_bov','9':'EM_sui','107':'EM_cod',
+    '3':'ED_bov','6':'ED_sui','22':'K',
+    '15':'Lis','18':'Met','17':'Met_Cis',
+    '29':'Tre','30':'Trp','56':'Arg','57':'Val','58':'Leu','59':'His','63':'Ile',
+    '33':'FDN','34':'FDA','52':'MM','2':'Cinzas','51':'Amido'
+  };
+
+  // Generate abbreviated key from nutrient name (fallback for unmapped codes)
+  function makeKey(nome){
+    return nome.replace(/[^A-Za-z0-9 ]/g,'').split(/\s+/)
+      .map(w=>w.charAt(0).toUpperCase()+w.slice(1,4).toLowerCase())
+      .join('').substring(0,12)||'Nut';
+  }
+
+  try {
+    const zip=await JSZip.loadAsync(file);
+
+    const [nutrientesCSV,alimentosCSV,composicaoCSV,especiesCSV,exigenciasCSV,racoesCSV,ingRacoesCSV]=
+      await Promise.all([
+        readCSV(zip,'nutrientes.csv'),readCSV(zip,'alimentos.csv'),
+        readCSV(zip,'composicao.csv'),readCSV(zip,'especies.csv'),
+        readCSV(zip,'exigencias.csv'),readCSV(zip,'racoes.csv'),
+        readCSV(zip,'ingredientes_racoes.csv')
+      ]);
+
+    toast(`ZIP lido: ${nutrientesCSV.length} nutr, ${alimentosCSV.length} alim, ${composicaoCSV.length} comp, ${exigenciasCSV.length} exig, ${racoesCSV.length} rac`,'info',4000);
+
+    let cntN=0,cntI=0,cntE=0,cntF=0;
+
+    // -- 1) Map nutrient codes to FeedOptimize keys & compute conversion factor --
+    // composicao.csv values * multiplicador = value in sigla_unidade.
+    // FeedOptimize stores per-kg: if sigla="%" we need g/kg (extra *10), otherwise direct.
+    const nutMap={}; // cod -> {key,label,unit,conv}
+    const U_NORM={'%':'g/kg','g/Kg':'g/kg','mg/Kg':'mg/kg','mg/kg':'mg/kg',
+      'UI/kg':'UI/kg','UI/Kg':'UI/kg','mcg/kg':'mcg/kg','mcg/Kg':'mcg/kg',
+      'kcal/kg':'kcal/kg','kcal/Kg':'kcal/kg','UFC/kg':'UFC/kg','UFC/KG':'UFC/kg',
+      'FTU/kg':'FTU/kg',
+      'Mcal/Kg':'kcal/kg','Mcal/kg':'kcal/kg',
+      'UI (1000)/Kg':'UI/kg','UI (1000)/kg':'UI/kg'};
+
+    for(const n of nutrientesCSV){
+      const cod=n.cod, nome=(n.nome||'').trim(), sigla=(n.sigla_unidade||'').trim();
+      const mult=parseFloat(n.multiplicador)||1;
+      let key=COD_MAP[cod];
+      const unit=U_NORM[sigla]||'g/kg';
+      const label=nome.charAt(0).toUpperCase()+nome.slice(1).toLowerCase();
+      if(!key){
+        key=makeKey(nome);
+        let base=key,suf=2;
+        while(allNuts.find(x=>x.k===key)||Object.values(nutMap).find(x=>x.key===key))key=base+(suf++);
+      }
+      let conv=mult;
+      if(sigla==='%') conv=mult*10; // % -> g/kg
+      else if(sigla==='Mcal/Kg'||sigla==='Mcal/kg') conv=mult*1000; // Mcal -> kcal/kg
+      else if(sigla==='UI (1000)/Kg'||sigla==='UI (1000)/kg') conv=mult*1000; // kIU -> IU/kg
+      nutMap[cod]={key,label,unit,conv};
+    }
+
+    // Ensure all nutrient keys exist in allNuts
+    const seen=new Set();
+    for(const m of Object.values(nutMap)){
+      if(seen.has(m.key))continue;seen.add(m.key);
+      if(!allNuts.find(n=>n.k===m.key)){allNuts.push({k:m.key,l:m.label,u:m.unit});cntN++;}
+    }
+
+    // -- 2) Import alimentos + composicao as ingredients --
+    const compMap={};
+    for(const c of composicaoCSV){
+      if(!compMap[c.cod_alimento])compMap[c.cod_alimento]=[];
+      compMap[c.cod_alimento].push({cod:c.cod_nutriente,v:parseFloat(c.qtde)||0});
+    }
+
+    const alimCodNome={};
+    for(const a of alimentosCSV) alimCodNome[a.cod]=(a.nome||'').trim();
+
+    for(const a of alimentosCSV){
+      const nome=(a.nome||'').trim();if(!nome)continue;
+      const nutrientes={};
+      for(const c of (compMap[a.cod]||[])){
+        const m=nutMap[c.cod];if(!m)continue;
+        const val=c.v*m.conv;
+        if(val&&!nutrientes[m.key]) nutrientes[m.key]=Math.round(val*10000)/10000;
+      }
+      const existente=ings.find(i=>i.nome.toUpperCase()===nome.toUpperCase());
+      if(existente){
+        // Atualizar nutrientes do existente (merge — SuperCrac vence)
+        Object.assign(existente.nutrientes,nutrientes);
+        if(parseFloat(a.custo)>0&&!existente.preco) existente.preco=parseFloat(a.custo);
+      } else {
+        const id=Date.now()+cntI+Math.floor(Math.random()*9999);
+        ings.push({id,nome,preco:parseFloat(a.custo)||0,nutrientes});
+      }
+      cntI++;
+    }
+
+    // -- 3) Import exigencias grouped by racao --
+    const exigGrp={};
+    for(const e of exigenciasCSV){
+      const cr=e.cod_racao;
+      if(!exigGrp[cr])exigGrp[cr]={nome:e.nome_racao,especie:e.especie,nuts:[]};
+      exigGrp[cr].nuts.push({cod:e.cod_nutriente,mn:parseFloat(e.qtde_min)||0,mx:parseFloat(e.qtde_max)||0});
+    }
+
+    for(const[,grp] of Object.entries(exigGrp)){
+      const especie=(grp.especie||'').trim(), fase=(grp.nome||'').trim();
+      if(!fase)continue;
+      const nuts={};
+      for(const n of grp.nuts){
+        const m=nutMap[n.cod];if(!m)continue;
+        const hasMin=n.mn>0, hasMax=n.mx<999999;
+        if(!hasMin&&!hasMax)continue;
+        const entry={};
+        if(hasMin) entry.min=Math.round(n.mn*m.conv*10000)/10000;
+        if(hasMax) entry.max=Math.round(n.mx*m.conv*10000)/10000;
+        if(Object.keys(entry).length) nuts[m.key]=entry;
+      }
+      if(!Object.keys(nuts).length) continue;
+      const existing=exigs.find(x=>x.especie.toUpperCase()===especie.toUpperCase()&&x.fase.toUpperCase()===fase.toUpperCase());
+      if(existing){
+        // Atualiza FO-padrão (FO) com dados do SuperCrac; preserva customizações do usuário (USR)
+        if(existing.fonte==='USR') continue;
+        existing.nuts=nuts; existing.fonte='SPC'; cntE++;
+      } else {
+        const id=Date.now()+cntE+Math.floor(Math.random()*9999);
+        exigs.push({id,especie,fase,nuts,fonte:'SPC'});
+        cntE++;
+      }
+    }
+
+    // -- 4) Import racoes + ingredientes_racoes as formulas --
+    // SuperCrac ingredientes_racoes:
+    //   qtde     = kg por lote (variável: lote 100 kg ou 1000 kg — normalizamos para %)
+    //   qtde_min = % mínimo (já em %)
+    //   qtde_max = % máximo (já em %; 100 = sem limite)
+    const irMap={};
+    for(const ir of ingRacoesCSV){
+      if(!irMap[ir.cod_racao])irMap[ir.cod_racao]=[];
+      irMap[ir.cod_racao].push(ir);
+    }
+
+    for(const r of racoesCSV){
+      const nome=(r.nome||'').trim();if(!nome)continue;
+      if(r.tipo==='0') continue; // pular templates padrão UFV — só importar criadas pelo usuário
+      const existing=formulas.find(f=>f.nome.toUpperCase()===nome.toUpperCase());
+      if(existing&&existing.fonte!=='SPC') continue; // preserva fórmulas criadas no FO
+      const fid=existing?existing.id:Date.now()+cntF+Math.floor(Math.random()*9999);
+      const irList=irMap[r.cod]||[];
+      // soma total do lote para normalizar kg → %
+      const totalQtde=irList.reduce((s,ir)=>s+(parseFloat(ir.qtde)||0),0);
+      if(!totalQtde) continue;
+      const linhas=[];
+      for(const ir of irList){
+        const ingNome=(ir.nome_alimento||'').trim()||alimCodNome[ir.cod_alimento]||'';
+        const ingObj=ings.find(i=>i.nome.toUpperCase()===ingNome.toUpperCase())||null;
+        const qtde=parseFloat(ir.qtde)||0;
+        const qMin=parseFloat(ir.qtde_min)||0;  // já em %
+        const qMax=parseFloat(ir.qtde_max)||0;   // já em %
+        if(!ingNome&&!qtde) continue;
+        const pct=(qtde/totalQtde)*100; // normaliza para %
+        linhas.push({
+          id:Date.now()+linhas.length+Math.floor(Math.random()*99999),
+          ing:ingObj?{id:ingObj.id,nome:ingObj.nome,preco:ingObj.preco,nutrientes:ingObj.nutrientes}
+             :ingNome?{id:null,nome:ingNome,preco:0,nutrientes:{}}:null,
+          qtd:pctToG(pct),
+          qtdMin:qMin>0?pctToG(qMin):0,
+          qtdMax:(qMax>0&&qMax<100)?pctToG(qMax):0
+        });
+      }
+      if(!linhas.length) continue;
+      const especie=(r.especie||'').trim();
+      const fase='';
+      if(existing){
+        existing.linhas=linhas; existing.especie=especie; existing.fonte='SPC';
+      } else {
+        formulas.push({id:fid,nome,especie,fase,linhas,fonte:'SPC'});
+      }
+      cntF++;
+    }
+
+    // -- 5) Save & refresh UI --
+    saveNuts();saveIngs();saveExigs();saveFormulas();
+    updateExigSelect();renderFml();renderExigList();renderAlimList();renderNutList();
+
+    toast(`Importacao concluida! ${cntN} nutrientes, ${cntI} ingredientes, ${cntE} exigencias, ${cntF} formulas.`,'ok',6000);
+
+  } catch(err){
+    console.error('Erro importacao SuperCrac:',err);
+    toast('Erro ao importar: '+err.message,'err',5000);
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// INICIALIZAÇÃO
+// ══════════════════════════════════════════════════════
+(async()=>{
+  // Mostrar aviso se Supabase não configurado
+  if(!SB_CONFIGURED){
+    document.getElementById('sb-config-warn').style.display='block'
+    setSyncBadge('local')
+  }
+
+  // Carregar dados locais primeiro (offline-first)
+  loadStorage()
+  updateExigSelect()
+  renderFml()
+
+  // Tentar conectar Supabase em background
+  if(SB_CONFIGURED){
+    getSB().auth.onAuthStateChange(async(event, session)=>{
+      await onAuthChange(session)
+      if(event==='SIGNED_IN') renderFml()
+    })
+    // Verificar sessão existente
+    const {data:{session}} = await getSB().auth.getSession()
+    if(session){
+      await onAuthChange(session)
+    } else {
+      setSyncBadge('offline')
+      // Mostrar login automaticamente se nunca logou
+      const jaTeveSessao = localStorage.getItem('fo_teve_sessao')
+      if(!jaTeveSessao) showLogin()
+    }
+  }
+})();
+</script>
+</body>
+</html>

@@ -2,14 +2,49 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 
 
-PlanStatus = Literal["draft", "approved", "needs_revision", "superseded", "discarded"]
-RunStatus = Literal[
-    "queued", "running", "blocked", "review", "completed", "failed", "cancelled"
+PlanStatus = Literal[
+    "draft",
+    "approved",
+    "needs_revision",
+    "superseded",
+    "discarded",
 ]
-AgentName = Literal["codex", "claude", "kimi", "qwen"]
+
+RunStatus = Literal[
+    "queued",
+    "running",
+    "blocked",
+    "review",
+    "completed",
+    "failed",
+    "cancelled",
+]
+
+AgentName = Literal[
+    "codex",
+    "claude",
+    "kimi",
+    "qwen",
+    "gemini",
+]
+
+RoutingMode = Literal["manual", "auto"]
+
+ComplexityLevel = Literal[
+    "low",
+    "medium",
+    "high",
+    "critical",
+]
 
 
 class PlanCreate(BaseModel):
@@ -17,11 +52,13 @@ class PlanCreate(BaseModel):
 
     backlog_id: UUID
     title: str | None = Field(
-        default=None, min_length=3,
+        default=None,
+        min_length=3,
         validation_alias=AliasChoices("title", "titulo"),
     )
     objective: str = Field(
-        min_length=3, validation_alias=AliasChoices("objective", "objetivo")
+        min_length=3,
+        validation_alias=AliasChoices("objective", "objetivo"),
     )
     scope: str | None = None
     constraints: list[str] = Field(default_factory=list)
@@ -35,11 +72,13 @@ class PlanUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     title: str | None = Field(
-        default=None, min_length=3,
+        default=None,
+        min_length=3,
         validation_alias=AliasChoices("title", "titulo"),
     )
     objective: str | None = Field(
-        default=None, min_length=3,
+        default=None,
+        min_length=3,
         validation_alias=AliasChoices("objective", "objetivo"),
     )
     status: Literal["discarded"] | None = None
@@ -65,7 +104,26 @@ class PlanOut(PlanCreate):
 
 
 class BuildRequest(BaseModel):
-    agent: AgentName
+    routing_mode: RoutingMode = "manual"
+    agent: AgentName | None = None
+    model: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=120,
+    )
+    reasoning_effort: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=16,
+    )
+
+    @model_validator(mode="after")
+    def validate_manual_agent(self):
+        if self.routing_mode == "manual" and self.agent is None:
+            raise ValueError(
+                "agent é obrigatório quando routing_mode=manual"
+            )
+        return self
 
 
 class RunUpdate(BaseModel):
@@ -85,7 +143,17 @@ class RunOut(BaseModel):
     id: UUID
     plan_id: UUID
     backlog_id: UUID
+
     agent: AgentName
+    model: str | None = None
+    reasoning_effort: str | None = None
+
+    complexity: ComplexityLevel | None = None
+    complexity_score: int | None = None
+
+    routing_mode: RoutingMode
+    routing_reason: str | None = None
+
     status: RunStatus
     summary: str | None = None
     result: str | None = None
@@ -97,6 +165,7 @@ class RunOut(BaseModel):
     finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
     task_title: str | None = None
     project_id: UUID | None = None
     project_name: str | None = None
@@ -109,7 +178,10 @@ class RunTransfer(BaseModel):
 
 
 class RunEventCreate(BaseModel):
-    event_type: str = Field(min_length=2, max_length=40)
+    event_type: str = Field(
+        min_length=2,
+        max_length=40,
+    )
     message: str | None = None
     payload: dict = Field(default_factory=dict)
 

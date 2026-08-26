@@ -11,7 +11,8 @@ from app.services.handoff import (
 
 class HandoffContractTest(unittest.TestCase):
     def test_supported_agents_include_all_build_agents(self):
-        self.assertEqual(SUPPORTED_AGENTS, {"codex", "claude", "kimi", "qwen"})
+        self.assertEqual(SUPPORTED_AGENTS, {"codex", "claude", "kimi", "qwen", "gemini"},
+)
 
     def test_terminal_states_cannot_transition(self):
         self.assertEqual(RUN_TRANSITIONS["completed"], set())
@@ -24,7 +25,17 @@ class HandoffContractTest(unittest.TestCase):
 
     def test_agent_prompt_contains_approved_contract_and_cli(self):
         context = {
-            "run": {"id": "run-123", "agent": "codex", "status": "queued"},
+            "run": {
+    "id": "run-123",
+    "agent": "codex",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "routing_mode": "manual",
+    "complexity": "high",
+    "complexity_score": 70,
+    "routing_reason": "Seleção manual pelo usuário",
+    "status": "queued",
+},
             "project": {
                 "name": "WorkDev", "slug": "workdev-core", "stack": "FastAPI + React",
                 "github_url": "https://example.invalid/repo", "dev_branch": "dev",
