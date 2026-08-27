@@ -26,11 +26,10 @@ LOG_TAG = "agents-healthcheck"
 AGENTS = {
     "claude": ("code", [str(WORKDEV_DIR / "scripts/start_claude_agent.sh")]),
     "codex": ("codex", [str(WORKDEV_DIR / "scripts/start_codex_agent.sh")]),
-    "kimi": (
-        "kimi",
-        ["env", "KIMI_PROVIDER=openrouter", str(WORKDEV_DIR / "scripts/start_kimi_agent.sh")],
+    "kimi": ("kimi",["env", "KIMI_PROVIDER=openrouter", str(WORKDEV_DIR / "scripts/start_kimi_agent.sh")],
     ),
     "qwen": ("qwen", [str(WORKDEV_DIR / "scripts/start_qwen_agent.sh")]),
+    "gemini": ("gemini", [str(WORKDEV_DIR / "scripts/start_gemini_agent.sh")]),
 }
 
 SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
@@ -192,7 +191,7 @@ def main() -> int:
     parser.add_argument("--no-restart", action="store_true", help="não recupera sessões offline")
     args = parser.parse_args()
     previous = read_previous_state()
-    always_on = {"claude", "codex"}
+    always_on = set()
     health = [
         inspect_agent(
             agent,

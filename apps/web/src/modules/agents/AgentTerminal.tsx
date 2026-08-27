@@ -5,10 +5,6 @@ import "@xterm/xterm/css/xterm.css"
 import type { AgentName } from "@/services/handoff.service"
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "busy" | "error"
-const labels: Record<ConnectionStatus, string> = {
-  connecting: "Conectando…", connected: "Conectado", disconnected: "Desconectado",
-  busy: "Em uso em outra janela", error: "Falha na conexão",
-}
 
 export function AgentTerminal({ agent, awaitingApproval = false }: { agent: AgentName; awaitingApproval?: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -299,15 +295,17 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
     URL.revokeObjectURL(url)
   }
 
-  const active = status === "connected"
+  const active = taskRunning
   const standby = true
   return (
     <section className="relative flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
       <div className="flex shrink-0 flex-col border-b border-slate-800">
         <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 py-1 text-sm sm:px-4">
           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${active ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-red-400"}`} />
-          <span className="truncate">{labels[status]}</span>
-          {active && (
+          <span className="truncate">
+          {status === "connecting" ? "Conectando…" : active ? "Conectado" : "Desconectado"}
+            </span>
+           {active && (
             <span className="truncate text-slate-500" title={processName || undefined}>
               • {taskRunning ? `ativo${processName ? `: ${processName}` : ""}` : "aguardando"}
             </span>
