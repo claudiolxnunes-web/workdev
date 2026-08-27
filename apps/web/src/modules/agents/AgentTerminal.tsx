@@ -255,7 +255,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
   async function reconnect() {
     if (sessionAction) return
     setSessionError("")
-    if (agent === "kimi" || agent === "qwen") {
+    if (["claude", "codex", "kimi", "qwen", "gemini"].includes(agent)) {
       setSessionAction("start")
       try {
         const response = await fetch(`/api/agents/${agent}/session`, { method: "POST" })
@@ -272,7 +272,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
   }
 
   async function disconnect() {
-    if (sessionAction || (agent !== "kimi" && agent !== "qwen")) return
+    if (sessionAction) return
     setSessionAction("stop")
     setSessionError("")
     try {
@@ -300,7 +300,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
   }
 
   const active = status === "connected"
-  const standby = agent === "kimi" || agent === "qwen"
+  const standby = true
   return (
     <section className="relative flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
       <div className="flex shrink-0 flex-col border-b border-slate-800">
@@ -427,3 +427,4 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
     </section>
   )
 }
+
