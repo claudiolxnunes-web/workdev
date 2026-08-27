@@ -39,7 +39,7 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
     async def test_all_agents_have_isolated_tmux_sessions(self):
         self.assertEqual(
             ALLOWED_SESSIONS,
-            {"claude": "code", "codex": "codex", "kimi": "kimi", "qwen": "qwen"},
+            {"claude": "code", "codex": "codex", "kimi": "kimi", "qwen": "qwen", "gemini": "gemini"},
         )
 
     async def test_output_sender_stops_when_websocket_disconnects(self):
