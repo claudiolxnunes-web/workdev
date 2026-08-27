@@ -197,10 +197,14 @@ class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
         run.return_value.stderr = "can't find session: kimi"
         self.assertFalse(_stop_standby_session("kimi"))
 
-    async def test_always_on_agents_cannot_be_stopped(self):
-        with self.assertRaises(HTTPException) as ctx:
-            await stop_agent_session("codex")
-        self.assertEqual(ctx.exception.status_code, 409)
+    @patch("app.routers.terminal._stop_standby_session", return_value=True)
+    async def test_codex_can_be_stopped_as_standby(self, stop):
+        result = await stop_agent_session("codex")
+        stop.assert_called_once_with("codex")
+        self.assertEqual(
+            result,
+            {"agent": "codex", "running": False, "stopped": True},
+        )
 
     @patch("app.routers.terminal._start_standby_session", return_value=True)
     async def test_start_endpoint_reconnects_standby_agent(self, start):

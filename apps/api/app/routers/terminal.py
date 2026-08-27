@@ -25,6 +25,8 @@ ALLOWED_SESSIONS = {
     "gemini": "gemini",
 }
 STANDBY_COMMANDS = {
+    "claude": ["/opt/workdev/scripts/start_claude_agent.sh"],
+    "codex": ["/opt/workdev/scripts/start_codex_agent.sh"],
     "kimi": ["/opt/workdev/scripts/start_kimi_agent.sh"],
     "qwen": ["/opt/workdev/scripts/start_qwen_agent.sh"],
     "gemini": ["/opt/workdev/scripts/start_gemini_agent.sh"],
@@ -230,7 +232,7 @@ def _standby_session(agent: str) -> str:
     if agent not in STANDBY_COMMANDS:
         raise HTTPException(
             status_code=409,
-            detail="Claude Code e Codex são agentes always-on",
+            detail="Agente sem launcher standby configurado",
         )
     return session
 
