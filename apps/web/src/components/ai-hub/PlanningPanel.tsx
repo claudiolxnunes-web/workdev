@@ -15,7 +15,7 @@ const statusColor: Record<string, string> = {
   discarded: "bg-slate-800 text-slate-300",
 }
 const agentLabel: Record<AgentName, string> = {
-  claude: "Claude Code", codex: "Codex", kimi: "Kimi Code", qwen: "Qwen Code",
+  claude: "Claude Code", codex: "Codex", kimi: "Kimi Code", qwen: "Qwen Code", gemini: "Gemini",
 }
 
 export function PlanningPanel({ onClose }: { onClose: () => void }) {

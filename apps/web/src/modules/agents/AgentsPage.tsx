@@ -8,6 +8,7 @@ const AGENTS: Array<{ id: AgentName; label: string }> = [
   { id: "codex", label: "Codex" },
   { id: "kimi", label: "Kimi Code" },
   { id: "qwen", label: "Qwen Code" },
+  { id: "gemini", label: "Gemini" },
 ]
 
 const STATUS_POLL_MS = 5000

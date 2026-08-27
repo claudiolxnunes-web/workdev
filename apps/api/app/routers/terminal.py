@@ -22,10 +22,12 @@ ALLOWED_SESSIONS = {
     "codex": "codex",
     "kimi": "kimi",
     "qwen": "qwen",
+    "gemini": "gemini",
 }
 STANDBY_COMMANDS = {
     "kimi": ["/opt/workdev/scripts/start_kimi_agent.sh"],
     "qwen": ["/opt/workdev/scripts/start_qwen_agent.sh"],
+    "gemini": ["/opt/workdev/scripts/start_gemini_agent.sh"],
 }
 _active_connections: set[str] = set()
 _connections_lock = asyncio.Lock()
