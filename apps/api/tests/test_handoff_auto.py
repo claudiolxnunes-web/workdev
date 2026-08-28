@@ -2,8 +2,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from app.routers.handoffs import send_to_build
-from app.schemas.handoff import BuildRequest
+from app.routers.handoffs import send_to_build, update_agent_run
+from app.schemas.handoff import BuildRequest, RunUpdate
 from app.services.agent_router import RoutingDecision
 
 
@@ -133,6 +133,13 @@ class HandoffAutoRouteTest(unittest.TestCase):
                     "routing_mode": "auto",
                 },
             ),
+            patch(
+                "app.routers.handoffs.build_context",
+                return_value={"prompt": "mock prompt"},
+            ) as build_context_mock,
+            patch(
+                "app.routers.handoffs.start_agent_runtime",
+            ) as start_agent_mock,
         ):
             result = send_to_build(
                 plan_id="plan-1",
@@ -172,6 +179,17 @@ class HandoffAutoRouteTest(unittest.TestCase):
             event,
         )
 
+        build_context_mock.assert_called_once_with(
+            db,
+            run,
+        )
+
+        background.add_task.assert_called_once_with(
+            start_agent_mock,
+            "gemini",
+            "mock prompt",
+        )
+
         self.assertEqual(
             result["agent"],
             "gemini",
@@ -185,6 +203,75 @@ class HandoffAutoRouteTest(unittest.TestCase):
         self.assertEqual(
             result["routing_mode"],
             "auto",
+        )
+
+    def test_auto_stops_agent_when_run_completes(self):
+        db = Mock()
+        background = Mock()
+
+        run = SimpleNamespace(
+            id="run-1",
+            agent="gemini",
+            routing_mode="auto",
+            status="completed",
+        )
+
+        event = SimpleNamespace(
+            id="event-1",
+        )
+
+        payload = RunUpdate(
+            status="completed",
+        )
+
+        with (
+            patch(
+                "app.routers.handoffs._get_run",
+                return_value=run,
+            ),
+            patch(
+                "app.routers.handoffs.update_run",
+                return_value=(run, event),
+            ) as update_mock,
+            patch(
+                "app.routers.handoffs._sync_run",
+            ) as sync_mock,
+            patch(
+                "app.routers.handoffs.stop_agent_runtime",
+            ) as stop_agent_mock,
+            patch(
+                "app.routers.handoffs._run_out",
+                return_value={
+                    "id": "run-1",
+                    "agent": "gemini",
+                    "status": "completed",
+                    "routing_mode": "auto",
+                },
+            ),
+        ):
+            result = update_agent_run(
+                run_id="run-1",
+                payload=payload,
+                background=background,
+                db=db,
+            )
+
+        update_mock.assert_called_once()
+        sync_mock.assert_called_once_with(
+            background,
+            db,
+            run,
+            event,
+        )
+
+        background.add_task.assert_called_once_with(
+            stop_agent_mock,
+            "gemini",
+        )
+
+        self.assertEqual(
+            result["status"],
+            "completed",
         )
 
 

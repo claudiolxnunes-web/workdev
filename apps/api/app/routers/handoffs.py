@@ -37,6 +37,11 @@ from app.services.task_complexity import (
     classify_task,
 )
 
+from app.routers.terminal import (
+    start_agent_runtime,
+    stop_agent_runtime,
+)
+
 router = APIRouter(prefix="/handoffs", tags=["handoffs"])
 plans_router = APIRouter(prefix="/plans", tags=["plans"])
 
@@ -502,6 +507,17 @@ def send_to_build(
         event,
     )
 
+    if run.routing_mode == "auto":
+        context = build_context(
+            db,
+            run,
+        )
+        background.add_task(
+            start_agent_runtime,
+            run.agent,
+            context["prompt"],
+        )
+
     return _run_out(
         db,
         run,
@@ -610,6 +626,20 @@ def update_agent_run(
         event,
     )
 
+    if (
+        run.routing_mode == "auto"
+        and run.status in {
+            "completed",
+            "failed",
+            "cancelled",
+        }
+        and event is not None
+    ):
+        background.add_task(
+            stop_agent_runtime,
+            run.agent,
+        )
+
     return _run_out(
         db,
         run,
@@ -682,7 +712,6 @@ def create_run_event(
         payload.message,
         payload.payload,
     )
-
     db.commit()
     db.refresh(event)
 

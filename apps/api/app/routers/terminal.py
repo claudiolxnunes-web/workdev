@@ -1,3 +1,4 @@
+import time
 import asyncio
 import json
 import os
@@ -224,7 +225,6 @@ def _stop_standby_session(session: str) -> bool:
         return False
     raise RuntimeError(result.stderr.strip() or "Falha ao encerrar sessão tmux")
 
-
 def _standby_session(agent: str) -> str:
     session = ALLOWED_SESSIONS.get(agent)
     if not session:
@@ -236,6 +236,52 @@ def _standby_session(agent: str) -> str:
         )
     return session
 
+
+def start_agent_runtime(
+    agent: str,
+    prompt: str,
+    timeout_seconds: float = 15.0,
+) -> dict:
+    session = _standby_session(agent)
+    started = _start_standby_session(
+        agent,
+        session,
+    )
+
+    deadline = time.monotonic() + timeout_seconds
+
+    while time.monotonic() < deadline:
+        process = _current_process(session)
+
+        if (
+            process
+            and process not in _SHELL_PROCESSES
+        ):
+            _send_text(
+                session,
+                prompt,
+            )
+            return {
+                "agent": agent,
+                "session": session,
+                "started": started,
+                "process": process,
+            }
+
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        f"{agent}: sessão iniciou, mas a CLI não ficou pronta"
+    )
+
+
+def stop_agent_runtime(
+    agent: str,
+) -> bool:
+    session = _standby_session(agent)
+    return _stop_standby_session(
+        session,
+    )
 
 @router.post("/api/agents/{agent}/session")
 async def start_agent_session(agent: str):
