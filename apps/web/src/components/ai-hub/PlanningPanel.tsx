@@ -54,11 +54,11 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
     finally { setBusy(null) }
   }
 
-  async function build(plan: ExecutionPlan, agent: AgentName) {
+  async function build(plan: ExecutionPlan, agent?: AgentName) {
     setBusy(plan.id); setError(""); setMessage("")
     try {
       await sendToBuild(plan.id, agent)
-      setMessage(`Build enviado para ${agentLabel[agent]}.`)
+      setMessage(agent ? `Build enviado para ${agentLabel[agent]}.` : "Build enviado em modo AUTO.")
       await load()
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha no handoff") }
     finally { setBusy(null) }
@@ -142,6 +142,7 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
                 {["draft", "needs_revision"].includes(plan.status) && <button disabled={busy === plan.id} onClick={() => void approve(plan)} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm hover:bg-emerald-500 disabled:opacity-50">Aprovar plano</button>}
                 {plan.status === "draft" && <button disabled={busy === plan.id} onClick={() => setDiscardTarget(plan)} className="rounded-lg border border-red-800 px-3 py-2 text-sm text-red-300 hover:bg-red-950 disabled:opacity-50">Descartar</button>}
                 {plan.status === "approved" && <>
+                  <button disabled={busy === plan.id} onClick={() => void build(plan)} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm hover:bg-emerald-500 disabled:opacity-50">Enviar em AUTO</button>
                   <button disabled={busy === plan.id} onClick={() => void build(plan, "codex")} className="rounded-lg bg-sky-600 px-3 py-2 text-sm hover:bg-sky-500 disabled:opacity-50">Enviar ao Codex</button>
                   <button disabled={busy === plan.id} onClick={() => void build(plan, "claude")} className="rounded-lg bg-violet-600 px-3 py-2 text-sm hover:bg-violet-500 disabled:opacity-50">Enviar ao Claude</button>
                   <button disabled={busy === plan.id} onClick={() => void build(plan, "kimi")} className="rounded-lg bg-fuchsia-600 px-3 py-2 text-sm hover:bg-fuchsia-500 disabled:opacity-50">Enviar ao Kimi</button>

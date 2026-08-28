@@ -99,9 +99,13 @@ export async function approvePlan(id: string): Promise<ExecutionPlan> {
   return read(fetch(`/api/handoffs/plans/${id}/approve`, { method: "POST", headers }))
 }
 
-export async function sendToBuild(id: string, agent: AgentName): Promise<AgentRun> {
+export async function sendToBuild(id: string, agent?: AgentName): Promise<AgentRun> {
+  const body = agent
+    ? { routing_mode: "manual", agent }
+    : { routing_mode: "auto" }
+
   return read(fetch(`/api/handoffs/plans/${id}/build`, {
-    method: "POST", headers, body: JSON.stringify({ agent }),
+    method: "POST", headers, body: JSON.stringify(body),
   }))
 }
 
