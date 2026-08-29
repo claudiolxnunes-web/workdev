@@ -26,6 +26,7 @@ from app.routers.terminal import (
     agent_send,
     agents_status,
     start_agent_session,
+    start_agent_runtime,
     stop_agent_session,
 )
 
@@ -147,6 +148,36 @@ class SendTextTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _send_text("codex", "oi")
 
+class AgentRuntimeReadinessTest(unittest.TestCase):
+    @patch("app.routers.terminal._send_text")
+    @patch("app.routers.terminal._capture_history")
+    @patch("app.routers.terminal._current_process", return_value="node")
+    @patch("app.routers.terminal._start_standby_session", return_value=True)
+    def test_gemini_waits_until_cli_is_ready_before_sending(
+        self,
+        start,
+        current_process,
+        capture,
+        send,
+    ):
+        capture.side_effect = [
+            "Loading Gemini CLI...",
+            "Gemini CLI\nType your message",
+        ]
+
+        result = start_agent_runtime(
+            "gemini",
+            "execute esta tarefa",
+            timeout_seconds=1,
+        )
+
+        self.assertEqual(capture.call_count, 2)
+        send.assert_called_once_with(
+            "gemini",
+            "execute esta tarefa",
+        )
+        self.assertEqual(result["agent"], "gemini")
+        self.assertEqual(result["process"], "node")
 
 class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_unknown_agent(self):

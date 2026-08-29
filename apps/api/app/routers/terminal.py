@@ -253,10 +253,20 @@ def start_agent_runtime(
     while time.monotonic() < deadline:
         process = _current_process(session)
 
-        if (
+        ready = (
             process
             and process not in _SHELL_PROCESSES
-        ):
+        )
+
+        if ready and agent == "gemini":
+            history = _capture_history(
+                session,
+                80,
+            )
+            ready = "Type your message" in history
+
+        if ready:
+
             _send_text(
                 session,
                 prompt,
