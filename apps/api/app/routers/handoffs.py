@@ -272,6 +272,7 @@ def _sync_auto_transition(
 def _run_auto_agent(
     run_id: UUID,
     agent: str,
+    model: str | None,
     prompt: str,
 ) -> None:
     db = SessionLocal()
@@ -291,7 +292,7 @@ def _run_auto_agent(
         _sync_auto_transition(db, run, event)
 
         try:
-            start_agent_runtime(agent, prompt)
+            start_agent_runtime(agent, prompt, model=model)
         except Exception as error:
             db.rollback()
             db.expire_all()
@@ -598,6 +599,7 @@ def send_to_build(
             _run_auto_agent,
             run.id,
             run.agent,
+            run.model,
             context["prompt"],
         )
 

@@ -166,11 +166,13 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
             "gemini",
             "execute esta tarefa",
             timeout_seconds=1,
+            model="gemini-2.5-flash",
         )
 
         start_headless.assert_called_once_with(
             "gemini",
             "execute esta tarefa",
+            "gemini-2.5-flash",
         )
         self.assertEqual(result["agent"], "gemini")
         self.assertEqual(result["process"], "node")
@@ -186,12 +188,15 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
         result = _start_gemini_headless_runtime(
             "gemini",
             "execute esta tarefa",
+            "gemini-2.5-flash",
         )
 
         self.assertEqual(
             run.call_args.args[0],
             [
                 "/opt/workdev/scripts/start_gemini_agent.sh",
+                "--model",
+                "gemini-2.5-flash",
                 "--prompt",
                 "execute esta tarefa",
             ],

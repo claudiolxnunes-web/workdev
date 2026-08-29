@@ -188,6 +188,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
             run_auto_mock,
             "run-1",
             "gemini",
+            "gemini-2.5-flash",
             "mock prompt",
         )
 
@@ -237,13 +238,17 @@ class HandoffAutoRouteTest(unittest.TestCase):
                 side_effect=apply_status,
             ) as update_mock,
         ):
-            _run_auto_agent("run-1", "gemini", "prompt")
+            _run_auto_agent(
+                "run-1", "gemini", "gemini-2.5-flash", "prompt",
+            )
 
         self.assertEqual(
             [call.args[2]["status"] for call in update_mock.call_args_list],
             ["running", "completed"],
         )
-        start_runtime.assert_called_once_with("gemini", "prompt")
+        start_runtime.assert_called_once_with(
+            "gemini", "prompt", model="gemini-2.5-flash",
+        )
         db.close.assert_called_once()
 
     @patch("app.routers.handoffs.graph_sync.sync_safely")
@@ -280,7 +285,9 @@ class HandoffAutoRouteTest(unittest.TestCase):
                 side_effect=apply_status,
             ) as update_mock,
         ):
-            _run_auto_agent("run-1", "gemini", "prompt")
+            _run_auto_agent(
+                "run-1", "gemini", "gemini-2.5-flash", "prompt",
+            )
 
         self.assertEqual(
             [call.args[2]["status"] for call in update_mock.call_args_list],
@@ -323,11 +330,11 @@ class HandoffAutoRouteTest(unittest.TestCase):
                 side_effect=apply_status,
             ) as update_mock,
         ):
-            _run_auto_agent("run-1", "codex", "prompt")
+            _run_auto_agent("run-1", "codex", "gpt-5", "prompt")
 
         self.assertEqual(len(update_mock.call_args_list), 1)
         self.assertEqual(update_mock.call_args.args[2]["status"], "running")
-        start_runtime.assert_called_once_with("codex", "prompt")
+        start_runtime.assert_called_once_with("codex", "prompt", model="gpt-5")
         db.close.assert_called_once()
 
     def test_auto_stops_agent_when_run_completes(self):

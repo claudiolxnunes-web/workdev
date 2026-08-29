@@ -186,11 +186,13 @@ def _current_process(session: str) -> str:
 def _start_gemini_headless_runtime(
     agent: str,
     prompt: str,
+    model: str | None = None,
 ) -> dict:
     session = _standby_session(agent)
 
     command = [
         *STANDBY_COMMANDS[agent],
+        *(["--model", model] if model else []),
         "--prompt",
         prompt,
     ]
@@ -274,6 +276,7 @@ def start_agent_runtime(
     agent: str,
     prompt: str,
     timeout_seconds: float = 15.0,
+    model: str | None = None,
 ) -> dict:
     session = _standby_session(agent)
 
@@ -281,6 +284,7 @@ def start_agent_runtime(
         return _start_gemini_headless_runtime(
             agent,
             prompt,
+            model,
         )
 
     started = _start_standby_session(
