@@ -85,6 +85,23 @@ def _validate_routing_metadata(
             )
 
 
+
+def _lista_de_texto(valor):
+    if not valor:
+        return []
+    saida = []
+    for e in valor:
+        if isinstance(e, str):
+            saida.append(e)
+        elif isinstance(e, dict):
+            saida.append(e.get("item") or e.get("texto") or e.get("descricao") or str(e))
+        else:
+            saida.append(str(e))
+
+    return saida
+
+
+
 def create_plan(
     db: Session,
     data: dict[str, Any],
@@ -109,9 +126,9 @@ def create_plan(
         title=(data.get("title") or task.title).strip(),
         objective=data["objective"].strip(),
         scope=(data.get("scope") or "").strip() or None,
-        constraints=data.get("constraints") or [],
-        acceptance_criteria=data.get("acceptance_criteria") or [],
-        validation_steps=data.get("validation_steps") or [],
+        constraints=_lista_de_texto(data.get("constraints")),
+        acceptance_criteria=_lista_de_texto(data.get("acceptance_criteria")),
+        validation_steps=_lista_de_texto(data.get("validation_steps")),
         implementation_notes=(
             (data.get("implementation_notes") or "").strip() or None
         ),
