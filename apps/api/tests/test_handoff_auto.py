@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from app.routers.handoffs import send_to_build, update_agent_run
+from app.routers.handoffs import _run_auto_agent, send_to_build, update_agent_run
 from app.schemas.handoff import BuildRequest, RunUpdate
 from app.services.agent_router import RoutingDecision
 
@@ -138,8 +138,8 @@ class HandoffAutoRouteTest(unittest.TestCase):
                 return_value={"prompt": "mock prompt"},
             ) as build_context_mock,
             patch(
-                "app.routers.handoffs.start_agent_runtime",
-            ) as start_agent_mock,
+                "app.routers.handoffs._run_auto_agent",
+            ) as run_auto_mock,
         ):
             result = send_to_build(
                 plan_id="plan-1",
@@ -185,7 +185,8 @@ class HandoffAutoRouteTest(unittest.TestCase):
         )
 
         background.add_task.assert_called_once_with(
-            start_agent_mock,
+            run_auto_mock,
+            "run-1",
             "gemini",
             "mock prompt",
         )
@@ -204,6 +205,130 @@ class HandoffAutoRouteTest(unittest.TestCase):
             result["routing_mode"],
             "auto",
         )
+
+    @patch("app.routers.handoffs.graph_sync.sync_safely")
+    @patch("app.routers.handoffs.start_agent_runtime")
+    @patch("app.routers.handoffs.SessionLocal")
+    def test_auto_runtime_completes_successful_headless_run(
+        self, session_local, start_runtime, _sync,
+    ):
+        db = Mock()
+        session_local.return_value = db
+        run = SimpleNamespace(
+            id="run-1", plan_id="plan-1", backlog_id="task-1",
+            agent="gemini", routing_mode="auto", status="queued",
+        )
+
+        def apply_status(_db, current, data):
+            current.status = data["status"]
+            return current, SimpleNamespace(id=f"event-{data['status']}")
+
+        with (
+            patch("app.routers.handoffs._get_run", return_value=run),
+            patch(
+                "app.routers.handoffs._task_project",
+                return_value=(
+                    SimpleNamespace(id="task-1"),
+                    SimpleNamespace(id="project-1"),
+                ),
+            ),
+            patch(
+                "app.routers.handoffs.update_run",
+                side_effect=apply_status,
+            ) as update_mock,
+        ):
+            _run_auto_agent("run-1", "gemini", "prompt")
+
+        self.assertEqual(
+            [call.args[2]["status"] for call in update_mock.call_args_list],
+            ["running", "completed"],
+        )
+        start_runtime.assert_called_once_with("gemini", "prompt")
+        db.close.assert_called_once()
+
+    @patch("app.routers.handoffs.graph_sync.sync_safely")
+    @patch(
+        "app.routers.handoffs.start_agent_runtime",
+        side_effect=RuntimeError("runtime indisponível"),
+    )
+    @patch("app.routers.handoffs.SessionLocal")
+    def test_auto_runtime_records_launch_failure(
+        self, session_local, _start_runtime, _sync,
+    ):
+        db = Mock()
+        session_local.return_value = db
+        run = SimpleNamespace(
+            id="run-1", plan_id="plan-1", backlog_id="task-1",
+            agent="gemini", routing_mode="auto", status="queued",
+        )
+
+        def apply_status(_db, current, data):
+            current.status = data["status"]
+            return current, SimpleNamespace(id=f"event-{data['status']}")
+
+        with (
+            patch("app.routers.handoffs._get_run", return_value=run),
+            patch(
+                "app.routers.handoffs._task_project",
+                return_value=(
+                    SimpleNamespace(id="task-1"),
+                    SimpleNamespace(id="project-1"),
+                ),
+            ),
+            patch(
+                "app.routers.handoffs.update_run",
+                side_effect=apply_status,
+            ) as update_mock,
+        ):
+            _run_auto_agent("run-1", "gemini", "prompt")
+
+        self.assertEqual(
+            [call.args[2]["status"] for call in update_mock.call_args_list],
+            ["running", "failed"],
+        )
+        self.assertEqual(
+            update_mock.call_args_list[-1].args[2]["error"],
+            "runtime indisponível",
+        )
+        db.close.assert_called_once()
+
+    @patch("app.routers.handoffs.graph_sync.sync_safely")
+    @patch("app.routers.handoffs.start_agent_runtime")
+    @patch("app.routers.handoffs.SessionLocal")
+    def test_interactive_auto_runtime_remains_running_after_prompt_delivery(
+        self, session_local, start_runtime, _sync,
+    ):
+        db = Mock()
+        session_local.return_value = db
+        run = SimpleNamespace(
+            id="run-1", plan_id="plan-1", backlog_id="task-1",
+            agent="codex", routing_mode="auto", status="queued",
+        )
+
+        def apply_status(_db, current, data):
+            current.status = data["status"]
+            return current, SimpleNamespace(id=f"event-{data['status']}")
+
+        with (
+            patch("app.routers.handoffs._get_run", return_value=run),
+            patch(
+                "app.routers.handoffs._task_project",
+                return_value=(
+                    SimpleNamespace(id="task-1"),
+                    SimpleNamespace(id="project-1"),
+                ),
+            ),
+            patch(
+                "app.routers.handoffs.update_run",
+                side_effect=apply_status,
+            ) as update_mock,
+        ):
+            _run_auto_agent("run-1", "codex", "prompt")
+
+        self.assertEqual(len(update_mock.call_args_list), 1)
+        self.assertEqual(update_mock.call_args.args[2]["status"], "running")
+        start_runtime.assert_called_once_with("codex", "prompt")
+        db.close.assert_called_once()
 
     def test_auto_stops_agent_when_run_completes(self):
         db = Mock()

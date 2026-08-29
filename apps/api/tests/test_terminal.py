@@ -176,13 +176,8 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
         self.assertEqual(result["process"], "node")
 
     @patch("app.routers.terminal.subprocess.run")
-    @patch(
-        "app.routers.terminal._stop_standby_session",
-        return_value=False,
-    )
-    def test_gemini_headless_starts_tmux_with_prompt(
+    def test_gemini_headless_runs_without_tmux_with_prompt(
         self,
-        stop,
         run,
     ):
         run.return_value.returncode = 0
@@ -193,22 +188,15 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
             "execute esta tarefa",
         )
 
-        stop.assert_called_once_with("gemini")
         self.assertEqual(
             run.call_args.args[0],
             [
-                "tmux",
-                "new-session",
-                "-d",
-                "-s",
-                "gemini",
-                "-c",
-                "/opt/workdev",
                 "/opt/workdev/scripts/start_gemini_agent.sh",
                 "--prompt",
                 "execute esta tarefa",
             ],
         )
+        self.assertEqual(run.call_args.kwargs["cwd"], "/opt/workdev")
         self.assertEqual(result["agent"], "gemini")
         self.assertTrue(result["started"])
 

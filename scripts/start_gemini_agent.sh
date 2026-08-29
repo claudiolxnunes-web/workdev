@@ -31,8 +31,16 @@ unset gemini_key
 
 cd /opt/workdev
 
+approval_mode="default"
+for argument in "$@"; do
+  if [[ "$argument" == "--prompt" || "$argument" == "-p" ]]; then
+    approval_mode="yolo"
+    break
+  fi
+done
+
 exec "$GEMINI_EXECUTABLE" \
   --skip-trust \
   --model "$GEMINI_MODEL" \
-  --approval-mode default \
+  --approval-mode "$approval_mode" \
   "$@"

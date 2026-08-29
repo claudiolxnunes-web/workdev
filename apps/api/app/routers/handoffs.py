@@ -247,6 +247,88 @@ def _sync_run(
         )
 
 
+def _sync_auto_transition(
+    db: Session,
+    run: AgentRun,
+    event: AgentRunEvent | None,
+) -> None:
+    task, project = _task_project(db, run.backlog_id)
+    graph_sync.sync_safely(
+        "sync_agent_run",
+        str(run.id),
+        str(project.id),
+        str(run.plan_id),
+        str(task.id),
+    )
+    if event:
+        graph_sync.sync_safely(
+            "sync_agent_event",
+            str(event.id),
+            str(project.id),
+            str(run.id),
+        )
+
+
+def _run_auto_agent(
+    run_id: UUID,
+    agent: str,
+    prompt: str,
+) -> None:
+    db = SessionLocal()
+    try:
+        run = _get_run(db, run_id)
+        if run.routing_mode != "auto" or run.status != "queued":
+            return
+
+        run, event = update_run(
+            db,
+            run,
+            {
+                "status": "running",
+                "message": f"Runtime AUTO iniciou {agent}",
+            },
+        )
+        _sync_auto_transition(db, run, event)
+
+        try:
+            start_agent_runtime(agent, prompt)
+        except Exception as error:
+            db.rollback()
+            db.expire_all()
+            run = _get_run(db, run_id)
+            if run.status == "running":
+                run, event = update_run(
+                    db,
+                    run,
+                    {
+                        "status": "failed",
+                        "error": str(error),
+                        "message": f"Runtime AUTO falhou: {error}",
+                    },
+                )
+                _sync_auto_transition(db, run, event)
+            return
+
+        if agent != "gemini":
+            return
+
+        db.expire_all()
+        run = _get_run(db, run_id)
+        if run.status == "running":
+            run, event = update_run(
+                db,
+                run,
+                {
+                    "status": "completed",
+                    "result": f"{agent} headless encerrou com sucesso",
+                    "message": "Runtime AUTO concluiu a execução",
+                },
+            )
+            _sync_auto_transition(db, run, event)
+    finally:
+        db.close()
+
+
 @router.get("/plans")
 def list_plans(
     status: str | None = None,
@@ -513,7 +595,8 @@ def send_to_build(
             run,
         )
         background.add_task(
-            start_agent_runtime,
+            _run_auto_agent,
+            run.id,
             run.agent,
             context["prompt"],
         )

@@ -189,8 +189,6 @@ def _start_gemini_headless_runtime(
 ) -> dict:
     session = _standby_session(agent)
 
-    _stop_standby_session(session)
-
     command = [
         *STANDBY_COMMANDS[agent],
         "--prompt",
@@ -198,33 +196,25 @@ def _start_gemini_headless_runtime(
     ]
 
     result = subprocess.run(
-        [
-            "tmux",
-            "new-session",
-            "-d",
-            "-s",
-            session,
-            "-c",
-            "/opt/workdev",
-            *command,
-        ],
+        command,
+        cwd="/opt/workdev",
         capture_output=True,
         text=True,
-        timeout=10,
         check=False,
     )
 
     if result.returncode != 0:
         raise RuntimeError(
             result.stderr.strip()
-            or "Falha ao iniciar Gemini headless"
+            or f"Gemini headless encerrou com código {result.returncode}"
         )
 
     return {
         "agent": agent,
         "session": session,
         "started": True,
-        "process": "node",
+        "process": "gemini",
+        "returncode": result.returncode,
     }
 
 def _start_standby_session(agent: str, session: str) -> bool:
