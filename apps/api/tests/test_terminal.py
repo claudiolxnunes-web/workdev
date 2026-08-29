@@ -21,6 +21,7 @@ from app.routers.terminal import (
     _scroll_terminal,
     _send_output,
     _send_text,
+    _start_gemini_headless_runtime,
     _start_standby_session,
     _stop_standby_session,
     agent_send,
@@ -149,21 +150,17 @@ class SendTextTest(unittest.TestCase):
             _send_text("codex", "oi")
 
 class AgentRuntimeReadinessTest(unittest.TestCase):
-    @patch("app.routers.terminal._send_text")
-    @patch("app.routers.terminal._capture_history")
-    @patch("app.routers.terminal._current_process", return_value="node")
-    @patch("app.routers.terminal._start_standby_session", return_value=True)
-    def test_gemini_waits_until_cli_is_ready_before_sending(
+    @patch("app.routers.terminal._start_gemini_headless_runtime")
+    def test_gemini_uses_headless_runtime(
         self,
-        start,
-        current_process,
-        capture,
-        send,
+        start_headless,
     ):
-        capture.side_effect = [
-            "Loading Gemini CLI...",
-            "Gemini CLI\nType your message",
-        ]
+        start_headless.return_value = {
+            "agent": "gemini",
+            "session": "gemini",
+            "started": True,
+            "process": "node",
+        }
 
         result = start_agent_runtime(
             "gemini",
@@ -171,13 +168,49 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
             timeout_seconds=1,
         )
 
-        self.assertEqual(capture.call_count, 2)
-        send.assert_called_once_with(
+        start_headless.assert_called_once_with(
             "gemini",
             "execute esta tarefa",
         )
         self.assertEqual(result["agent"], "gemini")
         self.assertEqual(result["process"], "node")
+
+    @patch("app.routers.terminal.subprocess.run")
+    @patch(
+        "app.routers.terminal._stop_standby_session",
+        return_value=False,
+    )
+    def test_gemini_headless_starts_tmux_with_prompt(
+        self,
+        stop,
+        run,
+    ):
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+
+        result = _start_gemini_headless_runtime(
+            "gemini",
+            "execute esta tarefa",
+        )
+
+        stop.assert_called_once_with("gemini")
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                "gemini",
+                "-c",
+                "/opt/workdev",
+                "/opt/workdev/scripts/start_gemini_agent.sh",
+                "--prompt",
+                "execute esta tarefa",
+            ],
+        )
+        self.assertEqual(result["agent"], "gemini")
+        self.assertTrue(result["started"])
 
 class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_unknown_agent(self):
