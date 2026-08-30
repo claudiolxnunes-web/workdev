@@ -1,7 +1,7 @@
 # ADR — AUTO Agent Runtime e ciclo de vida automático dos agentes
 
 - **Data:** 2026-08-28
-- **Status:** aceita, validada, pendente de deploy
+- **Status:** aceita, em produção; correção de isolamento AUTO validada, pendente de deploy
 - **Autor:** Cláudio L. X. Nunes
 
 ## Contexto
@@ -54,10 +54,10 @@ Quatro escolhas estruturais:
   - agenda retorno ao standby em estados terminais.
 
 - `apps/api/app/routers/terminal.py`
-  - `start_agent_runtime()` inicia ou reutiliza a sessão tmux do agente;
+  - `start_agent_runtime()` cria uma sessão tmux AUTO isolada por run, sem reutilizar a sessão manual do agente;
   - aguarda a CLI sair do processo shell;
   - envia o prompt ao processo ativo;
-  - `stop_agent_runtime()` encerra a sessão correspondente.
+  - `stop_agent_runtime()` encerra somente a sessão AUTO correspondente à run.
 
 - `apps/api/tests/test_handoff_auto.py`
   - valida classificação e escolha automática do Gemini em cenário controlado;
