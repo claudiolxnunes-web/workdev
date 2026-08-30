@@ -481,3 +481,24 @@ interativo — use `sed`. Um comando por bloco, pronto pra colar.
 Nunca escreva token, chave ou senha em arquivo versionado, em mensagem de chat ou
 em log. Antes de qualquer commit que toque `.env`, rode a varredura de segredos.
 Chave privada de criptografia de backup não fica no VPS.
+
+## GitHub push na VPS
+
+O usuário de runtime dos agentes (`workdev`) não possui atualmente credencial GitHub com permissão de escrita para o repositório. O `GITHUB_TOKEN` disponível para esse usuário deve ser tratado como somente leitura para `contents` e não deve ser ampliado, substituído ou exposto automaticamente.
+
+Na VPS, o push autorizado do repositório WorkDev é feito pelo usuário `root` usando a chave SSH já validada:
+
+- chave: `/root/.ssh/id_ed25519`
+- repositório: `claudiolxnunes-web/workdev`
+- autenticação validada com GitHub via SSH.
+
+Quando um push for necessário, o comando conhecido é:
+
+`GIT_SSH_COMMAND='ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes' git push origin develop`
+
+Regras:
+- agentes executando como `workdev` não devem tentar ler, copiar ou alterar a chave privada de `/root/.ssh`;
+- não criar novas credenciais apenas porque o push do usuário `workdev` falhou;
+- não concluir que o token possui escrita olhando apenas as permissões do usuário/repositório;
+- se o agente não estiver executando como `root`, preparar o commit e pedir ao operador/root para realizar o push;
+- nunca imprimir chaves, tokens ou outros segredos nos logs ou na conversa.
