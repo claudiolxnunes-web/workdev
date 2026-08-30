@@ -389,6 +389,14 @@ def route_agent(
 
     if not candidates:
         if premium:
+            premium = sorted(
+                premium,
+                key=lambda item: (
+                    -item[1],
+                    _price_index(item[0]) is None,
+                    _price_index(item[0]) or Decimal("0"),
+                ),
+            )
             premium_options = [
                 {
                     "catalog_id": row.id,
@@ -428,6 +436,7 @@ def route_agent(
                     "premium_options": (
                         premium_options
                     ),
+                    "recommended": premium_options[0],
                 },
             )
 

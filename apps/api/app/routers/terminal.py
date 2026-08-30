@@ -18,6 +18,12 @@ from app.auth import websocket_is_authenticated
 
 
 router = APIRouter(tags=["agents"])
+
+# Isolamento estrito: uma sessão persistente por agente configurado. O tmux é o
+# terminal manual do agente, não um mecanismo de orquestração — o fluxo
+# principal é PLAN → recomendação → escolha do usuário → envio ao agente
+# escolhido, que trabalha aqui. Sessões dinâmicas por execução pertencem apenas
+# ao runtime AUTO, que é opt-in (ver `_auto_runtime_enabled` em routers/handoffs).
 ALLOWED_SESSIONS = {
     "claude": "code",
     "codex": "codex",
@@ -338,6 +344,29 @@ def stop_agent_runtime(agent: str, run_id) -> bool:
     session = _auto_session(agent, run_id)
     return _stop_standby_session(session)
 
+
+def auto_runtime_running(agent: str, run_id) -> bool:
+    process = _current_process(_auto_session(agent, run_id))
+    return bool(process and process not in _SHELL_PROCESSES)
+
+
+def finalize_auto_runtime(agent: str, run_id) -> dict:
+    """Encerra só a sessão AUTO e confirma que o agente está em standby."""
+    auto_session = _auto_session(agent, run_id)
+    stopped = _stop_standby_session(auto_session)
+    standby_session = _standby_session(agent)
+    standby_started = _start_standby_session(agent, standby_session)
+    process = _current_process(standby_session)
+    if not process or process in _SHELL_PROCESSES:
+        raise RuntimeError(f"{agent}: não retornou ao standby")
+    return {
+        "session": auto_session,
+        "stopped": stopped,
+        "standby_session": standby_session,
+        "standby_started": standby_started,
+        "standby_process": process,
+    }
+
 @router.post("/api/agents/{agent}/session")
 async def start_agent_session(agent: str):
     session = _standby_session(agent)
@@ -418,6 +447,50 @@ async def _agent_status(agent: str, session: str, supervisor: dict | None = None
         "checked_at": health.get("checked_at"),
         "recovered": bool(health.get("recovered")),
     }
+
+
+def agent_runtime_snapshot() -> dict[str, dict]:
+    """Estado real das sessões, síncrono e tolerante a falha.
+
+    Usado pela recomendação consultiva do PLAN. Quando a sonda não consegue
+    ler o tmux, o agente fica marcado como NÃO verificado — nunca como
+    disponível por suposição.
+    """
+    supervisor = _load_supervisor_health()
+    snapshot: dict[str, dict] = {}
+
+    for agent, session in ALLOWED_SESSIONS.items():
+        try:
+            current_process = _current_process(session)
+        except Exception as error:  # tmux ausente, timeout, socket inacessível
+            snapshot[agent] = {
+                "agent": agent,
+                "checked": False,
+                "running": None,
+                "health": None,
+                "error": str(error),
+            }
+            continue
+
+        running = bool(
+            current_process and current_process not in _SHELL_PROCESSES
+        )
+        health = supervisor.get(agent) or {}
+        health_status = health.get("status")
+
+        if health_status not in {"idle", "busy", "blocked", "offline", "degraded"}:
+            health_status = "idle" if running else "offline"
+
+        snapshot[agent] = {
+            "agent": agent,
+            "checked": True,
+            "running": running,
+            "health": health_status,
+            "health_reason": health.get("reason"),
+            "checked_at": health.get("checked_at"),
+        }
+
+    return snapshot
 
 
 @router.get("/api/agents/status")

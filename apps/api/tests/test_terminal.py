@@ -24,6 +24,7 @@ from app.routers.terminal import (
     _start_gemini_headless_runtime,
     _start_standby_session,
     _stop_standby_session,
+    finalize_auto_runtime,
     agent_send,
     agents_status,
     start_agent_session,
@@ -219,6 +220,17 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
         result = stop_agent_runtime("codex", "run-1")
         stop_session.assert_called_once_with("auto-codex-run-1")
         self.assertTrue(result)
+
+    @patch("app.routers.terminal._current_process", return_value="codex")
+    @patch("app.routers.terminal._start_standby_session", return_value=False)
+    @patch("app.routers.terminal._stop_standby_session", return_value=True)
+    def test_finalize_auto_stops_only_run_and_confirms_standby(
+        self, stop_session, start_standby, _current_process,
+    ):
+        result = finalize_auto_runtime("codex", "run-1")
+        stop_session.assert_called_once_with("auto-codex-run-1")
+        start_standby.assert_called_once_with("codex", "codex")
+        self.assertEqual(result["standby_process"], "codex")
 
 
 

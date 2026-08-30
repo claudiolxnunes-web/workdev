@@ -3,6 +3,13 @@
   "modelProviders": {
     "openai": [
       {
+        "id": "qwen/qwen3.5-397b-a17b",
+        "name": "Qwen3.5 397B A17B — OpenRouter",
+        "description": "Modelo principal do Qwen Code (262k de contexto)",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
+      },
+      {
         "id": "qwen3-coder-plus",
         "name": "Qwen3 Coder Plus — DashScope",
         "description": "Chave direta do Alibaba Cloud Model Studio",
@@ -24,6 +31,6 @@
     }
   },
   "model": {
-    "name": "qwen/qwen3-coder-plus"
+    "name": "qwen/qwen3.5-397b-a17b"
   }
 }

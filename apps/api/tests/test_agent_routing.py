@@ -54,6 +54,25 @@ def fake_db(rows):
 
 
 class TaskComplexityTest(unittest.TestCase):
+    def test_passive_restrictions_do_not_increase_critical_risk(self):
+        result = classify_task(
+            {
+                "title": "Revisar documentação em modo passivo",
+                "description": "Somente leitura, sem mudanças; não alterar banco e não executar deploy",
+                "priority": "low",
+            },
+            {
+                "objective": "Documentar o comportamento atual",
+                "constraints": ["não alterar schema ou RLS", "não tocar produção"],
+                "acceptance_criteria": ["relatório revisado"],
+                "validation_steps": ["reler documento"],
+            },
+            [],
+        )
+
+        self.assertEqual(result.level, "low")
+        self.assertFalse(any("risco crítico" in signal for signal in result.signals))
+
     def test_simple_ui_change_is_low_but_requires_code(self):
         task = {
             "title": "Corrigir texto de botão",
@@ -311,6 +330,10 @@ class AgentRouterTest(unittest.TestCase):
         self.assertEqual(
             raised.exception.code,
             "premium_confirmation_required",
+        )
+        self.assertEqual(
+            raised.exception.details["recommended"]["model"],
+            "premium",
         )
 
     def test_premium_authorization_allows_qualified_model(self):

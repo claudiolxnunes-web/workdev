@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 from typing import Any, Iterable
 
 
@@ -358,6 +359,39 @@ def _matches(
         if marker in text
     )
 
+
+_NEGATION_PREFIXES = (
+    "não", "nao", "sem", "nunca", "jamais", "evitar",
+    "proibido", "proibida", "somente leitura", "apenas leitura",
+    "modo passivo",
+)
+
+
+def _is_negated(text: str, marker: str) -> bool:
+    """Reconhece restrições locais sem apagar ações afirmativas posteriores."""
+    occurrences = list(re.finditer(re.escape(marker), text))
+    if not occurrences:
+        return False
+    for match in occurrences:
+        prefix = text[max(0, match.start() - 48):match.start()]
+        tail = re.split(r"[.;:\n]", prefix)[-1].strip()
+        if not any(
+            re.search(
+                rf"(?:^|\s){re.escape(negation)}(?:\s+\w+){{0,4}}\s*$",
+                tail,
+            )
+            for negation in _NEGATION_PREFIXES
+        ):
+            return False
+    return True
+
+
+def _risk_matches(text: str, markers: set[str]) -> list[str]:
+    return sorted(
+        marker for marker in markers
+        if marker in text and not _is_negated(text, marker)
+    )
+
 def _level_for_score(
     score: int,
 ) -> str:
@@ -376,19 +410,19 @@ def _required_capabilities(
     capabilities: set[str] = set()
 
     if any(
-        marker in text
+        marker in text and not _is_negated(text, marker)
         for marker in CODE_MARKERS
     ):
         capabilities.add("code")
 
     if any(
-        marker in text
+        marker in text and not _is_negated(text, marker)
         for marker in ARCHITECTURE_MARKERS
     ):
         capabilities.add("architecture")
 
     if any(
-        marker in text
+        marker in text and not _is_negated(text, marker)
         for marker in REPOSITORY_ANALYSIS_MARKERS
     ):
         capabilities.add(
@@ -396,7 +430,7 @@ def _required_capabilities(
         )
 
     if any(
-        marker in text
+        marker in text and not _is_negated(text, marker)
         for marker in REVIEW_MARKERS
     ):
         capabilities.add("review")
@@ -430,7 +464,7 @@ def _critical_domain_count(
     domains = 0
 
     if any(
-        marker in text
+        marker in text and not _is_negated(text, marker)
         for marker in {
             "produção",
             "production",
@@ -439,7 +473,7 @@ def _critical_domain_count(
         domains += 1
 
     if any(
-        marker in text
+        marker in text and not _is_negated(text, marker)
         for marker in {
             "migração",
             "migration",
@@ -451,7 +485,7 @@ def _critical_domain_count(
         domains += 1
 
     if any(
-        marker in text
+        marker in text and not _is_negated(text, marker)
         for marker in {
             "segurança",
             "security",
@@ -474,7 +508,7 @@ def _critical_domain_count(
         domains += 1
 
     if any(
-        marker in text
+        marker in text and not _is_negated(text, marker)
         for marker in {
             "deploy",
             "deployment",
@@ -489,7 +523,7 @@ def _critical_domain_count(
         domains += 1
 
     if any(
-        marker in text
+        marker in text and not _is_negated(text, marker)
         for marker in {
             "pagamento",
             "payment",
@@ -519,7 +553,7 @@ def classify_task(
     score = 10
     signals: list[str] = []
 
-    critical_hits = _matches(
+    critical_hits = _risk_matches(
         text,
         CRITICAL_MARKERS,
     )
@@ -758,4 +792,229 @@ def classify_task(
         signals=tuple(
             signals
         ),
+    )
+
+
+# --- Perfil de workload (consultivo) -------------------------------------
+# Reaproveita os mesmos marcadores da classificação de complexidade. Não é um
+# classificador paralelo: `classify_task` continua sendo a única fonte de
+# complexidade; aqui só descrevemos QUE TIPO de trabalho o PLAN representa,
+# para a recomendação de agente.
+
+
+IMPLEMENTATION_MARKERS = {
+    "implementar",
+    "implementação",
+    "implementation",
+    "codificar",
+    "desenvolver",
+    "debug",
+    "debugar",
+    "depuração",
+    "corrigir",
+    "correção",
+    "fix",
+    "bug",
+    "patch",
+    "endpoint",
+    "crud",
+    "frontend",
+    "backend",
+    "componente",
+    "component",
+    "formulário",
+    "form",
+    "teste",
+    "testes",
+    "test",
+    "tests",
+    "pytest",
+    "vitest",
+    "build",
+    "lint",
+}
+
+
+DOCUMENTATION_MARKERS = {
+    "documentação",
+    "documentation",
+    "docs",
+    "readme",
+    "adr",
+    "rfc",
+    "changelog",
+    "manual",
+    "guia",
+    "runbook",
+}
+
+
+LARGE_CONTEXT_MARKERS = {
+    "contexto extenso",
+    "contexto grande",
+    "muitos arquivos",
+    "todos os arquivos",
+    "codebase",
+    "repositório inteiro",
+    "monorepo",
+    "varredura",
+    "análise ampla",
+    "grande volume",
+    "comparar",
+    "comparação",
+    "síntese",
+    "sintetizar",
+    "sumarizar",
+    "resumir",
+    "logs",
+    "dump",
+    "planilha",
+    "csv",
+    "auditoria completa",
+    "inventário",
+}
+
+
+COST_SENSITIVE_MARKERS = {
+    "custo",
+    "cost",
+    "barato",
+    "econômico",
+    "economico",
+    "orçamento",
+    "budget",
+    "cota",
+    "quota",
+    "gratuito",
+    "sem gastar",
+    "menor custo",
+}
+
+
+MULTIMODAL_MARKERS = {
+    "imagem",
+    "imagens",
+    "image",
+    "screenshot",
+    "captura de tela",
+    "print da tela",
+    "pdf",
+    "diagrama",
+    "vídeo",
+    "video",
+    "áudio",
+    "audio",
+    "ocr",
+}
+
+
+WORKLOAD_DIMENSIONS = (
+    "implementation",
+    "architecture",
+    "repository_analysis",
+    "review",
+    "documentation",
+    "large_context",
+    "cost_sensitive",
+    "multimodal",
+)
+
+
+@dataclass(frozen=True)
+class WorkloadProfile:
+    """Intensidade (0..3) de cada dimensão de trabalho detectada no PLAN."""
+
+    scores: dict[str, int]
+    markers: dict[str, tuple[str, ...]]
+    text_size: int
+    subtask_count: int
+
+    def score(self, dimension: str) -> int:
+        return self.scores.get(dimension, 0)
+
+    @property
+    def dominant(self) -> tuple[str, ...]:
+        ordered = sorted(
+            (
+                dimension
+                for dimension in WORKLOAD_DIMENSIONS
+                if self.scores.get(dimension)
+            ),
+            key=lambda dimension: (
+                -self.scores[dimension],
+                dimension,
+            ),
+        )
+
+        return tuple(ordered)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scores": dict(self.scores),
+            "dominant": list(self.dominant),
+            "text_size": self.text_size,
+            "subtask_count": self.subtask_count,
+        }
+
+
+_WORKLOAD_MARKER_SETS = {
+    "implementation": IMPLEMENTATION_MARKERS | CODE_MARKERS,
+    "architecture": ARCHITECTURE_MARKERS,
+    "repository_analysis": REPOSITORY_ANALYSIS_MARKERS,
+    "review": REVIEW_MARKERS,
+    "documentation": DOCUMENTATION_MARKERS,
+    "large_context": LARGE_CONTEXT_MARKERS,
+    "cost_sensitive": COST_SENSITIVE_MARKERS,
+    "multimodal": MULTIMODAL_MARKERS,
+}
+
+
+_WORKLOAD_MAX_SCORE = 3
+
+
+def describe_workload(
+    task: Any,
+    plan: Any,
+    subtasks: Iterable[Any] | None = None,
+) -> WorkloadProfile:
+    """Descreve o tipo de trabalho do PLAN, sem reclassificar complexidade."""
+    subtasks = list(subtasks or [])
+
+    text = _combined_text(
+        task,
+        plan,
+        subtasks,
+    )
+
+    scores: dict[str, int] = {}
+    markers: dict[str, tuple[str, ...]] = {}
+
+    for dimension, marker_set in _WORKLOAD_MARKER_SETS.items():
+        hits = _risk_matches(
+            text,
+            marker_set,
+        )
+
+        markers[dimension] = tuple(hits)
+        scores[dimension] = min(
+            _WORKLOAD_MAX_SCORE,
+            len(hits),
+        )
+
+    # Contexto também cresce com o tamanho real do material e das subtasks,
+    # não só com palavras-chave.
+    if len(text) >= 6000 or len(subtasks) >= 10:
+        scores["large_context"] = _WORKLOAD_MAX_SCORE
+
+    elif len(text) >= 2500 or len(subtasks) >= 5:
+        scores["large_context"] = max(
+            scores["large_context"],
+            2,
+        )
+
+    return WorkloadProfile(
+        scores=scores,
+        markers=markers,
+        text_size=len(text),
+        subtask_count=len(subtasks),
     )

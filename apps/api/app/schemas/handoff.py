@@ -105,6 +105,7 @@ class PlanOut(PlanCreate):
 
 class BuildRequest(BaseModel):
     routing_mode: RoutingMode = "manual"
+    premium_confirmed: bool = False
     agent: AgentName | None = None
     model: str | None = Field(
         default=None,
@@ -122,6 +123,12 @@ class BuildRequest(BaseModel):
         if self.routing_mode == "manual" and self.agent is None:
             raise ValueError(
                 "agent é obrigatório quando routing_mode=manual"
+            )
+        if self.routing_mode == "auto" and (
+            self.agent is not None or self.model is not None
+        ):
+            raise ValueError(
+                "AUTO seleciona agente e modelo automaticamente"
             )
         return self
 

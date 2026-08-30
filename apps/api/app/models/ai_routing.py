@@ -1,6 +1,6 @@
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Index, Integer, Numeric, String,
-    Text, UniqueConstraint, text,
+    Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, Integer,
+    Numeric, SmallInteger, String, Text, UniqueConstraint, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
@@ -35,12 +35,36 @@ class AIModelCatalog(Base):
     allowed_fallbacks = Column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+    # Agente que pode rodar este modelo. É configuração do agente, não escolha
+    # do catálogo: a recomendação só considera os modelos permitidos do agente,
+    # nunca o catálogo inteiro. NULL = modelo do catálogo sem vínculo com agente
+    # (continua servindo o AI Hub normalmente).
+    agent_slug = Column(String(16))
+    # Ordem de capacidade declarada pelo operador dentro do agente: 1 = modelo
+    # recomendado/padrão, 2 = alternativa. Necessária porque nem todo provider
+    # publica preço, e sem preço não há como ordenar por custo.
+    agent_preference_rank = Column(SmallInteger)
     pricing_updated_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
 
     __table_args__ = (
         UniqueConstraint("provider", "provider_model_id", name="uq_ai_model_provider_id"),
+        # Um agente não repete posição: no máximo um rank 1 (recomendado),
+        # um rank 2 (alternativa) e assim por diante.
+        UniqueConstraint(
+            "agent_slug",
+            "agent_preference_rank",
+            name="uq_ai_model_agent_rank",
+        ),
+        CheckConstraint(
+            "(agent_slug IS NULL) = (agent_preference_rank IS NULL)",
+            name="ck_ai_model_agent_rank_pair",
+        ),
+        CheckConstraint(
+            "agent_preference_rank IS NULL OR agent_preference_rank >= 1",
+            name="ck_ai_model_agent_rank_positive",
+        ),
     )
 
 

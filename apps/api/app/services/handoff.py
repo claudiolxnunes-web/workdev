@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
 from typing import Any
+import os
 from uuid import UUID
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.adr import ADR
 from app.models.backlog import BacklogItem
@@ -42,6 +44,15 @@ RUN_TRANSITIONS = {
 
 class HandoffError(RuntimeError):
     pass
+
+
+class AutoRuntimeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "auto-runtime.v2"
+    run_id: str
+    session: str
+    timeout_seconds: int = Field(ge=60, le=86400)
 
 
 def _now() -> datetime:
@@ -516,6 +527,19 @@ def transfer_run(
     return cancelled_run, new_run
 
 
+def load_subtasks(db: Session, backlog_id) -> list[BacklogSubtask]:
+    """Fonte única das subtasks reais, na ordem estável de execução."""
+    return (
+        db.query(BacklogSubtask)
+        .filter(BacklogSubtask.backlog_id == backlog_id)
+        .order_by(
+            BacklogSubtask.execution_order.asc(),
+            BacklogSubtask.created_at.asc(),
+        )
+        .all()
+    )
+
+
 def build_context(
     db: Session,
     run: AgentRun,
@@ -542,16 +566,7 @@ def build_context(
             "Projeto da execução não encontrado"
         )
 
-    subtasks = (
-        db.query(BacklogSubtask)
-        .filter(
-            BacklogSubtask.backlog_id == task.id
-        )
-        .order_by(
-            BacklogSubtask.execution_order.asc()
-        )
-        .all()
-    )
+    subtasks = load_subtasks(db, run.backlog_id)
 
     adrs = (
         db.query(ADR)
@@ -608,6 +623,14 @@ def build_context(
     )
 
     context = {
+        "runtime": AutoRuntimeConfig(
+            run_id=str(run.id),
+            session=f"auto-{run.agent}-{run.id}",
+            timeout_seconds=max(
+                60,
+                min(86400, int(os.getenv("AUTO_RUNTIME_TIMEOUT_SECONDS", "14400"))),
+            ),
+        ).model_dump(),
         "run": {
             "id": str(run.id),
             "agent": run.agent,
@@ -740,6 +763,7 @@ def render_agent_prompt(
     task = context["task"]
     plan = context["plan"]
     subtasks = context["subtasks"]
+    runtime = context["runtime"]
 
     subtask_text = "\n".join(
         (
@@ -763,6 +787,11 @@ e descreva a revisão necessária em vez de mudar o plano silenciosamente.
 - Complexidade: {run['complexity'] or 'não classificada'}
 - Score: {run['complexity_score'] if run['complexity_score'] is not None else 'não informado'}
 - Motivo: {run['routing_reason'] or 'não informado'}
+
+## Runtime AUTO
+- Schema: {runtime['schema_version']}
+- Sessão isolada: {runtime['session']}
+- Timeout: {runtime['timeout_seconds']} segundos
 
 ## Projeto
 - Nome: {project['name']} ({project['slug']})

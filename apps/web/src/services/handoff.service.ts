@@ -10,6 +10,71 @@ export type PlanStatus = "draft" | "approved" | "needs_revision" | "superseded" 
 export type RunStatus = "queued" | "running" | "blocked" | "review" | "completed" | "failed" | "cancelled"
 export type AgentName = "codex" | "claude" | "kimi" | "qwen" | "gemini"
 
+export type CostClass = "free" | "economic" | "moderate" | "premium" | "unknown"
+export type AvailabilityState = "available" | "unavailable" | "unknown"
+export type QuotaState = "exhausted" | "unknown"
+export type ComplexityLevel = "low" | "medium" | "high" | "critical"
+
+export interface AgentModelOption {
+  catalog_id: string | null
+  model: string | null
+  model_label: string | null
+  provider: string | null
+  category: string | null
+  context_window: number | null
+  capability_score: number
+  capable: boolean
+  missing_capabilities: string[]
+  cost_class: CostClass
+  cost_label: string
+  price_index: string | null
+  requires_confirmation: boolean
+  preference_rank: number
+  recommended: boolean
+}
+
+export interface AgentOption {
+  agent: AgentName
+  agent_label: string
+  fit_score: string
+  capable: boolean
+  capability_score: number | null
+  missing_capabilities: string[]
+  catalog_id: string | null
+  provider: string | null
+  model: string | null
+  model_label: string | null
+  category: string | null
+  context_window: number | null
+  requires_confirmation: boolean
+  cost_class: CostClass
+  cost_label: string
+  price_index: string | null
+  availability: AvailabilityState
+  availability_label: string
+  availability_reason: string | null
+  quota: QuotaState
+  quota_label: string
+  quota_reason: string | null
+  reason: string
+  /** Somente os modelos permitidos deste agente — nunca o catálogo inteiro. */
+  models: AgentModelOption[]
+}
+
+export interface PlanRecommendation {
+  plan_id: string
+  plan_version: number
+  complexity: ComplexityLevel
+  complexity_score: number
+  complexity_reason: string
+  required_capabilities: string[]
+  recommended: AgentOption
+  alternative: AgentOption | null
+  options: AgentOption[]
+  runtime_checked: boolean
+  pricing_source: string
+}
+
 export interface ExecutionPlan {
   id: string
   backlog_id: string
@@ -73,10 +138,42 @@ export interface AgentContext {
   prompt: string
 }
 
+export interface HandoffErrorDetail {
+  code?: string
+  message: string
+  details?: {
+    recommended?: {
+      model: string
+      agent: AgentName
+      capability_score: number
+      category: string
+    }
+    [key: string]: unknown
+  }
+}
+
+export class HandoffApiError extends Error {
+  readonly detail: HandoffErrorDetail
+  readonly status: number
+
+  constructor(detail: HandoffErrorDetail, status: number) {
+    super(detail.message)
+    this.detail = detail
+    this.status = status
+    this.name = "HandoffApiError"
+  }
+}
+
 async function read<T>(responsePromise: Promise<Response>): Promise<T> {
   const response = await responsePromise
   const body = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(body.detail || "Erro na integração PLAN → BUILD")
+  if (!response.ok) {
+    const raw = body.detail
+    const detail: HandoffErrorDetail = typeof raw === "object" && raw !== null
+      ? { ...raw, message: typeof raw.message === "string" ? raw.message : "Erro na integração PLAN → BUILD" }
+      : { message: typeof raw === "string" ? raw : "Erro na integração PLAN → BUILD" }
+    throw new HandoffApiError(detail, response.status)
+  }
   return body as T
 }
 
@@ -99,10 +196,19 @@ export async function approvePlan(id: string): Promise<ExecutionPlan> {
   return read(fetch(`/api/handoffs/plans/${id}/approve`, { method: "POST", headers }))
 }
 
-export async function sendToBuild(id: string, agent?: AgentName): Promise<AgentRun> {
+export async function getPlanRecommendation(id: string): Promise<PlanRecommendation> {
+  return read(fetch(`/api/handoffs/plans/${id}/recommendation`, { headers }))
+}
+
+export async function sendToBuild(
+  id: string,
+  agent?: AgentName,
+  premiumConfirmed = false,
+  model?: string,
+): Promise<AgentRun> {
   const body = agent
-    ? { routing_mode: "manual", agent }
-    : { routing_mode: "auto" }
+    ? { routing_mode: "manual", agent, ...(model ? { model } : {}) }
+    : { routing_mode: "auto", premium_confirmed: premiumConfirmed }
 
   return read(fetch(`/api/handoffs/plans/${id}/build`, {
     method: "POST", headers, body: JSON.stringify(body),

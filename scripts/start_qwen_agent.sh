@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WORKDEV_ENV_FILE="${WORKDEV_ENV_FILE:-/opt/workdev/apps/api/.env}"
+# O env real do serviço; o antigo apps/api/.env é resíduo root:root 600.
+WORKDEV_ENV_FILE="${WORKDEV_ENV_FILE:-/etc/workdev/workdev-api.env}"
 QWEN_EXECUTABLE="${QWEN_EXECUTABLE:-/usr/bin/qwen}"
 QWEN_SETTINGS_FILE="${QWEN_SETTINGS_FILE:-/opt/workdev/scripts/qwen-agent-settings.json}"
 
@@ -38,7 +39,8 @@ use_dashscope() {
 }
 
 use_openrouter() {
-  selected_model="qwen/qwen3-coder-plus"
+  # Modelo principal do Qwen Code, igual ao vinculado ao agente no catálogo.
+  selected_model="${QWEN_MODEL:-qwen/qwen3.5-397b-a17b}"
 }
 
 [[ -n "$dashscope_key" ]] && export DASHSCOPE_API_KEY="$dashscope_key"
