@@ -16,6 +16,7 @@ interface ProjectOpt {
 export default function NewTaskModal({ open, onClose, onCreated }: Props) {
   const [projects, setProjects] = useState<ProjectOpt[]>([]);
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [projectId, setProjectId] = useState("");
   const [type, setType] = useState("feature");
   const [priority, setPriority] = useState("medium");
@@ -44,6 +45,7 @@ export default function NewTaskModal({ open, onClose, onCreated }: Props) {
     try {
       await createItem({
         title: title.trim(),
+        description: description.trim() || undefined,
         project_id: projectId,
         type,
         priority,
@@ -51,6 +53,7 @@ export default function NewTaskModal({ open, onClose, onCreated }: Props) {
         status: "todo",
       });
       setTitle("");
+      setDescription("");
       setSprint("");
       onCreated();
       onClose();
@@ -76,6 +79,13 @@ export default function NewTaskModal({ open, onClose, onCreated }: Props) {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             autoFocus
+          />
+          <textarea
+            className={inputCls}
+            placeholder="Descrição / contexto da task"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={5}
           />
           <select
             className={inputCls}
