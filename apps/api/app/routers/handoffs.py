@@ -292,7 +292,7 @@ def _run_auto_agent(
         _sync_auto_transition(db, run, event)
 
         try:
-            start_agent_runtime(agent, prompt, model=model)
+            start_agent_runtime(agent, prompt, model=model, run_id=run_id)
         except Exception as error:
             db.rollback()
             db.expire_all()
@@ -723,6 +723,7 @@ def update_agent_run(
         background.add_task(
             stop_agent_runtime,
             run.agent,
+            run.id,
         )
 
     return _run_out(

@@ -272,13 +272,18 @@ def _standby_session(agent: str) -> str:
     return session
 
 
+def _auto_session(agent: str, run_id) -> str:
+    _standby_session(agent)
+    return f"auto-{agent}-{run_id}"
+
 def start_agent_runtime(
     agent: str,
     prompt: str,
     timeout_seconds: float = 15.0,
     model: str | None = None,
+    run_id = None,
 ) -> dict:
-    session = _standby_session(agent)
+    session = _auto_session(agent, run_id) if run_id else _standby_session(agent)
 
     if agent == "gemini":
         return _start_gemini_headless_runtime(
@@ -329,13 +334,9 @@ def start_agent_runtime(
     )
 
 
-def stop_agent_runtime(
-    agent: str,
-) -> bool:
-    session = _standby_session(agent)
-    return _stop_standby_session(
-        session,
-    )
+def stop_agent_runtime(agent: str, run_id) -> bool:
+    session = _auto_session(agent, run_id)
+    return _stop_standby_session(session)
 
 @router.post("/api/agents/{agent}/session")
 async def start_agent_session(agent: str):

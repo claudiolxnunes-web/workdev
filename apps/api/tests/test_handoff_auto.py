@@ -247,7 +247,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
             ["running", "completed"],
         )
         start_runtime.assert_called_once_with(
-            "gemini", "prompt", model="gemini-2.5-flash",
+            "gemini", "prompt", model="gemini-2.5-flash", run_id="run-1",
         )
         db.close.assert_called_once()
 
@@ -334,7 +334,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
 
         self.assertEqual(len(update_mock.call_args_list), 1)
         self.assertEqual(update_mock.call_args.args[2]["status"], "running")
-        start_runtime.assert_called_once_with("codex", "prompt", model="gpt-5")
+        start_runtime.assert_called_once_with("codex", "prompt", model="gpt-5", run_id="run-1")
         db.close.assert_called_once()
 
     def test_auto_stops_agent_when_run_completes(self):
@@ -399,6 +399,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
         background.add_task.assert_called_once_with(
             stop_agent_mock,
             "gemini",
+            "run-1",
         )
 
         self.assertEqual(

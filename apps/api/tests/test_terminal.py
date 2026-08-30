@@ -28,6 +28,7 @@ from app.routers.terminal import (
     agents_status,
     start_agent_session,
     start_agent_runtime,
+    stop_agent_runtime,
     stop_agent_session,
 )
 
@@ -204,6 +205,23 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["cwd"], "/opt/workdev")
         self.assertEqual(result["agent"], "gemini")
         self.assertTrue(result["started"])
+
+    @patch("app.routers.terminal._send_text")
+    @patch("app.routers.terminal._current_process", return_value="codex")
+    @patch("app.routers.terminal._start_standby_session", return_value=True)
+    def test_auto_runtime_uses_run_scoped_session(self, start_session, current_process, send_text):
+        result = start_agent_runtime("codex", "prompt", timeout_seconds=1, run_id="run-1")
+        start_session.assert_called_once_with("codex", "auto-codex-run-1")
+        send_text.assert_called_once_with("auto-codex-run-1", "prompt")
+        self.assertEqual(result["session"], "auto-codex-run-1")
+    @patch("app.routers.terminal._stop_standby_session", return_value=True)
+    def test_stop_auto_runtime_uses_run_scoped_session(self, stop_session):
+        result = stop_agent_runtime("codex", "run-1")
+        stop_session.assert_called_once_with("auto-codex-run-1")
+        self.assertTrue(result)
+
+
+
 
 class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_unknown_agent(self):
