@@ -218,8 +218,8 @@ TOOLS = [
         },
     },
     {
-        "name": "decompor_task",
-        "description": "Cria subtasks para um item do backlog. Use quando pedirem para decompor/quebrar uma task. Você decide as subtasks: títulos claros e acionáveis, em ordem de execução.",
+        "name": "desenhar_subtasks",
+        "description": "Propõe um desenho de subtasks para revisão do usuário, sem gravar nada no banco.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -227,6 +227,19 @@ TOOLS = [
                 "subtasks": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["titulo_task", "subtasks"],
+        },
+    },
+    {
+        "name": "decompor_task",
+        "description": "Materializa subtasks somente depois de aprovação explícita do usuário. Não use para propor ou desenhar subtasks; para isso use desenhar_subtasks. Se a task já possuir subtasks, a criação é bloqueada.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "titulo_task": {"type": "string", "description": "título (ou parte) da task"},
+                "subtasks": {"type": "array", "items": {"type": "string"}},
+                "aprovado_pelo_usuario": {"type": "boolean", "description": "deve ser true somente após aprovação explícita do usuário"},
+            },
+            "required": ["titulo_task", "subtasks", "aprovado_pelo_usuario"],
         },
     },
     {
@@ -413,12 +426,28 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
         return json.dumps({"ok": True, "titulo": item.title, "projeto": p.name},
                           ensure_ascii=False)
 
+    if nome == "desenhar_subtasks":
+        matches = (db.query(BacklogItem)
+                   .filter(BacklogItem.title.ilike(f"%{args['titulo_task']}%"))
+                   .all())
+        if not matches:
+            return json.dumps({"erro": "task não encontrada"}, ensure_ascii=False)
+        if len(matches) > 1:
+            return json.dumps({"erro": "mais de uma task encontrada, especifique", "candidatas": [{"id": str(t.id), "titulo": t.title} for t in matches]}, ensure_ascii=False)
+        t = matches[0]
+        return json.dumps({"ok": True, "executado": False, "persistido": False, "aguarda_aprovacao": True, "task_id": str(t.id), "task": t.title, "subtasks_propostas": args["subtasks"]}, ensure_ascii=False)
+
     if nome == "decompor_task":
+        if args.get("aprovado_pelo_usuario") is not True:
+            return json.dumps({"erro": "aprovação explícita do usuário obrigatória", "executado": False, "persistido": False}, ensure_ascii=False)
         t = (db.query(BacklogItem)
              .filter(BacklogItem.title.ilike(f"%{args['titulo_task']}%"))
              .first())
         if not t:
             return json.dumps({"erro": "task não encontrada"})
+        existentes = db.query(BacklogSubtask).filter(BacklogSubtask.backlog_id == t.id).count()
+        if existentes:
+            return json.dumps({"erro": "task já possui subtasks; nova criação bloqueada", "task": t.title, "quantidade_existente": existentes, "executado": False}, ensure_ascii=False)
         criadas = []
         objetos = []
         for i, titulo in enumerate(args["subtasks"], start=1):
