@@ -84,5 +84,5 @@ export QWEN_CODE_SYSTEM_SETTINGS_PATH="$QWEN_SETTINGS_FILE"
 export QWEN_CODE_SKIP_UPDATE_CHECK_ONCE="true"
 export NO_UPDATE_NOTIFIER="1"
 
-cd /opt/workdev
+cd "${WORKDEV_AGENT_CWD:-${WORKDEV_DIR:-/opt/workdev}}"
 exec "$QWEN_EXECUTABLE" --model "$selected_model" "$@"

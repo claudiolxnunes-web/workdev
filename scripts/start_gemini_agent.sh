@@ -36,7 +36,7 @@ export GEMINI_CLI_SYSTEM_SETTINGS_PATH="$GEMINI_SETTINGS_FILE"
 export NO_UPDATE_NOTIFIER=1
 unset gemini_key
 
-cd /opt/workdev
+cd "${WORKDEV_AGENT_CWD:-${WORKDEV_DIR:-/opt/workdev}}"
 
 approval_mode="default"
 for argument in "$@"; do

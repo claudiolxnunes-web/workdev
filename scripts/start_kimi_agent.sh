@@ -79,5 +79,5 @@ export KIMI_DISABLE_TELEMETRY="1"
 export KIMI_CODE_NO_AUTO_UPDATE="1"
 unset api_key model_context_size
 
-cd /opt/workdev
+cd "${WORKDEV_AGENT_CWD:-${WORKDEV_DIR:-/opt/workdev}}"
 exec "$KIMI_EXECUTABLE" "$@"

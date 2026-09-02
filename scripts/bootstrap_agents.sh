@@ -3,6 +3,10 @@ set -euo pipefail
 
 WORKDEV_DIR="${WORKDEV_DIR:-/opt/workdev}"
 
+# Kimi e outros TUIs distinguem Enter modificado; habilitar no servidor antes
+# de criar qualquer painel evita teclas descartadas silenciosamente.
+tmux set-option -g extended-keys on
+
 declare -A AGENT_COMMANDS=(
   [code]="$WORKDEV_DIR/scripts/start_claude_agent.sh"
   [codex]="$WORKDEV_DIR/scripts/start_codex_agent.sh"
