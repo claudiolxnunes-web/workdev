@@ -76,6 +76,7 @@ esac
 export KIMI_MODEL_API_KEY="$api_key"
 export KIMI_MODEL_MAX_CONTEXT_SIZE="${KIMI_MODEL_MAX_CONTEXT_SIZE:-$model_context_size}"
 export KIMI_DISABLE_TELEMETRY="1"
+export KIMI_CODE_NO_AUTO_UPDATE="1"
 unset api_key model_context_size
 
 cd /opt/workdev

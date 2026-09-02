@@ -46,9 +46,19 @@ _HEALTH_STATE_FILE = Path(os.getenv("AGENTS_HEALTH_STATE", "/var/lib/agents-heal
 _HEALTH_MAX_AGE_SECONDS = 15 * 60
 
 
+def _tmux_session_target(session: str) -> str:
+    """Força correspondência exata de target-session."""
+    return f"={session}"
+
+
+def _tmux_pane_target(session: str) -> str:
+    """Força sessão exata ao resolver o painel ativo."""
+    return f"={session}:"
+
+
 def _capture_history(session: str, lines: int) -> str:
     result = subprocess.run(
-        ["tmux", "capture-pane", "-p", "-J", "-S", f"-{lines}", "-t", session],
+        ["tmux", "capture-pane", "-p", "-J", "-S", f"-{lines}", "-t", _tmux_pane_target(session)],
         capture_output=True,
         text=True,
         timeout=5,
@@ -61,9 +71,9 @@ def _capture_history(session: str, lines: int) -> str:
 
 def _scroll_terminal(session: str, direction: str) -> None:
     command = (
-        ["tmux", "copy-mode", "-u", "-t", session]
+        ["tmux", "copy-mode", "-u", "-t", _tmux_pane_target(session)]
         if direction == "up"
-        else ["tmux", "send-keys", "-X", "-t", session, "page-down"]
+        else ["tmux", "send-keys", "-X", "-t", _tmux_pane_target(session), "page-down"]
     )
     subprocess.run(
         command,
@@ -73,7 +83,7 @@ def _scroll_terminal(session: str, direction: str) -> None:
         check=False,
     )
     position = subprocess.run(
-        ["tmux", "display-message", "-p", "-t", session, "#{scroll_position}"],
+        ["tmux", "display-message", "-p", "-t", _tmux_pane_target(session), "#{scroll_position}"],
         capture_output=True,
         text=True,
         timeout=2,
@@ -81,7 +91,7 @@ def _scroll_terminal(session: str, direction: str) -> None:
     )
     if position.stdout.strip() in {"", "0"}:
         subprocess.run(
-            ["tmux", "send-keys", "-X", "-t", session, "cancel"],
+            ["tmux", "send-keys", "-X", "-t", _tmux_pane_target(session), "cancel"],
             capture_output=True,
             text=True,
             timeout=2,
@@ -97,7 +107,7 @@ def _send_text(session: str, text: str) -> None:
     stripped = text.rstrip("\n")
     if stripped:
         literal = subprocess.run(
-            ["tmux", "send-keys", "-t", session, "-l", "--", stripped],
+            ["tmux", "send-keys", "-t", _tmux_pane_target(session), "-l", "--", stripped],
             capture_output=True,
             text=True,
             timeout=5,
@@ -106,7 +116,7 @@ def _send_text(session: str, text: str) -> None:
         if literal.returncode != 0:
             raise RuntimeError(literal.stderr.strip() or "Sessão tmux indisponível")
     enter = subprocess.run(
-        ["tmux", "send-keys", "-t", session, "Enter"],
+        ["tmux", "send-keys", "-t", _tmux_pane_target(session), "Enter"],
         capture_output=True,
         text=True,
         timeout=5,
@@ -181,7 +191,7 @@ async def _send_output(websocket: WebSocket, master_fd: int) -> None:
 
 def _current_process(session: str) -> str:
     result = subprocess.run(
-        ["tmux", "display-message", "-p", "-t", session, "#{pane_current_command}"],
+        ["tmux", "display-message", "-p", "-t", _tmux_pane_target(session), "#{pane_current_command}"],
         capture_output=True,
         text=True,
         timeout=2,
@@ -231,7 +241,7 @@ def _start_standby_session(agent: str, session: str) -> bool:
         return False
     if current_process:
         subprocess.run(
-            ["tmux", "kill-session", "-t", session],
+            ["tmux", "kill-session", "-t", _tmux_session_target(session)],
             capture_output=True,
             text=True,
             timeout=3,
@@ -254,7 +264,7 @@ def _start_standby_session(agent: str, session: str) -> bool:
 
 def _stop_standby_session(session: str) -> bool:
     result = subprocess.run(
-        ["tmux", "kill-session", "-t", session],
+        ["tmux", "kill-session", "-t", _tmux_session_target(session)],
         capture_output=True,
         text=True,
         timeout=3,
@@ -527,7 +537,7 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         env = os.environ.copy()
         env["TERM"] = "xterm-256color"
         process = subprocess.Popen(
-            ["tmux", "attach-session", "-t", session],
+            ["tmux", "attach-session", "-t", _tmux_session_target(session)],
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,

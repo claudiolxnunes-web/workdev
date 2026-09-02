@@ -4,6 +4,7 @@ set -euo pipefail
 WORKDEV_ENV_FILE="${WORKDEV_ENV_FILE:-/etc/workdev/workdev-api.env}"
 GEMINI_EXECUTABLE="${GEMINI_EXECUTABLE:-/usr/bin/gemini}"
 GEMINI_MODEL="${GEMINI_MODEL:-gemini-3.5-flash}"
+GEMINI_SETTINGS_FILE="${GEMINI_SETTINGS_FILE:-/opt/workdev/scripts/gemini-agent-settings.json}"
 
 if [[ ! -r "$WORKDEV_ENV_FILE" ]]; then
   echo "Gemini Agent: arquivo de configuração não encontrado" >&2
@@ -12,6 +13,10 @@ fi
 
 if [[ ! -x "$GEMINI_EXECUTABLE" ]]; then
   echo "Gemini Agent: CLI gemini não instalada" >&2
+  exit 1
+fi
+if [[ ! -r "$GEMINI_SETTINGS_FILE" ]]; then
+  echo "Gemini Agent: configuração de sistema não encontrada" >&2
   exit 1
 fi
 
@@ -27,6 +32,8 @@ if [[ -z "$gemini_key" ]]; then
 fi
 
 export GEMINI_API_KEY="$gemini_key"
+export GEMINI_CLI_SYSTEM_SETTINGS_PATH="$GEMINI_SETTINGS_FILE"
+export NO_UPDATE_NOTIFIER=1
 unset gemini_key
 
 cd /opt/workdev

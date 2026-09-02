@@ -31,6 +31,7 @@ AGENTS = {
     "qwen": ("qwen", [str(WORKDEV_DIR / "scripts/start_qwen_agent.sh")]),
     "gemini": ("gemini", [str(WORKDEV_DIR / "scripts/start_gemini_agent.sh")]),
 }
+ALWAYS_ON_AGENTS = frozenset(AGENTS)
 
 SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
 BLOCKED_PATTERNS = (
@@ -59,19 +60,19 @@ def run(command: Sequence[str], timeout: int = 5) -> subprocess.CompletedProcess
 
 
 def session_exists(session: str) -> bool:
-    return run(["tmux", "has-session", "-t", session], timeout=2).returncode == 0
+    return run(["tmux", "has-session", "-t", f"={session}"], timeout=2).returncode == 0
 
 
 def current_process(session: str) -> str:
     result = run(
-        ["tmux", "display-message", "-p", "-t", session, "#{pane_current_command}"],
+        ["tmux", "display-message", "-p", "-t", f"={session}:", "#{pane_current_command}"],
         timeout=2,
     )
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def capture_recent(session: str, lines: int = 40) -> str:
-    result = run(["tmux", "capture-pane", "-p", "-J", "-S", f"-{lines}", "-t", session])
+    result = run(["tmux", "capture-pane", "-p", "-J", "-S", f"-{lines}", "-t", f"={session}:"])
     return result.stdout if result.returncode == 0 else ""
 
 
@@ -106,7 +107,7 @@ def inspect_agent(agent: str, allow_restart: bool = True) -> AgentHealth:
         return health
 
     if exists:
-        run(["tmux", "kill-session", "-t", session], timeout=3)
+        run(["tmux", "kill-session", "-t", f"={session}"], timeout=3)
     if not start_session(session, command):
         return health
     process = current_process(session)
@@ -191,7 +192,7 @@ def main() -> int:
     parser.add_argument("--no-restart", action="store_true", help="não recupera sessões offline")
     args = parser.parse_args()
     previous = read_previous_state()
-    always_on = set()
+    always_on = ALWAYS_ON_AGENTS
     health = [
         inspect_agent(
             agent,

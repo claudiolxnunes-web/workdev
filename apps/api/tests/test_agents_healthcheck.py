@@ -3,6 +3,7 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).parents[3] / "scripts" / "agents_healthcheck.py"
@@ -38,6 +39,18 @@ class AgentHealthClassificationTest(unittest.TestCase):
     def test_prompt_ready_agent_is_idle(self):
         result = self.classify("kimi-code", "Kimi Code\n> ")
         self.assertEqual(result.status, "idle")
+
+    def test_all_five_agents_are_always_on(self):
+        self.assertEqual(healthcheck.ALWAYS_ON_AGENTS, frozenset(healthcheck.AGENTS))
+
+    @patch.object(healthcheck, "run")
+    def test_session_lookup_requires_exact_name(self, run):
+        run.return_value.returncode = 0
+        self.assertTrue(healthcheck.session_exists("code"))
+        run.assert_called_once_with(
+            ["tmux", "has-session", "-t", "=code"],
+            timeout=2,
+        )
 
 
 if __name__ == "__main__":

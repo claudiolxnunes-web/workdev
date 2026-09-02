@@ -21,6 +21,8 @@ from app.routers.terminal import (
     _scroll_terminal,
     _send_output,
     _send_text,
+    _tmux_pane_target,
+    _tmux_session_target,
     _start_gemini_headless_runtime,
     _start_standby_session,
     _stop_standby_session,
@@ -40,6 +42,10 @@ class FailingWebSocket:
 
 
 class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_tmux_targets_require_exact_session_name(self):
+        self.assertEqual(_tmux_session_target("code"), "=code")
+        self.assertEqual(_tmux_pane_target("code"), "=code:")
+
     async def test_all_agents_have_isolated_tmux_sessions(self):
         self.assertEqual(
             ALLOWED_SESSIONS,
@@ -81,7 +87,7 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(_capture_history("codex", 5000), "linha antiga\nlinha atual")
         run.assert_called_once_with(
-            ["tmux", "capture-pane", "-p", "-J", "-S", "-5000", "-t", "codex"],
+            ["tmux", "capture-pane", "-p", "-J", "-S", "-5000", "-t", "=codex:"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -95,10 +101,10 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             run.call_args_list[0].args[0],
-            ["tmux", "copy-mode", "-u", "-t", "codex"],
+            ["tmux", "copy-mode", "-u", "-t", "=codex:"],
         )
         self.assertEqual(run.call_args_list[1].args[0], [
-            "tmux", "display-message", "-p", "-t", "codex", "#{scroll_position}"
+            "tmux", "display-message", "-p", "-t", "=codex:", "#{scroll_position}"
         ])
         self.assertEqual(run.call_count, 2)
 
@@ -108,10 +114,10 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
         _scroll_terminal("codex", "down")
 
         self.assertEqual(run.call_args_list[0].args[0], [
-            "tmux", "send-keys", "-X", "-t", "codex", "page-down"
+            "tmux", "send-keys", "-X", "-t", "=codex:", "page-down"
         ])
         self.assertEqual(run.call_args_list[2].args[0], [
-            "tmux", "send-keys", "-X", "-t", "codex", "cancel"
+            "tmux", "send-keys", "-X", "-t", "=codex:", "cancel"
         ])
         self.assertEqual(run.call_count, 3)
 
@@ -124,10 +130,10 @@ class SendTextTest(unittest.TestCase):
         _send_text("codex", "gerar relatorio\n")
 
         self.assertEqual(run.call_args_list[0].args[0], [
-            "tmux", "send-keys", "-t", "codex", "-l", "--", "gerar relatorio",
+            "tmux", "send-keys", "-t", "=codex:", "-l", "--", "gerar relatorio",
         ])
         self.assertEqual(run.call_args_list[1].args[0], [
-            "tmux", "send-keys", "-t", "codex", "Enter",
+            "tmux", "send-keys", "-t", "=codex:", "Enter",
         ])
         self.assertEqual(run.call_count, 2)
 
@@ -139,7 +145,7 @@ class SendTextTest(unittest.TestCase):
         _send_text("codex", "")
 
         run.assert_called_once_with(
-            ["tmux", "send-keys", "-t", "codex", "Enter"],
+            ["tmux", "send-keys", "-t", "=codex:", "Enter"],
             capture_output=True, text=True, timeout=5, check=False,
         )
 
