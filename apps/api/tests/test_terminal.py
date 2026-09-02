@@ -21,8 +21,8 @@ from app.routers.terminal import (
     _scroll_terminal,
     _send_output,
     _send_text,
-    _tmux_pane_target,
-    _tmux_session_target,
+    _pane_target,
+    _session_target,
     _start_gemini_headless_runtime,
     _start_standby_session,
     _stop_standby_session,
@@ -43,8 +43,8 @@ class FailingWebSocket:
 
 class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
     async def test_tmux_targets_require_exact_session_name(self):
-        self.assertEqual(_tmux_session_target("code"), "=code")
-        self.assertEqual(_tmux_pane_target("code"), "=code:")
+        self.assertEqual(_session_target("code"), "=code")
+        self.assertEqual(_pane_target("code"), "=code:")
 
     async def test_all_agents_have_isolated_tmux_sessions(self):
         self.assertEqual(

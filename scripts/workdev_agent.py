@@ -11,7 +11,9 @@ from pathlib import Path
 
 
 API_BASE = os.getenv("WORKDEV_LOCAL_API", "http://127.0.0.1:8000/api")
-ENV_FILE = Path("/opt/workdev/apps/api/.env")
+ENV_FILE = Path(
+    os.getenv("WORKDEV_API_ENV_FILE", "/etc/workdev/workdev-api.env")
+)
 
 
 def api_key() -> str:
