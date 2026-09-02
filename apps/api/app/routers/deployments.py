@@ -3,8 +3,16 @@ import time
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-from fastapi import APIRouter
+from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models.deployment import DeploymentOutcome
+from app.schemas.deployment import (
+    DeploymentOutcomeCreate,
+    DeploymentOutcomeOut,
+)
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
 CONFIG = "/opt/workdev/deployments.json"
@@ -33,6 +41,11 @@ def ping(app: dict) -> dict:
 
 @router.get("/status")
 def status():
+    """
+    Verificar status dos aplicativos monitorados.
+
+    Endpoint existente de monitoramento de saúde de serviços.
+    """
     try:
         apps = json.load(open(CONFIG))
     except Exception as e:
@@ -45,3 +58,87 @@ def status():
         "resumo": {"total": len(resultados), "online": online},
         "apps": resultados,
     }
+
+
+@router.post(
+    "/outcomes",
+    response_model=DeploymentOutcomeOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_deployment_outcome(
+    outcome: DeploymentOutcomeCreate,
+    db: Session = Depends(get_db),
+):
+    """
+    Registrar o resultado de um deploy.
+
+    Este endpoint é chamado pelo pipeline de deploy após o postcheck
+    para persistir o resultado (success, rolled_back, hotfixed, degraded).
+    """
+    db_outcome = DeploymentOutcome(
+        proof_id=outcome.proof_id,
+        project=outcome.project,
+        artifact_fingerprint=outcome.artifact_fingerprint,
+        outcome=outcome.outcome,
+        deployed_at=outcome.deployed_at or datetime.utcnow(),
+        deployed_by=outcome.deployed_by,
+        commit_sha=outcome.commit_sha,
+        deployment_url=outcome.deployment_url,
+        postcheck_result=outcome.postcheck_result,
+        error_message=outcome.error_message,
+    )
+
+    db.add(db_outcome)
+    db.commit()
+    db.refresh(db_outcome)
+
+    return db_outcome
+
+
+@router.get("/outcomes", response_model=list[DeploymentOutcomeOut])
+def list_deployment_outcomes(
+    project: str | None = None,
+    days: int = 30,
+    db: Session = Depends(get_db),
+):
+    """
+    Listar deployment outcomes dos últimos N dias.
+
+    - `project`: filtrar por projeto (opcional)
+    - `days`: número de dias para retroceder (padrão: 30)
+    """
+    cutoff = datetime.utcnow() - timedelta(days=days)
+
+    query = db.query(DeploymentOutcome).filter(
+        DeploymentOutcome.deployed_at >= cutoff
+    )
+
+    if project:
+        query = query.filter(DeploymentOutcome.project == project)
+
+    outcomes = query.order_by(
+        DeploymentOutcome.deployed_at.desc()
+    ).all()
+
+    return outcomes
+
+
+@router.get("/outcomes/{proof_id}", response_model=DeploymentOutcomeOut)
+def get_deployment_outcome(
+    proof_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Obter o resultado de um deploy específico pelo proof_id.
+    """
+    outcome = db.query(DeploymentOutcome).filter(
+        DeploymentOutcome.proof_id == proof_id
+    ).first()
+
+    if not outcome:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Deployment outcome com proof_id '{proof_id}' não encontrado",
+        )
+
+    return outcome

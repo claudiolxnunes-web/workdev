@@ -4,6 +4,7 @@ import { Routes, Route, NavLink } from "react-router-dom"
 
 import NewProject from "./pages/NewProject"
 import Dashboard from "./pages/Dashboard"
+import ExecutiveDashboard from "./pages/ExecutiveDashboard"
 import Projects from "./pages/Projects"
 import Knowledge from "./pages/Knowledge"
 import Deployments from "./pages/Deployments"
@@ -158,6 +159,7 @@ function App() {
         <main className="min-w-0 max-w-full flex-1 overflow-x-hidden p-3 sm:p-5 md:p-8">
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/dashboard/executive" element={<ExecutiveDashboard />} />
             <Route path="/projects" element={<Projects />} />
             <Route
               path="/ai-hub"

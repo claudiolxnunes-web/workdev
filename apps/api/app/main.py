@@ -24,6 +24,7 @@ from app.routers.decisions import router as decisions_router
 from app.routers.handoffs import plans_router, router as handoffs_router
 from app.routers.settings import router as settings_router
 from app.routers.system import router as system_router
+from app.routers.metrics import router as metrics_router
 from app.auth import request_is_authenticated
 
 load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
@@ -75,6 +76,7 @@ app.include_router(settings_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(busca_web_router, prefix="/api")
 app.include_router(terminal_router)
+app.include_router(metrics_router, prefix="/api")
 
 
 @app.get("/health")

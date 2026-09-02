@@ -7,7 +7,10 @@ import hashlib
 import hmac
 import json
 import os
+import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -113,6 +116,72 @@ class DeploymentCallbacks:
     rollback: Callable[[], None]
 
 
+def _persist_deployment_outcome(
+    proof: dict[str, Any],
+    approval: dict[str, Any],
+    status: str,
+    postcheck_result: dict[str, Any],
+    api_url: str = "http://127.0.0.1:8000",
+    api_key: str | None = None,
+) -> None:
+    """
+    Persistir o resultado do deploy no banco de dados via API.
+
+    Mapeia os status do pipeline para o enum deployment_outcome:
+    - DEPLOY_SUCCEEDED -> success
+    - DEPLOY_DEGRADED -> degraded
+    - DEPLOY_FAILED -> rolled_back (se houve rollback) ou hotfixed
+    """
+    from deploy_broker import load
+
+    # Carregar proof e approval para obter metadados
+    proof_id = proof.get("proof_id", "")
+    project = proof.get("project", "workdev-core")
+    artifact_fingerprint = proof.get("artifact_fingerprint", "")
+
+    # Mapear status do pipeline para outcome
+    outcome_map = {
+        "DEPLOY_SUCCEEDED": "success",
+        "DEPLOY_DEGRADED": "degraded",
+        "DEPLOY_FAILED": "rolled_back",
+        "ROLLED_BACK": "rolled_back",
+    }
+    outcome = outcome_map.get(status, "rolled_back")
+
+    payload = {
+        "proof_id": proof_id,
+        "project": project,
+        "artifact_fingerprint": artifact_fingerprint,
+        "outcome": outcome,
+        "postcheck_result": postcheck_result,
+    }
+
+    if not api_key:
+        # Tentar ler a API key do env file
+        env_file = Path("/etc/workdev/workdev-api.env")
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.startswith("WORKDEV_API_KEY="):
+                    api_key = line.split("=", 1)[1].strip('"\'')
+                    break
+
+    try:
+        req = urllib.request.Request(
+            f"{api_url}/api/deployments/outcomes",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-API-Key": api_key or "",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            response.read()
+    except Exception as e:
+        # Falha ao persistir não deve falhar o deploy, apenas logar
+        print(f"Warning: failed to persist deployment outcome: {e}", file=sys.stderr)
+
+
 class DeploymentPipeline:
     def __init__(self, state_dir: Path, key: bytes):
         self.state_dir = state_dir
@@ -168,6 +237,10 @@ class DeploymentPipeline:
         if status not in {"DEPLOY_SUCCEEDED", "DEPLOY_DEGRADED", "DEPLOY_FAILED"}:
             status = "DEPLOY_FAILED"
         self._record(run_id, status, post_deploy=result)
+
+        # Persistir o deployment outcome no banco de dados
+        _persist_deployment_outcome(proof, approval, status, result)
+
         if status == "DEPLOY_FAILED":
             try:
                 callbacks.rollback()

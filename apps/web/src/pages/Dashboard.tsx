@@ -62,6 +62,19 @@ export default function Dashboard() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
 
+      {/* Novo: Link para Dashboard Executivo */}
+      <div className="md:col-span-3">
+        <a
+          href="/dashboard/executive"
+          className="block bg-gradient-to-r from-blue-900/50 to-purple-900/50 border border-blue-800 rounded-xl p-6 hover:border-blue-600 transition-colors"
+        >
+          <h2 className="text-xl font-bold mb-2">📊 Dashboard Executivo — Métricas DORA</h2>
+          <p className="text-slate-400 text-sm">
+            Deployment Frequency, Change Failure Rate, MTTR e Lead Time for Changes
+          </p>
+        </a>
+      </div>
+
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
         <h2 className="text-xl font-bold mb-4">Infrastructure</h2>
         {deployError && <p className="text-red-400 text-sm">Erro ao carregar status</p>}

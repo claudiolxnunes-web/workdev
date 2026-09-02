@@ -1,5 +1,5 @@
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
 from dotenv import load_dotenv
 import os
 
@@ -20,3 +20,12 @@ SessionLocal = sessionmaker(
 )
 
 Base = declarative_base()
+
+
+def get_db() -> Session:
+    """Dependency para obter sessão do banco de dados."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
