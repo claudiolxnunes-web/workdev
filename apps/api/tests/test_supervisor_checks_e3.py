@@ -243,11 +243,9 @@ def dados_knowledge(**ajustes):
         "documentos": [{"fonte_id": "decisions/a.md", "titulo": "Decisão A"}],
         "adrs": [],
         "knowledge": [],
-        "total_backlog": 100,
         "arquivos": [
             {"caminho": "decisions/a.md", "tipo": "decision", "titulo": "Decisão A"}
         ],
-        "cabecalho_backlog_md": "# Backlog\n\nExportado em 2026-08-16 12:00 — 100 itens.\n",
         "tabelas_vazias": [],
     }
     base.update(ajustes)
@@ -287,26 +285,6 @@ class KnowledgeDriftTest(unittest.TestCase):
         )
         fatos = [f for f in knowledge_drift.avaliar(dados, AGORA) if f.subcheck == "adr_fora_do_rag"]
         self.assertEqual(fatos, [], "normalização não casou títulos equivalentes")
-
-    def test_backlog_md_dentro_da_tolerancia(self):
-        dados = dados_knowledge(total_backlog=103)
-        fatos = [f for f in knowledge_drift.avaliar(dados, AGORA) if "backlog" in (f.subcheck or "")]
-        self.assertEqual(fatos, [])
-
-    def test_backlog_md_defasado(self):
-        dados = dados_knowledge(
-            total_backlog=179,
-            cabecalho_backlog_md="Exportado em 2026-08-13 20:58 — 84 itens.",
-        )
-        fatos = [f for f in knowledge_drift.avaliar(dados, AGORA) if f.subcheck == "backlog_md_defasado"]
-        self.assertEqual(len(fatos), 1)
-        self.assertEqual(fatos[0].medidas["diferenca"], 95)
-        self.assertEqual(fatos[0].medidas["itens_no_banco"], 179)
-
-    def test_cabecalho_ilegivel_nao_gera_achado(self):
-        dados = dados_knowledge(cabecalho_backlog_md="# Backlog\n\nsem cabeçalho de exportação")
-        fatos = [f for f in knowledge_drift.avaliar(dados, AGORA) if f.subcheck == "backlog_md_defasado"]
-        self.assertEqual(fatos, [])
 
     def test_arquivo_em_disco_fora_do_indice(self):
         dados = dados_knowledge(

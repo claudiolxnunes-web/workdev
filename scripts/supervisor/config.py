@@ -164,19 +164,13 @@ RAG_FONTE = "workdev"
 RAG_RAIZES = (
     ("docs/adr", "adr", True),
     ("decisions", "decision", True),
-    ("backlog.md", "backlog", False),
-    ("knowledge", "knowledge", True),
 )
-
-ARQUIVO_BACKLOG_EXPORTADO = "backlog.md"
 
 # Tabelas com endpoint ativo e nenhuma linha: estrutura que compete com
 # outra sem ser usada. Achado informativo, reportado uma vez.
 TABELAS_VIGIADAS_VAZIAS = ("decisions", "rfcs")
 
 FAIXAS_REGISTROS = ((6, "1-5"), (21, "6-20"), (101, "21-100"), (None, "100+"))
-BACKLOG_MD_TOLERANCIA_ITENS = 5
-BACKLOG_MD_TOLERANCIA_DIAS = 7
 
 
 # --------------------------------------------------------------------------
