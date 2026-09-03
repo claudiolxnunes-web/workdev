@@ -40,7 +40,7 @@ def ping(app: dict) -> dict:
 
 
 @router.get("/status")
-def status():
+def deployment_status():
     """
     Verificar status dos aplicativos monitorados.
 
