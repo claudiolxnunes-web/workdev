@@ -157,14 +157,9 @@ def _persist_deployment_outcome(
     }
 
     if not api_key:
-        # Tentar ler a API key do env file
-        env_file = Path("/etc/workdev/workdev-api.env")
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                if line.startswith("WORKDEV_API_KEY="):
-                    api_key = line.split("=", 1)[1].strip('"\'')
-                    break
-
+        key_file = Path("/etc/workdev-deploy/api.key")
+        if key_file.is_file():
+            api_key = key_file.read_text(encoding="utf-8").strip()
     try:
         req = urllib.request.Request(
             f"{api_url}/api/deployments/outcomes",
