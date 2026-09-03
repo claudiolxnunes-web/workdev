@@ -137,7 +137,7 @@ def _persist_deployment_outcome(
     # Carregar proof e approval para obter metadados
     proof_id = proof.get("proof_id", "")
     project = proof.get("project", "workdev-core")
-    artifact_fingerprint = proof.get("artifact_fingerprint", "")
+    artifact_fingerprint = proof.get("artifact_fingerprint", "").removeprefix("sha256:")
 
     # Mapear status do pipeline para outcome
     outcome_map = {
