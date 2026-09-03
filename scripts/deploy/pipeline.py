@@ -158,8 +158,12 @@ def _persist_deployment_outcome(
 
     if not api_key:
         key_file = Path("/etc/workdev-deploy/api.key")
-        if key_file.is_file():
-            api_key = key_file.read_text(encoding="utf-8").strip()
+        try:
+            if key_file.is_file():
+                api_key = key_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            api_key = None
+
     try:
         req = urllib.request.Request(
             f"{api_url}/api/deployments/outcomes",
