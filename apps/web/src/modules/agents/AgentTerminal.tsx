@@ -5,8 +5,25 @@ import "@xterm/xterm/css/xterm.css"
 import type { AgentName } from "@/services/handoff.service"
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "busy" | "error"
+export type OperationalStatus = "standby" | "executing" | "awaiting_approval" | "awaiting_user" | "completed" | "blocked" | "error"
 
-export function AgentTerminal({ agent, awaitingApproval = false }: { agent: AgentName; awaitingApproval?: boolean }) {
+const OPERATION_LABEL: Record<OperationalStatus, string> = {
+  standby: "STANDBY", executing: "EXECUTANDO", awaiting_approval: "AGUARDANDO APROVAÇÃO",
+  awaiting_user: "AGUARDANDO USUÁRIO", completed: "CONCLUÍDO", blocked: "BLOQUEADO", error: "ERRO",
+}
+
+const OPERATION_STYLE: Record<OperationalStatus, string> = {
+  standby: "bg-slate-800 text-slate-200", executing: "bg-sky-900 text-sky-200",
+  awaiting_approval: "animate-pulse bg-amber-500 text-slate-950", awaiting_user: "bg-violet-900 text-violet-200",
+  completed: "bg-emerald-900 text-emerald-200", blocked: "bg-orange-900 text-orange-200",
+  error: "bg-red-900 text-red-200",
+}
+
+export function AgentTerminal({
+  agent, awaitingApproval = false, operationalStatus = "standby", approvalPrompt,
+}: {
+  agent: AgentName; awaitingApproval?: boolean; operationalStatus?: OperationalStatus; approvalPrompt?: string | null
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
@@ -215,25 +232,6 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
     await copyText(history, "Histórico copiado")
   }
 
-  async function quickReply(value: string) {
-    if (sending) return
-    setSending(true)
-    setSendError("")
-    try {
-      const response = await fetch(`/api/agents/${agent}/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: value }),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.detail || "Falha ao enviar")
-    } catch (cause) {
-      setSendError(cause instanceof Error ? cause.message : "Falha ao enviar")
-    } finally {
-      setSending(false)
-    }
-  }
-
   async function sendPrompt() {
     const text = prompt.trim()
     if (!text || sending) return
@@ -305,7 +303,10 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
               • {taskRunning ? `ativo${processName ? `: ${processName}` : ""}` : "aguardando"}
             </span>
           )}
-          {agent === "claude" && <span className="hidden text-xs text-amber-300 xl:inline">• Para copiar com estabilidade, use Texto selecionável</span>}
+          {agent === "claude" && <span className="hidden text-xs text-amber-300 xl:inline">• Para copiar com estabilidade, use Copiar conversa</span>}
+          <span className={`ml-auto shrink-0 rounded px-2 py-1 text-[10px] font-bold ${OPERATION_STYLE[operationalStatus]}`}>
+            {OPERATION_LABEL[operationalStatus]}
+          </span>
         </div>
         <div className="flex w-full flex-wrap items-center gap-1 border-t border-slate-800/70 px-2 py-1 sm:px-3">
           {copyFeedback && <span className="hidden text-xs text-emerald-400 sm:inline">{copyFeedback}</span>}
@@ -350,16 +351,10 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
         </div>
       </div>
       {awaitingApproval && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-amber-800 bg-amber-950/60 px-3 py-2 text-sm text-amber-200">
-          <span className="font-medium">⏸ Aguardando aprovação</span>
-          <span className="text-xs text-amber-300/80">(detecção por heurística — confira o terminal antes de responder)</span>
-          <div className="ml-auto flex flex-wrap gap-1.5">
-            <button type="button" disabled={sending} onClick={() => void quickReply("1")} className="rounded bg-amber-800/70 px-2.5 py-1 text-xs font-medium hover:bg-amber-700 disabled:opacity-40">1</button>
-            <button type="button" disabled={sending} onClick={() => void quickReply("2")} className="rounded bg-amber-800/70 px-2.5 py-1 text-xs font-medium hover:bg-amber-700 disabled:opacity-40">2</button>
-            <button type="button" disabled={sending} onClick={() => void quickReply("y")} className="rounded bg-emerald-800/70 px-2.5 py-1 text-xs font-medium hover:bg-emerald-700 disabled:opacity-40">Sim (y)</button>
-            <button type="button" disabled={sending} onClick={() => void quickReply("n")} className="rounded bg-red-900/70 px-2.5 py-1 text-xs font-medium hover:bg-red-800 disabled:opacity-40">Não (n)</button>
-            <button type="button" disabled={sending} onClick={() => void quickReply("")} className="rounded bg-slate-800 px-2.5 py-1 text-xs font-medium hover:bg-slate-700 disabled:opacity-40">Enter</button>
-          </div>
+        <div role="alert" className="shrink-0 border-y border-amber-500 bg-amber-400 px-3 py-3 text-sm text-slate-950 shadow-lg shadow-amber-500/20">
+          <p className="text-base font-black">⚠ AGUARDANDO APROVAÇÃO</p>
+          <p className="mt-1 text-xs font-medium">Confira as opções abaixo e responda pelo campo de mensagem. Atalhos numéricos foram removidos para evitar aprovação permanente acidental.</p>
+          {approvalPrompt && <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded bg-slate-950/90 p-2 font-mono text-xs text-amber-100">{approvalPrompt}</pre>}
         </div>
       )}
       <div ref={containerRef} className="agent-terminal min-h-0 min-w-0 max-w-full flex-1 overflow-hidden p-2 sm:p-3" />

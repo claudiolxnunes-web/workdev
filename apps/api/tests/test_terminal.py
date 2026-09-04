@@ -14,12 +14,14 @@ from app.routers.terminal import (
     ALLOWED_SESSIONS,
     AgentSendRequest,
     _agent_status,
+    _approval_state,
     _awaiting_approval,
     _capture_history,
     _claim,
     _release,
     _read_pty,
     _load_supervisor_health,
+    _operational_status,
     _requested_terminal_size,
     _send_output,
     _send_text,
@@ -337,6 +339,18 @@ class AwaitingApprovalTest(unittest.TestCase):
         self.assertTrue(_awaiting_approval("code"))
 
     @patch("app.routers.terminal._capture_history")
+    def test_detects_required_approval_phrases_and_preserves_prompt(self, capture):
+        for phrase in (
+            "Allow execution?", "Approve?", "Proceed?", "Confirm?",
+            "Allow once", "Allow for this session", "permission required",
+        ):
+            with self.subTest(phrase=phrase):
+                capture.return_value = f"Comando: pytest\n{phrase}\nYes/No"
+                awaiting, prompt = _approval_state("codex")
+                self.assertTrue(awaiting)
+                self.assertIn(phrase, prompt)
+
+    @patch("app.routers.terminal._capture_history")
     def test_ignores_normal_output_without_prompt_markers(self, capture):
         capture.return_value = "instalando dependencias...\n1. baixando pacote a\n2. baixando pacote b"
         self.assertFalse(_awaiting_approval("codex"))
@@ -360,44 +374,67 @@ class AwaitingApprovalTest(unittest.TestCase):
 
 
 class AgentStatusTest(unittest.IsolatedAsyncioTestCase):
-    @patch("app.routers.terminal._awaiting_approval")
+    @patch("app.routers.terminal._approval_state")
     @patch("app.routers.terminal._current_process")
-    async def test_reports_idle_shell_as_not_running_and_not_awaiting(self, current_process, awaiting):
+    async def test_reports_idle_shell_as_not_running_and_not_awaiting(self, current_process, approval):
         current_process.return_value = "bash"
         result = await _agent_status("codex", "codex")
         self.assertFalse(result["running"])
         self.assertEqual(result["health"], "offline")
         self.assertFalse(result["awaiting_approval"])
-        awaiting.assert_not_called()
+        approval.assert_not_called()
 
-    @patch("app.routers.terminal._awaiting_approval")
+    @patch("app.routers.terminal._operational_status", return_value="awaiting_approval")
+    @patch("app.routers.terminal._approval_state")
     @patch("app.routers.terminal._current_process")
-    async def test_checks_approval_only_when_agent_process_is_running(self, current_process, awaiting):
+    async def test_checks_approval_only_when_agent_process_is_running(self, current_process, approval, _operational):
         current_process.return_value = "claude"
-        awaiting.return_value = True
+        approval.return_value = (True, "Allow execution?\n1. Yes\n2. No")
         result = await _agent_status("claude", "code")
         self.assertTrue(result["running"])
         self.assertEqual(result["health"], "idle")
         self.assertTrue(result["awaiting_approval"])
-        awaiting.assert_called_once_with("code")
+        self.assertIn("Allow execution?", result["approval_prompt"])
+        self.assertEqual(result["operational_status"], "awaiting_approval")
+        approval.assert_called_once_with("code")
 
+    @patch("app.routers.terminal._load_run_states", return_value={})
     @patch("app.routers.terminal._agent_status")
-    async def test_status_endpoint_reports_all_four_agents(self, mock_status):
-        mock_status.side_effect = lambda agent, session, supervisor=None: {
+    async def test_status_endpoint_reports_all_four_agents(self, mock_status, _runs):
+        mock_status.side_effect = lambda agent, session, supervisor=None, run_status=None: {
             "agent": agent, "running": False, "process": "", "awaiting_approval": False,
             "health": "offline", "health_reason": None, "checked_at": None, "recovered": False,
         }
         result = await agents_status()
         self.assertEqual({item["agent"] for item in result["agents"]}, set(ALLOWED_SESSIONS))
 
-    @patch("app.routers.terminal._awaiting_approval", return_value=False)
+    @patch("app.routers.terminal._operational_status", return_value="blocked")
+    @patch("app.routers.terminal._approval_state", return_value=(False, None))
     @patch("app.routers.terminal._current_process", return_value="kimi-code")
-    async def test_exposes_blocked_supervisor_state(self, _current, _awaiting):
+    async def test_exposes_blocked_supervisor_state(self, _current, _approval, _operational):
         result = await _agent_status(
             "kimi", "kimi", {"status": "blocked", "reason": "billing", "checked_at": "now"}
         )
         self.assertEqual(result["health"], "blocked")
         self.assertEqual(result["health_reason"], "billing")
+
+
+class OperationalStatusTest(unittest.TestCase):
+    def test_approval_has_highest_priority(self):
+        self.assertEqual(
+            _operational_status("codex", True, "busy", True, "running"),
+            "awaiting_approval",
+        )
+
+    def test_active_run_is_executing(self):
+        self.assertEqual(_operational_status("gemini", True, "idle", False, "running"), "executing")
+
+    def test_blocked_run_is_blocked(self):
+        self.assertEqual(_operational_status("qwen", True, "idle", False, "blocked"), "blocked")
+
+    @patch("app.routers.terminal._capture_history", return_value="Type your message\n> ")
+    def test_ready_prompt_is_awaiting_user(self, _capture):
+        self.assertEqual(_operational_status("kimi", True, "idle", False, None), "awaiting_user")
 
 
 class SupervisorHealthStateTest(unittest.TestCase):

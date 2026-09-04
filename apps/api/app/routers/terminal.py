@@ -15,7 +15,9 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from pydantic import BaseModel
 
 from app.auth import websocket_is_authenticated
-from app.services.terminal_transcript import read_transcript
+from app.database import SessionLocal
+from app.models.handoff import AgentRun
+from app.services.terminal_transcript import clean_terminal_text, read_transcript
 
 
 router = APIRouter(tags=["agents"])
@@ -413,21 +415,110 @@ _APPROVAL_PATTERNS = [
     for pattern in [
         r"\(y/n\)", r"\[y/n\]", r"\by/n\b",
         r"do you want to proceed", r"do you approve",
-        r"allow this (action|command|tool)",
+        r"allow (?:this )?(?:execution|action|command|tool)",
+        r"approve\?", r"proceed\?", r"confirm\?",
+        r"allow once", r"allow for this session",
+        r"permission required", r"requires? (?:your )?approval",
+        r"would you like to (?:run|execute|proceed)",
         r"deseja continuar", r"aprovar\s*\?", r"confirmar\s*\?",
         r"❯\s*1\.\s*(yes|sim)", r"press enter to continue",
     ]
 ]
 
+_USER_PROMPT_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"type your message", r"what can i (?:do|help)",
+        r"(?:^|\n)\s*[>❯›]\s*$", r"enter your (?:prompt|message)",
+    ]
+]
+_COMPLETED_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [r"build concluído", r"task completed", r"completed successfully", r"concluído com sucesso"]
+]
+_ERROR_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [r"fatal error", r"unhandled exception", r"process exited", r"encerrou com código [1-9]"]
+]
+_RESUMED_PATTERN = re.compile(
+    r"(?:aplicando|continuando|executing|running command|conclu[ií]do|completed|finished)",
+    re.IGNORECASE,
+)
+
+
+def _approval_state(session: str) -> tuple[bool, str | None]:
+    try:
+        tail = _capture_history(session, 60)
+    except RuntimeError:
+        return False, None
+    non_empty = [line for line in tail.splitlines() if line.strip()]
+    recent_lines = non_empty[-20:]
+    recent = "\n".join(recent_lines)
+    matches = [
+        index
+        for index, line in enumerate(recent_lines)
+        if any(pattern.search(line) for pattern in _APPROVAL_PATTERNS)
+    ]
+    if not matches:
+        return False, None
+    last_match = matches[-1]
+    if _RESUMED_PATTERN.search("\n".join(recent_lines[last_match + 1:])):
+        return False, None
+    prompt = clean_terminal_text("\n".join(recent_lines[max(0, last_match - 2):]))
+    return True, prompt or None
+
 
 def _awaiting_approval(session: str) -> bool:
+    return _approval_state(session)[0]
+
+
+def _load_run_states() -> dict[str, str]:
+    db = SessionLocal()
     try:
-        tail = _capture_history(session, 6)
+        rows = (
+            db.query(AgentRun)
+            .filter(AgentRun.status.in_(("queued", "running", "blocked", "review")))
+            .order_by(AgentRun.created_at.desc())
+            .all()
+        )
+        states: dict[str, str] = {}
+        for row in rows:
+            states.setdefault(row.agent, row.status)
+        return states
+    except Exception:
+        return {}
+    finally:
+        db.close()
+
+
+def _operational_status(
+    session: str,
+    running: bool,
+    health_status: str,
+    awaiting_approval: bool,
+    run_status: str | None,
+) -> str:
+    if awaiting_approval:
+        return "awaiting_approval"
+    if health_status == "blocked" or run_status == "blocked":
+        return "blocked"
+    if not running or health_status in {"offline", "degraded"}:
+        return "error"
+    if run_status == "review":
+        return "awaiting_user"
+    if run_status == "running" or health_status == "busy":
+        return "executing"
+    try:
+        recent = _capture_history(session, 40)
     except RuntimeError:
-        return False
-    non_empty = [line for line in tail.splitlines() if line.strip()]
-    recent = "\n".join(non_empty[-3:])
-    return any(pattern.search(recent) for pattern in _APPROVAL_PATTERNS)
+        return "error"
+    if any(pattern.search(recent) for pattern in _ERROR_PATTERNS):
+        return "error"
+    if any(pattern.search(recent) for pattern in _COMPLETED_PATTERNS):
+        return "completed"
+    if any(pattern.search(recent) for pattern in _USER_PROMPT_PATTERNS):
+        return "awaiting_user"
+    return "standby"
 
 
 def _load_supervisor_health() -> dict[str, dict]:
@@ -445,10 +536,17 @@ def _load_supervisor_health() -> dict[str, dict]:
         return {}
 
 
-async def _agent_status(agent: str, session: str, supervisor: dict | None = None) -> dict:
+async def _agent_status(
+    agent: str,
+    session: str,
+    supervisor: dict | None = None,
+    run_status: str | None = None,
+) -> dict:
     current_process = await asyncio.to_thread(_current_process, session)
     running = bool(current_process and current_process not in _SHELL_PROCESSES)
-    awaiting_approval = await asyncio.to_thread(_awaiting_approval, session) if running else False
+    awaiting_approval, approval_prompt = (
+        await asyncio.to_thread(_approval_state, session) if running else (False, None)
+    )
     health = supervisor or {}
     health_status = health.get("status")
     if health_status not in {"idle", "busy", "blocked", "offline", "degraded"}:
@@ -458,6 +556,15 @@ async def _agent_status(agent: str, session: str, supervisor: dict | None = None
         "running": running,
         "process": _PROCESS_LABELS.get(agent, current_process) if running else current_process,
         "awaiting_approval": awaiting_approval,
+        "approval_prompt": approval_prompt,
+        "operational_status": await asyncio.to_thread(
+            _operational_status,
+            session,
+            running,
+            health_status,
+            awaiting_approval,
+            run_status,
+        ),
         "health": health_status,
         "health_reason": health.get("reason"),
         "checked_at": health.get("checked_at"),
@@ -512,9 +619,10 @@ def agent_runtime_snapshot() -> dict[str, dict]:
 @router.get("/api/agents/status")
 async def agents_status():
     supervisor = await asyncio.to_thread(_load_supervisor_health)
+    run_states = await asyncio.to_thread(_load_run_states)
     results = await asyncio.gather(
         *(
-            _agent_status(agent, session, supervisor.get(agent))
+            _agent_status(agent, session, supervisor.get(agent), run_states.get(agent))
             for agent, session in ALLOWED_SESSIONS.items()
         )
     )
@@ -542,7 +650,8 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         master_fd, slave_fd = pty.openpty()
         rows, cols = _requested_terminal_size(websocket)
         _resize(master_fd, rows, cols)
-        initial_status = await _agent_status(agent, session)
+        run_states = await asyncio.to_thread(_load_run_states)
+        initial_status = await _agent_status(agent, session, run_status=run_states.get(agent))
         await websocket.send_text(json.dumps({"type": "status", **initial_status}))
         try:
             history = await asyncio.to_thread(_capture_history, session, 5000)
