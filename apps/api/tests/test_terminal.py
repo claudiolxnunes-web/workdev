@@ -30,7 +30,6 @@ from app.routers.terminal import (
     _stop_standby_session,
     finalize_auto_runtime,
     agent_send,
-    agent_transcript,
     agents_status,
     start_agent_session,
     start_agent_runtime,
@@ -265,18 +264,6 @@ class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as ctx:
             await agent_send("codex", AgentSendRequest(text="oi"))
         self.assertEqual(ctx.exception.status_code, 503)
-
-    @patch("app.routers.terminal.read_transcript", return_value=("linha limpa", 123.0))
-    async def test_transcript_endpoint_returns_clean_persistent_text(self, read):
-        result = await agent_transcript("codex")
-        read.assert_called_once_with("codex")
-        self.assertEqual(result["content"], "linha limpa")
-        self.assertEqual(result["lines"], 1)
-
-    async def test_transcript_endpoint_rejects_unknown_agent(self):
-        with self.assertRaises(HTTPException) as ctx:
-            await agent_transcript("desconhecido")
-        self.assertEqual(ctx.exception.status_code, 404)
 
 
 class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
