@@ -4,7 +4,7 @@ import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -67,6 +67,7 @@ def deployment_status():
 )
 def create_deployment_outcome(
     outcome: DeploymentOutcomeCreate,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     """
@@ -74,7 +75,37 @@ def create_deployment_outcome(
 
     Este endpoint é chamado pelo pipeline de deploy após o postcheck
     para persistir o resultado (success, rolled_back, hotfixed, degraded).
+
+    Idempotente por proof_id: se já existir outcome com o mesmo
+    proof_id e os campos essenciais (project, artifact_fingerprint,
+    outcome, commit_sha) forem compatíveis com o registro existente,
+    retorna o existente com HTTP 200 (retry idempotente). Se qualquer
+    campo essencial divergir, retorna HTTP 409 Conflict sem alterar o
+    registro. A unicidade é garantida em nível de aplicação — o
+    pipeline de deploy é serializado por flock, então não há corrida;
+    uma constraint UNIQUE no banco ficaria como reforço futuro.
     """
+    existing = db.query(DeploymentOutcome).filter(
+        DeploymentOutcome.proof_id == outcome.proof_id
+    ).first()
+    if existing:
+        divergencias = [
+            campo
+            for campo in ("project", "artifact_fingerprint", "outcome", "commit_sha")
+            if getattr(existing, campo) != getattr(outcome, campo)
+        ]
+        if divergencias:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"proof_id '{outcome.proof_id}' já registrado com "
+                    f"campos divergentes: {', '.join(divergencias)}. "
+                    "Registro existente não foi alterado."
+                ),
+            )
+        response.status_code = status.HTTP_200_OK
+        return existing
+
     db_outcome = DeploymentOutcome(
         proof_id=outcome.proof_id,
         project=outcome.project,

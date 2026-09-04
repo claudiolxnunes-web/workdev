@@ -118,42 +118,44 @@ class DeploymentCallbacks:
 
 def _persist_deployment_outcome(
     proof: dict[str, Any],
-    approval: dict[str, Any],
-    status: str,
-    postcheck_result: dict[str, Any],
+    outcome: str,
+    postcheck_result: dict[str, Any] | None = None,
+    error_message: str | None = None,
     api_url: str = "http://127.0.0.1:8000",
     api_key: str | None = None,
 ) -> None:
     """
     Persistir o resultado do deploy no banco de dados via API.
 
-    Mapeia os status do pipeline para o enum deployment_outcome:
+    `outcome` deve ser um valor do enum deployment_outcome
+    (success, rolled_back, hotfixed, degraded). Mapeamento dos status
+    do pipeline, sem inventar estados novos:
     - DEPLOY_SUCCEEDED -> success
     - DEPLOY_DEGRADED -> degraded
-    - DEPLOY_FAILED -> rolled_back (se houve rollback) ou hotfixed
+    - DEPLOY_FAILED com rollback bem-sucedido -> rolled_back
+    - DEPLOY_FAILED com rollback falho -> rolled_back, com
+      error_message prefixado por "rollback_failed:" para distinguir
+      os dois cenarios (o enum nao possui estado proprio para isso).
+
+    O artifact_fingerprint da prova vem no formato "sha256:<64 hex>";
+    o schema da API aceita no maximo 64 caracteres, entao o prefixo e
+    removido antes do envio (causa raiz do HTTP 422 original).
     """
-    from deploy_broker import load
-
-    # Carregar proof e approval para obter metadados
-    proof_id = proof.get("proof_id", "")
-    project = proof.get("project", "workdev-core")
-    artifact_fingerprint = proof.get("artifact_fingerprint", "").removeprefix("sha256:")
-
-    # Mapear status do pipeline para outcome
-    outcome_map = {
-        "DEPLOY_SUCCEEDED": "success",
-        "DEPLOY_DEGRADED": "degraded",
-        "DEPLOY_FAILED": "rolled_back",
-        "ROLLED_BACK": "rolled_back",
-    }
-    outcome = outcome_map.get(status, "rolled_back")
+    proof_id = str(proof.get("proof_id", ""))
+    project = str(proof.get("project", "workdev-core"))
+    artifact_fingerprint = str(
+        proof.get("artifact_fingerprint", "")
+    ).removeprefix("sha256:")
 
     payload = {
         "proof_id": proof_id,
         "project": project,
         "artifact_fingerprint": artifact_fingerprint,
         "outcome": outcome,
+        "commit_sha": proof.get("commit_sha"),
+        "deployment_url": None,
         "postcheck_result": postcheck_result,
+        "error_message": error_message,
     }
 
     if not api_key:
@@ -219,6 +221,7 @@ class DeploymentPipeline:
             callbacks.restart()
         except Exception as error:
             self._record(run_id, "DEPLOY_FAILED", error=str(error))
+            error_message = f"deploy_failed: {error}"
             try:
                 callbacks.rollback()
                 self._record(run_id, "ROLLED_BACK", error=str(error))
@@ -229,6 +232,12 @@ class DeploymentPipeline:
                     error=str(error),
                     rollback_error=str(rollback_error),
                 )
+                error_message = f"rollback_failed: {rollback_error}; {error_message}"
+            # Persistir falha de promote/restart: sem esta chamada o outcome
+            # nunca chegava ao banco e o Change Failure Rate ficava sub-contado.
+            _persist_deployment_outcome(
+                proof, "rolled_back", error_message=error_message
+            )
             return "DEPLOY_FAILED"
 
         result = callbacks.postcheck()
@@ -237,9 +246,7 @@ class DeploymentPipeline:
             status = "DEPLOY_FAILED"
         self._record(run_id, status, post_deploy=result)
 
-        # Persistir o deployment outcome no banco de dados
-        _persist_deployment_outcome(proof, approval, status, result)
-
+        error_message = None
         if status == "DEPLOY_FAILED":
             try:
                 callbacks.rollback()
@@ -251,4 +258,14 @@ class DeploymentPipeline:
                     post_deploy=result,
                     rollback_error=str(rollback_error),
                 )
+                error_message = f"rollback_failed: {rollback_error}"
+            outcome = "rolled_back"
+        else:
+            outcome = "success" if status == "DEPLOY_SUCCEEDED" else "degraded"
+
+        # Persistir o deployment outcome no banco de dados, depois do
+        # rollback, para que o outcome reflita o estado final real.
+        _persist_deployment_outcome(
+            proof, outcome, postcheck_result=result, error_message=error_message
+        )
         return status

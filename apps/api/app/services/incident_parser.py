@@ -184,14 +184,31 @@ class IncidentParser:
 
         Returns:
         - AgentRunEvent de resolução criado
+
+        O payload sempre carrega `detected_at` (copiado do evento de
+        incidente original) e `resolved_at`, porque a query de MTTR em
+        GET /api/metrics/executive depende desses dois campos para
+        calcular o tempo de recuperação.
         """
+        detected_at = resolution_data.get("detected_at")
+        if detected_at is None:
+            original = self.db.query(AgentRunEvent).filter(
+                AgentRunEvent.id == incident_event_id
+            ).first()
+            if original and isinstance(original.payload, dict):
+                detected_at = original.payload.get("detected_at")
+
         event = AgentRunEvent(
             run_id=run_id or UUID("00000000-0000-0000-0000-000000000000"),
             event_type=INCIDENT_RESOLVED,
             message=f"Incidente resolvido: {resolution_data.get('incident_type')}",
             payload={
-                "incident_event_id": str(incident_event_id),
                 **resolution_data,
+                "incident_event_id": str(incident_event_id),
+                "detected_at": detected_at,
+                "resolved_at": resolution_data.get(
+                    "resolved_at", datetime.now(timezone.utc).isoformat()
+                ),
             },
         )
 
