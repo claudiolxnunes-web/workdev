@@ -26,5 +26,4 @@ for session in code codex kimi qwen gemini; do
   tmux new-session -d -s "$session" -c "$WORKDEV_DIR" "${AGENT_COMMANDS[$session]}"
 done
 
-"$WORKDEV_DIR/scripts/configure_agent_transcripts.py"
 "$WORKDEV_DIR/scripts/agents_healthcheck.py" --once
