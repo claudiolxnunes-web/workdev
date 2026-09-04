@@ -160,6 +160,16 @@ def _resize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
+def _requested_terminal_size(websocket: WebSocket) -> tuple[int, int]:
+    """Lê o tamanho inicial sem confiar nos valores enviados pelo navegador."""
+    try:
+        rows = int(websocket.query_params.get("rows", "24"))
+        cols = int(websocket.query_params.get("cols", "80"))
+    except (TypeError, ValueError):
+        return 24, 80
+    return max(5, min(rows, 300)), max(10, min(cols, 500))
+
+
 async def _claim(session: str) -> bool:
     async with _connections_lock:
         if session in _active_connections:
@@ -173,10 +183,22 @@ async def _release(session: str) -> None:
         _active_connections.discard(session)
 
 
+async def _read_pty(master_fd: int) -> bytes:
+    """Espera dados do PTY sem ocupar uma thread bloqueada em ``os.read``."""
+    loop = asyncio.get_running_loop()
+    readable = asyncio.Event()
+    loop.add_reader(master_fd, readable.set)
+    try:
+        await readable.wait()
+        return os.read(master_fd, 65536)
+    finally:
+        loop.remove_reader(master_fd)
+
+
 async def _send_output(websocket: WebSocket, master_fd: int) -> None:
     while True:
         try:
-            data = await asyncio.to_thread(os.read, master_fd, 65536)
+            data = await _read_pty(master_fd)
         except OSError:
             return
         if not data:
@@ -534,6 +556,18 @@ async def agent_terminal(websocket: WebSocket, agent: str):
     try:
         await websocket.accept()
         master_fd, slave_fd = pty.openpty()
+        rows, cols = _requested_terminal_size(websocket)
+        _resize(master_fd, rows, cols)
+        initial_status = await _agent_status(agent, session)
+        await websocket.send_text(json.dumps({"type": "status", **initial_status}))
+        try:
+            history = await asyncio.to_thread(_capture_history, session, 5000)
+        except (RuntimeError, subprocess.TimeoutExpired):
+            history = ""
+        await websocket.send_text(json.dumps({
+            "type": "snapshot",
+            "content": history,
+        }))
         env = os.environ.copy()
         env["TERM"] = "xterm-256color"
         process = subprocess.Popen(
@@ -547,8 +581,6 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         )
         os.close(slave_fd)
         slave_fd = -1
-        initial_status = await _agent_status(agent, session)
-        await websocket.send_text(json.dumps({"type": "status", **initial_status}))
         output_task = asyncio.create_task(_send_output(websocket, master_fd))
 
         while True:

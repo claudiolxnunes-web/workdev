@@ -73,8 +73,10 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
       if (disposed) return
       window.clearTimeout(reconnectTimer)
       setStatus("connecting")
+      try { fitAddon.fit() } catch { /* layout ainda não disponível */ }
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-      const socket = new WebSocket(`${protocol}//${window.location.host}/ws/agents/${agent}`)
+      const size = new URLSearchParams({ cols: String(terminal.cols), rows: String(terminal.rows) })
+      const socket = new WebSocket(`${protocol}//${window.location.host}/ws/agents/${agent}?${size}`)
       socketRef.current = socket
       socket.binaryType = "arraybuffer"
       socket.onopen = () => {
@@ -94,6 +96,9 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
           if (message.type === "status") {
             setTaskRunning(Boolean(message.running))
             setProcessName(typeof message.process === "string" ? message.process : "")
+          } else if (message.type === "snapshot" && typeof message.content === "string") {
+            terminal.reset()
+            if (message.content) terminal.write(`${message.content.replace(/\r?\n/g, "\r\n")}\r\n`)
           }
         } catch { /* mensagem de controle desconhecida */ }
       }
@@ -251,19 +256,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
   async function reconnect() {
     if (sessionAction) return
     setSessionError("")
-    if (["claude", "codex", "kimi", "qwen", "gemini"].includes(agent)) {
-      setSessionAction("start")
-      try {
-        const response = await fetch(`/api/agents/${agent}/session`, { method: "POST" })
-        const data = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(data.detail || "Falha ao iniciar agente")
-      } catch (cause) {
-        setSessionError(cause instanceof Error ? cause.message : "Falha ao iniciar agente")
-        setSessionAction(null)
-        return
-      }
-      setSessionAction(null)
-    }
+    socketRef.current?.close(1000, "Reconexão solicitada")
     setGeneration((value) => value + 1)
   }
 
@@ -338,7 +331,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
             onClick={() => void reconnect()}
             title={active ? "Refazer a conexão com o terminal" : "Reconectar ao terminal"}
           >
-            {sessionAction === "start" ? "Religando…" : "Reconectar"}
+            Reconectar navegador
           </button>
           {standby && (
             <button
@@ -425,4 +418,3 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
     </section>
   )
 }
-

@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -17,8 +18,10 @@ from app.routers.terminal import (
     _capture_history,
     _claim,
     _release,
+    _read_pty,
     _load_supervisor_health,
     _scroll_terminal,
+    _requested_terminal_size,
     _send_output,
     _send_text,
     _pane_target,
@@ -68,6 +71,16 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
             if write_fd >= 0:
                 os.close(write_fd)
 
+    async def test_pty_read_can_be_cancelled_without_blocking_executor(self):
+        read_fd, write_fd = os.pipe()
+        task = asyncio.create_task(_read_pty(read_fd))
+        await asyncio.sleep(0)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        os.close(read_fd)
+        os.close(write_fd)
+
     async def test_connection_claim_can_be_released(self):
         session = "test-terminal-lifecycle"
         await _release(session)
@@ -94,6 +107,8 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
             check=False,
         )
 
+
+class TerminalScrollTest(unittest.IsolatedAsyncioTestCase):
     @patch("app.routers.terminal.subprocess.run")
     async def test_scroll_up_enters_tmux_copy_mode_one_page_up(self, run):
         run.return_value.stdout = "25\n"
@@ -120,6 +135,21 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
             "tmux", "send-keys", "-X", "-t", "=codex:", "cancel"
         ])
         self.assertEqual(run.call_count, 3)
+
+
+class RequestedTerminalSizeTest(unittest.TestCase):
+    def test_accepts_size_inside_limits(self):
+        websocket = SimpleNamespace(query_params={"rows": "42", "cols": "132"})
+        self.assertEqual(_requested_terminal_size(websocket), (42, 132))
+
+    def test_clamps_untrusted_size(self):
+        websocket = SimpleNamespace(query_params={"rows": "999", "cols": "1"})
+        self.assertEqual(_requested_terminal_size(websocket), (300, 10))
+
+    def test_uses_safe_default_for_invalid_size(self):
+        websocket = SimpleNamespace(query_params={"rows": "invalid", "cols": "80"})
+        self.assertEqual(_requested_terminal_size(websocket), (24, 80))
+
 
 class SendTextTest(unittest.TestCase):
     @patch("app.routers.terminal.subprocess.run")
