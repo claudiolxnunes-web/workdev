@@ -198,7 +198,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
   async function openHistory() {
     setHistoryOpen(true); setHistoryLoading(true); setHistoryError("")
     try {
-      const response = await fetch(`/api/agents/${agent}/history?lines=100000`)
+      const response = await fetch(`/api/agents/${agent}/transcript`)
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || "Falha ao carregar histórico")
       setHistory(typeof data.content === "string" ? data.content : "")
@@ -324,7 +324,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
           <button type="button" onClick={() => scrollPage("up")} className="min-h-8 min-w-8 shrink-0 rounded px-2 py-1 text-sm text-sky-400 hover:bg-slate-800" title="Subir uma página no terminal" aria-label="Subir uma página">↑</button>
           <button type="button" onClick={() => scrollPage("down")} className="min-h-8 min-w-8 shrink-0 rounded px-2 py-1 text-sm text-sky-400 hover:bg-slate-800" title="Descer uma página no terminal" aria-label="Descer uma página">↓</button>
           <button type="button" onClick={() => void openHistory()} className="min-h-8 shrink-0 rounded bg-sky-950 px-2 py-1 text-xs font-medium text-sky-300 hover:bg-sky-900">
-            Texto selecionável
+            Copiar conversa
           </button>
           <button
             type="button"
@@ -393,18 +393,18 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
         <div className="absolute inset-0 z-20 flex flex-col bg-slate-950">
           <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
             <div>
-              <p className="text-sm font-semibold">Histórico do {agent}</p>
-              <p className="text-[11px] text-slate-500">Selecione qualquer trecho ou copie tudo</p>
+              <p className="text-sm font-semibold">Conversa do {agent}</p>
+              <p className="text-[11px] text-slate-500">Transcript persistente e sem códigos ANSI</p>
             </div>
             <div className="flex max-w-full flex-wrap items-center gap-1 sm:gap-2">
               <button type="button" onClick={() => { if (historyRef.current) historyRef.current.scrollTop = 0 }} className="rounded px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800">Início</button>
               <button type="button" onClick={() => { const field = historyRef.current; if (field) field.scrollTop = field.scrollHeight }} className="rounded px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800">Final</button>
               <button type="button" disabled={!history} onClick={() => void copyHistory()} className="rounded bg-sky-700 px-3 py-1.5 text-xs hover:bg-sky-600 disabled:opacity-40">Copiar tudo</button>
-              <button type="button" disabled={!history} onClick={downloadHistory} className="rounded bg-slate-800 px-3 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-40">Baixar .txt</button>
+              <button type="button" disabled={!history} onClick={downloadHistory} className="rounded bg-slate-800 px-3 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-40">Baixar transcript</button>
               <button type="button" onClick={() => setHistoryOpen(false)} className="rounded px-2 py-1 text-xl text-slate-400 hover:bg-slate-800 hover:text-white" aria-label="Fechar histórico">×</button>
             </div>
           </div>
-          {historyLoading && <p className="p-4 text-sm text-slate-400">Carregando histórico do tmux…</p>}
+          {historyLoading && <p className="p-4 text-sm text-slate-400">Carregando transcript persistente…</p>}
           {historyError && <p className="m-4 rounded bg-red-950/60 p-3 text-sm text-red-300">{historyError}</p>}
           {!historyLoading && !historyError && (
             <textarea
