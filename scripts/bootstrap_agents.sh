@@ -6,6 +6,10 @@ WORKDEV_DIR="${WORKDEV_DIR:-/opt/workdev}"
 # Kimi e outros TUIs distinguem Enter modificado; habilitar no servidor antes
 # de criar qualquer painel evita teclas descartadas silenciosamente.
 tmux set-option -g extended-keys on
+# O tmux continua sendo a camada de persistência do processo e precisa reter
+# histórico suficiente para replay/reconexão. Não desabilitamos alternate-screen:
+# cada CLI continua livre para usar seu TUI nativo.
+tmux set-option -g history-limit 100000
 
 declare -A AGENT_COMMANDS=(
   [code]="$WORKDEV_DIR/scripts/start_claude_agent.sh"

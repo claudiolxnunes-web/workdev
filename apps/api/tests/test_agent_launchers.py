@@ -17,6 +17,9 @@ def test_bootstrap_starts_all_five_agents_and_uses_exact_tmux_targets():
     assert "for session in code codex kimi qwen gemini" in content
     assert 'tmux has-session -t "=$session"' in content
     assert "tmux set-option -g extended-keys on" in content
+    assert "tmux set-option -g history-limit 100000" in content
+    assert "alternate-screen" in content
+    assert "set-option -gw alternate-screen off" not in content
     assert "--no-restart" not in content
 
 

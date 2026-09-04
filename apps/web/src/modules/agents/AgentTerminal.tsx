@@ -41,7 +41,7 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
     const terminal = new Terminal({
       cursorBlink: true, convertEol: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-      fontSize: window.innerWidth < 640 ? 15 : 14, lineHeight: 1.2, scrollback: 20000,
+      fontSize: window.innerWidth < 640 ? 15 : 14, lineHeight: 1.2, scrollback: 100000,
       rightClickSelectsWord: true,
       theme: { background: "#020617", foreground: "#e2e8f0", cursor: "#38bdf8" },
     })
@@ -188,15 +188,17 @@ export function AgentTerminal({ agent, awaitingApproval = false }: { agent: Agen
   }
 
   function scrollPage(direction: "up" | "down") {
-    const socket = socketRef.current
-    if (socket?.readyState !== WebSocket.OPEN) return
-    socket.send(JSON.stringify({ type: "scroll", direction }))
+    const terminal = terminalRef.current
+    if (!terminal) return
+    if (direction === "up") terminal.scrollPages(-1)
+    else if (terminal.buffer.active.viewportY >= terminal.buffer.active.baseY) terminal.scrollToBottom()
+    else terminal.scrollPages(1)
   }
 
   async function openHistory() {
     setHistoryOpen(true); setHistoryLoading(true); setHistoryError("")
     try {
-      const response = await fetch(`/api/agents/${agent}/history?lines=10000`)
+      const response = await fetch(`/api/agents/${agent}/history?lines=100000`)
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || "Falha ao carregar histórico")
       setHistory(typeof data.content === "string" ? data.content : "")

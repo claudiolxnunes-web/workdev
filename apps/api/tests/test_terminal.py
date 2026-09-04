@@ -20,7 +20,6 @@ from app.routers.terminal import (
     _release,
     _read_pty,
     _load_supervisor_health,
-    _scroll_terminal,
     _requested_terminal_size,
     _send_output,
     _send_text,
@@ -106,35 +105,6 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
             timeout=5,
             check=False,
         )
-
-
-class TerminalScrollTest(unittest.IsolatedAsyncioTestCase):
-    @patch("app.routers.terminal.subprocess.run")
-    async def test_scroll_up_enters_tmux_copy_mode_one_page_up(self, run):
-        run.return_value.stdout = "25\n"
-        _scroll_terminal("codex", "up")
-
-        self.assertEqual(
-            run.call_args_list[0].args[0],
-            ["tmux", "copy-mode", "-u", "-t", "=codex:"],
-        )
-        self.assertEqual(run.call_args_list[1].args[0], [
-            "tmux", "display-message", "-p", "-t", "=codex:", "#{scroll_position}"
-        ])
-        self.assertEqual(run.call_count, 2)
-
-    @patch("app.routers.terminal.subprocess.run")
-    async def test_scroll_down_returns_to_live_terminal_at_bottom(self, run):
-        run.return_value.stdout = "0\n"
-        _scroll_terminal("codex", "down")
-
-        self.assertEqual(run.call_args_list[0].args[0], [
-            "tmux", "send-keys", "-X", "-t", "=codex:", "page-down"
-        ])
-        self.assertEqual(run.call_args_list[2].args[0], [
-            "tmux", "send-keys", "-X", "-t", "=codex:", "cancel"
-        ])
-        self.assertEqual(run.call_count, 3)
 
 
 class RequestedTerminalSizeTest(unittest.TestCase):
