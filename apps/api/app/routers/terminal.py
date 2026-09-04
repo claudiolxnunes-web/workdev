@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from pydantic import BaseModel
 
 from app.auth import websocket_is_authenticated
+from app.services.terminal_transcript import read_transcript
 
 
 router = APIRouter(tags=["agents"])
@@ -121,6 +122,19 @@ async def agent_history(
     except (RuntimeError, subprocess.TimeoutExpired) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return {"agent": agent, "lines": len(content.splitlines()), "content": content}
+
+
+@router.get("/api/agents/{agent}/transcript")
+async def agent_transcript(agent: str):
+    if agent not in ALLOWED_SESSIONS:
+        raise HTTPException(status_code=404, detail="Agente inválido")
+    content, updated_at = await asyncio.to_thread(read_transcript, agent)
+    return {
+        "agent": agent,
+        "lines": len(content.splitlines()),
+        "content": content,
+        "updated_at": updated_at,
+    }
 
 
 def _resize(fd: int, rows: int, cols: int) -> None:
