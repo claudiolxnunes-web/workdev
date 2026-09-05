@@ -107,7 +107,10 @@ def inspect_agent(agent: str, allow_restart: bool = True) -> AgentHealth:
         return health
 
     if exists:
-        run(["tmux", "kill-session", "-t", f"={session}"], timeout=3)
+        # Uma sessão existente pode conter shell, prompt ou artefatos ainda não
+        # registrados. O supervisor alerta, mas nunca a destrói automaticamente.
+        health.reason = "agent_process_missing_restart_required"
+        return health
     if not start_session(session, command):
         return health
     process = current_process(session)

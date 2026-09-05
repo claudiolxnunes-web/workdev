@@ -305,14 +305,10 @@ class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
         run.return_value.stderr = "can't find session: kimi"
         self.assertFalse(_stop_standby_session("kimi"))
 
-    @patch("app.routers.terminal._stop_standby_session", return_value=True)
-    async def test_codex_can_be_stopped_as_standby(self, stop):
-        result = await stop_agent_session("codex")
-        stop.assert_called_once_with("codex")
-        self.assertEqual(
-            result,
-            {"agent": "codex", "running": False, "stopped": True},
-        )
+    async def test_stop_requires_explicit_confirmation(self):
+        with self.assertRaises(HTTPException) as ctx:
+            await stop_agent_session("codex")
+        self.assertEqual(ctx.exception.status_code, 409)
 
     @patch("app.routers.terminal._start_standby_session", return_value=True)
     async def test_start_endpoint_reconnects_standby_agent(self, start):
@@ -320,11 +316,20 @@ class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
         start.assert_called_once_with("qwen", "qwen")
         self.assertEqual(result, {"agent": "qwen", "running": True, "started": True})
 
+    @patch("app.routers.terminal._load_run_states", return_value={})
     @patch("app.routers.terminal._stop_standby_session", return_value=True)
-    async def test_stop_endpoint_disconnects_standby_agent(self, stop):
-        result = await stop_agent_session("kimi")
+    async def test_confirmed_stop_without_active_run_is_allowed(self, stop, _runs):
+        result = await stop_agent_session("kimi", confirm=True)
         stop.assert_called_once_with("kimi")
         self.assertEqual(result, {"agent": "kimi", "running": False, "stopped": True})
+
+    @patch("app.routers.terminal._load_run_states", return_value={"gemini": "running"})
+    @patch("app.routers.terminal._stop_standby_session")
+    async def test_active_run_cannot_be_stopped(self, stop, _runs):
+        with self.assertRaises(HTTPException) as ctx:
+            await stop_agent_session("gemini", confirm=True)
+        self.assertEqual(ctx.exception.status_code, 409)
+        stop.assert_not_called()
 
 
 class AwaitingApprovalTest(unittest.TestCase):

@@ -101,5 +101,7 @@ describe("AgentTerminal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reconectar navegador" }))
     await waitFor(() => expect(mocks.sockets).toHaveLength(2))
     expect(fetchMock).not.toHaveBeenCalled()
+    expect(screen.queryByRole("button", { name: "Desconectar" })).not.toBeInTheDocument()
+    expect(screen.getByText("Sessão tmux persistente")).toBeInTheDocument()
   })
 })

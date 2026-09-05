@@ -52,6 +52,18 @@ class AgentHealthClassificationTest(unittest.TestCase):
             timeout=2,
         )
 
+    @patch.object(healthcheck, "start_session")
+    @patch.object(healthcheck, "capture_recent", return_value="")
+    @patch.object(healthcheck, "current_process", return_value="bash")
+    @patch.object(healthcheck, "session_exists", return_value=True)
+    def test_existing_shell_session_is_never_destroyed_automatically(
+        self, _exists, _process, _capture, start,
+    ):
+        result = healthcheck.inspect_agent("gemini", allow_restart=True)
+        self.assertEqual(result.status, "offline")
+        self.assertEqual(result.reason, "agent_process_missing_restart_required")
+        start.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

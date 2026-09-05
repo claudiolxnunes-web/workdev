@@ -5,6 +5,7 @@ WORKDEV_ENV_FILE="${WORKDEV_ENV_FILE:-/etc/workdev/workdev-api.env}"
 GEMINI_EXECUTABLE="${GEMINI_EXECUTABLE:-/usr/bin/gemini}"
 GEMINI_MODEL="${GEMINI_MODEL:-gemini-3.5-flash}"
 GEMINI_SETTINGS_FILE="${GEMINI_SETTINGS_FILE:-/opt/workdev/scripts/gemini-agent-settings.json}"
+export COLORTERM="${COLORTERM:-truecolor}"
 
 if [[ ! -r "$WORKDEV_ENV_FILE" ]]; then
   echo "Gemini Agent: arquivo de configuração não encontrado" >&2

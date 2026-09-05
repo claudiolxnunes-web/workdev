@@ -42,8 +42,6 @@ export function AgentTerminal({
   const [prompt, setPrompt] = useState("")
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState("")
-  const [sessionAction, setSessionAction] = useState<"start" | "stop" | null>(null)
-  const [sessionError, setSessionError] = useState("")
 
   useEffect(() => {
     const container = containerRef.current
@@ -254,29 +252,8 @@ export function AgentTerminal({
   }
 
   async function reconnect() {
-    if (sessionAction) return
-    setSessionError("")
     socketRef.current?.close(1000, "Reconexão solicitada")
     setGeneration((value) => value + 1)
-  }
-
-  async function disconnect() {
-    if (sessionAction) return
-    setSessionAction("stop")
-    setSessionError("")
-    try {
-      const response = await fetch(`/api/agents/${agent}/session`, { method: "DELETE" })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.detail || "Falha ao desligar agente")
-      socketRef.current?.close(1000, "Agente em standby")
-      setStatus("disconnected")
-      setTaskRunning(false)
-      setProcessName("")
-    } catch (cause) {
-      setSessionError(cause instanceof Error ? cause.message : "Falha ao desligar agente")
-    } finally {
-      setSessionAction(null)
-    }
   }
 
   function downloadHistory() {
@@ -289,7 +266,6 @@ export function AgentTerminal({
   }
 
   const active = taskRunning
-  const standby = true
   return (
     <section className="relative flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
       <div className="flex shrink-0 flex-col border-b border-slate-800">
@@ -329,25 +305,13 @@ export function AgentTerminal({
           </button>
           <button
             type="button"
-            disabled={(!standby && status === "connecting") || sessionAction !== null}
             className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800 hover:text-sky-300 disabled:cursor-wait disabled:text-slate-600"
             onClick={() => void reconnect()}
             title={active ? "Refazer a conexão com o terminal" : "Reconectar ao terminal"}
           >
             Reconectar navegador
           </button>
-          {standby && (
-            <button
-              type="button"
-              disabled={sessionAction !== null}
-              className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-red-400 hover:bg-red-950 hover:text-red-300 disabled:cursor-wait disabled:text-slate-600"
-              onClick={() => void disconnect()}
-              title="Encerrar a sessão e manter o agente em standby"
-            >
-              {sessionAction === "stop" ? "Desligando…" : "Desconectar"}
-            </button>
-          )}
-          {sessionError && <span className="text-xs text-red-400">{sessionError}</span>}
+          <span className="text-[10px] text-slate-500" title="Fechar ou reconectar o navegador não encerra o processo do agente">Sessão tmux persistente</span>
         </div>
       </div>
       {awaitingApproval && (

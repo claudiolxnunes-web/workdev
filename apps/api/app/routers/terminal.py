@@ -396,8 +396,19 @@ async def start_agent_session(agent: str):
 
 
 @router.delete("/api/agents/{agent}/session")
-async def stop_agent_session(agent: str):
+async def stop_agent_session(agent: str, confirm: bool = Query(default=False)):
     session = _standby_session(agent)
+    if not confirm:
+        raise HTTPException(
+            status_code=409,
+            detail="Encerramento recusado: use confirm=true após verificar tarefas ativas",
+        )
+    active = await asyncio.to_thread(_load_run_states)
+    if active.get(agent) in {"queued", "running", "blocked", "review"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Encerramento recusado: o agente possui execução ativa",
+        )
     try:
         stopped = await asyncio.to_thread(_stop_standby_session, session)
     except (RuntimeError, subprocess.TimeoutExpired) as error:

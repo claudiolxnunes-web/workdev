@@ -32,6 +32,13 @@ def test_launchers_disable_update_checks():
     assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in launcher("gemini")
 
 
+def test_all_launchers_advertise_truecolor_without_overriding_term():
+    for agent in ("claude", "codex", "kimi", "qwen", "gemini"):
+        content = launcher(agent)
+        assert 'COLORTERM="${COLORTERM:-truecolor}"' in content
+        assert "export TERM=" not in content
+
+
 def test_all_launchers_honor_task_worktree_cwd():
     expected = 'cd "${WORKDEV_AGENT_CWD:-${WORKDEV_DIR:-/opt/workdev}}"'
 

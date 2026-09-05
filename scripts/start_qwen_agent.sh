@@ -5,6 +5,7 @@ set -euo pipefail
 WORKDEV_ENV_FILE="${WORKDEV_ENV_FILE:-/etc/workdev/workdev-api.env}"
 QWEN_EXECUTABLE="${QWEN_EXECUTABLE:-/usr/bin/qwen}"
 QWEN_SETTINGS_FILE="${QWEN_SETTINGS_FILE:-/opt/workdev/scripts/qwen-agent-settings.json}"
+export COLORTERM="${COLORTERM:-truecolor}"
 QWEN_PROVIDER="${QWEN_PROVIDER:-openrouter}"
 
 if [[ ! -r "$WORKDEV_ENV_FILE" ]]; then

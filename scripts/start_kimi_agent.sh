@@ -9,6 +9,7 @@ KIMI_PROVIDER="${KIMI_PROVIDER:-openrouter}"
 # Modelo do agente. Os ids e as janelas de contexto são os do catálogo público
 # da OpenRouter, iguais aos vinculados ao agente kimi em ai_model_catalog.
 KIMI_MODEL="${KIMI_MODEL:-k3}"
+export COLORTERM="${COLORTERM:-truecolor}"
 
 if [[ ! -r "$WORKDEV_ENV_FILE" ]]; then
   echo "Kimi Agent: arquivo de configuração não encontrado" >&2
