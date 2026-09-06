@@ -31,6 +31,7 @@ export default function Backlog() {
   const [error, setError] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [selected, setSelected] = useState<BacklogItem | null>(null);
+  const [mobileColumn, setMobileColumn] = useState<string>("todo");
 
   async function load() {
     try {
@@ -88,11 +89,22 @@ export default function Backlog() {
       {loading && <p className="text-slate-400">Carregando...</p>}
       {error && <p className="text-red-400">{error}</p>}
 
+      <div className="mb-4 grid grid-cols-2 gap-2 md:hidden">
+        {COLUMNS.map((col) => (
+          <button
+            key={col.key}
+            onClick={() => setMobileColumn(col.key)}
+            className={`rounded-lg px-3 py-2 text-sm ${mobileColumn === col.key ? "bg-slate-700 text-white" : "bg-slate-900 text-slate-400"}`}
+          >
+            {col.label} ({items.filter((i) => i.status === col.key).length})
+          </button>
+        ))}
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {COLUMNS.map((col) => (
           <div
             key={col.key}
-            className="bg-slate-900 border border-slate-800 rounded-xl p-6"
+            className={`bg-slate-900 border border-slate-800 rounded-xl p-6 ${mobileColumn === col.key ? "block" : "hidden"} md:block`}
           >
             <h2 className={`text-xl font-bold mb-4 ${col.color}`}>
               {col.label}{" "}
