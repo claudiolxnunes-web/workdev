@@ -30,6 +30,7 @@ export function BacklogTab() {
   const [items, setItems] = useState<BacklogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<BacklogItem | null>(null);
+  const [mobileColumn, setMobileColumn] = useState<string>("todo");
 
   function load() {
     setLoading(true);
@@ -72,11 +73,22 @@ export function BacklogTab() {
 
   return (
     <div>
+      <div className="mb-4 flex gap-2 overflow-x-auto md:hidden">
+        {COLUMNS.map((col) => (
+          <button
+            key={col.key}
+            onClick={() => setMobileColumn(col.key)}
+            className={`shrink-0 rounded-lg px-3 py-2 text-sm ${mobileColumn === col.key ? "bg-slate-700 text-white" : "bg-slate-900 text-slate-400"}`}
+          >
+            {col.label} ({items.filter((i) => i.status === col.key).length})
+          </button>
+        ))}
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {COLUMNS.map((col) => (
           <div
             key={col.key}
-            className="bg-slate-900 border border-slate-800 rounded-xl p-6"
+            className={`bg-slate-900 border border-slate-800 rounded-xl p-6 ${mobileColumn === col.key ? "block" : "hidden"} md:block`}
           >
             <h2 className={`text-lg font-bold mb-4 ${col.color}`}>
               {col.label}{" "}
