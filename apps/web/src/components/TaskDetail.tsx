@@ -1,5 +1,10 @@
-import { startTransition, useEffect, useState } from "react";
-import { getSubtasks, updateSubtask } from "../services/backlog.service";
+import { startTransition, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  createTaskPlanningSession,
+  getSubtasks,
+  updateSubtask,
+} from "../services/backlog.service";
 import type { BacklogItem, Subtask } from "../services/backlog.service";
 
 interface Props {
@@ -9,8 +14,12 @@ interface Props {
 }
 
 export default function TaskDetail({ item, onClose, onAdvance }: Props) {
+  const navigate = useNavigate();
   const [subs, setSubs] = useState<Subtask[]>([]);
   const [loading, setLoading] = useState(false);
+  const [planning, setPlanning] = useState(false);
+  const [planningError, setPlanningError] = useState("");
+  const planningRef = useRef(false);
 
   useEffect(() => {
     if (item) {
@@ -39,6 +48,22 @@ export default function TaskDetail({ item, onClose, onAdvance }: Props) {
     }
   }
 
+  async function planInAIHub() {
+    if (planningRef.current) return;
+    planningRef.current = true;
+    setPlanning(true);
+    setPlanningError("");
+    try {
+      const session = await createTaskPlanningSession(item!.id);
+      sessionStorage.setItem("workdev_chat_session", session.id);
+      navigate(`/ai-hub?session=${encodeURIComponent(session.id)}&autostart=1`);
+    } catch {
+      setPlanningError("Não foi possível enviar a task ao AI Hub.");
+      planningRef.current = false;
+      setPlanning(false);
+    }
+  }
+
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
          onClick={onClose}>
@@ -56,6 +81,17 @@ export default function TaskDetail({ item, onClose, onAdvance }: Props) {
             <span className="px-2 py-0.5 rounded bg-slate-700">sprint {item.sprint}</span>
           )}
         </div>
+
+        <button
+          onClick={planInAIHub}
+          disabled={planning}
+          className="mb-4 w-full rounded-lg bg-violet-600 px-4 py-2.5 font-medium transition-colors hover:bg-violet-700 disabled:cursor-wait disabled:opacity-60"
+        >
+          {planning ? "Abrindo AI Hub…" : "Planejar no AI Hub"}
+        </button>
+        {planningError && (
+          <p role="alert" className="mb-4 text-sm text-red-400">{planningError}</p>
+        )}
 
         <div className="flex justify-between items-center mb-2">
           <h3 className="font-semibold text-slate-300">

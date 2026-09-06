@@ -30,6 +30,7 @@ def test_premium_preflight_does_not_call_provider():
     assert response["error_code"] == "premium_confirmation_required"
     assert response["confirmation_required"] is True
     provider_call.assert_not_called()
+    db.add.assert_not_called()
 
 
 def test_unknown_provider_never_falls_back_to_anthropic():

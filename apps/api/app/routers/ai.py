@@ -1092,7 +1092,12 @@ def _record_ai_call(db: Session, *, correlation: uuid.UUID, session,
 @router.post("/ai/chat")
 def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     provider = (req.provider or os.getenv("AI_PROVIDER", "anthropic")).lower()
-    messages = [{"role": m.role, "content": m.content} for m in req.messages]
+    # Mensagens system do cliente nunca são autoritativas. Contexto especial
+    # (como a ficha de uma task) é lido da sessão persistida mais abaixo.
+    messages = [
+        {"role": m.role, "content": m.content}
+        for m in req.messages if m.role in {"user", "assistant"}
+    ]
 
     session = None
     if req.session_id:
@@ -1144,16 +1149,24 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
             if projeto is not None:
                 slug_efetivo = projeto.slug
 
-    if session and messages:
-        last = messages[-1]
-        if last["role"] == "user":
-            db.add(ChatMessageDB(session_id=session.id,
-                                 role="user", content=last["content"]))
-            db.commit()
 
     # E1.2: o contexto passa a ser montado sempre — global quando não há projeto
     # ativo. Antes, o chat global ia ao modelo sem nenhum dado do WorkDev.
     system = build_system(db, slug_efetivo, nivel)
+    if session is not None:
+        persisted_system = (
+            db.query(ChatMessageDB)
+            .filter(
+                ChatMessageDB.session_id == session.id,
+                ChatMessageDB.role == "system",
+            )
+            .order_by(ChatMessageDB.created_at.asc())
+            .all()
+        )
+        if isinstance(persisted_system, list) and persisted_system:
+            system = "\n\n".join(
+                [system, *(message.content for message in persisted_system)]
+            )
 
     if provider in COMPAT_PROVIDERS:
         selected_model = req.model or COMPAT_PROVIDERS[provider]["default_model"]
@@ -1207,6 +1220,13 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
             "project_slug": slug_efetivo, "authority": nivel,
             "authority_payload_ignorada": payload_ignorado,
         }
+
+    if session and messages:
+        last = messages[-1]
+        if last["role"] == "user":
+            db.add(ChatMessageDB(session_id=session.id,
+                                 role="user", content=last["content"]))
+            db.commit()
 
     started = time.monotonic()
     try:

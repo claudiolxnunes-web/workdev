@@ -3,7 +3,7 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { isErrorMessage } from "./messageUtils";
 
 export interface Msg {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   error?: boolean;
 }
@@ -19,6 +19,14 @@ export function MessageBubble({ msg }: { msg: Msg }) {
       <div className="max-w-[75%] min-w-0 flex items-start gap-2 rounded-xl border border-red-500/50 bg-red-950/30 px-4 py-3">
         <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
         <p className="text-sm text-red-300 min-w-0 break-words">{summarize(msg.content)}</p>
+      </div>
+    );
+  }
+
+  if (msg.role === "system") {
+    return (
+      <div className="min-w-0 rounded-xl border border-violet-700/60 bg-violet-950/30 px-4 py-3 text-sm text-violet-100">
+        <MarkdownMessage content={msg.content} />
       </div>
     );
   }

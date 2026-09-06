@@ -38,6 +38,10 @@ class SessionUpdate(BaseModel):
     )
 
 
+class SessionFromTask(BaseModel):
+    task_id: UUID
+
+
 class SessionOut(BaseModel):
     id: str
     title: str

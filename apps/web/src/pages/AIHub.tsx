@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { sendAiChatWithConfirmation } from "../services/ai.service";
 import { Trash2, FolderGit2 } from "lucide-react";
 import {
   MessageBubble,
@@ -68,7 +69,8 @@ export default function AIHub() {
   const [dividers, setDividers] = useState<Divider[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(
-    () => sessionStorage.getItem("workdev_chat_session")
+    () => new URLSearchParams(window.location.search).get("session")
+      ?? sessionStorage.getItem("workdev_chat_session")
   );
   // Projeto ativo. A fonte de verdade é chat_sessions.project_id no banco; o
   // localStorage só lembra a escolha para a PRÓXIMA conversa nova.
@@ -83,6 +85,7 @@ export default function AIHub() {
   const [showPlans, setShowPlans] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const autostartedRef = useRef(false);
 
   useEffect(() => {
     const panel = messagesRef.current;
@@ -94,7 +97,10 @@ export default function AIHub() {
     // Incluir sessionId/restoreSession nas deps re-rodaria a cada troca de
     // sessão (restoreSession chama setSessionId), criando um loop.
     loadSessions();
-    if (sessionId) restoreSession(sessionId);
+    if (sessionId) {
+      const params = new URLSearchParams(window.location.search);
+      restoreSession(sessionId, params.get("autostart") === "1");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -105,7 +111,7 @@ export default function AIHub() {
     } catch { /* silencioso */ }
   }
 
-  async function restoreSession(id: string) {
+  async function restoreSession(id: string, autostart = false) {
     try {
       const r = await fetch(`/api/chat/sessions/${id}`);
       if (!r.ok) { newChat(); return; }
@@ -119,7 +125,44 @@ export default function AIHub() {
       setAuthority(data.authority ?? AUTORIDADE_PADRAO);
       setSessionId(id);
       sessionStorage.setItem("workdev_chat_session", id);
+      if (autostart && !autostartedRef.current) {
+        autostartedRef.current = true;
+        await startTaskConversation(id, data.messages, data.project_slug);
+      }
     } catch { /* silencioso */ }
+  }
+
+  async function startTaskConversation(
+    id: string,
+    currentMessages: Msg[],
+    slug: string | null,
+  ) {
+    const prompt = "Confirme sua compreensão da task, identifique lacunas e proponha os próximos passos para elaborar um plano draft. Não aprove nem envie para Build.";
+    const next: Msg[] = [...currentMessages, { role: "user", content: prompt }];
+    setMessages(next);
+    setLoading(true);
+    try {
+        const data = await sendAiChatWithConfirmation({
+          messages: next,
+          session_id: id,
+          provider: modelo.provider,
+          model: modelo.model,
+          project_slug: slug,
+        });
+      setMessages([
+        ...next,
+        { role: "assistant", content: data.reply || "Erro na resposta", error: !!data.error },
+      ]);
+      loadSessions();
+    } catch {
+      setMessages([
+        ...next,
+        { role: "assistant", content: "Erro ao iniciar o planejamento", error: true },
+      ]);
+    } finally {
+      setLoading(false);
+      window.history.replaceState({}, "", "/ai-hub");
+    }
   }
 
   function newChat() {
@@ -199,22 +242,13 @@ export default function AIHub() {
     setInput("");
     setLoading(true);
     try {
-      const r = await fetch("/api/ai/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        const data = await sendAiChatWithConfirmation({
           messages: next,
           session_id: sessionId,
           provider: modelo.provider,
           model: modelo.model,
           project_slug: projectSlug,
-        }),
-      });
-      let data = await r.json();
-      if (data.confirmation_required && window.confirm(`${data.reply}\n\nContinuar mesmo assim?`)) {
-        const r2 = await fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: next, session_id: sessionId, provider: modelo.provider, model: modelo.model, project_slug: projectSlug, user_confirmation: true }) });
-        data = await r2.json();
-      }
+        });
       if (data.authority === "observe" || data.authority === "plan") {
         setAuthority(data.authority);
       }

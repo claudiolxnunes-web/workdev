@@ -20,6 +20,9 @@ class ChatSession(Base):
     project_id = Column(UUID(as_uuid=True),
                         ForeignKey("projects.id", ondelete="SET NULL"),
                         nullable=True)
+    task_id = Column(UUID(as_uuid=True),
+                     ForeignKey("backlog.id", ondelete="SET NULL"),
+                     nullable=True)
     authority = Column(String(12), nullable=False,
                        server_default=AUTORIDADE_PADRAO)
     created_at = Column(DateTime, server_default=text("now()"))
@@ -27,6 +30,7 @@ class ChatSession(Base):
 
     __table_args__ = (
         Index("ix_chat_sessions_project", "project_id", "updated_at"),
+        Index("uq_chat_sessions_task_id", "task_id", unique=True, postgresql_where=text("task_id IS NOT NULL")),
     )
 
 

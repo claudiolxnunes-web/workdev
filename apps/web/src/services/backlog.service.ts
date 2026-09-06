@@ -80,3 +80,22 @@ export async function updateSubtask(id: string, data: Partial<Subtask>) {
   if (!r.ok) throw new Error("Erro ao atualizar subtask");
   return r.json();
 }
+
+export interface TaskPlanningSession {
+  id: string;
+  task_id: string;
+  task_title: string;
+  project_slug: string;
+}
+
+export async function createTaskPlanningSession(
+  taskId: string
+): Promise<TaskPlanningSession> {
+  const response = await fetch("/api/chat/sessions/from-task", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_id: taskId }),
+  });
+  if (!response.ok) throw new Error("Erro ao enviar task ao AI Hub");
+  return response.json();
+}

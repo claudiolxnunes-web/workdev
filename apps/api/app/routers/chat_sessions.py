@@ -1,12 +1,15 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
+from app.models.backlog import BacklogItem
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.project import Project
-from app.schemas.chat import SessionUpdate
+from app.models.subtask import BacklogSubtask
+from app.schemas.chat import SessionFromTask, SessionUpdate
 from app.services import autoridade, chat_audit
 
 router = APIRouter()
@@ -50,6 +53,105 @@ def _get_sessao(db: Session, session_id: str) -> ChatSession:
     if not sessao:
         raise HTTPException(status_code=404, detail="Sessão não encontrada")
     return sessao
+
+
+def _markdown_value(value: object | None, fallback: str = "Não informado") -> str:
+    """Mantém valores do banco dentro da estrutura Markdown da ficha."""
+    text = str(value).strip() if value is not None else ""
+    if not text:
+        return fallback
+    return text.replace("\\", "\\\\").replace("`", "\\`")
+
+
+def _task_context(
+    task: BacklogItem, project: Project, subtasks: list[BacklogSubtask]
+) -> str:
+    lines = [
+        "Você está auxiliando no planejamento da seguinte tarefa do WorkDev.",
+        "",
+        "## Ficha técnica da tarefa",
+        f"- **Task ID:** `{task.id}`",
+        f"- **Título:** {_markdown_value(task.title)}",
+        f"- **Descrição:** {_markdown_value(task.description, 'Sem descrição')}",
+        f"- **Prioridade:** {_markdown_value(task.priority)}",
+        f"- **Projeto:** {_markdown_value(project.name)} (`{project.slug}`)",
+        f"- **Sprint:** {_markdown_value(task.sprint, 'Sem sprint')}",
+        f"- **Tipo:** {_markdown_value(task.type)}",
+        "",
+        "## Subtasks",
+    ]
+    if subtasks:
+        lines.extend(
+            f"- [{subtask.status}] {_markdown_value(subtask.title)}"
+            for subtask in subtasks
+        )
+    else:
+        lines.append("- Nenhuma subtask cadastrada.")
+    lines.extend([
+        "",
+        "## Regras deste planejamento",
+        "- Use o Task ID acima ao chamar `criar_plano_execucao`.",
+        "- Todo plano criado deve permanecer em `draft` até aprovação humana.",
+        "- Não aprove plano, não envie para Build e não inicie agente ou tmux.",
+    ])
+    return "\n".join(lines)
+
+
+@router.post("/chat/sessions/from-task", status_code=201)
+def criar_sessao_da_task(
+    payload: SessionFromTask, db: Session = Depends(get_db)
+):
+    task = db.query(BacklogItem).filter(
+        BacklogItem.id == payload.task_id
+    ).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task não encontrada")
+
+    project = db.query(Project).filter(Project.id == task.project_id).first()
+    if not project:
+        raise HTTPException(status_code=409, detail="Projeto da task não encontrado")
+    existing_session = db.query(ChatSession).filter(ChatSession.task_id == task.id).first()
+    if existing_session:
+        return {
+            **sessao_out(existing_session, project),
+            "task_id": str(task.id),
+            "task_title": task.title,
+        }
+
+
+    subtasks = (
+        db.query(BacklogSubtask)
+        .filter(BacklogSubtask.backlog_id == task.id)
+        .order_by(BacklogSubtask.execution_order.asc(), BacklogSubtask.created_at.asc())
+        .all()
+    )
+    session = ChatSession(
+        title=f"Planejar: {task.title}"[:255],
+        project_id=project.id,
+        task_id=task.id,
+        authority=autoridade.PLAN,
+    )
+    try:
+        db.add(session)
+        db.flush()
+        db.add(ChatMessageDB(
+            session_id=session.id,
+            role="system",
+            content=_task_context(task, project, subtasks),
+        ))
+        db.commit()
+        db.refresh(session)
+    except IntegrityError:
+        db.rollback()
+        session = db.query(ChatSession).filter(ChatSession.task_id == task.id).first()
+        if session is None:
+            raise
+
+    return {
+        **sessao_out(session, project),
+        "task_id": str(task.id),
+        "task_title": task.title,
+    }
 
 
 @router.get("/chat/sessions")
