@@ -29,18 +29,13 @@ interface Divider {
 
 export const MODELOS = [
   { label: "Gemini 3.5 Flash", provider: "gemini", model: "gemini-3.5-flash" },
-  { label: "GPT-OSS 20B (Ollama Cloud)", provider: "ollama", model: "gpt-oss:20b" },
-  { label: "GPT-5.6 Luna", provider: "openai", model: "gpt-5.6-luna" },
+  { label: "Kimi K2.7 Code", provider: "openrouter", model: "moonshotai/kimi-k2.7-code" },
+  { label: "GPT-OSS 120B (Ollama Cloud)", provider: "ollama", model: "gpt-oss:120b" },
   { label: "Qwen3 Coder", provider: "openrouter", model: "qwen/qwen3-coder" },
-  { label: "Nemotron Ultra 550B (free)", provider: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b:free" },
+  { label: "GPT-5.6 Luna", provider: "openai", model: "gpt-5.6-luna" },
   { label: "Claude Sonnet 5", provider: "anthropic", model: "claude-sonnet-5" },
-  { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
-  { label: "GPT-4o", provider: "openai", model: "gpt-4o" },
   { label: "Claude Haiku 4.5", provider: "anthropic", model: "claude-haiku-4-5-20251001" },
-  { label: "Kimi K2.6", provider: "kimi", model: "kimi-k2.6" },
-  { label: "Kimi K2.7 Code", provider: "kimi", model: "kimi-k2.7-code" },
-  { label: "Kimi K3 (OpenRouter)", provider: "openrouter", model: "moonshotai/kimi-k3" },
-  { label: "Claude Opus 5", provider: "anthropic", model: "claude-opus-5" },
+  { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
 ];
 const MODELO_STORAGE_KEY = "workdev_ai_hub_modelo";
 const PROJETO_STORAGE_KEY = "workdev_ai_hub_projeto";
@@ -70,7 +65,7 @@ export default function AIHub() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(
     () => new URLSearchParams(window.location.search).get("session")
-      ?? sessionStorage.getItem("workdev_chat_session")
+      ?? localStorage.getItem("workdev_chat_session")
   );
   // Projeto ativo. A fonte de verdade é chat_sessions.project_id no banco; o
   // localStorage só lembra a escolha para a PRÓXIMA conversa nova.
@@ -93,7 +88,7 @@ export default function AIHub() {
   }, [messages, loading]);
 
   useEffect(() => {
-    // Intencional: roda só no mount, lendo o sessionId inicial (sessionStorage).
+    // Intencional: roda só no mount, lendo o sessionId inicial (localStorage).
     // Incluir sessionId/restoreSession nas deps re-rodaria a cada troca de
     // sessão (restoreSession chama setSessionId), criando um loop.
     loadSessions();
@@ -124,7 +119,7 @@ export default function AIHub() {
       setProjectSlug(data.project_slug ?? null);
       setAuthority(data.authority ?? AUTORIDADE_PADRAO);
       setSessionId(id);
-      sessionStorage.setItem("workdev_chat_session", id);
+      localStorage.setItem("workdev_chat_session", id);
       if (autostart && !autostartedRef.current) {
         autostartedRef.current = true;
         await startTaskConversation(id, data.messages, data.project_slug);
@@ -170,7 +165,7 @@ export default function AIHub() {
     setDividers([]);
     setSessionId(null);
     setAuthority(AUTORIDADE_PADRAO);
-    sessionStorage.removeItem("workdev_chat_session");
+    localStorage.removeItem("workdev_chat_session");
     // O projeto ativo permanece: quem está trabalhando no Feed_BPF e abre uma
     // conversa nova quase sempre continua no Feed_BPF.
   }
@@ -258,7 +253,7 @@ export default function AIHub() {
       ]);
       if (data.session_id) {
         setSessionId(data.session_id);
-        sessionStorage.setItem("workdev_chat_session", data.session_id);
+        localStorage.setItem("workdev_chat_session", data.session_id);
         loadSessions();
       }
     } catch {
