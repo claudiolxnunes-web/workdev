@@ -73,7 +73,7 @@ export function BacklogTab() {
 
   return (
     <div>
-      <div className="mb-4 flex gap-2 overflow-x-auto md:hidden">
+      <div className="mb-4 grid grid-cols-2 gap-2 md:hidden">
         {COLUMNS.map((col) => (
           <button
             key={col.key}
