@@ -81,7 +81,15 @@ def load(path: Path) -> dict:
 
 def prepare(args, key: bytes) -> str:
     run(["sudo", "-n", "/usr/local/libexec/workdev-predeploy-gate"])
-    proof = issue_proof(args.root, args.artifact, args.project, key, args.ttl)
+    proof = issue_proof(
+        args.root,
+        args.artifact,
+        args.project,
+        key,
+        args.ttl,
+        agent_run_id=args.agent_run_id,
+        backlog_id=args.backlog_id,
+    )
     proof_id = proof["proof_id"]
     manager = release_manager(args.runtime)
     release = manager.prepare(args.root, args.artifact, proof_id)
@@ -143,6 +151,8 @@ def parser():
     sub = result.add_subparsers(dest="command", required=True)
     prepare_cmd = sub.add_parser("prepare")
     prepare_cmd.add_argument("--ttl", type=int, default=900)
+    prepare_cmd.add_argument("--agent-run-id")
+    prepare_cmd.add_argument("--backlog-id")
     approve_cmd = sub.add_parser("approve")
     approve_cmd.add_argument("proof_id")
     approve_cmd.add_argument("--actor", required=True)

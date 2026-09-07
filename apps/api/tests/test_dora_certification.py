@@ -31,6 +31,8 @@ def _existing_outcome(**overrides):
         "artifact_fingerprint": "ab" * 32,
         "outcome": "success",
         "commit_sha": None,
+        "agent_run_id": None,
+        "backlog_id": None,
     }
     fields.update(overrides)
     for key, value in fields.items():
@@ -54,7 +56,7 @@ def test_post_outcomes_retry_identico_retorna_200():
 
 @pytest.mark.parametrize(
     "campo",
-    ["project", "artifact_fingerprint", "outcome", "commit_sha"],
+    ["project", "artifact_fingerprint", "outcome", "commit_sha", "agent_run_id", "backlog_id"],
 )
 def test_post_outcomes_payload_conflitante_retorna_409(campo):
     existing = _existing_outcome(**{campo: "valor-divergente"})

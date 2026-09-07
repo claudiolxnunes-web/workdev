@@ -65,6 +65,26 @@ def update_item(item_id: UUID, item: BacklogUpdate,
     obj = db.query(BacklogItem).filter(BacklogItem.id == item_id).first()
     if not obj:
         raise HTTPException(404, "Backlog item not found")
+
+    if item.status == "done" and obj.status != "done":
+        from app.models.subtask import BacklogSubtask
+        pending_subtasks = db.query(BacklogSubtask).filter(
+            BacklogSubtask.backlog_id == item_id,
+            BacklogSubtask.status != "done"
+        ).all()
+        if pending_subtasks:
+            active_titles = [s.title for s in pending_subtasks]
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "active_subtasks_remaining",
+                    "message": f"Não é possível concluir a tarefa pois existem {len(pending_subtasks)} subtasks pendentes: {', '.join(active_titles)}.",
+                    "details": {
+                        "pending_subtasks": active_titles
+                    }
+                }
+            )
+
     for k, v in item.model_dump(exclude_unset=True).items():
         setattr(obj, k, v)
     obj.updated_at = db.execute(text("SELECT now()")).scalar()
@@ -79,6 +99,26 @@ def update_status(item_id: UUID, status: str,
     obj = db.query(BacklogItem).filter(BacklogItem.id == item_id).first()
     if not obj:
         raise HTTPException(404, "Backlog item not found")
+
+    if status == "done" and obj.status != "done":
+        from app.models.subtask import BacklogSubtask
+        pending_subtasks = db.query(BacklogSubtask).filter(
+            BacklogSubtask.backlog_id == item_id,
+            BacklogSubtask.status != "done"
+        ).all()
+        if pending_subtasks:
+            active_titles = [s.title for s in pending_subtasks]
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "active_subtasks_remaining",
+                    "message": f"Não é possível concluir a tarefa pois existem {len(pending_subtasks)} subtasks pendentes: {', '.join(active_titles)}.",
+                    "details": {
+                        "pending_subtasks": active_titles
+                    }
+                }
+            )
+
     obj.status = status
     obj.updated_at = db.execute(text("SELECT now()")).scalar()
     db.commit()

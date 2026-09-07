@@ -158,6 +158,11 @@ def _persist_deployment_outcome(
         "error_message": error_message,
     }
 
+    if "agent_run_id" in proof:
+        payload["agent_run_id"] = proof["agent_run_id"]
+    if "backlog_id" in proof:
+        payload["backlog_id"] = proof["backlog_id"]
+
     if not api_key:
         key_file = Path("/etc/workdev-deploy/api.key")
         try:

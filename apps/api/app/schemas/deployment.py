@@ -21,6 +21,8 @@ class DeploymentOutcomeCreate(BaseModel):
     deployment_url: str | None = None
     postcheck_result: dict | None = None
     error_message: str | None = None
+    agent_run_id: UUID | None = None
+    backlog_id: UUID | None = None
 
 
 class DeploymentOutcomeOut(BaseModel):
@@ -37,4 +39,6 @@ class DeploymentOutcomeOut(BaseModel):
     deployment_url: str | None
     postcheck_result: dict | None
     error_message: str | None
+    agent_run_id: UUID | None = None
+    backlog_id: UUID | None = None
     created_at: datetime

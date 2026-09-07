@@ -98,6 +98,8 @@ def issue_proof(
     key: bytes,
     ttl_seconds: int = 900,
     now: int | None = None,
+    agent_run_id: str | None = None,
+    backlog_id: str | None = None,
 ) -> dict[str, Any]:
     if ttl_seconds < 1 or ttl_seconds > 3600:
         raise ProofError("validade deve ficar entre 1 e 3600 segundos")
@@ -113,6 +115,10 @@ def issue_proof(
         "expires_at": current + ttl_seconds,
         "result": "PASS",
     }
+    if agent_run_id:
+        payload["agent_run_id"] = agent_run_id
+    if backlog_id:
+        payload["backlog_id"] = backlog_id
     payload["signature"] = sign(payload, key)
     return payload
 

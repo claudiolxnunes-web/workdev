@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, DateTime, Enum, String, Text, text,
+    Column, DateTime, Enum, String, Text, text, ForeignKey,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
@@ -31,6 +31,16 @@ class DeploymentOutcome(Base):
     deployment_url = Column(Text(), nullable=True)
     postcheck_result = Column(JSONB(), nullable=True)
     error_message = Column(Text(), nullable=True)
+    agent_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    backlog_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("backlog.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at = Column(
         DateTime(timezone=True),
         server_default=text("now()"),

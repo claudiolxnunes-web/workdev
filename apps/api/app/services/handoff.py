@@ -235,8 +235,55 @@ def approve_plan(
     plan.approved_at = _now()
     plan.updated_at = _now()
 
-    db.commit()
-    db.refresh(plan)
+    active = db.query(AgentRun).filter(
+        AgentRun.backlog_id == plan.backlog_id,
+        AgentRun.status.in_(ACTIVE_RUN_STATUSES),
+    ).first()
+
+    if not active:
+        from app.services.task_complexity import classify_task
+        from app.services.agent_router import route_agent
+        from app.models.backlog import BacklogItem
+
+        task = db.query(BacklogItem).filter(BacklogItem.id == plan.backlog_id).first()
+        subtasks = db.query(BacklogSubtask).filter(BacklogSubtask.backlog_id == plan.backlog_id).all()
+
+        try:
+            assessment = classify_task(task, plan, subtasks)
+            decision = route_agent(db, assessment, allow_premium=False)
+            agent = decision.agent
+            model = decision.model
+            reasoning_effort = decision.reasoning_effort
+            complexity = decision.complexity
+            complexity_score = decision.complexity_score
+            routing_reason = decision.reason
+        except Exception as e:
+            if plan.created_by in SUPPORTED_AGENTS:
+                agent = plan.created_by
+                model = None
+                reasoning_effort = None
+                complexity = None
+                complexity_score = None
+                routing_reason = f"Fallback para o criador do plano ({plan.created_by}) devido a: {str(e)}"
+            else:
+                raise HandoffError(
+                    f"Erro de roteamento automático para o build: {str(e)}"
+                ) from e
+
+        queue_build(
+            db,
+            plan,
+            agent,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            routing_mode="auto",
+            complexity=complexity,
+            complexity_score=complexity_score,
+            routing_reason=routing_reason,
+        )
+    else:
+        db.commit()
+        db.refresh(plan)
 
     return plan
 
@@ -403,7 +450,11 @@ def update_run(
             elif next_status in {"blocked", "failed"}:
                 task.status = "blocked"
             elif next_status == "completed":
-                task.status = "done"
+                if task_requires_deploy(db, run.backlog_id):
+                    task.status = "doing"
+                else:
+                    task.status = "done"
+                    promote_pending_subtasks(db, task)
             elif (
                 next_status == "cancelled"
                 and task.status != "done"
@@ -835,3 +886,56 @@ Use a CLI local, que não exibe secrets:
 Preserve alterações preexistentes, execute as validações do plano e registre o
 resultado real. Não declare testes, commit ou deploy que não tenham ocorrido.
 """
+
+
+def task_requires_deploy(db: Session, backlog_id: UUID) -> bool:
+    from app.models.backlog import BacklogItem
+    from app.models.project import Project
+
+    task = db.query(BacklogItem).filter(BacklogItem.id == backlog_id).first()
+    if not task:
+        return False
+
+    project = db.query(Project).filter(Project.id == task.project_id).first()
+    if not project:
+        return False
+
+    # Check for explicit deployment targets in the project configuration
+    return bool(
+        project.vps or
+        project.supabase_project or
+        project.netlify_project or
+        project.vercel_project
+    )
+
+
+def promote_pending_subtasks(db: Session, task: BacklogItem) -> None:
+    subtasks = db.query(BacklogSubtask).filter(
+        BacklogSubtask.backlog_id == task.id
+    ).all()
+
+    for subtask in subtasks:
+        if subtask.status != "done":
+            ref_marker = f"[subtask_ref: {subtask.id}]"
+            # Idempotency check: search if a task with this reference marker already exists
+            already_promoted = db.query(BacklogItem).filter(
+                BacklogItem.description.like(f"%{ref_marker}%")
+            ).first()
+
+            if not already_promoted:
+                new_task = BacklogItem(
+                    project_id=task.project_id,
+                    title=subtask.title,
+                    description=(
+                        f"Gerada automaticamente por conclusão parcial da task '{task.title}'.\n"
+                        f"Origem: Subtask '{subtask.title}' da task pai '{task.title}' ({task.id}).\n\n"
+                        f"{ref_marker}"
+                    ),
+                    type="feature",
+                    priority="medium",
+                    status="todo",
+                    owner=None,
+                    effort=None,
+                    sprint=task.sprint,
+                )
+                db.add(new_task)

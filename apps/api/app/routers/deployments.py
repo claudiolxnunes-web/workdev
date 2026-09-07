@@ -91,7 +91,7 @@ def create_deployment_outcome(
     if existing:
         divergencias = [
             campo
-            for campo in ("project", "artifact_fingerprint", "outcome", "commit_sha")
+            for campo in ("project", "artifact_fingerprint", "outcome", "commit_sha", "agent_run_id", "backlog_id")
             if getattr(existing, campo) != getattr(outcome, campo)
         ]
         if divergencias:
@@ -106,6 +106,30 @@ def create_deployment_outcome(
         response.status_code = status.HTTP_200_OK
         return existing
 
+    # Validate the link: agent_run_id must exist and match backlog_id if both are provided
+    if outcome.agent_run_id:
+        from app.models.handoff import AgentRun
+        run = db.query(AgentRun).filter(AgentRun.id == outcome.agent_run_id).first()
+        if not run:
+            raise HTTPException(
+                status_code=400,
+                detail="O agent_run_id especificado não existe."
+            )
+        if outcome.backlog_id and outcome.backlog_id != run.backlog_id:
+            raise HTTPException(
+                status_code=400,
+                detail="O backlog_id não corresponde ao backlog_id do AgentRun."
+            )
+
+    if outcome.backlog_id:
+        from app.models.backlog import BacklogItem
+        backlog = db.query(BacklogItem).filter(BacklogItem.id == outcome.backlog_id).first()
+        if not backlog:
+            raise HTTPException(
+                status_code=400,
+                detail="O backlog_id especificado não existe."
+            )
+
     db_outcome = DeploymentOutcome(
         proof_id=outcome.proof_id,
         project=outcome.project,
@@ -117,12 +141,35 @@ def create_deployment_outcome(
         deployment_url=outcome.deployment_url,
         postcheck_result=outcome.postcheck_result,
         error_message=outcome.error_message,
+        agent_run_id=outcome.agent_run_id,
+        backlog_id=outcome.backlog_id,
     )
 
     db.add(db_outcome)
+    db.flush()
+
+    # Only conclude task if outcome is success AND postcheck succeeded
+    if db_outcome.outcome == "success":
+        postcheck = db_outcome.postcheck_result or {}
+        if postcheck.get("status") == "DEPLOY_SUCCEEDED":
+            backlog_id = db_outcome.backlog_id
+            if not backlog_id and db_outcome.agent_run_id:
+                from app.models.handoff import AgentRun
+                run = db.query(AgentRun).filter(AgentRun.id == db_outcome.agent_run_id).first()
+                if run:
+                    backlog_id = run.backlog_id
+
+            if backlog_id:
+                from app.models.backlog import BacklogItem
+                task = db.query(BacklogItem).filter(BacklogItem.id == backlog_id).first()
+                if task and task.status != "done":
+                    task.status = "done"
+                    task.updated_at = datetime.utcnow()
+                    from app.services.handoff import promote_pending_subtasks
+                    promote_pending_subtasks(db, task)
+
     db.commit()
     db.refresh(db_outcome)
-
     return db_outcome
 
 
