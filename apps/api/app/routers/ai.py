@@ -316,8 +316,8 @@ TOOLS = [
         },
     },
     {
-        "name": "criar_plano_execucao",
-        "description": "Cria um plano de execução versionado em rascunho para uma task. Use ao finalizar o planejamento; o plano será aprovado e enviado ao Build pela interface.",
+        "name": "previsualizar_plano_execucao",
+        "description": "Gera uma prévia estruturada do plano para revisão humana, sem criar plan_id, versão ou registro no banco. Use durante toda a formulação e revisão do plano.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -332,6 +332,26 @@ TOOLS = [
                 "notas_implementacao": {"type": "string"},
             },
             "required": ["objetivo", "criterios_aceite", "validacoes"],
+        },
+    },
+    {
+        "name": "criar_plano_execucao",
+        "description": "Cria o plano oficial em draft SOMENTE após aprovação explícita do usuário sobre a prévia. Nunca use para formular ou revisar o plano.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "UUID da task; preferencial"},
+                "titulo_task": {"type": "string", "description": "alternativa ao UUID"},
+                "projeto_slug": {"type": "string", "description": "use para desambiguar o título"},
+                "objetivo": {"type": "string"},
+                "escopo": {"type": "string"},
+                "restricoes": {"type": "array", "items": {"type": "string"}},
+                "criterios_aceite": {"type": "array", "items": {"type": "string"}},
+                "validacoes": {"type": "array", "items": {"type": "string"}},
+                "notas_implementacao": {"type": "string"},
+                "aprovado_pelo_usuario": {"type": "boolean", "description": "deve ser true somente após o usuário aprovar explicitamente a prévia final"},
+            },
+            "required": ["objetivo", "criterios_aceite", "validacoes", "aprovado_pelo_usuario"],
         },
     },
     {
@@ -680,7 +700,14 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
                            "subtask": s.title, "ordem": s.execution_order,
                            "alteracoes": alteracoes}, ensure_ascii=False)
 
-    if nome == "criar_plano_execucao":
+    if nome in {"previsualizar_plano_execucao", "criar_plano_execucao"}:
+        if nome == "criar_plano_execucao" and args.get("aprovado_pelo_usuario") is not True:
+            return json.dumps({
+                "erro": "Plano oficial não criado: a prévia precisa de aprovação explícita do usuário.",
+                "executado": False,
+                "proximo_passo": "Use previsualizar_plano_execucao até o usuário aprovar a formulação final.",
+            }, ensure_ascii=False)
+
         task = None
         if args.get("task_id"):
             task = db.query(BacklogItem).filter(
@@ -710,6 +737,29 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
                 {"erro": "task não encontrada — informe task_id ou titulo_task"},
                 ensure_ascii=False,
             )
+        if nome == "previsualizar_plano_execucao":
+            return json.dumps({
+                "ok": True,
+                "preview": True,
+                "persistido": False,
+                "plano_id": None,
+                "versao": None,
+                "task_id": str(task.id),
+                "task": task.title,
+                "plano": {
+                    "backlog_id": str(task.id),
+                    "title": task.title,
+                    "objective": args["objetivo"],
+                    "scope": args.get("escopo"),
+                    "constraints": args.get("restricoes") or [],
+                    "acceptance_criteria": args.get("criterios_aceite") or [],
+                    "validation_steps": args.get("validacoes") or [],
+                    "implementation_notes": args.get("notas_implementacao"),
+                    "created_by": "ai_hub",
+                },
+                "proximo_passo": "Revisar esta prévia. Só após aprovação explícita criar o plano oficial.",
+            }, ensure_ascii=False)
+
         try:
             plan = create_plan(db, {
                 "backlog_id": task.id,

@@ -17,7 +17,7 @@ from app.services.handoff import (
 
 
 class StatusTransitionAutomationTest(unittest.TestCase):
-    def test_approve_plan_creates_queued_run_when_no_active_runs(self):
+    def test_approve_plan_only_marks_plan_approved(self):
         db = Mock()
         plan = SimpleNamespace(
             id=uuid4(),
@@ -28,41 +28,14 @@ class StatusTransitionAutomationTest(unittest.TestCase):
             created_by="ai_hub",
         )
 
-        # Mock active check to return None (no active run)
-        db.query.return_value.filter.return_value.first.return_value = None
+        result = approve_plan(db, plan)
 
-        # Mock dependencies inside approve_plan
-        task = SimpleNamespace(id=plan.backlog_id, project_id=uuid4(), title="Test Task", description="")
-        subtasks = []
-        db.query.return_value.filter.return_value.all.return_value = subtasks
+        self.assertEqual(result.status, "approved")
+        self.assertIsNotNone(result.approved_at)
+        db.commit.assert_called_once()
+        db.refresh.assert_called_once_with(plan)
 
-        assessment = SimpleNamespace(level="medium", score=50)
-        decision = SimpleNamespace(
-            agent="gemini",
-            model="gemini-3.5-flash",
-            reasoning_effort=None,
-            complexity="medium",
-            complexity_score=50,
-            reason="AUTO selecionou",
-        )
-
-        with (
-            patch("app.services.task_complexity.classify_task", return_value=assessment),
-            patch("app.services.agent_router.route_agent", return_value=decision) as route_mock,
-            patch("app.services.handoff.queue_build") as queue_mock,
-        ):
-            # Also mock the database lookup for task
-            db.query.return_value.filter.return_value.first.side_effect = [None, task]
-            
-            result = approve_plan(db, plan)
-
-            self.assertEqual(result.status, "approved")
-            route_mock.assert_called_once_with(db, assessment, allow_premium=False)
-            queue_mock.assert_called_once()
-            args, kwargs = queue_mock.call_args
-            self.assertEqual(args[2], "gemini")  # agent name passed to queue_build
-
-    def test_approve_plan_raises_handoff_error_on_routing_exception_if_creator_unsupported(self):
+    def test_approve_plan_never_routes_or_queues_build(self):
         db = Mock()
         plan = SimpleNamespace(
             id=uuid4(),
@@ -70,84 +43,18 @@ class StatusTransitionAutomationTest(unittest.TestCase):
             status="draft",
             acceptance_criteria=["crit"],
             validation_steps=["step"],
-            created_by="unsupported_creator",
+            created_by="ai_hub",
         )
-
-        db.query.return_value.filter.return_value.first.return_value = None
-
-        # Mock dependencies inside approve_plan
-        task = SimpleNamespace(id=plan.backlog_id, project_id=uuid4(), title="Test Task", description="")
-        subtasks = []
-        db.query.return_value.filter.return_value.all.return_value = subtasks
-
-        assessment = SimpleNamespace(level="medium", score=50)
 
         with (
-            patch("app.services.task_complexity.classify_task", return_value=assessment),
-            patch("app.services.agent_router.route_agent", side_effect=ValueError("Routing failed")),
+            patch("app.services.agent_router.route_agent") as route_mock,
             patch("app.services.handoff.queue_build") as queue_mock,
         ):
-            db.query.return_value.filter.return_value.first.side_effect = [None, task]
-            
-            with self.assertRaisesRegex(HandoffError, "Erro de roteamento automático"):
-                approve_plan(db, plan)
-            
-            queue_mock.assert_not_called()
-
-    def test_approve_plan_falls_back_to_creator_if_supported_when_routing_fails(self):
-        db = Mock()
-        plan = SimpleNamespace(
-            id=uuid4(),
-            backlog_id=uuid4(),
-            status="draft",
-            acceptance_criteria=["crit"],
-            validation_steps=["step"],
-            created_by="codex",  # Supported agent
-        )
-
-        db.query.return_value.filter.return_value.first.return_value = None
-
-        # Mock dependencies inside approve_plan
-        task = SimpleNamespace(id=plan.backlog_id, project_id=uuid4(), title="Test Task", description="")
-        subtasks = []
-        db.query.return_value.filter.return_value.all.return_value = subtasks
-
-        assessment = SimpleNamespace(level="medium", score=50)
-
-        with (
-            patch("app.services.task_complexity.classify_task", return_value=assessment),
-            patch("app.services.agent_router.route_agent", side_effect=ValueError("Routing failed")),
-            patch("app.services.handoff.queue_build") as queue_mock,
-        ):
-            db.query.return_value.filter.return_value.first.side_effect = [None, task]
-            
             result = approve_plan(db, plan)
 
-            self.assertEqual(result.status, "approved")
-            queue_mock.assert_called_once()
-            args, kwargs = queue_mock.call_args
-            self.assertEqual(args[2], "codex")  # fallback agent name (plan creator)
-
-    def test_approve_plan_does_not_create_run_when_active_run_exists(self):
-        db = Mock()
-        plan = SimpleNamespace(
-            id=uuid4(),
-            backlog_id=uuid4(),
-            status="draft",
-            acceptance_criteria=["crit"],
-            validation_steps=["step"],
-        )
-
-        # Mock active check to return an active run
-        active_run = SimpleNamespace(id=uuid4(), status="running")
-        db.query.return_value.filter.return_value.first.return_value = active_run
-
-        with patch("app.services.handoff.queue_build") as queue_mock:
-            result = approve_plan(db, plan)
-
-            self.assertEqual(result.status, "approved")
-            queue_mock.assert_not_called()
-            db.commit.assert_called_once()
+        self.assertEqual(result.status, "approved")
+        route_mock.assert_not_called()
+        queue_mock.assert_not_called()
 
     def test_create_plan_raises_handoff_error_if_plan_already_exists(self):
         from app.services.handoff import create_plan

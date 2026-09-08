@@ -90,9 +90,12 @@ def _task_context(
     lines.extend([
         "",
         "## Regras deste planejamento",
-        "- Use o Task ID acima ao chamar `criar_plano_execucao`.",
+        "- Durante formulação e revisão, use `previsualizar_plano_execucao`; a prévia não cria plan_id nem versão.",
+        "- Só chame `criar_plano_execucao` depois de o usuário aprovar explicitamente a formulação final da prévia.",
+        "- Ao criar o plano oficial, use o Task ID acima e informe `aprovado_pelo_usuario=true`.",
         "- Todo plano criado deve permanecer em `draft` até aprovação humana.",
-        "- Não aprove plano, não envie para Build e não inicie agente ou tmux.",
+        "- Aprovar plano não inicia Build, não escolhe agente e não inicia tmux.",
+        "- Após aprovação, apenas recomende o agente/modelo mais econômico e adequado; a execução é manual pelo usuário.",
     ])
     return "\n".join(lines)
 

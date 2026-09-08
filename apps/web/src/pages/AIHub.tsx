@@ -132,7 +132,7 @@ export default function AIHub() {
     currentMessages: Msg[],
     slug: string | null,
   ) {
-    const prompt = "Confirme sua compreensão da task, identifique lacunas e proponha os próximos passos para elaborar um plano draft. Não aprove nem envie para Build.";
+    const prompt = "Confirme sua compreensão da task, identifique lacunas e formule uma PRÉVIA do plano para revisão humana. Durante toda a revisão use apenas a prévia: não crie plan_id, não gere nova versão e não materialize plano oficial. Corrija a mesma prévia quantas vezes o usuário pedir. Só após aprovação explícita da formulação final o plano oficial poderá ser criado em draft. Aprovar o plano não envia para Build nem escolhe agente; apenas recomende o agente/modelo mais econômico e adequado, e deixe a execução manual para o usuário.";
     const next: Msg[] = [...currentMessages, { role: "user", content: prompt }];
     setMessages(next);
     setLoading(true);

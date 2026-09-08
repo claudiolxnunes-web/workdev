@@ -156,7 +156,9 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const pending = plans.filter(
-      (plan) => !requestedRecommendations.current.has(recommendationKey(plan)),
+      (plan) =>
+        plan.status === "approved" &&
+        !requestedRecommendations.current.has(recommendationKey(plan)),
     )
     if (pending.length === 0) return
 
@@ -248,7 +250,7 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
         <div className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h2 className="text-2xl font-bold">Planos de execução</h2>
-            <p className="text-sm text-slate-400">PLAN no AI Hub → aprovação → BUILD nos Agents</p>
+            <p className="text-sm text-slate-400">Prévia no AI Hub → plano oficial → aprovação → recomendação → envio manual</p>
           </div>
           <button className="text-xl text-slate-400 hover:text-white" onClick={onClose}>✕</button>
         </div>
@@ -261,7 +263,7 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
         {loading && <p className="text-slate-400">Carregando…</p>}
         {!loading && plans.length === 0 && (
           <div className="rounded-xl border border-dashed border-slate-700 p-8 text-center text-sm text-slate-400">
-            Ainda não há planos. Peça no chat: “crie um plano de execução para a task …”.
+            Ainda não há planos oficiais. Revise a prévia no chat e aprove a formulação final para criar o plano.
           </div>
         )}
         <div className="space-y-4">

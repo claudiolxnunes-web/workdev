@@ -245,55 +245,11 @@ def approve_plan(
     plan.approved_at = _now()
     plan.updated_at = _now()
 
-    active = db.query(AgentRun).filter(
-        AgentRun.backlog_id == plan.backlog_id,
-        AgentRun.status.in_(ACTIVE_RUN_STATUSES),
-    ).first()
-
-    if not active:
-        from app.services.task_complexity import classify_task
-        from app.services.agent_router import route_agent
-        from app.models.backlog import BacklogItem
-
-        task = db.query(BacklogItem).filter(BacklogItem.id == plan.backlog_id).first()
-        subtasks = db.query(BacklogSubtask).filter(BacklogSubtask.backlog_id == plan.backlog_id).all()
-
-        try:
-            assessment = classify_task(task, plan, subtasks)
-            decision = route_agent(db, assessment, allow_premium=False)
-            agent = decision.agent
-            model = decision.model
-            reasoning_effort = decision.reasoning_effort
-            complexity = decision.complexity
-            complexity_score = decision.complexity_score
-            routing_reason = decision.reason
-        except Exception as e:
-            if plan.created_by in SUPPORTED_AGENTS:
-                agent = plan.created_by
-                model = None
-                reasoning_effort = None
-                complexity = None
-                complexity_score = None
-                routing_reason = f"Fallback para o criador do plano ({plan.created_by}) devido a: {str(e)}"
-            else:
-                raise HandoffError(
-                    f"Erro de roteamento automático para o build: {str(e)}"
-                ) from e
-
-        queue_build(
-            db,
-            plan,
-            agent,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            routing_mode="auto",
-            complexity=complexity,
-            complexity_score=complexity_score,
-            routing_reason=routing_reason,
-        )
-    else:
-        db.commit()
-        db.refresh(plan)
+    # Aprovar o plano nunca inicia execução nem escolhe agente automaticamente.
+    # O roteamento permanece disponível como recomendação separada; criar Build
+    # exige ação explícita do usuário.
+    db.commit()
+    db.refresh(plan)
 
     return plan
 
