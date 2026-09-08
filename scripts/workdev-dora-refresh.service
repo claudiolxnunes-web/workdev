@@ -1,0 +1,31 @@
+[Unit]
+Description=WorkDev DORA — Refresh de cache de métricas
+Documentation=https://workdev.bpfconsult.com.br
+After=workdev-api.service
+Requires=workdev-api.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/workdev/apps/api/venv/bin/python /opt/workdev/scripts/refresh_dora_views.py
+WorkingDirectory=/opt/workdev
+User=workdev
+Group=workdev
+
+# Segredos
+Environment="DORA_API_URL=http://127.0.0.1:8000"
+EnvironmentFile=/etc/workdev/workdev-api.env
+
+# Observabilidade
+SyslogIdentifier=dora-refresh
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dora-refresh
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

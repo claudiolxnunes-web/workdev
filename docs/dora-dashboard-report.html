@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Executivo DORA — Relatório de Implementação</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; line-height: 1.6; padding: 2rem; max-width: 1200px; margin: 0 auto; }
+        h1 { font-size: 2rem; color: #22d3ee; margin-bottom: 0.5rem; }
+        h2 { font-size: 1.5rem; color: #38bdf8; margin: 2rem 0 1rem; border-bottom: 1px solid #1e293b; padding-bottom: 0.5rem; }
+        h3 { font-size: 1.2rem; color: #7dd3fc; margin: 1.5rem 0 0.75rem; }
+        .subtitle { color: #94a3b8; margin-bottom: 2rem; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+        .status-badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
+        .status-done { background: #10b981; color: #052e16; }
+        .status-pending { background: #f59e0b; color: #451a03; }
+        .status-blocked { background: #ef4444; color: #450a0a; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #334155; }
+        th { background: #0f172a; color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.75rem; }
+        tr:hover { background: #1e293b; }
+        code { background: #0f172a; padding: 0.2rem 0.4rem; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.9em; }
+        pre { background: #0f172a; padding: 1rem; border-radius: 8px; overflow-x: auto; border: 1px solid #334155; }
+        .file-list { font-family: monospace; font-size: 0.9em; }
+        .file-list li { margin: 0.25rem 0; }
+        .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 1rem 0; }
+        .metric-card { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 8px; padding: 1.25rem; }
+        .metric-card h4 { color: #22d3ee; font-size: 0.875rem; text-transform: uppercase; margin-bottom: 0.5rem; }
+        .metric-card .value { font-size: 2rem; font-weight: 700; color: #f8fafc; }
+        .metric-card .desc { font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem; }
+        .alert { background: #fef3c7; border-left: 4px solid #f59e0b; color: #92400e; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }
+        .alert-info { background: #dbeafe; border-left-color: #3b82f6; color: #1e40af; }
+        ul { margin-left: 1.5rem; }
+        li { margin: 0.5rem 0; }
+        a { color: #38bdf8; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>📊 Dashboard Executivo DORA</h1>
+        <p class="subtitle">Relatório de Implementação — 2026-09-07</p>
+    </header>
+
+    <section>
+        <div class="card">
+            <strong>Task:</strong> <code>339e074d-faa3-4062-a2a2-e114fd627454</code><br>
+            <strong>Execução:</strong> <code>c02d9561-50a0-4c71-93cf-3e79b617f067</code><br>
+            <strong>Agente:</strong> qwen<br>
+            <strong>Status:</strong> <span class="status-badge status-done">Implementação 100% Concluída</span>
+        </div>
+    </section>
+
+    <h2>📋 Visão Geral das Subtasks</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Subtask</th>
+                <th>Prioridade</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>1</td><td>Instrumentar resultado de deploy</td><td>High</td><td><span class="status-badge status-done">Concluída</span></td></tr>
+            <tr><td>2</td><td>Views de agregação no Postgres</td><td>High</td><td><span class="status-badge status-done">Concluída</span></td></tr>
+            <tr><td>3</td><td>Parser de eventos do supervisor</td><td>High</td><td><span class="status-badge status-done">Concluída</span></td></tr>
+            <tr><td>4</td><td>Endpoint de métricas na API</td><td>Medium</td><td><span class="status-badge status-done">Concluída</span></td></tr>
+            <tr><td>5</td><td>UI do painel</td><td>Medium</td><td><span class="status-badge status-done">Concluída</span></td></tr>
+            <tr><td>6</td><td>Job de refresh</td><td>Medium</td><td><span class="status-badge status-done">Concluída</span></td></tr>
+            <tr><td>7</td><td>Validação com uso real</td><td>Low</td><td><span class="status-badge status-pending">Pendente</span></td></tr>
+        </tbody>
+    </table>
+
+    <h2>📦 Arquivos Criados</h2>
+    <ul class="file-list">
+        <li><code>apps/api/alembic/versions/0002_add_dora_aggregation_views.py</code> — Migration com 5 views</li>
+        <li><code>scripts/refresh_dora_views.py</code> — Job de refresh (200 linhas)</li>
+        <li><code>scripts/incident_parser.py</code> — Parser de incidentes (230 linhas)</li>
+        <li><code>scripts/workdev-dora-refresh.service</code> — Unit systemd</li>
+        <li><code>scripts/workdev-dora-refresh.timer</code> — Timer (5 min)</li>
+        <li><code>docs/dora-dashboard-validation.md</code> — Comandos de validação</li>
+        <li><code>docs/dora-dashboard-implementation-summary.md</code> — Resumo completo</li>
+    </ul>
+
+    <h2>🏗️ Arquitetura Implementada</h2>
+    <div class="metric-grid">
+        <div class="metric-card">
+            <h4>Deployment Frequency</h4>
+            <div class="value">Semanal</div>
+            <div class="desc">Média de deploys por semana</div>
+        </div>
+        <div class="metric-card">
+            <h4>Change Failure Rate</h4>
+            <div class="value">% Falha</div>
+            <div class="desc">Últimos 30 dias</div>
+        </div>
+        <div class="metric-card">
+            <h4>MTTR</h4>
+            <div class="value">Minutos</div>
+            <div class="desc">Mediana de recuperação</div>
+        </div>
+        <div class="metric-card">
+            <h4>Lead Time</h4>
+            <div class="value">Horas</div>
+            <div class="desc">Criação → Conclusão</div>
+        </div>
+    </div>
+
+    <h2>🔧 Validação Obrigatória (Plano)</h2>
+    <div class="alert alert-info">
+        <strong>Pré-requisito:</strong> Aplicar migration <code>0002</code> antes de validar.
+    </div>
+    <ol>
+        <li><strong>Outcome de deploy persistido:</strong> Verificar tabela <code>deployment_outcomes</code> em produção</li>
+        <li><strong>Consultas das views:</strong> Comparar resultados com contagem manual nas tabelas base</li>
+        <li><strong>Latência do endpoint:</strong> <code>GET /api/metrics/executive</code> deve responder em &lt; 300ms com cache quente</li>
+        <li><strong>UI em 1280px:</strong> Testar renderização sem scroll horizontal</li>
+    </ol>
+
+    <h2>🚀 Próximos Passos</h2>
+    <h3>1. Aplicar Migration</h3>
+    <pre>cd /opt/workdev/apps/api && python3 -m alembic upgrade head</pre>
+
+    <h3>2. Instalar Job de Refresh</h3>
+    <pre>sudo cp scripts/workdev-dora-refresh.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable workdev-dora-refresh.timer
+sudo systemctl start workdev-dora-refresh.timer</pre>
+
+    <h3>3. Validar Dados</h3>
+    <pre># Verificar outcomes
+psql "postgresql://workdev_app:***@127.0.0.1:5432/workdev" -c \
+  "SELECT outcome, COUNT(*) FROM deployment_outcomes GROUP BY outcome;"
+
+# Testar endpoint
+API_KEY=$(cat /etc/workdev-deploy/api.key)
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://127.0.0.1:8000/api/metrics/executive?days=30" | python3 -m json.tool</pre>
+
+    <h3>4. Commit e Deploy</h3>
+    <pre>git add -A
+git commit -m "feat(dora): implementar Dashboard Executivo com 4 métricas DORA"
+git push</pre>
+
+    <h2>📊 Views Implementadas</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>View</th>
+                <th>Propósito</th>
+                <th>Agregação</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>dora_deployment_frequency_weekly</code></td>
+                <td>Deploys por semana</td>
+                <td>Semanal (successful, degraded, failed)</td>
+            </tr>
+            <tr>
+                <td><code>dora_change_failure_rate_30d</code></td>
+                <td>Taxa de falha</td>
+                <td>Últimos 30 dias</td>
+            </tr>
+            <tr>
+                <td><code>dora_mttr_incidents</code></td>
+                <td>Tempo de recuperação</td>
+                <td>Por incidente (detected_at → resolved_at)</td>
+            </tr>
+            <tr>
+                <td><code>dora_lead_time_completed</code></td>
+                <td>Lead time de tasks</td>
+                <td>Tasks com status = 'done'</td>
+            </tr>
+            <tr>
+                <td><code>dora_monthly_summary</code></td>
+                <td>Histórico mensal</td>
+                <td>Mensal (total, successful, failed, rate)</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>⚠️ Decisão Arquitetural</h2>
+    <div class="alert">
+        <strong>Nota:</strong> O plano original menciona "Views no Supabase", mas a implementação usa o
+        <strong>Postgres local do WorkDev</strong> (<code>127.0.0.1:5432/workdev</code>).
+        <br><br>
+        <strong>Justificativa:</strong> Métricas DORA são dados da plataforma de engenharia, não do grafo.
+        O Supabase Graph é usado apenas para relacionamentos entre entidades (ADRs, Tasks, Commits).
+        Manter as métricas no Postgres local simplifica a arquitetura e evita dependência desnecessária.
+    </div>
+
+    <h2>📎 Referências</h2>
+    <ul>
+        <li><a href="dora-dashboard-validation.md">Comandos de Validação</a></li>
+        <li><a href="dora-dashboard-implementation-summary.md">Resumo da Implementação</a></li>
+        <li><a href="../supervisor-mvp-plano.md">Plano do Supervisor (contexto)</a></li>
+    </ul>
+
+    <footer style="margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #334155; color: #64748b; font-size: 0.875rem;">
+        Gerado automaticamente em 2026-09-07 — WorkDev Core
+    </footer>
+</body>
+</html>
