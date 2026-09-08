@@ -109,14 +109,15 @@ def check_agents_health() -> tuple[bool, str, dict]:
         return False, "Status dos agentes indisponível", {}
     
     agents = status_data.get("agents", {})
+    required_agents = {"claude", "codex"}
     offline_agents = []
     blocked_agents = []
     
     for agent, health in agents.items():
         agent_status = health.get("status", "unknown")
-        if agent_status == "offline":
+        if agent in required_agents and agent_status == "offline":
             offline_agents.append(agent)
-        elif agent_status == "blocked":
+        elif agent in required_agents and agent_status == "blocked":
             blocked_agents.append(agent)
     
     metricas = {

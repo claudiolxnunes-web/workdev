@@ -45,7 +45,10 @@ class TaskContextTest(unittest.TestCase):
         self.assertIn("**Sprint:** Sem sprint", context)
         self.assertIn("Nenhuma subtask cadastrada", context)
         self.assertIn("permanecer em `draft`", context)
-        self.assertIn("não inicie agente ou tmux", context)
+        self.assertIn("`previsualizar_plano_execucao`", context)
+        self.assertIn("aprovar explicitamente a formulação final", context)
+        self.assertIn("Aprovar plano não inicia Build", context)
+        self.assertIn("execução é manual pelo usuário", context)
 
     def test_subtasks_sao_ordenadas_e_exibem_status(self):
         subtasks = [

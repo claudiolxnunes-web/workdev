@@ -11,10 +11,11 @@ def launcher(name: str) -> str:
     return (SCRIPTS / f"start_{name}_agent.sh").read_text(encoding="utf-8")
 
 
-def test_bootstrap_starts_all_five_agents_and_uses_exact_tmux_targets():
+def test_bootstrap_starts_only_always_on_agents_and_uses_exact_tmux_targets():
     content = (SCRIPTS / "bootstrap_agents.sh").read_text(encoding="utf-8")
 
-    assert "for session in code codex kimi qwen gemini" in content
+    assert "for session in code codex" in content
+    assert "for session in code codex kimi qwen gemini" not in content
     assert 'tmux has-session -t "=$session"' in content
     assert "tmux set-option -g extended-keys on" in content
     assert "tmux set-option -g history-limit 100000" in content
