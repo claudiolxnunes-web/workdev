@@ -331,6 +331,17 @@ class HandoffAutoRouteTest(unittest.TestCase):
             return current, SimpleNamespace(id=f"event-{data['status']}")
 
         with (
+            patch(
+                "app.services.test_gate.execute_gate",
+                return_value=SimpleNamespace(
+                    passed=True,
+                    mandatory_failed=[],
+                ),
+            ),
+            patch(
+                "app.services.test_gate.persist_gate_evidence",
+                return_value=SimpleNamespace(id="gate-event"),
+            ),
             patch("app.routers.handoffs._get_run", return_value=run),
             patch(
                 "app.routers.handoffs._task_project",
