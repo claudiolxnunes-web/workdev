@@ -106,3 +106,26 @@ def test_resolution_event_carrega_detected_at_do_incidente_original():
     assert payload["resolved_at"] is not None
     # Query de MTTR em /api/metrics/executive exige as duas chaves:
     assert "detected_at" in payload and "resolved_at" in payload
+
+def test_platform_incident_event_allows_null_run_id():
+    db = MagicMock()
+    created = {}
+
+    def fake_add(event):
+        created["event"] = event
+
+    db.add.side_effect = fake_add
+
+    parser = IncidentParser(db)
+    parser.create_incident_event(
+        uuid4(),
+        {
+            "incident_type": "service_outage",
+            "service_name": "workdev-api",
+            "severity": "critical",
+        },
+        run_id=None,
+    )
+
+    assert created["event"].run_id is None
+    assert created["event"].event_type == "incident_detected"

@@ -151,7 +151,7 @@ class IncidentParser:
         - AgentRunEvent criado
         """
         event = AgentRunEvent(
-            run_id=run_id or UUID("00000000-0000-0000-0000-000000000000"),
+            run_id=run_id,
             event_type=INCIDENT_DETECTED,
             message=f"Incidente detectado: {incident_data.get('incident_type')} em {incident_data.get('service', 'unknown')}",
             payload={
@@ -199,7 +199,7 @@ class IncidentParser:
                 detected_at = original.payload.get("detected_at")
 
         event = AgentRunEvent(
-            run_id=run_id or UUID("00000000-0000-0000-0000-000000000000"),
+            run_id=run_id,
             event_type=INCIDENT_RESOLVED,
             message=f"Incidente resolvido: {resolution_data.get('incident_type')}",
             payload={

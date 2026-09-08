@@ -144,7 +144,7 @@ class AgentRunEvent(Base):
     run_id = Column(
         UUID(as_uuid=True),
         ForeignKey("agent_runs.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     event_type = Column(String(40), nullable=False)
     message = Column(Text)
