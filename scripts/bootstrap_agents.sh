@@ -3,13 +3,25 @@ set -euo pipefail
 
 WORKDEV_DIR="${WORKDEV_DIR:-/opt/workdev}"
 
+# As opções globais exigem um servidor tmux ativo. Em um boot limpo ainda não
+# existe nenhuma sessão, então criamos uma sessão neutra temporária.
+BOOTSTRAP_SESSION="__workdev_bootstrap__"
+BOOTSTRAP_CREATED=0
+
+if ! tmux has-session -t "=$BOOTSTRAP_SESSION" 2>/dev/null; then
+  tmux new-session -d -s "$BOOTSTRAP_SESSION" "sleep 60"
+  BOOTSTRAP_CREATED=1
+fi
+
 # Kimi e outros TUIs distinguem Enter modificado; habilitar no servidor antes
 # de criar qualquer painel evita teclas descartadas silenciosamente.
 tmux set-option -g extended-keys on
+
 # O tmux continua sendo a camada de persistência do processo e precisa reter
 # histórico suficiente para replay/reconexão. Não desabilitamos alternate-screen:
 # cada CLI continua livre para usar seu TUI nativo.
 tmux set-option -g history-limit 100000
+
 
 declare -A AGENT_COMMANDS=(
   [code]="$WORKDEV_DIR/scripts/start_claude_agent.sh"
@@ -19,12 +31,16 @@ declare -A AGENT_COMMANDS=(
   [gemini]="$WORKDEV_DIR/scripts/start_gemini_agent.sh"
 )
 
-for session in code codex kimi qwen gemini; do
+for session in code codex; do
   if tmux has-session -t "=$session" 2>/dev/null; then
     continue
   fi
   tmux new-session -d -s "$session" -c "$WORKDEV_DIR" "${AGENT_COMMANDS[$session]}"
 done
+
+if [[ "$BOOTSTRAP_CREATED" -eq 1 ]]; then
+  tmux kill-session -t "=$BOOTSTRAP_SESSION"
+fi
 
 "$WORKDEV_DIR/scripts/configure_agent_transcripts.py"
 "$WORKDEV_DIR/scripts/agents_healthcheck.py" --once

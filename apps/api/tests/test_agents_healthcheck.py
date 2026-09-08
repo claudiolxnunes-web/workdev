@@ -40,8 +40,8 @@ class AgentHealthClassificationTest(unittest.TestCase):
         result = self.classify("kimi-code", "Kimi Code\n> ")
         self.assertEqual(result.status, "idle")
 
-    def test_all_five_agents_are_always_on(self):
-        self.assertEqual(healthcheck.ALWAYS_ON_AGENTS, frozenset(healthcheck.AGENTS))
+    def test_only_claude_and_codex_are_always_on(self):
+        self.assertEqual(healthcheck.ALWAYS_ON_AGENTS, frozenset({"claude", "codex"}))
 
     @patch.object(healthcheck, "run")
     def test_session_lookup_requires_exact_name(self, run):

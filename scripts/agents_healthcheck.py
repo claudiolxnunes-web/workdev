@@ -31,7 +31,7 @@ AGENTS = {
     "qwen": ("qwen", [str(WORKDEV_DIR / "scripts/start_qwen_agent.sh")]),
     "gemini": ("gemini", [str(WORKDEV_DIR / "scripts/start_gemini_agent.sh")]),
 }
-ALWAYS_ON_AGENTS = frozenset(AGENTS)
+ALWAYS_ON_AGENTS = frozenset({"claude", "codex"})
 
 SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
 BLOCKED_PATTERNS = (

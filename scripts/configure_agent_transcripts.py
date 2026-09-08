@@ -46,11 +46,16 @@ def configure(agent: str, session: str) -> bool:
 
 
 def main() -> int:
-    failed = [agent for agent, session in SESSIONS.items() if not configure(agent, session)]
+    existing = [
+        (agent, session)
+        for agent, session in SESSIONS.items()
+        if run("tmux", "has-session", "-t", f"={session}").returncode == 0
+    ]
+    failed = [agent for agent, session in existing if not configure(agent, session)]
     if failed:
         print("Falha ao configurar transcript: " + ", ".join(failed))
         return 1
-    print("Transcripts configurados: " + ", ".join(SESSIONS))
+    print("Transcripts configurados: " + ", ".join(agent for agent, _ in existing))
     return 0
 
 
