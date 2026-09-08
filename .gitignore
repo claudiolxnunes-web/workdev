@@ -24,3 +24,6 @@ supabase/.temp/
 .backups/
 .restore-points/
 /agent-transcripts/
+
+/.workdev/
+/.workdev-recovery/
