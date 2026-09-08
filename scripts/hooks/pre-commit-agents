@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+#
+# Hook para bloquear commits diretos de agentes em branches protegidas.
+#
+# Instalação:
+#   cp /opt/workdev/scripts/hooks/pre-commit-agents .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# Mecanismo:
+# - Agentes são processos filhos de scripts/start_*_agent.sh
+# - Hook verifica se o processo atual é executado no contexto de um agente
+# - Em branches protegidas (develop, main, master), agentes devem usar worktree
+#
+# Variáveis de ambiente detectadas:
+# - WORKDEV_AGENT_RUN_ID: definida quando agente executa via workdev_agent.py
+# - QWEN_CODE_SYSTEM_SETTINGS_PATH: indica execução do Qwen Code
+# - PARENT process name contém start_*_agent.sh
+
+set -euo pipefail
+
+# Branches protegidas
+PROTECTED_BRANCHES="develop main master"
+
+# Obter branch atual
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || {
+    # Não estamos em repositório git ou hook chamado incorretamente
+    exit 0
+}
+
+# Verificar se está em branch protegida
+is_protected=false
+for branch in $PROTECTED_BRANCHES; do
+    if [[ "$CURRENT_BRANCH" == "$branch" ]]; then
+        is_protected=true
+        break
+    fi
+done
+
+# Se não está em branch protegida, liberar
+if [[ "$is_protected" == false ]]; then
+    exit 0
+fi
+
+# Detectar se execução é de agente
+is_agent_execution=false
+
+# 1. Verificar variável de ambiente de agente
+if [[ -n "${WORKDEV_AGENT_RUN_ID:-}" ]]; then
+    is_agent_execution=true
+fi
+
+# 2. Verificar se Qwen Code está executando
+if [[ -n "${QWEN_CODE_SYSTEM_SETTINGS_PATH:-}" ]]; then
+    is_agent_execution=true
+fi
+
+# 3. Verificar processo pai (start_*_agent.sh)
+PARENT_PID=$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')
+if [[ -n "$PARENT_PID" ]]; then
+    PARENT_CMD=$(ps -o comm= -p "$PARENT_PID" 2>/dev/null || echo "")
+    if [[ "$PARENT_CMD" == *"start_"*"_agent.sh"* ]]; then
+        is_agent_execution=true
+    fi
+fi
+
+# Se não é execução de agente, liberar
+if [[ "$is_agent_execution" == false ]]; then
+    exit 0
+fi
+
+# Se chegou aqui: agente tentando commitar em branch protegida
+cat >&2 << EOF
+❌ BLOQUEADO: Agente não pode commitar diretamente em '$CURRENT_BRANCH'
+
+Motivo: Commits de agentes em branches protegidas devem ser feitos via worktree.
+
+Solução:
+  1. Crie um worktree para sua task:
+     ./scripts/create_task_worktree.sh <task-id> ${AGENT_NAME:-agent}
+
+  2. Trabalhe no worktree isolado:
+     cd .workdev/worktrees/task-<id>
+     # Seu commit será na branch task/<id>
+
+  3. Após revisão humana, faça merge:
+     git worktree remove .workdev/worktrees/task-<id>
+     git merge task/<id>
+
+Branch atual: $CURRENT_BRANCH
+Processo pai: ${PARENT_CMD:-desconhecido}
+WORKDEV_AGENT_RUN_ID: ${WORKDEV_AGENT_RUN_ID:-não definido}
+
+Para operações humanas/administrativas em develop, use:
+  git commit --no-verify  # bypass intencional do hook
+EOF
+
+exit 1
