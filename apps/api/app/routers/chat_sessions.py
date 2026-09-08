@@ -110,6 +110,24 @@ def criar_sessao_da_task(
     project = db.query(Project).filter(Project.id == task.project_id).first()
     if not project:
         raise HTTPException(status_code=409, detail="Projeto da task não encontrado")
+
+    # Check if there is already an active or approved plan for this task
+    from app.models.handoff import ExecutionPlan
+    active_plan = db.query(ExecutionPlan).filter(
+        ExecutionPlan.backlog_id == task.id,
+        ExecutionPlan.status.in_({"draft", "needs_revision", "approved"})
+    ).first()
+    if active_plan:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "active_plan_exists",
+                "message": f"Já existe um plano {active_plan.status} para esta tarefa (versão {active_plan.version}).",
+                "plan_id": str(active_plan.id),
+                "plan_status": active_plan.status,
+            }
+        )
+
     existing_session = db.query(ChatSession).filter(ChatSession.task_id == task.id).first()
     if existing_session:
         return {

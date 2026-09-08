@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 
@@ -64,12 +64,14 @@ class CreateSessionFromTaskTest(unittest.TestCase):
         task_query.filter.return_value.first.return_value = _task()
         project_query = Mock()
         project_query.filter.return_value.first.return_value = _project()
+        active_plan_query = Mock()
+        active_plan_query.filter.return_value.first.return_value = None
         existing_session_query = Mock()
         existing_session_query.filter.return_value.first.return_value = None
         subtask_query = Mock()
         subtask_query.filter.return_value.order_by.return_value.all.return_value = []
         db = Mock()
-        db.query.side_effect = [task_query, project_query, existing_session_query, subtask_query]
+        db.query.side_effect = [task_query, project_query, active_plan_query, existing_session_query, subtask_query]
 
         def assign_session_id():
             session = db.add.call_args_list[0].args[0]
@@ -100,6 +102,8 @@ class CreateSessionFromTaskTest(unittest.TestCase):
         task_query.filter.return_value.first.return_value = _task()
         project_query = Mock()
         project_query.filter.return_value.first.return_value = _project()
+        active_plan_query = Mock()
+        active_plan_query.filter.return_value.first.return_value = None
         existing_session = SimpleNamespace(
             id=SESSION_ID,
             title="Planejar: Adicionar integração",
@@ -111,7 +115,7 @@ class CreateSessionFromTaskTest(unittest.TestCase):
         existing_session_query = Mock()
         existing_session_query.filter.return_value.first.return_value = existing_session
         db = Mock()
-        db.query.side_effect = [task_query, project_query, existing_session_query]
+        db.query.side_effect = [task_query, project_query, active_plan_query, existing_session_query]
 
         result = chat_sessions.criar_sessao_da_task(
             SessionFromTask(task_id=TASK_ID), db
@@ -119,6 +123,27 @@ class CreateSessionFromTaskTest(unittest.TestCase):
 
         self.assertEqual(result["id"], str(SESSION_ID))
         self.assertEqual(result["task_id"], str(TASK_ID))
+        db.add.assert_not_called()
+        db.commit.assert_not_called()
+
+    def test_rejeita_sessao_se_plano_ativo_existente(self):
+        task_query = Mock()
+        task_query.filter.return_value.first.return_value = _task()
+        project_query = Mock()
+        project_query.filter.return_value.first.return_value = _project()
+        active_plan = SimpleNamespace(id=uuid4(), status="approved", version=1)
+        active_plan_query = Mock()
+        active_plan_query.filter.return_value.first.return_value = active_plan
+        db = Mock()
+        db.query.side_effect = [task_query, project_query, active_plan_query]
+
+        with self.assertRaises(HTTPException) as error:
+            chat_sessions.criar_sessao_da_task(
+                SessionFromTask(task_id=TASK_ID), db
+            )
+
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertEqual(error.exception.detail["code"], "active_plan_exists")
         db.add.assert_not_called()
         db.commit.assert_not_called()
 

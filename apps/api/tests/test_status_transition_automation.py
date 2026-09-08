@@ -149,6 +149,21 @@ class StatusTransitionAutomationTest(unittest.TestCase):
             queue_mock.assert_not_called()
             db.commit.assert_called_once()
 
+    def test_create_plan_raises_handoff_error_if_plan_already_exists(self):
+        from app.services.handoff import create_plan
+        db = Mock()
+        backlog_id = uuid4()
+        task = SimpleNamespace(id=backlog_id, title="Test Task")
+        active_plan = SimpleNamespace(id=uuid4(), status="draft", version=1)
+
+        # Mock query return values:
+        # First query: finds task
+        # Second query: finds active_plan
+        db.query.return_value.filter.return_value.first.side_effect = [task, active_plan]
+
+        with self.assertRaisesRegex(HandoffError, "Já existe um plano ativo ou aprovado"):
+            create_plan(db, {"backlog_id": backlog_id})
+
     def test_task_requires_deploy_detection(self):
         db = Mock()
         backlog_id = uuid4()
@@ -207,6 +222,7 @@ class StatusTransitionAutomationTest(unittest.TestCase):
 
         # Mock task_requires_deploy to return False
         with (
+            patch("app.services.test_gate.validate_run_for_status_change", return_value=(True, "Gate aprovado")),
             patch("app.services.handoff.task_requires_deploy", return_value=False),
             patch("app.services.handoff.promote_pending_subtasks") as promote_mock,
         ):
@@ -223,6 +239,7 @@ class StatusTransitionAutomationTest(unittest.TestCase):
 
         # Mock task_requires_deploy to return True
         with (
+            patch("app.services.test_gate.validate_run_for_status_change", return_value=(True, "Gate aprovado")),
             patch("app.services.handoff.task_requires_deploy", return_value=True),
             patch("app.services.handoff.promote_pending_subtasks") as promote_mock,
         ):

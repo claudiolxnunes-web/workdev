@@ -55,8 +55,8 @@ describe("TaskDetail: planejamento no AI Hub", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Planejar no AI Hub" }));
-    fireEvent.click(screen.getByRole("button", { name: "Abrindo AI Hub…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enviar ao AI Hub" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enviando ao AI Hub…" }));
 
     await waitFor(() => {
       expect(createTaskPlanningSession).toHaveBeenCalledTimes(1);
@@ -69,14 +69,14 @@ describe("TaskDetail: planejamento no AI Hub", () => {
   });
 
   it("mantém o modal aberto e mostra erro quando a criação falha", async () => {
-    vi.mocked(createTaskPlanningSession).mockRejectedValueOnce(new Error("falha"));
+    vi.mocked(createTaskPlanningSession).mockRejectedValueOnce(new Error("Não foi possível enviar a task ao AI Hub."));
     render(
       <MemoryRouter>
         <TaskDetail item={item} onClose={vi.fn()} onAdvance={vi.fn()} />
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Planejar no AI Hub" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enviar ao AI Hub" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Não foi possível enviar a task ao AI Hub.",

@@ -96,6 +96,10 @@ export async function createTaskPlanningSession(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ task_id: taskId }),
   });
-  if (!response.ok) throw new Error("Erro ao enviar task ao AI Hub");
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const message = errorData.detail?.message || errorData.detail || "Erro ao enviar task ao AI Hub";
+    throw new Error(message);
+  }
   return response.json();
 }

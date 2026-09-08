@@ -124,6 +124,16 @@ def create_plan(
     if not task:
         raise HandoffError("Task do backlog não encontrada")
 
+    # Check for duplicate active/approved plan
+    active_plan = db.query(ExecutionPlan).filter(
+        ExecutionPlan.backlog_id == task.id,
+        ExecutionPlan.status.in_({"draft", "needs_revision", "approved"})
+    ).first()
+    if active_plan:
+        raise HandoffError(
+            f"Já existe um plano ativo ou aprovado para esta tarefa (status: {active_plan.status})"
+        )
+
     version = db.query(
         func.coalesce(func.max(ExecutionPlan.version), 0)
     ).filter(
@@ -414,6 +424,21 @@ def update_run(
             raise HandoffError(
                 f"Transição inválida: {run.status} → {next_status}"
             )
+
+        # Gate de testes antes de permitir transição para review ou completed
+        # FAIL-CLOSED: sem evidência válida → bloqueia
+        if next_status in {"review", "completed"}:
+            from app.services.test_gate import validate_run_for_status_change
+
+            allowed_by_gate, gate_reason = validate_run_for_status_change(
+                db, run, next_status
+            )
+
+            if not allowed_by_gate:
+                raise HandoffError(
+                    f"Gate de testes reprovado: {gate_reason}. "
+                    f"Task não pode ir para {next_status} sem testes aprovados."
+                )
 
         previous = run.status
         run.status = next_status

@@ -387,19 +387,52 @@ def _run_auto_agent(
             _start_auto_monitor(run_id, agent)
             return
 
+        # GEMINI AUTO: fluxo correto para conclusão
+        # 1. Execução técnica terminou (runtime headless encerrou)
+        # 2. Executar gate ANTES de marcar completed
+        # 3. Persistir evidência
+        # 4. Se gate PASS: avançar para completed
+        # 5. Se gate FAIL: ir para blocked/review com justificativa
+        # 6. Só então finalizar runtime
+
         db.expire_all()
         run = _get_run(db, run_id)
+
         if run.status == "running":
-            finalize_auto_runtime(agent, run_id)
-            run, event = update_run(
-                db,
-                run,
-                {
-                    "status": "completed",
-                    "result": f"{agent} headless encerrou com sucesso",
-                    "message": "Runtime AUTO concluiu; sessão encerrada e agente em standby",
-                },
-            )
+            # Executar gate antes de qualquer transição terminal
+            from app.services.test_gate import execute_gate, persist_gate_evidence
+
+            gate_evidence = execute_gate(run)
+            gate_event = persist_gate_evidence(db, gate_evidence)
+
+            # Decidir status baseado no gate
+            if gate_evidence.passed:
+                # Gate PASS: pode completar
+                run, event = update_run(
+                    db,
+                    run,
+                    {
+                        "status": "completed",
+                        "result": f"{agent} headless encerrou com sucesso",
+                        "message": "Runtime AUTO concluiu; sessão encerrada e agente em standby",
+                    },
+                )
+                finalize_auto_runtime(agent, run_id)
+            else:
+                # Gate FAIL: não completar, ir para blocked ou review
+                # Para Fase 1: vai para blocked com erro do gate
+                failed_checks = ", ".join(gate_evidence.mandatory_failed)
+                run, event = update_run(
+                    db,
+                    run,
+                    {
+                        "status": "blocked",
+                        "error": f"Gate de testes reprovado: {failed_checks}",
+                        "message": "Runtime AUTO encerrou, mas testes falharam; task bloqueada para revisão",
+                    },
+                )
+                finalize_auto_runtime(agent, run_id)
+
             _sync_auto_transition(db, run, event)
     finally:
         db.close()
@@ -647,6 +680,30 @@ def get_plan_recommendation(
     return payload
 
 
+def execute_test_gate_for_run(db: Session, run: AgentRun) -> dict:
+    """
+    Executar gate de testes para um AgentRun e persistir evidência.
+
+    Usa o service dedicado test_gate para execução e persistência.
+    Retorna resultado para o caller.
+    """
+    from app.services.test_gate import execute_gate, persist_gate_evidence
+
+    # Executar gate
+    evidence = execute_gate(run)
+
+    # Persistir evidência como evento
+    event = persist_gate_evidence(db, evidence)
+
+    return {
+        "passed": evidence.passed,
+        "reason": evidence.error or "Gate aprovado",
+        "evidence_id": event.id,
+        "checks": [c.name for c in evidence.checks],
+        "mandatory_failed": evidence.mandatory_failed,
+    }
+
+
 @router.post(
     "/plans/{plan_id}/build",
     status_code=201,
@@ -883,30 +940,55 @@ def update_agent_run(
     current = _get_run(db, run_id)
     data = payload.model_dump(exclude_unset=True)
     requested_status = data.get("status")
-    if (
-        current.routing_mode == "auto"
-        and requested_status in {"completed", "failed", "cancelled"}
-        and requested_status != current.status
-    ):
-        if requested_status == "completed" and not data.get("result"):
+
+    # BUG FIX: Capturar previous_status ANTES de update_run modificar o objeto
+    # Após update_run, current.status já foi alterado, então a comparação
+    # requested_status != current.status estaria errada
+    previous_status = current.status
+
+    # ORDEM CORRETA PARA AUTO RUNTIME:
+    # 1. Validar transição (inclui gate se necessário)
+    # 2. Só então finalizar runtime se transição for aceita
+    # 3. Executar update_run
+
+    # Primeiro validar transição (gate é verificado dentro de update_run)
+    try:
+        # Validar pré-requisitos antes de qualquer modificação
+        if (
+            current.routing_mode == "auto"
+            and requested_status == "completed"
+            and not data.get("result")
+        ):
             raise HTTPException(
                 409,
                 "Execução AUTO concluída exige resultado persistido",
             )
-        try:
-            finalize_auto_runtime(current.agent, current.id)
-        except Exception as error:
-            raise HTTPException(
-                503,
-                f"Falha ao finalizar runtime AUTO: {error}",
-            ) from error
 
-    try:
+        # Executar gate de testes se necessário (dentro de update_run)
+        # Se gate falhar, HandoffError será lançado
         run, event = update_run(
             db,
             current,
             data,
         )
+
+        # Só após update_run aceitar a transição, finalizar runtime
+        # Usar previous_status capturado antes, não current.status que foi modificado
+        if (
+            current.routing_mode == "auto"
+            and requested_status in {"completed", "failed", "cancelled"}
+            and requested_status != previous_status
+        ):
+            try:
+                finalize_auto_runtime(current.agent, current.id)
+            except Exception as error:
+                # Runtime já foi finalizado, mas transição foi aceita
+                # Logar erro mas não reverter
+                import logging
+                logging.warning(
+                    f"Runtime AUTO finalizado com erro após transição aceita: {error}"
+                )
+
     except HandoffError as error:
         raise HTTPException(
             409,

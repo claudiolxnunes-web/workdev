@@ -57,8 +57,8 @@ export default function TaskDetail({ item, onClose, onAdvance }: Props) {
       const session = await createTaskPlanningSession(item!.id);
       sessionStorage.setItem("workdev_chat_session", session.id);
       navigate(`/ai-hub?session=${encodeURIComponent(session.id)}&autostart=1`);
-    } catch {
-      setPlanningError("Não foi possível enviar a task ao AI Hub.");
+    } catch (error: unknown) {
+      setPlanningError(error instanceof Error && error.message ? error.message : "Não foi possível enviar a task ao AI Hub.");
       planningRef.current = false;
       setPlanning(false);
     }
@@ -87,7 +87,7 @@ export default function TaskDetail({ item, onClose, onAdvance }: Props) {
           disabled={planning}
           className="mb-4 w-full rounded-lg bg-violet-600 px-4 py-2.5 font-medium transition-colors hover:bg-violet-700 disabled:cursor-wait disabled:opacity-60"
         >
-          {planning ? "Abrindo AI Hub…" : "Planejar no AI Hub"}
+          {planning ? "Enviando ao AI Hub…" : "Enviar ao AI Hub"}
         </button>
         {planningError && (
           <p role="alert" className="mb-4 text-sm text-red-400">{planningError}</p>
