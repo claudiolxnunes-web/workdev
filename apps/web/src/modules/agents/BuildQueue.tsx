@@ -1,7 +1,7 @@
 import { startTransition, useCallback, useEffect, useState } from "react"
 import {
   getRunContext, getRuns, subscribeToHandoffs, transferRun, updateRun,
-  updateRunSubtask,
+  updateRunSubtask, agentLabels,
   type AgentContext, type AgentName, type AgentRun, type RunStatus,
 } from "@/services/handoff.service"
 
@@ -14,9 +14,7 @@ const statusColor: Record<RunStatus, string> = {
   review: "text-violet-300", completed: "text-emerald-300", failed: "text-red-300",
   cancelled: "text-slate-500",
 }
-const agentLabel: Record<AgentName, string> = {
-  claude: "Claude Code", codex: "Codex", kimi: "Kimi Code", qwen: "Qwen Code", gemini: "Gemini",
-}
+const agentLabel = agentLabels
 
 export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName; mobileExpanded?: boolean }) {
   const [runs, setRuns] = useState<AgentRun[]>([])

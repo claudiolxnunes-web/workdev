@@ -13,7 +13,7 @@ describe("handoff service errors", () => {
       },
     }), { status: 409, headers: { "Content-Type": "application/json" } })))
 
-    await expect(sendToBuild("plan-1")).rejects.toMatchObject({
+    await expect(sendToBuild("plan-1", "codex")).rejects.toMatchObject({
       name: "HandoffApiError",
       message: "Autorize o custo premium",
       detail: { code: "premium_confirmation_required", message: "Autorize o custo premium" },

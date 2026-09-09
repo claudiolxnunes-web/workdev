@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import {
-  approvePlan, getPlanRecommendation, getPlans, sendToBuild, subscribeToHandoffs,
-  updatePlan, HandoffApiError, type AgentName, type ExecutionPlan,
+  agentLabels, approvePlan, getAgentRuntimes, getPlanRecommendation, getPlans,
+  sendToBuild, subscribeToHandoffs, updatePlan, CLI_AGENTS, HandoffApiError,
+  type AgentName, type AgentRuntime, type ExecutionPlan,
   type PlanRecommendation,
 } from "@/services/handoff.service"
 
@@ -15,18 +16,7 @@ const statusColor: Record<string, string> = {
   needs_revision: "bg-red-500/20 text-red-300", superseded: "bg-slate-700 text-slate-400",
   discarded: "bg-slate-800 text-slate-300",
 }
-const agentLabel: Record<AgentName, string> = {
-  claude: "Claude Code", codex: "Codex", kimi: "Kimi Code", qwen: "Qwen Code", gemini: "Gemini",
-}
-// Os cinco agentes configurados. A recomendação nunca desabilita nenhum deles:
-// o usuário pode ignorá-la e enviar para quem quiser.
-const agents: Array<{ name: AgentName; className: string }> = [
-  { name: "codex", className: "bg-sky-600 hover:bg-sky-500" },
-  { name: "claude", className: "bg-violet-600 hover:bg-violet-500" },
-  { name: "kimi", className: "bg-fuchsia-600 hover:bg-fuchsia-500" },
-  { name: "qwen", className: "bg-amber-600 hover:bg-amber-500" },
-  { name: "gemini", className: "bg-teal-600 hover:bg-teal-500" },
-]
+const agentLabel = agentLabels
 const costColor: Record<string, string> = {
   free: "text-emerald-300", economic: "text-emerald-300", moderate: "text-amber-300",
   premium: "text-rose-300", unknown: "text-slate-400",
@@ -37,6 +27,58 @@ const availabilityColor: Record<string, string> = {
 
 function recommendationKey(plan: ExecutionPlan) {
   return `${plan.id}:${plan.updated_at}`
+}
+
+type RolePair = { executor?: AgentName; reviewer?: AgentName }
+type AgentChoice = { name: AgentName; label: string; disabled: boolean; hint: string }
+
+/**
+ * Opções de agente para executor e revisor. Agentes com CLI própria estão
+ * sempre disponíveis; runtimes Ollama só quando o backend os reporta
+ * despacháveis — endpoint offline não vira opção de envio.
+ */
+function agentChoices(runtimes: AgentRuntime[]): AgentChoice[] {
+  const cli: AgentChoice[] = CLI_AGENTS.map((name) => ({
+    name, label: agentLabel[name], disabled: false, hint: "",
+  }))
+  const locais: AgentChoice[] = runtimes.map((runtime) => ({
+    name: runtime.id,
+    label: `${runtime.label} · ${runtime.status_label}`,
+    disabled: !runtime.dispatchable,
+    hint: runtime.reason ?? "",
+  }))
+  return [...cli, ...locais]
+}
+
+function RoleSelect({
+  id, titulo, valor, choices, onChange, disabled,
+}: {
+  id: string
+  titulo: string
+  valor?: AgentName
+  choices: AgentChoice[]
+  onChange: (agent: AgentName) => void
+  disabled: boolean
+}) {
+  return (
+    <label htmlFor={id} className="block text-xs text-slate-400">
+      {titulo}
+      <select
+        id={id}
+        value={valor ?? ""}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value as AgentName)}
+        className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100 disabled:opacity-50"
+      >
+        <option value="">Selecione…</option>
+        {choices.map((choice) => (
+          <option key={choice.name} value={choice.name} disabled={choice.disabled}>
+            {choice.label}{choice.disabled && choice.hint ? ` — ${choice.hint}` : ""}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
 }
 
 function RecommendationCard({
@@ -135,7 +177,19 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
   // Modelo escolhido pelo usuário para aquele envio, por plano. Vazio = usa o
   // recomendado. A troca é consultiva e não altera nada no servidor.
   const [modelChoice, setModelChoice] = useState<Record<string, string>>({})
+  // Executor e revisor escolhidos por plano. Sem os dois, não há envio.
+  const [roles, setRoles] = useState<Record<string, RolePair>>({})
+  const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const requestedRecommendations = useRef<Set<string>>(new Set())
+
+  const choices = agentChoices(runtimes)
+
+  function setRole(planId: string, field: keyof RolePair, agent: AgentName) {
+    setRoles((current) => ({
+      ...current,
+      [planId]: { ...current[planId], [field]: agent },
+    }))
+  }
 
   const load = useCallback(async () => {
     try { setPlans(await getPlans(filter === "discarded" ? "discarded" : undefined)); setError("") }
@@ -153,6 +207,21 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
     const timer = window.setInterval(() => void load(), 15000)
     return () => { unsubscribe(); window.clearInterval(timer) }
   }, [load])
+
+  useEffect(() => {
+    // Status dos runtimes Ollama vem do backend. Se a rota falhar, a aba segue
+    // utilizável com os agentes de CLI — GPU fora do ar não derruba o envio.
+    let cancelled = false
+    async function poll() {
+      try {
+        const rows = await getAgentRuntimes()
+        if (!cancelled) setRuntimes(rows)
+      } catch { /* próxima rodada tenta de novo */ }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 15000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [])
 
   useEffect(() => {
     const pending = plans.filter(
@@ -198,11 +267,20 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
   }
 
   async function build(plan: ExecutionPlan, agent?: AgentName, premiumConfirmed = false) {
+    const reviewer = roles[plan.id]?.reviewer
+    if (!reviewer) {
+      setError("Escolha o revisor independente antes de enviar ao Build.")
+      return
+    }
     setBusy(plan.id); setError(""); setMessage("")
     try {
-      await sendToBuild(plan.id, agent, premiumConfirmed, chosenModel(plan, agent))
+      await sendToBuild(plan.id, reviewer, agent, premiumConfirmed, chosenModel(plan, agent))
       setPremiumTarget(null)
-      setMessage(agent ? `Build enviado para ${agentLabel[agent]}.` : "Build enviado.")
+      setMessage(
+        agent
+          ? `Build enviado: ${agentLabel[agent]} executa, ${agentLabel[reviewer]} revisa.`
+          : `Build enviado em AUTO; ${agentLabel[reviewer]} revisa.`,
+      )
       await load()
     } catch (cause) {
       if (cause instanceof HandoffApiError && cause.detail.code === "premium_confirmation_required") {
@@ -307,17 +385,59 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
                 </>}
                 {["draft", "needs_revision"].includes(plan.status) && <button disabled={busy === plan.id} onClick={() => void approve(plan)} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm hover:bg-emerald-500 disabled:opacity-50">Aprovar plano</button>}
                 {plan.status === "draft" && <button disabled={busy === plan.id} onClick={() => setDiscardTarget(plan)} className="rounded-lg border border-red-800 px-3 py-2 text-sm text-red-300 hover:bg-red-950 disabled:opacity-50">Descartar</button>}
-                {plan.status === "approved" && agents.map(({ name, className }) => (
-                  <button
-                    key={name}
-                    disabled={busy === plan.id}
-                    onClick={() => void build(plan, name)}
-                    className={`rounded-lg px-3 py-2 text-sm disabled:opacity-50 ${className}`}
-                  >
-                    Enviar ao {agentLabel[name]}
-                  </button>
-                ))}
               </div>
+              {plan.status === "approved" && (
+                <section
+                  aria-label="Executor e revisor"
+                  className="mt-3 rounded-lg border border-slate-700 bg-slate-950/60 p-3"
+                >
+                  <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">
+                    Quem executa e quem revisa
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <RoleSelect
+                      id={`executor-${plan.id}`}
+                      titulo="Executor"
+                      valor={roles[plan.id]?.executor}
+                      choices={choices}
+                      disabled={busy === plan.id}
+                      onChange={(agent) => setRole(plan.id, "executor", agent)}
+                    />
+                    <RoleSelect
+                      id={`revisor-${plan.id}`}
+                      titulo="Revisor independente"
+                      valor={roles[plan.id]?.reviewer}
+                      choices={choices}
+                      disabled={busy === plan.id}
+                      onChange={(agent) => setRole(plan.id, "reviewer", agent)}
+                    />
+                  </div>
+                  {roles[plan.id]?.executor
+                    && roles[plan.id]?.executor === roles[plan.id]?.reviewer && (
+                    <p className="mt-2 text-xs text-rose-300">
+                      Executor e revisor precisam ser agentes diferentes: quem
+                      executa não aprova o próprio trabalho.
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    disabled={
+                      busy === plan.id
+                      || !roles[plan.id]?.executor
+                      || !roles[plan.id]?.reviewer
+                      || roles[plan.id]?.executor === roles[plan.id]?.reviewer
+                    }
+                    onClick={() => void build(plan, roles[plan.id]?.executor)}
+                    className="mt-3 rounded-lg bg-sky-600 px-3 py-2 text-sm hover:bg-sky-500 disabled:opacity-50"
+                  >
+                    Enviar ao Build
+                  </button>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Após a execução a task vai para revisão, não direto para
+                    concluída. Runtimes Ollama offline não aparecem como opção.
+                  </p>
+                </section>
+              )}
             </article>
           ))}
         </div>

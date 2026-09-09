@@ -3,14 +3,15 @@ import { MemoryRouter } from "react-router-dom"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { PlanningPanel } from "./PlanningPanel"
 import {
-  HandoffApiError, type AgentModelOption, type AgentOption, type ExecutionPlan,
-  type PlanRecommendation,
+  HandoffApiError, type AgentModelOption, type AgentOption, type AgentRuntime,
+  type ExecutionPlan, type PlanRecommendation,
 } from "@/services/handoff.service"
 
 const getPlans = vi.fn()
 const updatePlan = vi.fn()
 const sendToBuild = vi.fn()
 const getPlanRecommendation = vi.fn()
+const getAgentRuntimes = vi.fn()
 
 vi.mock("@/services/handoff.service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/handoff.service")>()),
@@ -19,8 +20,37 @@ vi.mock("@/services/handoff.service", async (importOriginal) => ({
   approvePlan: vi.fn(),
   sendToBuild: (...args: unknown[]) => sendToBuild(...args),
   getPlanRecommendation: (...args: unknown[]) => getPlanRecommendation(...args),
+  getAgentRuntimes: (...args: unknown[]) => getAgentRuntimes(...args),
   subscribeToHandoffs: () => () => undefined,
 }))
+
+function runtime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
+  return {
+    id: "local-code", label: "Ollama local (VPS)", kind: "local",
+    provider: "ollama", persistence: "local_na_vps", auto_eligible: false,
+    configured: true, model: "qwen2.5-coder:7b", source_of_truth: false,
+    notes: "Roda na própria VPS.",
+    reprovision: { policy: "nao_aplicavel", steps: [] },
+    status: "online", status_label: "Online", reason: null,
+    models: ["qwen2.5-coder:7b"], checked_at: "2026-09-09T00:00:00Z",
+    latency_ms: 8, dispatchable: true, active_run_id: null, busy: false,
+    ...overrides,
+  }
+}
+
+/** Escolhe executor e revisor do único plano em tela. */
+async function escolherPapeis(executor: string, reviewer = "claude") {
+  fireEvent.change(await screen.findByLabelText("Executor"), {
+    target: { value: executor },
+  })
+  fireEvent.change(screen.getByLabelText("Revisor independente"), {
+    target: { value: reviewer },
+  })
+}
+
+function enviar() {
+  fireEvent.click(screen.getByRole("button", { name: "Enviar ao Build" }))
+}
 
 function agentOption(overrides: Partial<AgentOption> = {}): AgentOption {
   return {
@@ -107,11 +137,12 @@ function renderPanel() {
 describe("PlanningPanel", () => {
   beforeEach(() => {
     getPlans.mockReset(); updatePlan.mockReset(); sendToBuild.mockReset()
-    getPlanRecommendation.mockReset()
+    getPlanRecommendation.mockReset(); getAgentRuntimes.mockReset()
     getPlans.mockResolvedValue([basePlan])
     updatePlan.mockResolvedValue(basePlan)
     sendToBuild.mockResolvedValue({})
     getPlanRecommendation.mockResolvedValue(baseRecommendation)
+    getAgentRuntimes.mockResolvedValue([])
   })
 
   it("edita título e objetivo apenas no plano draft", async () => {
@@ -151,7 +182,7 @@ describe("PlanningPanel", () => {
     await waitFor(() => expect(getPlans).toHaveBeenCalledWith("discarded"))
   })
 
-  it("mostra autorização premium estruturada e reenvia ao mesmo agente", async () => {
+  it("mostra autorização premium estruturada e reenvia ao mesmo par", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     sendToBuild
       .mockRejectedValueOnce(new HandoffApiError({
@@ -169,12 +200,15 @@ describe("PlanningPanel", () => {
       .mockResolvedValueOnce({})
 
     renderPanel()
-    fireEvent.click(await screen.findByRole("button", { name: "Enviar ao Codex" }))
+    await escolherPapeis("codex")
+    enviar()
     expect(await screen.findByRole("dialog", { name: "Autorizar modelo premium?" })).toBeInTheDocument()
     expect(screen.getByText(/gpt-premium/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Autorizar custo e continuar" }))
-    await waitFor(() => expect(sendToBuild).toHaveBeenLastCalledWith("plan-1", "codex", true, undefined))
+    await waitFor(() => expect(sendToBuild).toHaveBeenLastCalledWith(
+      "plan-1", "claude", "codex", true, undefined,
+    ))
   })
 
   it("renderiza mensagem de erro estruturada sem object Object", async () => {
@@ -186,7 +220,8 @@ describe("PlanningPanel", () => {
     }, 409))
 
     renderPanel()
-    fireEvent.click(await screen.findByRole("button", { name: "Enviar ao Codex" }))
+    await escolherPapeis("codex")
+    enviar()
     expect(await screen.findByText("Nenhum modelo atende à capacidade mínima")).toBeInTheDocument()
     expect(screen.queryByText("[object Object]")).not.toBeInTheDocument()
   })
@@ -230,24 +265,79 @@ describe("PlanningPanel", () => {
     expect(card).toHaveTextContent("Alternativa: Claude Code")
   })
 
-  it("oferece os cinco agentes manuais e não expõe mais o envio em AUTO", async () => {
+  it("oferece os cinco agentes de CLI nos dois papéis e não expõe o envio em AUTO", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     renderPanel()
 
-    for (const label of ["Codex", "Claude Code", "Kimi Code", "Qwen Code", "Gemini"]) {
-      expect(
-        await screen.findByRole("button", { name: `Enviar ao ${label}` }),
-      ).toBeEnabled()
+    const executor = await screen.findByLabelText("Executor")
+    const revisor = screen.getByLabelText("Revisor independente")
+    for (const seletor of [executor, revisor]) {
+      const valores = Array.from(seletor.querySelectorAll("option")).map((o) => o.value)
+      expect(valores).toEqual(
+        expect.arrayContaining(["codex", "claude", "kimi", "qwen", "gemini"]),
+      )
     }
     expect(screen.queryByRole("button", { name: "Enviar em AUTO" })).not.toBeInTheDocument()
   })
 
-  it("permite ignorar a recomendação e escolher outro agente", async () => {
+  it("exige executor e revisor antes de liberar o envio", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     renderPanel()
 
-    fireEvent.click(await screen.findByRole("button", { name: "Enviar ao Gemini" }))
-    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith("plan-1", "gemini", false, undefined))
+    expect(await screen.findByRole("button", { name: "Enviar ao Build" })).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText("Executor"), { target: { value: "codex" } })
+    expect(screen.getByRole("button", { name: "Enviar ao Build" })).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText("Revisor independente"), {
+      target: { value: "claude" },
+    })
+    expect(screen.getByRole("button", { name: "Enviar ao Build" })).toBeEnabled()
+  })
+
+  it("recusa executor igual ao revisor", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    renderPanel()
+
+    await escolherPapeis("codex", "codex")
+
+    expect(screen.getByRole("button", { name: "Enviar ao Build" })).toBeDisabled()
+    expect(
+      screen.getByText(/Executor e revisor precisam ser agentes diferentes/),
+    ).toBeInTheDocument()
+    expect(sendToBuild).not.toHaveBeenCalled()
+  })
+
+  it("envia o par escolhido, ignorando a recomendação se quiser", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    renderPanel()
+
+    await escolherPapeis("gemini", "codex")
+    enviar()
+
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
+      "plan-1", "codex", "gemini", false, undefined,
+    ))
+  })
+
+  it("oferece runtime Ollama online e bloqueia o offline", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    getAgentRuntimes.mockResolvedValue([
+      runtime(),
+      runtime({
+        id: "gpu-hostinger", label: "GPU Hostinger", kind: "gpu",
+        status: "offline", status_label: "Indisponível",
+        reason: "sem resposta em 2s", dispatchable: false, models: [],
+      }),
+    ])
+    renderPanel()
+
+    const executor = await screen.findByLabelText("Executor")
+    await waitFor(() => {
+      const opcoes = Array.from(executor.querySelectorAll("option"))
+      expect(opcoes.some((o) => o.value === "local-code" && !o.disabled)).toBe(true)
+      expect(opcoes.some((o) => o.value === "gpu-hostinger" && o.disabled)).toBe(true)
+    })
   })
 
   it("mantém a aba utilizável quando a recomendação falha", async () => {
@@ -255,10 +345,19 @@ describe("PlanningPanel", () => {
     getPlanRecommendation.mockRejectedValue(new Error("indisponível"))
     renderPanel()
 
-    expect(await screen.findByRole("button", { name: "Enviar ao Codex" })).toBeEnabled()
+    expect(await screen.findByLabelText("Executor")).toBeEnabled()
     expect(
       screen.queryByRole("region", { name: "Recomendação do WorkDev" }),
     ).not.toBeInTheDocument()
+  })
+
+  it("mantém a aba utilizável quando o status dos runtimes falha", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    getAgentRuntimes.mockRejectedValue(new Error("GPU fora do ar"))
+    renderPanel()
+
+    await escolherPapeis("codex")
+    expect(screen.getByRole("button", { name: "Enviar ao Build" })).toBeEnabled()
   })
 
   it("mostra o seletor só quando o agente tem mais de um modelo", async () => {
@@ -289,10 +388,11 @@ describe("PlanningPanel", () => {
     fireEvent.change(await screen.findByLabelText("Modelo"), {
       target: { value: "gpt-5.6-terra" },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Enviar ao Codex" }))
+    await escolherPapeis("codex")
+    enviar()
 
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "codex", false, "gpt-5.6-terra",
+      "plan-1", "claude", "codex", false, "gpt-5.6-terra",
     ))
   })
 
@@ -304,10 +404,11 @@ describe("PlanningPanel", () => {
     // Espera a recomendação chegar: antes dela não há modelo a enviar, e o
     // clique cedo tornava este teste instável.
     await screen.findByLabelText("Modelo")
-    fireEvent.click(screen.getByRole("button", { name: "Enviar ao Codex" }))
+    await escolherPapeis("codex")
+    enviar()
 
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "codex", false, "gpt-5.6-sol",
+      "plan-1", "claude", "codex", false, "gpt-5.6-sol",
     ))
   })
 
@@ -319,10 +420,11 @@ describe("PlanningPanel", () => {
     fireEvent.change(await screen.findByLabelText("Modelo"), {
       target: { value: "gpt-5.6-terra" },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Enviar ao Gemini" }))
+    await escolherPapeis("gemini")
+    enviar()
 
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "gemini", false, undefined,
+      "plan-1", "claude", "gemini", false, undefined,
     ))
   })
 })

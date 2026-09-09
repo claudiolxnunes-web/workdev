@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { AgentTerminal } from "./AgentTerminal"
 import type { OperationalStatus } from "./AgentTerminal"
 import { BuildQueue } from "./BuildQueue"
-import type { AgentName } from "@/services/handoff.service"
+import { RuntimePanel } from "./RuntimePanel"
+import {
+  getAgentRuntimes, type AgentName, type AgentRuntime,
+} from "@/services/handoff.service"
 
 const AGENTS: Array<{ id: AgentName; label: string }> = [
   { id: "claude", label: "Claude Code" },
@@ -12,7 +15,21 @@ const AGENTS: Array<{ id: AgentName; label: string }> = [
   { id: "gemini", label: "Gemini" },
 ]
 
+type AgentFilter = "todos" | "online" | "runtimes"
+
+const FILTER_LABEL: Record<AgentFilter, string> = {
+  todos: "Todos", online: "Online", runtimes: "Locais/GPU",
+}
+
+const RUNTIME_DOT: Record<string, string> = {
+  online: "bg-emerald-400",
+  degraded: "bg-amber-400",
+  offline: "bg-red-500",
+  unconfigured: "bg-slate-500",
+}
+
 const STATUS_POLL_MS = 2000
+const RUNTIME_POLL_MS = 10000
 
 type HealthStatus = "idle" | "busy" | "blocked" | "offline" | "degraded"
 type AgentHealth = { health: HealthStatus; health_reason?: string | null; checked_at?: string | null }
@@ -54,6 +71,8 @@ export default function AgentsPage() {
   const [health, setHealth] = useState<Partial<Record<AgentName, AgentHealth>>>({})
   const [operations, setOperations] = useState<Partial<Record<AgentName, AgentOperation>>>({})
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("terminal")
+  const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
+  const [filter, setFilter] = useState<AgentFilter>("todos")
 
   useEffect(() => {
     let cancelled = false
@@ -85,12 +104,63 @@ export default function AgentsPage() {
     return () => { cancelled = true; window.clearInterval(interval) }
   }, [])
 
+  useEffect(() => {
+    // Runtimes Ollama são sondados pelo backend. Endpoint fora do ar volta
+    // como estado, então a página nunca quebra por causa de uma GPU desligada.
+    let cancelled = false
+    async function poll() {
+      try {
+        const rows = await getAgentRuntimes()
+        if (!cancelled) setRuntimes(rows)
+      } catch { /* próxima rodada tenta de novo */ }
+    }
+    void poll()
+    const interval = window.setInterval(poll, RUNTIME_POLL_MS)
+    return () => { cancelled = true; window.clearInterval(interval) }
+  }, [])
+
+  const selectedRuntime = runtimes.find((runtime) => runtime.id === agent)
+
+  const visibleAgents = useMemo(() => {
+    if (filter === "runtimes") return []
+    if (filter === "online") {
+      return AGENTS.filter((item) => {
+        const current = health[item.id]?.health
+        return current === "idle" || current === "busy" || current === "degraded"
+      })
+    }
+    return AGENTS
+  }, [filter, health])
+
+  const visibleRuntimes = useMemo(() => {
+    if (filter === "online") return runtimes.filter((item) => item.dispatchable)
+    return runtimes
+  }, [filter, runtimes])
+
   return (
     <div className="flex min-h-[620px] min-w-0 max-w-full flex-col gap-3 overflow-hidden md:h-[calc(100dvh-9rem)] md:min-h-[420px]">
       <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div><h2 className="text-xl font-semibold sm:text-2xl">Agents</h2><p className="hidden text-sm text-slate-400 sm:block">Terminal seguro conectado às sessões tmux da VPS.</p></div>
+        <div className="flex gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1" role="group" aria-label="Filtrar agentes">
+          {(["todos", "online", "runtimes"] as AgentFilter[]).map((item) => (
+            <button key={item} type="button" aria-pressed={filter === item} onClick={() => setFilter(item)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium ${filter === item ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+              {FILTER_LABEL[item]}
+            </button>
+          ))}
+        </div>
         <div className="flex max-w-full overflow-x-auto rounded-lg border border-slate-700 bg-slate-900 p-1" role="tablist">
-          {AGENTS.map((item) => (
+          {visibleRuntimes.map((item) => (
+            <button key={item.id} role="tab" aria-selected={agent === item.id} onClick={() => setAgent(item.id)}
+              className={`relative min-h-10 shrink-0 rounded-md px-3 text-sm font-medium sm:px-4 ${agent === item.id ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+              {item.label}
+              <span
+                className={`ml-2 inline-block h-2 w-2 rounded-full ${RUNTIME_DOT[item.status] ?? "bg-slate-500"}`}
+                title={`${item.status_label}${item.reason ? `: ${item.reason}` : ""}`}
+              />
+            </button>
+          ))}
+          {visibleAgents.map((item) => (
             <button key={item.id} role="tab" aria-selected={agent === item.id} onClick={() => setAgent(item.id)}
               className={`relative min-h-10 shrink-0 rounded-md px-3 text-sm font-medium sm:px-4 ${agent === item.id ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
               {item.label}
@@ -107,7 +177,7 @@ export default function AgentsPage() {
           ))}
         </div>
       </div>
-      {health[agent] && (
+      {!selectedRuntime && health[agent] && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-300">
           <span className={`h-2.5 w-2.5 rounded-full ${HEALTH_STYLE[health[agent]!.health]}`} />
           <span className="font-medium">{HEALTH_LABEL[health[agent]!.health]}</span>
@@ -129,13 +199,19 @@ export default function AgentsPage() {
           <BuildQueue agent={agent} mobileExpanded={mobilePanel === "queue"} />
         </div>
         <div className={mobilePanel === "terminal" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden md:flex md:min-h-0 md:min-w-0 md:flex-1 md:flex-col"}>
-          <AgentTerminal
-            key={agent}
-            agent={agent}
-            awaitingApproval={Boolean(awaitingApproval[agent])}
-            operationalStatus={operations[agent]?.status}
-            approvalPrompt={operations[agent]?.approvalPrompt}
-          />
+          {selectedRuntime ? (
+            // Runtime Ollama não tem sessão tmux: no lugar do terminal vai o
+            // painel de estado operacional do endpoint.
+            <RuntimePanel runtime={selectedRuntime} />
+          ) : (
+            <AgentTerminal
+              key={agent}
+              agent={agent}
+              awaitingApproval={Boolean(awaitingApproval[agent])}
+              operationalStatus={operations[agent]?.status}
+              approvalPrompt={operations[agent]?.approvalPrompt}
+            />
+          )}
         </div>
       </div>
     </div>

@@ -8,7 +8,64 @@ const headers: HeadersInit = {
 
 export type PlanStatus = "draft" | "approved" | "needs_revision" | "superseded" | "discarded"
 export type RunStatus = "queued" | "running" | "blocked" | "review" | "completed" | "failed" | "cancelled"
-export type AgentName = "codex" | "claude" | "kimi" | "qwen" | "gemini"
+/** Agentes com CLI e sessão tmux própria na VPS. */
+export type CliAgentName = "codex" | "claude" | "kimi" | "qwen" | "gemini"
+/** Identidades de runtime Ollama — estáveis, independentes do modelo carregado. */
+export type RuntimeAgentName = "local-code" | "gpu-hostinger" | "gpu-runpod"
+export type AgentName = CliAgentName | RuntimeAgentName
+
+export const CLI_AGENTS: CliAgentName[] = ["codex", "claude", "kimi", "qwen", "gemini"]
+export const RUNTIME_AGENTS: RuntimeAgentName[] = ["local-code", "gpu-hostinger", "gpu-runpod"]
+
+export const agentLabels: Record<AgentName, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  kimi: "Kimi Code",
+  qwen: "Qwen Code",
+  gemini: "Gemini",
+  "local-code": "Ollama local (VPS)",
+  "gpu-hostinger": "GPU Hostinger",
+  "gpu-runpod": "GPU RunPod",
+}
+
+export type RuntimeStatus = "online" | "offline" | "unconfigured" | "degraded"
+
+export interface AgentRuntime {
+  id: RuntimeAgentName
+  label: string
+  kind: "local" | "gpu"
+  provider: string
+  persistence: string
+  auto_eligible: boolean
+  configured: boolean
+  model: string | null
+  source_of_truth: boolean
+  notes: string
+  reprovision: { policy: string; steps: string[] }
+  status: RuntimeStatus
+  status_label: string
+  reason: string | null
+  models: string[]
+  checked_at: string | null
+  latency_ms: number | null
+  dispatchable: boolean
+  active_run_id: string | null
+  busy: boolean
+}
+
+export type ReviewVerdict = "approved" | "rejected"
+
+export interface RunReview {
+  id: string
+  run_id: string
+  attempt: number
+  executor_agent: AgentName
+  reviewer_agent: AgentName
+  verdict: ReviewVerdict
+  feedback: string | null
+  gate_passed: boolean | null
+  created_at: string
+}
 
 export type CostClass = "free" | "economic" | "moderate" | "premium" | "unknown"
 export type AvailabilityState = "available" | "unavailable" | "unknown"
@@ -101,6 +158,8 @@ export interface AgentRun {
   plan_id: string
   backlog_id: string
   agent: AgentName
+  reviewer_agent: AgentName | null
+  review_attempts: number
   status: RunStatus
   summary?: string
   result?: string
@@ -200,18 +259,69 @@ export async function getPlanRecommendation(id: string): Promise<PlanRecommendat
   return read(fetch(`/api/handoffs/plans/${id}/recommendation`, { headers }))
 }
 
+/**
+ * Envia o plano ao Build. O revisor é obrigatório e precisa ser diferente do
+ * executor — o backend recusa o par igual, isto aqui só evita a ida à rede.
+ */
 export async function sendToBuild(
   id: string,
+  reviewer: AgentName,
   agent?: AgentName,
   premiumConfirmed = false,
   model?: string,
 ): Promise<AgentRun> {
+  if (agent && agent === reviewer) {
+    throw new HandoffApiError(
+      { message: "Executor e revisor precisam ser agentes diferentes" },
+      400,
+    )
+  }
+
   const body = agent
-    ? { routing_mode: "manual", agent, ...(model ? { model } : {}) }
-    : { routing_mode: "auto", premium_confirmed: premiumConfirmed }
+    ? { routing_mode: "manual", agent, reviewer, ...(model ? { model } : {}) }
+    : { routing_mode: "auto", reviewer, premium_confirmed: premiumConfirmed }
 
   return read(fetch(`/api/handoffs/plans/${id}/build`, {
     method: "POST", headers, body: JSON.stringify(body),
+  }))
+}
+
+export async function getAgentRuntimes(refresh = false): Promise<AgentRuntime[]> {
+  const body = await read<{ runtimes: AgentRuntime[] }>(
+    fetch(`/api/agent-runtimes${refresh ? "?refresh=true" : ""}`, { headers }),
+  )
+  return body.runtimes ?? []
+}
+
+export async function getRunReviews(runId: string): Promise<{
+  run_id: string
+  executor_agent: AgentName
+  reviewer_agent: AgentName | null
+  review_attempts: number
+  reviews: RunReview[]
+}> {
+  return read(fetch(`/api/handoffs/runs/${runId}/reviews`, { headers }))
+}
+
+export async function submitRunReview(
+  runId: string,
+  reviewer: AgentName,
+  verdict: ReviewVerdict,
+  feedback?: string,
+): Promise<{ review: RunReview; run: AgentRun }> {
+  return read(fetch(`/api/handoffs/runs/${runId}/reviews`, {
+    method: "POST", headers,
+    body: JSON.stringify({ reviewer, verdict, feedback }),
+  }))
+}
+
+export async function swapRunReviewer(
+  runId: string,
+  reviewer: AgentName,
+  reason: string,
+): Promise<AgentRun> {
+  return read(fetch(`/api/handoffs/runs/${runId}/reviewer`, {
+    method: "POST", headers, body: JSON.stringify({ reviewer, reason }),
   }))
 }
 
