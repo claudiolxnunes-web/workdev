@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models.backlog import BacklogItem
-from app.models.handoff import AgentRun, AgentRunEvent, ExecutionPlan
+from app.models.handoff import (
+    AgentBuildJob,
+    AgentRun,
+    AgentRunEvent,
+    ExecutionPlan,
+)
 from app.models.project import Project
 from app.models.subtask import BacklogSubtask
 from app.schemas.handoff import (
@@ -23,6 +28,7 @@ from app.schemas.handoff import (
     RunUpdate,
     SubtaskProgress,
 )
+from app.services import agent_runtimes, build_jobs
 from app.services.agent_runtimes import is_ollama_agent
 from app.services.build_rag import augment_prompt
 from app.services.plan_granularity import assess as assess_plan_granularity
@@ -1154,20 +1160,135 @@ def transfer_agent_run(
     )
 
 
+async def _consume_dispatch_job(
+    run_id: UUID,
+    job_id: UUID,
+    prompt: str,
+    model: str | None,
+) -> None:
+    """Consome um job de despacho fora do ciclo da requisição.
+
+    Provisório e assim declarado: o consumidor definitivo é o worker isolado da
+    fatia 3, em processo e systemd próprios, com permissão de escrever arquivo.
+    Este aqui só tira a inferência de dentro da rota — que era o achado 6, a
+    sessão de banco presa por até 900s — e mantém o comportamento de hoje:
+    o runtime devolve TEXTO, que vira evento auditável. Nenhum arquivo é
+    editado, nenhum gate roda, nada é commitado.
+
+    A sessão é própria e curta: abre, marca `running`, solta o banco durante a
+    inferência e reabre para gravar. Segurar a sessão pelo await seria repetir
+    o problema que a fatia 2 existe para resolver.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(AgentBuildJob).filter(AgentBuildJob.id == job_id).first()
+        if job is None or job.state != "queued":
+            return
+        build_jobs.start_job(db, job)
+        db.commit()
+        runtime_id = job.runtime_id
+    finally:
+        db.close()
+
+    erro: OllamaDispatchError | None = None
+    result: dict | None = None
+
+    try:
+        result = await dispatch_to_ollama(runtime_id, prompt, model=model)
+    except OllamaDispatchError as falha:
+        erro = falha
+
+    db = SessionLocal()
+    try:
+        job = db.query(AgentBuildJob).filter(AgentBuildJob.id == job_id).first()
+        run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+
+        if job is None or run is None:  # pragma: no cover - run apagada no meio
+            return
+
+        if erro is not None:
+            event = add_run_event(
+                db,
+                run,
+                "build.dispatch_failed",
+                erro.message,
+                {"code": erro.code, "job_id": str(job.id), **erro.details},
+            )
+            build_jobs.fail_job(
+                db,
+                job,
+                error=erro.message,
+                payload={"code": erro.code, **erro.details},
+            )
+            db.commit()
+            _sync_auto_transition(db, run, event)
+            return
+
+        if result is None:  # pragma: no cover - sem resposta e sem erro
+            build_jobs.fail_job(
+                db,
+                job,
+                error="Driver não devolveu resposta nem erro",
+            )
+            db.commit()
+            return
+
+        if run.status == "queued":
+            run, _event = update_run(
+                db,
+                run,
+                {
+                    "status": "running",
+                    "message": f"Despacho para {run.agent} iniciado",
+                },
+            )
+
+        event = add_run_event(
+            db,
+            run,
+            "build.ollama_response",
+            f"Resposta de {result['runtime_id']} ({result['model']})",
+            {
+                "runtime_id": result["runtime_id"],
+                "model": result["model"],
+                "duration_ms": result["duration_ms"],
+                "truncated": result["truncated"],
+                "response": result["response"],
+                "job_id": str(job.id),
+            },
+        )
+        build_jobs.finish_job(
+            db,
+            job,
+            payload={
+                "duration_ms": result["duration_ms"],
+                "truncated": result["truncated"],
+                "event_id": str(event.id),
+            },
+        )
+        db.commit()
+        _sync_auto_transition(db, run, event)
+    finally:
+        db.close()
+
+
 @router.post(
     "/runs/{run_id}/dispatch",
-    status_code=201,
+    status_code=202,
 )
-async def dispatch_run_to_ollama(
+def dispatch_run_to_ollama(
     run_id: UUID,
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """Envia o contexto de Build da run ao runtime Ollama e guarda a resposta.
+    """Abre um job de despacho para o runtime Ollama e devolve 202.
 
-    O modelo recebe texto e devolve texto. Nada é executado a partir da
-    resposta: repositório, comandos e gates continuam na VPS principal, e o
-    resultado fica registrado como evento auditável da run.
+    A rota não espera a inferência. Ela valida, registra a intenção como linha
+    em `agent_build_jobs` e sai — a resposta é o `job_id`, que a UI acompanha
+    por `GET /runs/{id}/dispatch/{job_id}`.
+
+    Chamada concorrente para a mesma run devolve 409 com o `job_id` que já está
+    vivo, e a recusa vem do índice parcial do banco, não de um `if` daqui.
     """
     run = _get_run(db, run_id)
 
@@ -1183,6 +1304,35 @@ async def dispatch_run_to_ollama(
             f"Execução em '{run.status}' não aceita despacho",
         )
 
+    # Modelo e saúde resolvidos ANTES de abrir o job: erro de configuração
+    # aparece no envio, não numa linha órfã em `queued` que ninguém consome.
+    try:
+        runtime = ensure_dispatchable_blocking(run.agent)
+    except OllamaDispatchError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": error.code,
+                "message": error.message,
+                "details": error.details,
+            },
+        ) from error
+
+    model = run.model or agent_runtimes.model_for(runtime)
+
+    if not model:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "model_not_configured",
+                "message": (
+                    f"Nenhum modelo configurado para {runtime.label}; defina "
+                    f"{runtime.model_env}"
+                ),
+                "details": {"runtime_id": runtime.id},
+            },
+        )
+
     try:
         context = build_context(db, run)
     except HandoffError as error:
@@ -1193,68 +1343,63 @@ async def dispatch_run_to_ollama(
     prompt = augment_prompt(context)
 
     try:
-        result = await dispatch_to_ollama(
-            run.agent,
-            prompt,
-            model=run.model,
-        )
-    except OllamaDispatchError as error:
-        add_run_event(
+        job = build_jobs.open_job(
             db,
             run,
-            "build.dispatch_failed",
-            error.message,
-            {"code": error.code, **error.details},
+            runtime_id=run.agent,
+            model=model,
+            prompt_sha256=build_jobs.prompt_fingerprint(prompt),
         )
-        db.commit()
+    except build_jobs.DispatchConflict as conflito:
         raise HTTPException(
             status_code=409,
             detail={
-                "code": error.code,
-                "message": error.message,
-                "details": error.details,
+                "code": "dispatch_already_active",
+                "message": (
+                    "Já existe um despacho ativo para esta execução"
+                ),
+                "details": build_jobs.job_out(conflito.job),
             },
-        ) from error
-
-    if run.status == "queued":
-        run, _event = update_run(
-            db,
-            run,
-            {
-                "status": "running",
-                "message": f"Despacho para {run.agent} iniciado",
-            },
-        )
+        ) from conflito
 
     event = add_run_event(
         db,
         run,
-        "build.ollama_response",
-        f"Resposta de {result['runtime_id']} ({result['model']})",
+        "build.dispatch_requested",
+        f"Despacho pedido para {runtime.label} ({model})",
         {
-            "runtime_id": result["runtime_id"],
-            "model": result["model"],
-            "duration_ms": result["duration_ms"],
-            "truncated": result["truncated"],
-            "response": result["response"],
+            "job_id": str(job.id),
+            "runtime_id": run.agent,
+            "model": model,
+            "attempt": job.attempt,
+            "prompt_sha256": job.prompt_sha256,
         },
     )
     db.commit()
-    db.refresh(event)
+    db.refresh(job)
 
     _sync_run(background, db, run, event)
+    background.add_task(_consume_dispatch_job, run.id, job.id, prompt, model)
 
     return {
         "run": _run_out(db, run),
-        "dispatch": {
-            "runtime_id": result["runtime_id"],
-            "model": result["model"],
-            "duration_ms": result["duration_ms"],
-            "truncated": result["truncated"],
-            "response": result["response"],
-        },
-        "event_id": event.id,
+        "dispatch": build_jobs.job_out(job),
     }
+
+
+@router.get("/runs/{run_id}/dispatch/{job_id}")
+def get_dispatch_job(
+    run_id: UUID,
+    job_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Estado de um job de despacho, para a UI acompanhar sem repetir o POST."""
+    job = build_jobs.get_job(db, run_id, job_id)
+
+    if job is None:
+        raise HTTPException(404, "Despacho não encontrado para esta execução")
+
+    return build_jobs.job_out(job)
 
 
 @router.post("/runs/{run_id}/reviewer")

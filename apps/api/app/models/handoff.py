@@ -226,3 +226,54 @@ class AgentRunEvent(Base):
         Index("ix_agent_run_events_run_id", "run_id"),
         Index("ix_agent_run_events_created_at", "created_at"),
     )
+
+
+class AgentBuildJob(Base):
+    """Uma tentativa de despacho de uma run para um runtime Ollama.
+
+    A run diz *quem* executa; o job diz *que* uma execução concreta foi pedida,
+    quando, com qual prompt e em que estado ela está. Sem esta linha o despacho
+    só existia como efeito colateral de uma requisição HTTP: dois cliques
+    viravam duas inferências sem que nada no banco registrasse a primeira.
+
+    A garantia de despacho único não é da aplicação, é do banco — o índice
+    parcial `uq_agent_build_jobs_active_run` recusa uma segunda linha ativa para
+    a mesma run. Corrida entre dois processos perde no INSERT, não num `if`.
+    """
+
+    __tablename__ = "agent_build_jobs"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    runtime_id = Column(String(32), nullable=False)
+    model = Column(String(120))
+    state = Column(String(16), nullable=False, server_default="queued")
+    attempt = Column(Integer, nullable=False, server_default=text("1"))
+    prompt_sha256 = Column(String(64))
+    branch = Column(String(120))
+    error = Column(Text)
+    payload = Column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    started_at = Column(DateTime(timezone=True))
+    finished_at = Column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_agent_build_jobs_run_id", "run_id"),
+        Index("ix_agent_build_jobs_state", "state"),
+    )
