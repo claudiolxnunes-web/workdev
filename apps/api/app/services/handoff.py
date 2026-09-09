@@ -99,6 +99,14 @@ def _validate_routing_metadata(
             "routing_mode inválido; escolha manual ou auto"
         )
 
+    # Segunda barreira, além do filtro do roteador: runtime Ollama só entra em
+    # execução por escolha manual do usuário.
+    if routing_mode == "auto" and agent in OLLAMA_AGENT_IDS:
+        raise HandoffError(
+            f"{agent} é runtime Ollama e só aceita seleção manual nesta fase; "
+            "o AUTO não pode escolhê-lo"
+        )
+
     if complexity is not None and complexity not in COMPLEXITY_LEVELS:
         raise HandoffError(
             "complexity inválida; escolha low, medium, high ou critical"

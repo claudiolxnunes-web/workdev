@@ -2,6 +2,7 @@
 
 Fatia 5 — registry de runtimes com credenciais fora do banco.
 Fatia 6 — health check assíncrono no backend, com timeout de 2s.
+Fatia 9 — GPUs remotas reprovisionáveis e exclusão do AUTO.
 """
 
 import asyncio
@@ -287,6 +288,148 @@ class RuntimeHealthTest(unittest.TestCase):
             asyncio.run(agent_runtimes.check_runtime_cached(runtime))
 
         self.assertEqual(fetch.await_count, 1)
+
+
+class RemoteGpuAbstractionTest(unittest.TestCase):
+    def test_ephemeral_gpu_is_reprovisioned_on_every_boot(self):
+        runtime = agent_runtimes.get_runtime("gpu-hostinger")
+
+        self.assertEqual(
+            agent_runtimes.reprovision_policy(runtime),
+            agent_runtimes.REPROVISION_ON_BOOT,
+        )
+
+    def test_persistent_gpu_is_provisioned_only_once(self):
+        runtime = agent_runtimes.get_runtime("gpu-runpod")
+
+        self.assertEqual(
+            agent_runtimes.reprovision_policy(runtime),
+            agent_runtimes.REPROVISION_ON_SETUP,
+        )
+
+    def test_local_runtime_has_no_reprovisioning_ritual(self):
+        runtime = agent_runtimes.get_runtime("local-code")
+
+        self.assertEqual(
+            agent_runtimes.reprovision_policy(runtime),
+            agent_runtimes.REPROVISION_NOT_APPLICABLE,
+        )
+        self.assertEqual(agent_runtimes.reprovision_steps(runtime), [])
+
+    def test_reprovisioning_never_asks_for_repo_or_credentials_on_the_gpu(self):
+        for runtime_id in ("gpu-hostinger", "gpu-runpod"):
+            steps = " ".join(
+                agent_runtimes.reprovision_steps(
+                    agent_runtimes.get_runtime(runtime_id)
+                )
+            ).lower()
+
+            self.assertIn("ollama pull", steps)
+            for proibido in ("git clone", "ssh", "chave privada", "deploy"):
+                self.assertNotIn(proibido, steps)
+
+    def test_reprovisioning_states_that_truth_stays_on_the_vps(self):
+        steps = agent_runtimes.reprovision_steps(
+            agent_runtimes.get_runtime("gpu-hostinger")
+        )
+
+        self.assertTrue(
+            any("Postgres da VPS principal" in step for step in steps)
+        )
+
+    def test_reprovision_steps_cite_variable_names_not_values(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "WORKDEV_OLLAMA_HOSTINGER_URL": "https://gpu.example.invalid",
+                "WORKDEV_OLLAMA_HOSTINGER_TOKEN": "token-secreto-abc",
+            },
+        ):
+            payload = agent_runtimes.describe(
+                agent_runtimes.get_runtime("gpu-hostinger")
+            )
+
+        serialized = repr(payload["reprovision"])
+        self.assertIn("WORKDEV_OLLAMA_HOSTINGER_URL", serialized)
+        self.assertNotIn("gpu.example.invalid", serialized)
+        self.assertNotIn("token-secreto-abc", serialized)
+
+
+class OutOfAutoTest(unittest.TestCase):
+    def test_router_never_considers_ollama_runtimes(self):
+        from app.services.agent_router import AUTO_EXCLUDED_AGENTS
+
+        self.assertEqual(
+            AUTO_EXCLUDED_AGENTS,
+            {"local-code", "gpu-hostinger", "gpu-runpod"},
+        )
+
+    def test_catalog_row_mapped_to_a_runtime_is_filtered_out(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from app.services.agent_router import _all_eligible_rows
+
+        row = SimpleNamespace(category="free", active=True)
+        db = Mock()
+        db.query.return_value.filter.return_value.all.return_value = [row]
+        assessment = SimpleNamespace(level="low")
+
+        with patch(
+            "app.services.agent_router._agent_for_model",
+            return_value="local-code",
+        ):
+            self.assertEqual(_all_eligible_rows(db, assessment), [])
+
+    def test_queue_build_refuses_auto_routing_to_a_runtime(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from app.services.handoff import HandoffError, queue_build
+
+        db = Mock()
+        db.query.return_value.filter.return_value.first.return_value = None
+        plan = SimpleNamespace(
+            id="plan-1",
+            backlog_id="task-1",
+            status="approved",
+        )
+
+        with self.assertRaises(HandoffError) as ctx:
+            queue_build(
+                db,
+                plan,
+                "local-code",
+                reviewer="claude",
+                routing_mode="auto",
+            )
+
+        self.assertIn("seleção manual", str(ctx.exception))
+
+    def test_manual_routing_to_a_runtime_is_allowed(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from app.services.handoff import queue_build
+
+        db = Mock()
+        db.query.return_value.filter.return_value.first.return_value = None
+        plan = SimpleNamespace(
+            id="plan-1",
+            backlog_id="task-1",
+            status="approved",
+        )
+
+        run, _event = queue_build(
+            db,
+            plan,
+            "local-code",
+            reviewer="claude",
+            routing_mode="manual",
+        )
+
+        self.assertEqual(run.agent, "local-code")
+        self.assertEqual(run.reviewer_agent, "claude")
 
 
 if __name__ == "__main__":

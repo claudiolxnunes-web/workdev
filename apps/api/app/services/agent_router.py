@@ -5,7 +5,12 @@ from typing import Any, Iterable
 from sqlalchemy.orm import Session
 
 from app.models.ai_routing import AIModelCatalog
+from app.services.agent_runtimes import OLLAMA_AGENT_IDS
 from app.services.task_complexity import ComplexityAssessment
+
+
+# Agentes que o AUTO nunca escolhe sozinho nesta fase.
+AUTO_EXCLUDED_AGENTS = frozenset(OLLAMA_AGENT_IDS)
 
 
 PROVIDER_TO_AGENT = {
@@ -299,7 +304,16 @@ def _all_eligible_rows(
         ):
             continue
 
-        if not _agent_for_model(row):
+        agent = _agent_for_model(row)
+
+        if not agent:
+            continue
+
+        # Runtimes Ollama locais/GPU são seleção manual nesta fase: ficam fora
+        # do AUTO até haver benchmark de qualidade, disponibilidade e custo.
+        # O filtro é aqui, e não só na ausência de linha no catálogo, para que
+        # cadastrar um modelo Ollama não os coloque no AUTO por acidente.
+        if agent in AUTO_EXCLUDED_AGENTS:
             continue
 
         result.append(row)

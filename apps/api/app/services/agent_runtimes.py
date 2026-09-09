@@ -145,6 +145,59 @@ def is_configured(runtime: OllamaRuntime) -> bool:
     return base_url(runtime) is not None
 
 
+# Reprovisionamento: o que precisa ser refeito quando a máquina volta.
+#
+# Hostinger perde o disco ao desligar, então tudo tem que ser reconstruível a
+# cada boot. RunPod guarda os modelos, mas a GPU pode não estar disponível para
+# religar — o setup é uma vez só, a disponibilidade é que não é garantida.
+# Em nenhum dos casos algo indispensável fica só na GPU: repositório, estado da
+# run, eventos e auditoria vivem no Postgres da VPS.
+REPROVISION_ON_BOOT = "sempre_ao_ligar"
+REPROVISION_ON_SETUP = "apenas_no_primeiro_setup"
+REPROVISION_NOT_APPLICABLE = "nao_aplicavel"
+
+REPROVISION_POLICY = {
+    PERSISTENCE_LOCAL: REPROVISION_NOT_APPLICABLE,
+    PERSISTENCE_EPHEMERAL: REPROVISION_ON_BOOT,
+    PERSISTENCE_INTERMITTENT: REPROVISION_ON_SETUP,
+}
+
+
+def reprovision_policy(runtime: OllamaRuntime) -> str:
+    return REPROVISION_POLICY[runtime.persistence]
+
+
+def reprovision_steps(runtime: OllamaRuntime) -> list[str]:
+    """Passos para reconstruir a capacidade de inferência do zero.
+
+    Só cita nomes de variável — nunca valores. E não inclui clone de
+    repositório nem credencial de git: a GPU não recebe nada disso.
+    """
+    if runtime.persistence == PERSISTENCE_LOCAL:
+        return []
+
+    model = model_for(runtime) or f"o modelo definido em {runtime.model_env}"
+
+    steps = [
+        "Subir o servidor Ollama na instância e expor a porta de inferência.",
+        f"Baixar o modelo na instância: `ollama pull {model}`.",
+        f"Apontar {runtime.base_url_env} na VPS para o endereço novo.",
+    ]
+
+    if runtime.api_key_env:
+        steps.append(
+            f"Registrar o token de acesso em {runtime.api_key_env} na VPS "
+            "(nunca na instância)."
+        )
+
+    steps.append(
+        "Nada mais: repositório, estado das runs, eventos e auditoria "
+        "continuam no Postgres da VPS principal."
+    )
+
+    return steps
+
+
 def describe(runtime: OllamaRuntime) -> dict:
     """Visão pública do runtime: sem URL, sem token, sem nada sensível."""
     return {
@@ -158,6 +211,10 @@ def describe(runtime: OllamaRuntime) -> dict:
         "model": model_for(runtime),
         "source_of_truth": False,
         "notes": runtime.notes,
+        "reprovision": {
+            "policy": reprovision_policy(runtime),
+            "steps": reprovision_steps(runtime),
+        },
     }
 
 
