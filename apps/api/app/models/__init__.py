@@ -5,7 +5,12 @@ from app.models.backlog import BacklogItem
 from app.models.chat import ChatMessage, ChatSession
 from app.models.decision import Decision
 from app.models.deployment import DeploymentOutcome
-from app.models.handoff import ExecutionPlan, AgentRun, AgentRunEvent
+from app.models.handoff import (
+    AgentRun,
+    AgentRunEvent,
+    AgentRunReview,
+    ExecutionPlan,
+)
 from app.models.knowledge import KnowledgeEntry
 from app.models.project import Project
 from app.models.rfc import RFC
@@ -22,6 +27,7 @@ __all__ = [
     "ExecutionPlan",
     "AgentRun",
     "AgentRunEvent",
+    "AgentRunReview",
     "KnowledgeEntry",
     "Project",
     "RFC",

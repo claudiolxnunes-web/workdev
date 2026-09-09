@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, DateTime, ForeignKey, Index, Integer, String, Text,
+    Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text,
     UniqueConstraint, text,
 )
 
@@ -89,7 +89,21 @@ class AgentRun(Base):
         nullable=False,
     )
 
-    agent = Column(String(20), nullable=False)
+    # Executor da run. Identidade lógica do agente (codex, claude, local-code,
+    # gpu-hostinger…), nunca o modelo carregado — modelo é `model`.
+    agent = Column(String(32), nullable=False)
+
+    # Revisor independente escolhido na aprovação do PLAN. Nunca pode ser igual
+    # ao executor na revisão final (validado em app/services/handoff.py).
+    reviewer_agent = Column(String(32))
+
+    # Quantas rodadas de revisão já foram registradas para esta run. O histórico
+    # detalhado vive em agent_run_reviews e é cumulativo (nunca sobrescrito).
+    review_attempts = Column(
+        Integer,
+        nullable=False,
+        server_default="0",
+    )
 
     model = Column(String(120))
     reasoning_effort = Column(String(16))
@@ -130,6 +144,55 @@ class AgentRun(Base):
         Index("ix_agent_runs_plan_id", "plan_id"),
         Index("ix_agent_runs_backlog_id", "backlog_id"),
         Index("ix_agent_runs_agent_status", "agent", "status"),
+        Index("ix_agent_runs_reviewer_agent", "reviewer_agent"),
+    )
+
+
+class AgentRunReview(Base):
+    """Histórico cumulativo de revisões independentes de uma execução.
+
+    Cada tentativa vira uma linha nova: rejeição não apaga nem sobrescreve a
+    anterior, então a trilha de auditoria (quem revisou, quando, com qual
+    veredito e feedback) sobrevive a quantas correções forem necessárias.
+    """
+
+    __tablename__ = "agent_run_reviews"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attempt = Column(Integer, nullable=False)
+    executor_agent = Column(String(32), nullable=False)
+    reviewer_agent = Column(String(32), nullable=False)
+    verdict = Column(String(16), nullable=False)
+    feedback = Column(Text)
+    gate_passed = Column(Boolean)
+    payload = Column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "attempt",
+            name="uq_agent_run_review_attempt",
+        ),
+        Index("ix_agent_run_reviews_run_id", "run_id"),
+        Index("ix_agent_run_reviews_created_at", "created_at"),
     )
 
 
