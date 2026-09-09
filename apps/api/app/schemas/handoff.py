@@ -30,11 +30,16 @@ RunStatus = Literal[
 ]
 
 AgentName = Literal[
+    # Agentes com CLI e sessão tmux própria na VPS
     "codex",
     "claude",
     "kimi",
     "qwen",
     "gemini",
+    # Runtimes Ollama: identidade estável, independente do modelo carregado
+    "local-code",
+    "gpu-hostinger",
+    "gpu-runpod",
 ]
 
 RoutingMode = Literal["manual", "auto"]

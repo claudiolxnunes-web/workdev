@@ -19,19 +19,25 @@ from app.models.handoff import (
 from app.models.knowledge import KnowledgeEntry
 from app.models.project import Project
 from app.models.subtask import BacklogSubtask
+from app.services.agent_runtimes import OLLAMA_AGENT_IDS
 
 
 PLAN_EDITABLE = {"draft", "needs_revision"}
 ACTIVE_RUN_STATUSES = {"queued", "running", "blocked", "review"}
 TRANSFERABLE_RUN_STATUSES = {"queued", "running", "blocked"}
 
-SUPPORTED_AGENTS = {
+# Agentes com CLI própria e sessão tmux persistente na VPS.
+CLI_AGENTS = {
     "codex",
     "claude",
     "kimi",
     "qwen",
     "gemini",
 }
+
+# Identidades de runtime Ollama (local e GPU). São estáveis e independentes do
+# modelo carregado; ficam fora do AUTO até haver benchmark.
+SUPPORTED_AGENTS = CLI_AGENTS | set(OLLAMA_AGENT_IDS)
 
 SUPPORTED_ROUTING_MODES = {"manual", "auto"}
 COMPLEXITY_LEVELS = {"low", "medium", "high", "critical"}
@@ -84,7 +90,8 @@ def _validate_routing_metadata(
 
     if agent not in SUPPORTED_AGENTS:
         raise HandoffError(
-            "Agente inválido; escolha codex, claude, kimi, qwen ou gemini"
+            "Agente inválido; escolha um dos agentes suportados: "
+            + ", ".join(sorted(SUPPORTED_AGENTS))
         )
 
     if routing_mode not in SUPPORTED_ROUTING_MODES:
@@ -539,7 +546,8 @@ def transfer_run(
 ) -> tuple[AgentRun, AgentRun]:
     if new_agent not in SUPPORTED_AGENTS:
         raise HandoffError(
-            "Agente inválido; escolha codex, claude, kimi, qwen ou gemini"
+            "Agente inválido; escolha um dos agentes suportados: "
+            + ", ".join(sorted(SUPPORTED_AGENTS))
         )
 
     if new_agent == run.agent:

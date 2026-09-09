@@ -12,8 +12,14 @@ from app.services.handoff import (
 
 class HandoffContractTest(unittest.TestCase):
     def test_supported_agents_include_all_build_agents(self):
-        self.assertEqual(SUPPORTED_AGENTS, {"codex", "claude", "kimi", "qwen", "gemini"},
-)
+        # Agentes com CLI própria + identidades de runtime Ollama local/GPU.
+        self.assertEqual(
+            SUPPORTED_AGENTS,
+            {
+                "codex", "claude", "kimi", "qwen", "gemini",
+                "local-code", "gpu-hostinger", "gpu-runpod",
+            },
+        )
 
     def test_terminal_states_cannot_transition(self):
         self.assertEqual(RUN_TRANSITIONS["completed"], set())
