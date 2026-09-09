@@ -36,6 +36,13 @@ ESCOPO_GRANDE = (
 )
 
 
+ESCOPO_TITULOS_REPETIDOS = (
+    "Fatiamento:\n"
+    "1. Ajustar o driver de despacho.\n"
+    "2. Ajustar o driver de despacho.\n"
+)
+
+
 def _subtasks_das_fatias(plan, quantidade=None):
     """Subtasks como `decompose_plan` as materializa: título = título da fatia.
 
@@ -142,6 +149,54 @@ class AssessmentTest(unittest.TestCase):
         self.assertEqual(len(resultado["missing_slices"]), 3)
         self.assertNotIn(primeira, resultado["missing_slices"])
 
+    def test_identical_front_titles_yield_a_satisfiable_gate(self):
+        """Regressão do gate insatisfazível (revisão do Codex sobre 9eacb8e).
+
+        Duas frentes de título idêntico derivam 1 fatia distinta, mas o piso
+        `MIN_SLICES_WHEN_OVERSIZED` exigia 2 coberturas — impossíveis, já que
+        só existe um título. Nem `decompose_plan` resolvia: idempotente por
+        título, ele cria uma subtask só. O plano ficava travado sem force.
+        """
+        plan = _plan(scope=ESCOPO_TITULOS_REPETIDOS)
+
+        # O escopo enumera 2 frentes — o plano é sinalizado como grande.
+        parcial = plan_granularity.assess(plan, [])
+        self.assertTrue(parcial["oversized"])
+        self.assertEqual(parcial["required_slices"], 1)
+        self.assertTrue(parcial["requires_decomposition"])
+
+        # E uma única subtask, que é tudo o que decompose_plan consegue
+        # materializar aqui, fecha o gate.
+        resultado = plan_granularity.assess(
+            plan,
+            [SimpleNamespace(title="Ajustar o driver de despacho.")],
+        )
+
+        self.assertEqual(resultado["covered_slices"], 1)
+        self.assertFalse(resultado["requires_decomposition"])
+        self.assertEqual(resultado["missing_slices"], [])
+
+    def test_gate_stays_closed_when_no_slice_can_be_derived(self):
+        """Sem fatia derivável, `exigidas` é 0 — e `0 >= 0` liberaria tudo.
+
+        O bloqueio precisa continuar: o caminho é enumerar o escopo, não
+        passar batido.
+        """
+        plan = _plan(
+            scope="Texto corrido, sem enumeração alguma. " * 60,
+            acceptance_criteria=[],
+        )
+
+        resultado = plan_granularity.assess(
+            plan,
+            [SimpleNamespace(title="qualquer coisa")],
+        )
+
+        self.assertTrue(resultado["oversized"])
+        self.assertEqual(resultado["suggested_slices"], [])
+        self.assertEqual(resultado["required_slices"], 0)
+        self.assertTrue(resultado["requires_decomposition"])
+
     def test_missing_slices_never_repeats_a_slice(self):
         plan = _plan(scope=ESCOPO_GRANDE)
 
@@ -240,6 +295,39 @@ class ApprovalGateTest(unittest.TestCase):
 
         self.assertIn("4 fatias", str(ctx.exception))
         self.assertIn("0 coberta(s)", str(ctx.exception))
+        self.assertEqual(plan.status, "draft")
+
+    def test_plan_with_identical_front_titles_can_be_approved(self):
+        """O gate insatisfazível no ponto onde travava de verdade."""
+        plan = _plan(scope=ESCOPO_TITULOS_REPETIDOS)
+
+        with patch(
+            "app.services.handoff.load_subtasks",
+            return_value=[
+                SimpleNamespace(title="Ajustar o driver de despacho.")
+            ],
+        ):
+            approve_plan(self._db(), plan)
+
+        self.assertEqual(plan.status, "approved")
+
+    def test_undecomposable_scope_says_what_to_do(self):
+        plan = _plan(
+            scope="Texto corrido, sem enumeração alguma. " * 60,
+            acceptance_criteria=["um critério"],
+            validation_steps=["pytest"],
+        )
+
+        with (
+            patch("app.services.handoff.load_subtasks", return_value=[]),
+            self.assertRaises(HandoffError) as ctx,
+        ):
+            approve_plan(self._db(), plan)
+
+        # Um único critério de aceite vira a única fatia derivável; a mensagem
+        # tem que apontar caminho executável, não mandar rodar um endpoint que
+        # também recusaria.
+        self.assertIn("grande demais", str(ctx.exception))
         self.assertEqual(plan.status, "draft")
 
     def test_duplicated_subtasks_do_not_unlock_approval(self):

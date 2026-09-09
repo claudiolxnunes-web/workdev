@@ -124,13 +124,23 @@ def assess(plan, subtasks=None) -> dict:
         for subtask in correspondentes
     }
 
-    # Uma unidade por fatia distinta, nunca menos que o mínimo.
-    exigidas = (
-        max(MIN_SLICES_WHEN_OVERSIZED, len(titulos_de_fatia)) if oversized else 0
-    )
+    # Uma unidade por fatia DISTINTA — sem piso mínimo.
+    #
+    # Aplicar `max(MIN_SLICES_WHEN_OVERSIZED, ...)` aqui fechava o gate para
+    # sempre quando o escopo enumerava duas frentes de título idêntico: as
+    # fatias distintas eram 1, o piso exigia 2, e `cobertos` nunca passava de
+    # 1. Nem `decompose_plan` resolvia — sendo idempotente por título, ele
+    # criava uma subtask só. `MIN_SLICES_WHEN_OVERSIZED` continua valendo onde
+    # sempre valeu: no sinal de "escopo enumera N frentes", não como exigência
+    # de cobertura.
+    exigidas = len(titulos_de_fatia) if oversized else 0
 
     if oversized:
-        decomposto = len(cobertos) >= exigidas
+        # Sem nenhuma fatia derivável não há como declarar o plano fatiado, e
+        # `exigidas == 0` faria `0 >= 0` liberar tudo. O gate segue fechado: o
+        # caminho é enumerar as frentes no escopo — mesma condição que
+        # `decompose_plan` exige — ou assumir a exceção com force=true.
+        decomposto = bool(titulos_de_fatia) and len(cobertos) >= exigidas
     else:
         # Nada a corresponder: plano já é uma unidade auditável.
         decomposto = bool(subtasks)

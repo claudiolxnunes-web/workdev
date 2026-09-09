@@ -328,6 +328,17 @@ def approve_plan(
 
         if granularidade["requires_decomposition"]:
             sinais = "; ".join(granularidade["signals"])
+
+            if not granularidade["suggested_slices"]:
+                # Nenhuma fatia derivável do texto: pedir "decomponha" seria
+                # mandar o operador rodar um endpoint que também vai recusar.
+                raise HandoffError(
+                    f"Plano grande demais para uma execução só ({sinais}), e "
+                    "não foi possível derivar fatias do escopo. Enumere as "
+                    "frentes no escopo (1., 2., 3.) ou aprove com force=true "
+                    "assumindo a exceção."
+                )
+
             raise HandoffError(
                 f"Plano grande demais para uma execução só ({sinais}). "
                 f"São exigidas {granularidade['required_slices']} fatias "
