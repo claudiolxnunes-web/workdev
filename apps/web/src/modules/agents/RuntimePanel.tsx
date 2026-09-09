@@ -23,6 +23,13 @@ const REPROVISION_LABEL: Record<string, string> = {
  * Painel de um runtime Ollama. Não há terminal aqui: estes agentes não têm
  * sessão tmux, só um endpoint de inferência sondado pelo backend. Nenhuma URL
  * ou token chega ao browser — a API devolve apenas estado.
+ *
+ * A tarja diz "nunca entra em AUTO" e não "seleção manual" de propósito: a
+ * versão anterior descrevia uma propriedade de roteamento (estes runtimes só
+ * entram por eleição do operador) num card que não tem controle nenhum, e era
+ * lida como um seletor desativado. O lugar da eleição é o AI Hub — dito aqui
+ * em texto, já que o despacho pela tela de Agents é a fatia 2 do plano de
+ * correção e ainda não existe.
  */
 export function RuntimePanel({ runtime }: { runtime: AgentRuntime }) {
   return (
@@ -39,9 +46,15 @@ export function RuntimePanel({ runtime }: { runtime: AgentRuntime }) {
           <span className="rounded bg-sky-900 px-2 py-1 text-xs font-bold text-sky-200">OCUPADO</span>
         )}
         <span className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400">
-          seleção manual
+          nunca entra em AUTO
         </span>
       </header>
+
+      <p className="text-xs text-slate-400">
+        Painel de leitura: o despacho não parte daqui. Este runtime só executa
+        se você o eleger como executor no AI Hub → Planejamento, no bloco
+        "Quem executa e quem revisa" de um plano aprovado.
+      </p>
 
       {runtime.reason && <p className="text-xs text-amber-300">Motivo: {runtime.reason}</p>}
 

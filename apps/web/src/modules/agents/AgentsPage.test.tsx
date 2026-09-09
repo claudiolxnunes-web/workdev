@@ -109,4 +109,20 @@ describe("AgentsPage", () => {
     expect(painel).toHaveTextContent("Fonte de verdade continua na VPS principal")
     expect(screen.queryByText(/^terminal:/)).not.toBeInTheDocument()
   })
+
+  it("painel do runtime não promete controle que não tem", async () => {
+    getAgentRuntimes.mockResolvedValue([runtime()])
+    render(<AgentsPage />)
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Ollama local/ }))
+    const painel = await screen.findByRole("region", { name: /Runtime Ollama local/ })
+
+    // "seleção manual" numa tela sem seletor lia como controle desativado.
+    expect(painel).not.toHaveTextContent("seleção manual")
+    expect(painel).toHaveTextContent("nunca entra em AUTO")
+    // O painel tem que dizer onde a eleição realmente acontece.
+    expect(painel).toHaveTextContent("AI Hub")
+    // E não pode ganhar botão sem a fatia 2: despacho não parte daqui.
+    expect(painel.querySelector("button")).toBeNull()
+  })
 })
