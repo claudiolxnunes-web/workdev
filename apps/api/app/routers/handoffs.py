@@ -195,6 +195,12 @@ def _run_out(
             if plan
             else None
         ),
+        # Estado do despacho (fatia 2). A UI precisa disto para não oferecer
+        # "despachar" a uma run que já tem job vivo — o 409 do banco continua
+        # sendo a garantia, isto aqui é só para não convidar ao erro.
+        "dispatch_state": run.dispatch_state or "idle",
+        "dispatch_attempts": run.dispatch_attempts or 0,
+        "last_dispatch_at": run.last_dispatch_at,
     }
 
 

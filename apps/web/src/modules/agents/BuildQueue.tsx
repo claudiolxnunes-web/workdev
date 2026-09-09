@@ -1,8 +1,9 @@
 import { startTransition, useCallback, useEffect, useState } from "react"
 import {
   getRunContext, getRuns, subscribeToHandoffs, transferRun, updateRun,
-  updateRunSubtask, agentLabels,
-  type AgentContext, type AgentName, type AgentRun, type RunStatus,
+  updateRunSubtask, agentLabels, dispatchRun, HandoffApiError, RUNTIME_AGENTS,
+  type AgentContext, type AgentName, type AgentRun, type DispatchJob,
+  type RunStatus,
 } from "@/services/handoff.service"
 
 const statusLabel: Record<RunStatus, string> = {
@@ -16,6 +17,10 @@ const statusColor: Record<RunStatus, string> = {
 }
 const agentLabel = agentLabels
 
+/** Um despacho já pedido não pode ser pedido de novo: o banco recusaria com
+ *  409, e oferecer o botão assim mesmo seria convidar ao erro. */
+const DESPACHO_EM_CURSO = ["queued", "dispatching"]
+
 export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName; mobileExpanded?: boolean }) {
   const [runs, setRuns] = useState<AgentRun[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -24,6 +29,7 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [copied, setCopied] = useState(false)
+  const [job, setJob] = useState<DispatchJob | null>(null)
 
   const loadRuns = useCallback(async () => {
     try {
@@ -119,6 +125,34 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
     finally { setBusy(false) }
   }
 
+  /**
+   * Pede o despacho da run para o runtime Ollama — a chamada que faltava e que
+   * deixava a run parada para sempre depois de escolhida na tela de planos
+   * (achado 1 do plano de correção).
+   *
+   * A resposta é 202: quando esta função retorna, o modelo ainda está
+   * pensando. O resultado aparece no Histórico como `build.ollama_response`.
+   */
+  async function dispatch() {
+    if (!selectedId) return
+    setBusy(true); setError("")
+    try {
+      const resposta = await dispatchRun(selectedId)
+      setJob(resposta.dispatch)
+      await Promise.all([loadRuns(), loadContext(selectedId)])
+    } catch (cause) {
+      if (cause instanceof HandoffApiError
+        && cause.detail.code === "dispatch_already_active") {
+        // Não é erro do operador: já existe um despacho vivo. Mostramos qual.
+        const vivo = cause.detail.details as DispatchJob | undefined
+        if (vivo) setJob(vivo)
+        setError("Já existe um despacho ativo para esta execução.")
+      } else {
+        setError(cause instanceof Error ? cause.message : "Falha ao despachar")
+      }
+    } finally { setBusy(false) }
+  }
+
   async function copyPrompt() {
     if (!context) return
     try { await navigator.clipboard.writeText(context.prompt); setCopied(true); window.setTimeout(() => setCopied(false), 1800) }
@@ -154,6 +188,34 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
             {["queued", "running", "blocked"].includes(selected.status) && <button disabled={busy} onClick={() => void transfer()} className="rounded bg-amber-700 px-2 py-1 text-xs" title="Cancela esta execução e cria uma nova para outro agente">Transferir</button>}
             {["queued", "running", "blocked"].includes(selected.status) && <button disabled={busy} onClick={() => void move("cancelled")} className="rounded bg-slate-700 px-2 py-1 text-xs">Cancelar</button>}
           </div>
+          {RUNTIME_AGENTS.includes(selected.agent as typeof RUNTIME_AGENTS[number])
+            && ["queued", "running"].includes(selected.status) && (
+            <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+              <button
+                type="button"
+                disabled={busy || DESPACHO_EM_CURSO.includes(selected.dispatch_state)}
+                onClick={() => void dispatch()}
+                className="w-full rounded bg-indigo-700 px-2 py-2 text-xs font-medium hover:bg-indigo-600 disabled:opacity-50"
+              >
+                {DESPACHO_EM_CURSO.includes(selected.dispatch_state)
+                  ? "Despacho em curso…"
+                  : "Despachar para o runtime"}
+              </button>
+              <p className="mt-2 text-[11px] text-amber-300">
+                O runtime devolve texto. Ele não edita arquivo, não roda gate e
+                não commita — a proposta chega no Histórico como
+                build.ollama_response, para você aplicar.
+              </p>
+              {(job || selected.dispatch_attempts > 0) && (
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Despacho: {job?.state ?? selected.dispatch_state}
+                  {job?.model ? ` · ${job.model}` : ""}
+                  {` · tentativa ${job?.attempt ?? selected.dispatch_attempts}`}
+                  {job?.error ? ` · ${job.error}` : ""}
+                </p>
+              )}
+            </div>
+          )}
           {context.subtasks.length > 0 && <div><p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">Subtasks</p>{context.subtasks.map((item) => <label key={item.id} className="flex cursor-pointer gap-2 py-1 text-xs text-slate-300"><input type="checkbox" disabled={busy} checked={item.status === "done"} onChange={() => void toggleSubtask(item.id, item.status)} /><span className={item.status === "done" ? "text-slate-500 line-through" : ""}>{item.order}. {item.title}</span></label>)}</div>}
           <details><summary className="cursor-pointer text-xs text-sky-400">Ver prompt completo</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-[11px] text-slate-400">{context.prompt}</pre></details>
           {context.events.length > 0 && <details><summary className="cursor-pointer text-xs text-slate-400">Histórico ({context.events.length})</summary><div className="mt-2 space-y-1">{context.events.slice().reverse().map((event) => <p key={event.id} className="text-[11px] text-slate-500"><span className="text-slate-300">{event.type}</span>{event.message ? ` · ${event.message}` : ""}</p>)}</div></details>}

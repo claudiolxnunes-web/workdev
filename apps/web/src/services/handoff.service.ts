@@ -190,6 +190,32 @@ export interface AgentRun {
   project_id: string
   project_name: string
   plan_version: number
+  /** Estado do despacho para runtime Ollama (fatia 2). Runs de agente com CLI
+   *  ficam sempre em "idle": elas não passam por despacho, quem as executa é a
+   *  sessão tmux. */
+  dispatch_state: DispatchState
+  dispatch_attempts: number
+  last_dispatch_at?: string
+}
+
+export type DispatchState =
+  | "idle" | "queued" | "dispatching" | "dispatched" | "failed"
+
+export type DispatchJobState =
+  | "queued" | "running" | "done" | "failed" | "cancelled"
+
+export interface DispatchJob {
+  job_id: string
+  run_id: string
+  runtime_id: RuntimeAgentName
+  model: string | null
+  state: DispatchJobState
+  attempt: number
+  prompt_sha256: string | null
+  error: string | null
+  created_at: string | null
+  started_at: string | null
+  finished_at: string | null
 }
 
 export interface AgentContext {
@@ -306,6 +332,32 @@ export async function getAgentRuntimes(refresh = false): Promise<AgentRuntime[]>
     fetch(`/api/agent-runtimes${refresh ? "?refresh=true" : ""}`, { headers }),
   )
   return body.runtimes ?? []
+}
+
+/**
+ * Pede o despacho da run para o runtime Ollama. Devolve 202 com o job — a
+ * inferência NÃO acabou quando esta promise resolve.
+ *
+ * Chamada concorrente para a mesma run devolve 409 `dispatch_already_active`
+ * com o job vivo em `detail.details`. Quem recusa é o índice parcial do banco,
+ * não esta função: reapertar o botão não duplica inferência.
+ */
+export async function dispatchRun(runId: string): Promise<{
+  run: AgentRun
+  dispatch: DispatchJob
+}> {
+  return read(
+    fetch(`/api/handoffs/runs/${runId}/dispatch`, { method: "POST", headers }),
+  )
+}
+
+export async function getDispatchJob(
+  runId: string,
+  jobId: string,
+): Promise<DispatchJob> {
+  return read(
+    fetch(`/api/handoffs/runs/${runId}/dispatch/${jobId}`, { headers }),
+  )
 }
 
 export async function getRunReviews(runId: string): Promise<{
