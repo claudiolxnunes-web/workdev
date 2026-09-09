@@ -331,9 +331,9 @@ def approve_plan(
             raise HandoffError(
                 f"Plano grande demais para uma execução só ({sinais}). "
                 f"São exigidas {granularidade['required_slices']} fatias "
-                f"auditáveis e há {granularidade['matching_subtask_count']} "
-                f"subtask(s) correspondendo às fatias deste plano "
-                f"(de {granularidade['subtask_count']} no total). "
+                f"auditáveis e há {granularidade['covered_slices']} coberta(s) "
+                f"por subtask própria "
+                f"(de {granularidade['subtask_count']} subtask(s) no total). "
                 "Decomponha antes de aprovar — use "
                 f"POST /api/handoffs/plans/{plan.id}/decompose ou aprove com "
                 "force=true assumindo a exceção."

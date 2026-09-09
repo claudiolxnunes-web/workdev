@@ -100,7 +100,13 @@ def assess(plan, subtasks=None) -> dict:
     # fatias com esse título, então o gate é sempre satisfazível pela
     # ferramenta oficial — e continua contornável por `force=true`, que é
     # decisão explícita e auditável do operador.
-    titulos_de_fatia = {_normalizar_titulo(f["title"]) for f in fatias}
+    # Fatias distintas, na ordem em que o plano as declara. `suggest_slices`
+    # pode repetir título quando o escopo enumera a mesma frente duas vezes;
+    # exigir uma unidade por título repetido seria um gate insatisfazível.
+    titulos_de_fatia: dict[str, str] = {}
+    for fatia in fatias:
+        titulos_de_fatia.setdefault(_normalizar_titulo(fatia["title"]), fatia["title"])
+
     correspondentes = [
         subtask
         for subtask in subtasks
@@ -108,30 +114,38 @@ def assess(plan, subtasks=None) -> dict:
         in titulos_de_fatia
     ]
 
-    # Uma unidade por fatia derivada, nunca menos que o mínimo.
-    exigidas = max(MIN_SLICES_WHEN_OVERSIZED, len(fatias)) if oversized else 0
-
-    if oversized:
-        decomposto = len(correspondentes) >= exigidas
-    else:
-        # Nada a corresponder: plano já é uma unidade auditável.
-        decomposto = bool(subtasks)
-
+    # O que decide é COBERTURA, não contagem de subtasks correspondentes.
+    # Quatro subtasks duplicando a mesma fatia dão quatro correspondências e
+    # cobrem uma frente só — passariam num teste de contagem e deixariam três
+    # frentes sem unidade auditável, que é precisamente o que o gate existe
+    # para impedir.
     cobertos = {
         _normalizar_titulo(getattr(subtask, "title", None))
         for subtask in correspondentes
     }
+
+    # Uma unidade por fatia distinta, nunca menos que o mínimo.
+    exigidas = (
+        max(MIN_SLICES_WHEN_OVERSIZED, len(titulos_de_fatia)) if oversized else 0
+    )
+
+    if oversized:
+        decomposto = len(cobertos) >= exigidas
+    else:
+        # Nada a corresponder: plano já é uma unidade auditável.
+        decomposto = bool(subtasks)
 
     return {
         "oversized": oversized,
         "signals": signals,
         "subtask_count": len(subtasks),
         "matching_subtask_count": len(correspondentes),
+        "covered_slices": len(cobertos),
         "required_slices": exigidas,
         "missing_slices": [
-            fatia["title"]
-            for fatia in fatias
-            if _normalizar_titulo(fatia["title"]) not in cobertos
+            titulo
+            for normalizado, titulo in titulos_de_fatia.items()
+            if normalizado not in cobertos
         ],
         "decomposed": decomposto,
         "suggested_slices": fatias,

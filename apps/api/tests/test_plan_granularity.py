@@ -119,6 +119,39 @@ class AssessmentTest(unittest.TestCase):
             resultado["missing_slices"],
         )
 
+    def test_duplicated_subtasks_of_one_slice_do_not_cover_the_others(self):
+        """Regressão da revisão do Codex sobre a própria correção do achado 10.
+
+        A primeira versão decidia por `len(correspondentes)`: quatro subtasks
+        duplicando a fatia 1 davam quatro correspondências e liberavam o
+        plano, deixando três frentes sem unidade auditável. O que vale é
+        cobertura de fatias distintas.
+        """
+        plan = _plan(scope=ESCOPO_GRANDE)
+        primeira = plan_granularity.suggest_slices(plan)[0]["title"]
+
+        resultado = plan_granularity.assess(
+            plan,
+            [SimpleNamespace(title=primeira) for _ in range(4)],
+        )
+
+        self.assertTrue(resultado["requires_decomposition"])
+        self.assertEqual(resultado["matching_subtask_count"], 4)
+        self.assertEqual(resultado["covered_slices"], 1)
+        self.assertEqual(resultado["required_slices"], 4)
+        self.assertEqual(len(resultado["missing_slices"]), 3)
+        self.assertNotIn(primeira, resultado["missing_slices"])
+
+    def test_missing_slices_never_repeats_a_slice(self):
+        plan = _plan(scope=ESCOPO_GRANDE)
+
+        resultado = plan_granularity.assess(plan, [])
+
+        self.assertEqual(
+            len(resultado["missing_slices"]),
+            len(set(resultado["missing_slices"])),
+        )
+
     def test_matching_is_insensitive_to_case_and_spacing(self):
         plan = _plan(scope=ESCOPO_GRANDE)
         fatias = plan_granularity.suggest_slices(plan)
@@ -206,7 +239,27 @@ class ApprovalGateTest(unittest.TestCase):
             approve_plan(self._db(), plan)
 
         self.assertIn("4 fatias", str(ctx.exception))
-        self.assertIn("0 subtask(s)", str(ctx.exception))
+        self.assertIn("0 coberta(s)", str(ctx.exception))
+        self.assertEqual(plan.status, "draft")
+
+    def test_duplicated_subtasks_do_not_unlock_approval(self):
+        """O caso das duplicatas no ponto onde ele custava caro: a aprovação."""
+        plan = _plan(scope=ESCOPO_GRANDE)
+        primeira = plan_granularity.suggest_slices(plan)[0]["title"]
+
+        with (
+            patch(
+                "app.services.handoff.load_subtasks",
+                return_value=[
+                    SimpleNamespace(title=primeira) for _ in range(4)
+                ],
+            ),
+            self.assertRaises(HandoffError) as ctx,
+        ):
+            approve_plan(self._db(), plan)
+
+        self.assertIn("1 coberta(s)", str(ctx.exception))
+        self.assertIn("4 subtask(s) no total", str(ctx.exception))
         self.assertEqual(plan.status, "draft")
 
     def test_operator_can_take_the_exception_explicitly(self):
