@@ -20,7 +20,10 @@ from app.services import agent_runtimes
 from app.services.agent_runtimes import OllamaRuntime
 
 
-DEFAULT_DISPATCH_TIMEOUT_SECONDS = 300.0
+# Medido em 2026-09-09 na VPS1: uma pergunta de uma linha ao
+# qwen2.5-coder:14b em CPU levou 171s. Prompt de Build é bem maior, então o
+# padrão precisa de folga — ajustável por WORKDEV_OLLAMA_DISPATCH_TIMEOUT_SECONDS.
+DEFAULT_DISPATCH_TIMEOUT_SECONDS = 900.0
 MAX_RESPONSE_CHARS = 60_000
 
 
