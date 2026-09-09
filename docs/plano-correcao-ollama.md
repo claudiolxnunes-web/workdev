@@ -28,10 +28,40 @@ achados adicionais apareceram na verificação.
 | 7 | média | Contexto vai para GPU remota sem classificação/redaction/consentimento | `build_context` monta ADRs, knowledge, decisions e plano (`handoff.py:925+`), `augment_prompt` anexa trechos, e o prompt sai igual para `local-code` (loopback) e para `gpu-hostinger`/`gpu-runpod` (internet, terceiros). Nenhuma etapa de classificação, redaction ou consentimento entre os dois |
 | 8 | média | `agent_runtimes` router pendurado dentro de `terminal.py` | `terminal.py:737-739` inclui o router porque `apps/api/app/main.py` é `root:root 644` e não pôde ser editado pelo usuário `workdev`. É a pendência de ownership já registrada no `CLAUDE.md`, agora com efeito estrutural na árvore de rotas |
 | 9 | baixa | `test_gate` é fixo em `/opt/workdev` | `WORKDIR = Path("/opt/workdev")` (`test_gate.py:28`). Qualquer execução isolada (worktree) exige parametrizar isso antes |
+| 10 | alta | Gate de fatiamento aceita qualquer subtask como decomposição | `plan_granularity.py:91` faz `"decomposed": bool(subtasks)` e a linha 93, `"requires_decomposition": oversized and not subtasks`. **Uma** subtask antiga, única e sem relação com as fatias sugeridas satisfaz o gate. Não há checagem de quantidade, de correspondência com as fatias propostas, nem de gate próprio por fatia — exatamente o que `72b5360` prometia exigir. Achado da revisão independente do Codex em 2026-09-09 |
+| 11 | crítico | Release em produção está ~11 commits atrás | A release promovida (`/opt/workdev-runtime/current`, de 2026-09-08 23:37) **não contém** `routers/agent_runtimes.py`, `services/ollama_driver.py` nem `services/plan_granularity.py`, e seu `handoffs.py` tem **zero** ocorrências de `reviews`. Consequência concreta: `workdev_agent.py verdict` responde **HTTP 405** porque a rota `POST /runs/{run_id}/reviews` (presente no repo em `handoffs.py:1326`) não existe em produção. O Codex não conseguiu gravar o veredito na trilha oficial por causa disso |
 
 Suíte atual passa: `45 passed` em `tests/test_ollama_dispatch.py` + `tests/test_agent_runtimes.py`.
 Os testes existentes são honestos — eles testam o driver de texto, não um executor
 de Build. O problema não é teste faltando, é o contrato estar menor do que a UI promete.
+
+### Revisão independente do Codex — `rejected` (2026-09-09)
+
+Run `8491f6db-9d83-4bba-9e38-b8a3c0ba39fe`, sobre os 11 commits da integração
+Ollama. Veredito: **rejeitado**, com gates **verdes**:
+
+| Gate | Resultado |
+|---|---|
+| Backend | 670 passed, 19 skipped, 20 subtests |
+| Frontend | 61 passed |
+| Build | passou |
+| Lint | 4 erros **preexistentes**, fora do diff |
+
+A distinção importa e é o resumo deste documento inteiro: **gate verde responde
+"não quebrou"; revisão responde "faz o que promete"**. Os três motivos da rejeição
+são de contrato, não de teste quebrado:
+
+1. Runtime Ollama/GPU selecionável como revisor sem fluxo de despacho de revisão
+   nem UI que consuma `submitRunReview` → **é o achado 3 deste plano**, confirmado
+   de forma independente. Fechado pela fatia 1.
+2. `plan_granularity.assess` aceita qualquer subtask como decomposição suficiente
+   → **achado 10**, novo, não estava neste plano.
+3. A própria task foi entregue com zero subtasks persistidas, apesar de o critério
+   de aceite exigir fatiamento auditável.
+
+O veredito **não pôde ser gravado na trilha oficial**: `workdev_agent.py verdict`
+devolveu `HTTP 405` — ver achado 11. A rejeição existe como transcrição de sessão,
+não como registro em `agent_run_reviews`. Regularizar isso depende de deploy.
 
 ---
 
