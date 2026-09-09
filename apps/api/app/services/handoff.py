@@ -329,14 +329,18 @@ def approve_plan(
         if granularidade["requires_decomposition"]:
             sinais = "; ".join(granularidade["signals"])
 
-            if not granularidade["suggested_slices"]:
-                # Nenhuma fatia derivável do texto: pedir "decomponha" seria
-                # mandar o operador rodar um endpoint que também vai recusar.
+            if not granularidade["decomposable"]:
+                # O texto do plano não rende fatias distintas suficientes:
+                # mandar "decomponha" seria mandar rodar um endpoint que
+                # também recusa. O caminho é enumerar as frentes.
                 raise HandoffError(
-                    f"Plano grande demais para uma execução só ({sinais}), e "
-                    "não foi possível derivar fatias do escopo. Enumere as "
-                    "frentes no escopo (1., 2., 3.) ou aprove com force=true "
-                    "assumindo a exceção."
+                    f"Plano grande demais para uma execução só ({sinais}), "
+                    f"mas o escopo só rende "
+                    f"{granularidade['derivable_slices']} fatia(s) distinta(s) "
+                    f"e são exigidas {granularidade['required_slices']}. "
+                    "Uma fatia não é decomposição: enumere as frentes no "
+                    "escopo (1., 2., 3.) ou aprove com force=true assumindo "
+                    "a exceção."
                 )
 
             raise HandoffError(
@@ -406,7 +410,17 @@ def decompose_plan(
             "escopo do plano (1., 2., 3.) e tente de novo"
         )
 
-    titulos = {row.title.strip() for row in existentes}
+    # Idempotência por fatia coberta, não por título exato: uma subtask criada
+    # antes do identificador `[id]` cobre a mesma fatia, e compará-la por
+    # string literal recriaria a subtask duplicada a cada decomposição.
+    from app.services.plan_granularity import slice_keys, _normalizar_titulo
+
+    aceitas = slice_keys(fatias)
+    ja_cobertas = {
+        aceitas[chave]
+        for row in existentes
+        if (chave := _normalizar_titulo(row.title)) in aceitas
+    }
     proxima_ordem = max(
         (row.execution_order or 0 for row in existentes),
         default=0,
@@ -414,7 +428,7 @@ def decompose_plan(
     criadas: list[BacklogSubtask] = []
 
     for fatia in fatias:
-        if fatia["title"] in titulos:
+        if _normalizar_titulo(fatia["title"]) in ja_cobertas:
             continue
 
         proxima_ordem += 1

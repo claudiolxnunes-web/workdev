@@ -151,33 +151,119 @@ class AssessmentTest(unittest.TestCase):
         self.assertEqual(len(resultado["missing_slices"]), 3)
         self.assertNotIn(primeira, resultado["missing_slices"])
 
-    def test_identical_front_titles_yield_a_satisfiable_gate(self):
-        """Regressão do gate insatisfazível (revisão do Codex sobre 9eacb8e).
+    def test_repeated_front_is_not_counted_twice_as_a_signal(self):
+        """Regressão do gate insatisfazível (2ª revisão do Codex).
 
-        Duas frentes de título idêntico derivam 1 fatia distinta, mas o piso
-        `MIN_SLICES_WHEN_OVERSIZED` exigia 2 coberturas — impossíveis, já que
-        só existe um título. Nem `decompose_plan` resolvia: idempotente por
-        título, ele cria uma subtask só. O plano ficava travado sem force.
+        O escopo repetia a mesma frente duas vezes e o sinal contava itens
+        brutos: o plano era marcado como grande, e o gate passava a exigir
+        duas fatias que não existem. Nem `decompose_plan` resolvia — sendo
+        idempotente, ele materializa uma subtask só.
+
+        A correção é na origem, não na exigência: o sinal conta frentes
+        DISTINTAS, como o texto dele sempre prometeu. Repetir a mesma frente
+        não torna o plano grande.
         """
-        plan = _plan(scope=ESCOPO_TITULOS_REPETIDOS)
+        resultado = plan_granularity.assess(
+            _plan(scope=ESCOPO_TITULOS_REPETIDOS),
+            [],
+        )
 
-        # O escopo enumera 2 frentes — o plano é sinalizado como grande.
-        parcial = plan_granularity.assess(plan, [])
-        self.assertTrue(parcial["oversized"])
-        self.assertEqual(parcial["required_slices"], 1)
-        self.assertTrue(parcial["requires_decomposition"])
+        self.assertFalse(resultado["oversized"])
+        self.assertEqual(resultado["signals"], [])
+        self.assertFalse(resultado["requires_decomposition"])
 
-        # E uma única subtask, que é tudo o que decompose_plan consegue
-        # materializar aqui, fecha o gate.
+    def test_one_slice_is_never_a_decomposition(self):
+        """Regressão da 4ª revisão do Codex.
+
+        Sem piso, um plano marcado como grande por 9 etapas de validação e com
+        um único critério de aceite derivava 1 fatia, exigia 1 e era declarado
+        decomposto por UMA subtask. Uma fatia não é decomposição.
+        """
+        plan = _plan(
+            acceptance_criteria=["Único critério"],
+            validation_steps=[f"passo {i}" for i in range(9)],
+        )
         unica = plan_granularity.suggest_slices(plan)[0]["title"]
+
         resultado = plan_granularity.assess(
             plan,
             [SimpleNamespace(title=unica)],
         )
 
-        self.assertEqual(resultado["covered_slices"], 1)
+        self.assertTrue(resultado["oversized"])
+        self.assertEqual(resultado["derivable_slices"], 1)
+        self.assertEqual(
+            resultado["required_slices"],
+            plan_granularity.MIN_SLICES_WHEN_OVERSIZED,
+        )
+        self.assertFalse(resultado["decomposable"])
+        self.assertTrue(resultado["requires_decomposition"])
+
+    def test_oversized_by_long_scope_also_needs_two_slices(self):
+        plan = _plan(
+            scope="Texto corrido, sem enumeração alguma. " * 60,
+            acceptance_criteria=["Único critério"],
+        )
+        unica = plan_granularity.suggest_slices(plan)[0]["title"]
+
+        resultado = plan_granularity.assess(
+            plan,
+            [SimpleNamespace(title=unica)],
+        )
+
+        self.assertTrue(resultado["requires_decomposition"])
+        self.assertFalse(resultado["decomposable"])
+
+    def test_legacy_titles_without_the_id_still_cover_their_slice(self):
+        """Compatibilidade retroativa (2º achado da 4ª revisão).
+
+        As 216 subtasks já gravadas não têm o sufixo `[id]`. Sem aceitá-las,
+        decompor de novo duplicaria cada uma — ou exigiria migração.
+        """
+        plan = _plan(scope=ESCOPO_GRANDE)
+        fatias = plan_granularity.suggest_slices(plan)
+        legadas = [
+            SimpleNamespace(
+                title=plan_granularity._sem_identificador(fatia["title"])
+            )
+            for fatia in fatias
+        ]
+
+        for subtask in legadas:
+            self.assertNotIn("[", subtask.title)
+
+        resultado = plan_granularity.assess(plan, legadas)
+
+        self.assertEqual(resultado["covered_slices"], 4)
         self.assertFalse(resultado["requires_decomposition"])
-        self.assertEqual(resultado["missing_slices"], [])
+
+    def test_colliding_legacy_title_covers_no_slice(self):
+        """O título legado ambíguo é a colisão que o `[id]` veio corrigir.
+
+        Se ele cobrisse "alguma" das fatias, reabriria o bypass do 3º achado
+        pela porta da compatibilidade.
+        """
+        prefixo = (
+            "Reescrever o driver de despacho cobrindo timeout, retry, "
+            "backoff, idempotencia, telemetria e limites de payload do "
+            "endpoint remoto, para "
+        )
+        plan = _plan(
+            scope=(
+                f"1. {prefixo}o runtime local.\n"
+                f"2. {prefixo}as GPUs remotas.\n"
+            ),
+        )
+        fatias = plan_granularity.suggest_slices(plan)
+        legado = plan_granularity._sem_identificador(fatias[0]["title"])
+
+        resultado = plan_granularity.assess(
+            plan,
+            [SimpleNamespace(title=legado)],
+        )
+
+        self.assertEqual(resultado["covered_slices"], 0)
+        self.assertTrue(resultado["requires_decomposition"])
 
     def test_titles_do_not_collide_after_truncation(self):
         """Regressão do 3º passe do Codex: colisão por truncamento.
@@ -254,7 +340,8 @@ class AssessmentTest(unittest.TestCase):
 
         self.assertTrue(resultado["oversized"])
         self.assertEqual(resultado["suggested_slices"], [])
-        self.assertEqual(resultado["required_slices"], 0)
+        self.assertEqual(resultado["derivable_slices"], 0)
+        self.assertFalse(resultado["decomposable"])
         self.assertTrue(resultado["requires_decomposition"])
 
     def test_missing_slices_never_repeats_a_slice(self):
@@ -446,6 +533,35 @@ class DecomposeTest(unittest.TestCase):
             [row.execution_order for row in criadas],
             [1, 2, 3, 4],
         )
+
+    def test_decompose_does_not_duplicate_legacy_subtasks(self):
+        """Efeito prático do 2º achado da 4ª revisão.
+
+        Com idempotência por título literal, uma subtask criada antes do
+        identificador `[id]` não casava com a fatia e era recriada — o banco
+        ficaria com as duas, descrevendo a mesma frente.
+        """
+        db = Mock()
+        criadas = []
+        db.add.side_effect = criadas.append
+        plan = _plan(scope=ESCOPO_GRANDE)
+        fatias = plan_granularity.suggest_slices(plan)
+        legadas = [
+            SimpleNamespace(
+                title=plan_granularity._sem_identificador(fatia["title"]),
+                execution_order=ordem,
+            )
+            for ordem, fatia in enumerate(fatias, start=1)
+        ]
+
+        with patch(
+            "app.services.handoff.load_subtasks",
+            return_value=legadas,
+        ):
+            resultado = decompose_plan(db, plan)
+
+        self.assertEqual(resultado, [])
+        self.assertEqual(criadas, [])
 
     def test_decompose_is_idempotent_by_title(self):
         db = Mock()

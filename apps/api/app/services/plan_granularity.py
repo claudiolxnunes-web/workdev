@@ -69,6 +69,42 @@ def _slice_id(item: str) -> str:
     return digest[:SLICE_ID_CHARS]
 
 
+_SUFIXO_DE_ID = re.compile(r"\s\[[0-9a-f]{%d}\]$" % SLICE_ID_CHARS)
+
+
+def _sem_identificador(titulo: str) -> str:
+    """Título no formato antigo: só o corpo truncado, sem o `[id]`."""
+    return _SUFIXO_DE_ID.sub("", titulo)
+
+
+def slice_keys(fatias: list[dict]) -> dict[str, str]:
+    """Chaves de título aceitas por fatia → chave canônica da fatia.
+
+    Aceita dois formatos, para não exigir migração das 216 subtasks criadas
+    antes do identificador: o título atual (`corpo [id]`) e o legado (só
+    `corpo`). Sem isto, decompor de novo duplicaria toda subtask antiga.
+
+    Um título legado que casaria com mais de uma fatia é exatamente a colisão
+    por truncamento que o identificador veio corrigir — nesse caso ele não
+    cobre fatia nenhuma, e a subtask precisa do formato novo.
+    """
+    canonico: dict[str, str] = {}
+    legadas: dict[str, set[str]] = {}
+
+    for fatia in fatias:
+        chave = _normalizar_titulo(fatia["title"])
+        canonico[chave] = chave
+        legada = _normalizar_titulo(_sem_identificador(fatia["title"]))
+        if legada != chave:
+            legadas.setdefault(legada, set()).add(chave)
+
+    for legada, alvos in legadas.items():
+        if len(alvos) == 1 and legada not in canonico:
+            canonico[legada] = next(iter(alvos))
+
+    return canonico
+
+
 def _titulo_de_fatia(item: str) -> str:
     """Título da fatia: texto truncado mais o identificador do conteúdo.
 
@@ -118,9 +154,15 @@ def assess(plan, subtasks=None) -> dict:
             f"(acima de {MAX_SCOPE_CHARS})"
         )
 
-    if len(itens) >= MIN_SLICES_WHEN_OVERSIZED:
+    # Frentes DISTINTAS, como o texto do sinal sempre prometeu. Contar itens
+    # brutos sinalizava como grande um escopo que repete a mesma frente duas
+    # vezes — e aí o gate exigia duas fatias que não existem. Contar distintas
+    # resolve isso na origem, sem precisar afrouxar a exigência de cobertura.
+    frentes_distintas = {_normalizar_titulo(item) for item in itens}
+
+    if len(frentes_distintas) >= MIN_SLICES_WHEN_OVERSIZED:
         signals.append(
-            f"escopo enumera {len(itens)} frentes distintas"
+            f"escopo enumera {len(frentes_distintas)} frentes distintas"
         )
 
     oversized = bool(signals)
@@ -132,13 +174,13 @@ def assess(plan, subtasks=None) -> dict:
     # exatamente o trabalho monolítico que o gate existe para barrar.
     #
     # Agora vale correspondência: só conta a subtask cujo título bate com uma
-    # das fatias derivadas do próprio plano. `decompose_plan` materializa essas
-    # fatias com esse título, então o gate é sempre satisfazível pela
-    # ferramenta oficial — e continua contornável por `force=true`, que é
-    # decisão explícita e auditável do operador.
-    # Fatias distintas, na ordem em que o plano as declara. `suggest_slices`
-    # pode repetir título quando o escopo enumera a mesma frente duas vezes;
-    # exigir uma unidade por título repetido seria um gate insatisfazível.
+    # das fatias derivadas do próprio plano — no formato atual ou no legado
+    # (ver `slice_keys`). `decompose_plan` materializa essas fatias com esse
+    # título, então o gate é satisfazível pela ferramenta oficial sempre que o
+    # próprio texto do plano render fatias suficientes — e continua contornável
+    # por `force=true`, decisão explícita e auditável do operador.
+    aceitas = slice_keys(fatias)
+
     titulos_de_fatia: dict[str, str] = {}
     for fatia in fatias:
         titulos_de_fatia.setdefault(_normalizar_titulo(fatia["title"]), fatia["title"])
@@ -146,8 +188,7 @@ def assess(plan, subtasks=None) -> dict:
     correspondentes = [
         subtask
         for subtask in subtasks
-        if _normalizar_titulo(getattr(subtask, "title", None))
-        in titulos_de_fatia
+        if _normalizar_titulo(getattr(subtask, "title", None)) in aceitas
     ]
 
     # O que decide é COBERTURA, não contagem de subtasks correspondentes.
@@ -156,27 +197,28 @@ def assess(plan, subtasks=None) -> dict:
     # frentes sem unidade auditável, que é precisamente o que o gate existe
     # para impedir.
     cobertos = {
-        _normalizar_titulo(getattr(subtask, "title", None))
+        aceitas[_normalizar_titulo(getattr(subtask, "title", None))]
         for subtask in correspondentes
     }
 
-    # Uma unidade por fatia DISTINTA — sem piso mínimo.
+    # Uma unidade por fatia distinta, e nunca menos que o mínimo: UMA fatia não
+    # é decomposição. Sem o piso, um plano marcado como grande por 9 etapas de
+    # validação — ou por escopo extenso — com um único critério de aceite era
+    # "decomposto" por uma subtask só.
     #
-    # Aplicar `max(MIN_SLICES_WHEN_OVERSIZED, ...)` aqui fechava o gate para
-    # sempre quando o escopo enumerava duas frentes de título idêntico: as
-    # fatias distintas eram 1, o piso exigia 2, e `cobertos` nunca passava de
-    # 1. Nem `decompose_plan` resolvia — sendo idempotente por título, ele
-    # criava uma subtask só. `MIN_SLICES_WHEN_OVERSIZED` continua valendo onde
-    # sempre valeu: no sinal de "escopo enumera N frentes", não como exigência
-    # de cobertura.
-    exigidas = len(titulos_de_fatia) if oversized else 0
+    # O piso não recria o gate insatisfazível de antes porque a causa daquele
+    # caso foi corrigida na origem: o sinal de escopo agora conta frentes
+    # DISTINTAS, então repetir a mesma frente não marca mais o plano como
+    # grande. Quando ainda assim o texto não render fatias suficientes,
+    # `decomposable` fica falso e a mensagem diz o que fazer, em vez de o
+    # operador esbarrar num bloqueio mudo.
+    exigidas = (
+        max(MIN_SLICES_WHEN_OVERSIZED, len(titulos_de_fatia)) if oversized else 0
+    )
+    derivaveis = len(titulos_de_fatia)
 
     if oversized:
-        # Sem nenhuma fatia derivável não há como declarar o plano fatiado, e
-        # `exigidas == 0` faria `0 >= 0` liberar tudo. O gate segue fechado: o
-        # caminho é enumerar as frentes no escopo — mesma condição que
-        # `decompose_plan` exige — ou assumir a exceção com force=true.
-        decomposto = bool(titulos_de_fatia) and len(cobertos) >= exigidas
+        decomposto = derivaveis >= exigidas and len(cobertos) >= exigidas
     else:
         # Nada a corresponder: plano já é uma unidade auditável.
         decomposto = bool(subtasks)
@@ -188,6 +230,10 @@ def assess(plan, subtasks=None) -> dict:
         "matching_subtask_count": len(correspondentes),
         "covered_slices": len(cobertos),
         "required_slices": exigidas,
+        "derivable_slices": derivaveis,
+        # Falso quando o texto do plano não rende fatias distintas bastantes:
+        # decompor não resolve, é preciso enumerar/detalhar as frentes.
+        "decomposable": (not oversized) or derivaveis >= exigidas,
         "missing_slices": [
             titulo
             for normalizado, titulo in titulos_de_fatia.items()
