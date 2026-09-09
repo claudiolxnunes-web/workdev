@@ -146,8 +146,14 @@ defeito que originou este documento.
 Cada fatia é uma unidade auditável: commit próprio, testes próprios, reversível
 isoladamente. Ordem é dependência real.
 
-### Fatia 1 — Honestidade de rótulo e portas fechadas (sem ADR, seguro)
-Fecha 3, 4 e parte de 1. Nenhuma promessa nova na UI.
+### Fatia 1 — Honestidade de rótulo e portas fechadas ✅ IMPLEMENTADA (2026-09-09)
+Fecha 3, 4, 10 e parte de 1. Nenhuma promessa nova na UI.
+
+> **Entregue em `f79add7`.** Gates: API 680 passed / 19 skipped (era 670);
+> frontend 64 passed (era 61); `tsc --noEmit` limpo; build com 0 ocorrências de
+> `localhost:8000` no bundle. O achado 10 entrou junto por acoplamento na
+> mensagem de erro de `approve_plan`. Sem migração — revertível por
+> `git revert` isolado.
 
 - `DISPATCHABLE_STATUSES = {STATUS_ONLINE}` — `degraded` deixa de ser despachável.
 - `check_runtime()` passa a exigir modelo resolvido: sem `*_MODEL` e sem
@@ -439,7 +445,7 @@ não roda deploy, não faz push, não mexe em `/root/.ssh`, não altera
 
 | Ordem | Fatia | Bloqueio |
 |---|---|---|
-| 1º | 1 — rótulo, recomendação de revisor, portas fechadas | nenhum, pode começar hoje |
+| ~~1º~~ | ~~1 — rótulo, recomendação de revisor, portas fechadas~~ | ✅ feita em `f79add7` |
 | 2º | 4 — classificação e redaction | nenhum (independe do worker) |
 | 3º | 2 — estado, lock, idempotência | migração precisa do seu OK |
 | 4º | ADR 005 | sua aprovação |
