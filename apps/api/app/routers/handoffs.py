@@ -16,6 +16,7 @@ from app.schemas.handoff import (
     BuildRequest,
     PlanCreate,
     PlanUpdate,
+    ReviewerSwap,
     RunEventCreate,
     RunReviewCreate,
     RunTransfer,
@@ -33,6 +34,7 @@ from app.services.handoff import (
     load_subtasks,
     queue_build,
     record_review,
+    swap_reviewer,
     transfer_run,
     update_plan,
     update_run,
@@ -1038,6 +1040,7 @@ def transfer_agent_run(
             ),
             payload.agent,
             payload.reason,
+            new_reviewer=payload.reviewer,
         )
     except HandoffError as error:
         raise HTTPException(
@@ -1061,6 +1064,37 @@ def transfer_agent_run(
         db,
         new_run,
     )
+
+
+@router.post("/runs/{run_id}/reviewer")
+def swap_run_reviewer(
+    run_id: UUID,
+    payload: ReviewerSwap,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Troca auditada do revisor, sem cancelar a execução em andamento."""
+    try:
+        run, event = swap_reviewer(
+            db,
+            _get_run(db, run_id),
+            payload.reviewer,
+            payload.reason,
+        )
+    except HandoffError as error:
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+    _sync_run(
+        background,
+        db,
+        run,
+        event,
+    )
+
+    return _run_out(db, run)
 
 
 def _review_out(review) -> dict:

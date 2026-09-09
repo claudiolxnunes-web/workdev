@@ -535,6 +535,7 @@ def transfer_run(
     run: AgentRun,
     new_agent: str,
     reason: str,
+    new_reviewer: str | None = None,
 ) -> tuple[AgentRun, AgentRun]:
     if new_agent not in SUPPORTED_AGENTS:
         raise HandoffError(
@@ -546,13 +547,14 @@ def transfer_run(
             "Escolha um agente diferente do atual para transferir"
         )
 
-    # A transferência preserva o revisor escolhido na aprovação do PLAN; se o
-    # novo executor for justamente o revisor, a independência some — recusa.
-    reviewer = run.reviewer_agent
-    if reviewer and new_agent == reviewer:
+    # A transferência preserva o revisor escolhido na aprovação do PLAN, a
+    # menos que a troca informe um revisor novo. Se o novo executor for
+    # justamente o revisor vigente, a independência some — recusa.
+    reviewer = new_reviewer or run.reviewer_agent
+    if new_agent == reviewer:
         raise HandoffError(
-            f"{new_agent} é o revisor desta execução; troque o revisor antes "
-            "de transferir a execução para ele"
+            f"{new_agent} é o revisor desta execução; informe também um "
+            "revisor diferente para transferir a execução para ele"
         )
 
     if run.status not in TRANSFERABLE_RUN_STATUSES:
@@ -602,6 +604,12 @@ def transfer_run(
         {
             "from_run_id": str(cancelled_run.id),
             "from_agent": previous_agent,
+            "to_agent": new_agent,
+            "reviewer_agent": reviewer,
+            "reviewer_changed": bool(
+                new_reviewer and new_reviewer != run.reviewer_agent
+            ),
+            "reason": reason,
         },
     )
 
@@ -609,6 +617,63 @@ def transfer_run(
     db.refresh(new_run)
 
     return cancelled_run, new_run
+
+
+def swap_reviewer(
+    db: Session,
+    run: AgentRun,
+    new_reviewer: str,
+    reason: str,
+) -> tuple[AgentRun, AgentRunEvent]:
+    """Troca auditada do revisor sem cancelar a execução em andamento.
+
+    Serve para o caso em que o revisor designado fica indisponível no meio do
+    ciclo. Exige justificativa escrita e mantém a regra de independência.
+    """
+    if run.status not in ACTIVE_RUN_STATUSES:
+        raise HandoffError(
+            f"Execução em '{run.status}' não aceita troca de revisor"
+        )
+
+    reason = (reason or "").strip()
+
+    if not reason:
+        raise HandoffError(
+            "Troca de revisor exige justificativa escrita"
+        )
+
+    validate_review_pair(run.agent, new_reviewer)
+
+    if new_reviewer == run.reviewer_agent:
+        raise HandoffError(
+            "Escolha um revisor diferente do atual"
+        )
+
+    previous_reviewer = run.reviewer_agent
+    run.reviewer_agent = new_reviewer
+    run.updated_at = _now()
+
+    event = add_run_event(
+        db,
+        run,
+        "review.reviewer_changed",
+        (
+            f"Revisor trocado de {previous_reviewer or 'não definido'} para "
+            f"{new_reviewer}: {reason}"
+        ),
+        {
+            "from_reviewer": previous_reviewer,
+            "to_reviewer": new_reviewer,
+            "executor_agent": run.agent,
+            "reason": reason,
+        },
+    )
+
+    db.commit()
+    db.refresh(run)
+    db.refresh(event)
+
+    return run, event
 
 
 def load_reviews(db: Session, run_id) -> list[AgentRunReview]:

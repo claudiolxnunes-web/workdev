@@ -196,6 +196,22 @@ class RunOut(BaseModel):
 class RunTransfer(BaseModel):
     agent: AgentName
     reason: str = Field(min_length=1)
+    # Opcional: trocar executor e revisor no mesmo movimento, necessário
+    # quando o novo executor é justamente o revisor vigente.
+    reviewer: AgentName | None = None
+
+    @model_validator(mode="after")
+    def validate_distinct_roles(self):
+        if self.reviewer is not None and self.reviewer == self.agent:
+            raise ValueError(
+                "executor e revisor precisam ser agentes diferentes"
+            )
+        return self
+
+
+class ReviewerSwap(BaseModel):
+    reviewer: AgentName
+    reason: str = Field(min_length=1)
 
 
 ReviewVerdict = Literal["approved", "rejected"]

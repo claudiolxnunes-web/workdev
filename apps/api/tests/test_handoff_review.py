@@ -3,6 +3,7 @@
 Fatia 1 — modelagem dos papéis executor/revisor e da trilha de revisões.
 Fatia 2 — validação executor != revisor no envio ao Build.
 Fatia 3 — histórico cumulativo e ciclo BUILD → REVIEW → correção → DONE.
+Fatia 4 — troca auditada de executor/revisor com justificativa escrita.
 """
 
 import unittest
@@ -19,6 +20,7 @@ from app.services.handoff import (
     HandoffError,
     queue_build,
     record_review,
+    swap_reviewer,
     transfer_run,
     validate_review_pair,
 )
@@ -372,6 +374,98 @@ class RecordReviewTest(unittest.TestCase):
     def test_unknown_verdict_is_refused(self):
         with self.assertRaises(HandoffError):
             record_review(self.db, _ReviewRun(), "codex", "aprovadinho")
+
+
+class SwapReviewerTest(unittest.TestCase):
+    def setUp(self):
+        self.db = Mock()
+        self.events = []
+        self.db.add.side_effect = self.events.append
+
+    def test_swap_records_reason_and_previous_reviewer(self):
+        run = _ReviewRun(status="running")
+
+        updated, event = swap_reviewer(
+            self.db,
+            run,
+            "kimi",
+            "Codex sem cota até amanhã",
+        )
+
+        self.assertEqual(updated.reviewer_agent, "kimi")
+        self.assertEqual(event.event_type, "review.reviewer_changed")
+        self.assertEqual(event.payload["from_reviewer"], "codex")
+        self.assertEqual(event.payload["to_reviewer"], "kimi")
+        self.assertEqual(
+            event.payload["reason"],
+            "Codex sem cota até amanhã",
+        )
+
+    def test_swap_requires_written_reason(self):
+        with self.assertRaises(HandoffError) as ctx:
+            swap_reviewer(self.db, _ReviewRun(status="running"), "kimi", "  ")
+        self.assertIn("justificativa", str(ctx.exception))
+
+    def test_swap_cannot_make_the_executor_its_own_reviewer(self):
+        with self.assertRaises(HandoffError):
+            swap_reviewer(
+                self.db,
+                _ReviewRun(status="running"),
+                "claude",
+                "quero aprovar sozinho",
+            )
+
+    def test_swap_rejects_the_current_reviewer(self):
+        with self.assertRaises(HandoffError):
+            swap_reviewer(
+                self.db,
+                _ReviewRun(status="running"),
+                "codex",
+                "sem mudança real",
+            )
+
+    def test_terminal_run_does_not_accept_reviewer_swap(self):
+        with self.assertRaises(HandoffError):
+            swap_reviewer(
+                self.db,
+                _ReviewRun(status="completed"),
+                "kimi",
+                "tarde demais",
+            )
+
+
+class TransferWithReviewerSwapTest(unittest.TestCase):
+    def test_transfer_to_reviewer_is_allowed_when_reviewer_also_changes(self):
+        db = _db_without_active_run()
+        plan = _approved_plan()
+        run = SimpleNamespace(
+            id=uuid4(),
+            plan_id=plan.id,
+            backlog_id=plan.backlog_id,
+            agent="claude",
+            reviewer_agent="codex",
+            status="running",
+        )
+        db.query.return_value.filter.return_value.first.side_effect = [
+            plan,
+            None,
+            None,
+        ]
+
+        with patch(
+            "app.services.handoff.update_run",
+            side_effect=lambda _db, current, _data: (current, None),
+        ):
+            _cancelled, new_run = transfer_run(
+                db,
+                run,
+                "codex",
+                "Claude travou",
+                new_reviewer="kimi",
+            )
+
+        self.assertEqual(new_run.agent, "codex")
+        self.assertEqual(new_run.reviewer_agent, "kimi")
 
 
 if __name__ == "__main__":
