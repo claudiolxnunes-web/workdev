@@ -105,6 +105,23 @@ class AgentRun(Base):
         server_default="0",
     )
 
+    # Estado do despacho para runtime Ollama. As colunas nasceram na migração
+    # b2e8f4a17c30 e ficaram meses no banco sem existir aqui: quem lesse
+    # run.dispatch_state pelo ORM levava AttributeError, não None. O detalhe de
+    # cada tentativa vive em agent_build_jobs; isto aqui é o resumo na run.
+    dispatch_state = Column(
+        String(16),
+        nullable=False,
+        server_default="idle",
+    )
+    dispatch_attempts = Column(
+        Integer,
+        nullable=False,
+        server_default="0",
+    )
+    last_dispatch_at = Column(DateTime(timezone=True))
+    dispatch_token = Column(UUID(as_uuid=True))
+
     model = Column(String(120))
     reasoning_effort = Column(String(16))
     complexity = Column(String(16))

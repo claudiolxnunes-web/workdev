@@ -161,6 +161,53 @@ class CicloDeVida(unittest.TestCase):
         self.assertEqual(run.dispatch_state, build_jobs.DISPATCH_FAILED)
 
 
+class ModelDeclaraOQueOBancoTem(unittest.TestCase):
+    """O ORM tem que declarar as colunas que a migração criou.
+
+    Este teste nasceu de um 500 em produção. A migração `b2e8f4a17c30` criou
+    dispatch_state/attempts/last_dispatch_at/token em `agent_runs`, mas o model
+    AgentRun nunca foi atualizado — ler `run.dispatch_state` pelo ORM levantava
+    AttributeError e derrubava toda rota que serializasse uma run.
+
+    Os testes de serviço não pegam isso: eles usam Mock e SimpleNamespace, que
+    aceitam qualquer atributo. Só olhando o model de verdade é que aparece.
+    """
+
+    def test_agent_run_declara_as_colunas_de_despacho(self):
+        from app.models.handoff import AgentRun
+
+        colunas = {c.name for c in AgentRun.__table__.columns}
+
+        for nome in (
+            "dispatch_state",
+            "dispatch_attempts",
+            "last_dispatch_at",
+            "dispatch_token",
+        ):
+            self.assertIn(nome, colunas, f"{nome} existe no banco e não no ORM")
+
+    def test_instancia_real_nao_estoura_no_acesso(self):
+        from app.models.handoff import AgentRun
+
+        run = AgentRun()
+
+        # Antes do INSERT o valor é None (o default é server_default). O que não
+        # pode acontecer é AttributeError — que foi exatamente o 500.
+        self.assertIsNone(run.dispatch_state)
+        self.assertIsNone(run.dispatch_attempts)
+
+    def test_build_job_declara_o_que_o_servico_escreve(self):
+        from app.models.handoff import AgentBuildJob
+
+        colunas = {c.name for c in AgentBuildJob.__table__.columns}
+
+        for nome in (
+            "run_id", "runtime_id", "model", "state", "attempt",
+            "prompt_sha256", "error", "payload", "started_at", "finished_at",
+        ):
+            self.assertIn(nome, colunas)
+
+
 class Fingerprint(unittest.TestCase):
     def test_mesmo_prompt_mesma_impressao(self):
         self.assertEqual(
