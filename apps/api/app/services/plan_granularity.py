@@ -46,6 +46,11 @@ def _scope_items(scope: str | None) -> list[str]:
     return inline if len(inline) > 1 else []
 
 
+def _normalizar_titulo(valor) -> str:
+    """Título comparável: espaços colapsados e caixa neutra."""
+    return " ".join(str(valor or "").split()).casefold()
+
+
 def assess(plan, subtasks=None) -> dict:
     """Diz se o plano está grande demais e por quê, sem alterar nada."""
     subtasks = list(subtasks or [])
@@ -83,14 +88,54 @@ def assess(plan, subtasks=None) -> dict:
         )
 
     oversized = bool(signals)
+    fatias = suggest_slices(plan) if oversized else []
+
+    # Contar subtask não basta. Uma subtask antiga, única e sem relação com as
+    # fatias derivadas satisfazia o gate — era `bool(subtasks)`, e uma revisão
+    # independente (Codex, 2026-09-09) mostrou que isso deixa passar
+    # exatamente o trabalho monolítico que o gate existe para barrar.
+    #
+    # Agora vale correspondência: só conta a subtask cujo título bate com uma
+    # das fatias derivadas do próprio plano. `decompose_plan` materializa essas
+    # fatias com esse título, então o gate é sempre satisfazível pela
+    # ferramenta oficial — e continua contornável por `force=true`, que é
+    # decisão explícita e auditável do operador.
+    titulos_de_fatia = {_normalizar_titulo(f["title"]) for f in fatias}
+    correspondentes = [
+        subtask
+        for subtask in subtasks
+        if _normalizar_titulo(getattr(subtask, "title", None))
+        in titulos_de_fatia
+    ]
+
+    # Uma unidade por fatia derivada, nunca menos que o mínimo.
+    exigidas = max(MIN_SLICES_WHEN_OVERSIZED, len(fatias)) if oversized else 0
+
+    if oversized:
+        decomposto = len(correspondentes) >= exigidas
+    else:
+        # Nada a corresponder: plano já é uma unidade auditável.
+        decomposto = bool(subtasks)
+
+    cobertos = {
+        _normalizar_titulo(getattr(subtask, "title", None))
+        for subtask in correspondentes
+    }
 
     return {
         "oversized": oversized,
         "signals": signals,
         "subtask_count": len(subtasks),
-        "decomposed": bool(subtasks),
-        "suggested_slices": suggest_slices(plan) if oversized else [],
-        "requires_decomposition": oversized and not subtasks,
+        "matching_subtask_count": len(correspondentes),
+        "required_slices": exigidas,
+        "missing_slices": [
+            fatia["title"]
+            for fatia in fatias
+            if _normalizar_titulo(fatia["title"]) not in cobertos
+        ],
+        "decomposed": decomposto,
+        "suggested_slices": fatias,
+        "requires_decomposition": oversized and not decomposto,
     }
 
 

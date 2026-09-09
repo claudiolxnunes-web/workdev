@@ -229,6 +229,54 @@ class RuntimeHealthTest(unittest.TestCase):
         self.assertEqual(health.status, agent_runtimes.STATUS_DEGRADED)
         self.assertIn("qwen2.5-coder:7b", health.reason)
 
+    def test_degraded_runtime_is_not_dispatchable(self):
+        """Achado 4: `degraded` era despachável.
+
+        O endpoint responde, mas o modelo configurado não está carregado —
+        despachar entregaria a inferência a outro modelo, em silêncio.
+        """
+        with patch(
+            "app.services.agent_runtimes._fetch_tags",
+            new=AsyncMock(return_value=_tags("llama3:8b")),
+        ):
+            health = self._check(
+                "local-code",
+                {"WORKDEV_OLLAMA_LOCAL_MODEL": "qwen2.5-coder:7b"},
+            )
+
+        self.assertEqual(health.status, agent_runtimes.STATUS_DEGRADED)
+        self.assertFalse(health.as_dict()["dispatchable"])
+        self.assertNotIn(
+            agent_runtimes.STATUS_DEGRADED,
+            agent_runtimes.DISPATCHABLE_STATUSES,
+        )
+
+    def test_runtime_without_model_reports_unconfigured(self):
+        """Achado 4, o caminho pior.
+
+        Sem `*_MODEL` e sem `default_model`, `model_for()` devolvia `None`, o
+        teste de `degraded` era pulado e o runtime virava `online`: a run era
+        criada e só o `dispatch()` estourava `model_not_configured`, com a run
+        já parada na fila. O erro tem que aparecer no envio.
+        """
+        runtime = agent_runtimes.get_runtime("gpu-hostinger")
+
+        with patch(
+            "app.services.agent_runtimes._fetch_tags",
+            new=AsyncMock(return_value=_tags("llama3:8b")),
+        ):
+            health = self._check(
+                "gpu-hostinger",
+                {
+                    runtime.base_url_env: "http://gpu.exemplo:11434",
+                    runtime.model_env: "",
+                },
+            )
+
+        self.assertEqual(health.status, agent_runtimes.STATUS_UNCONFIGURED)
+        self.assertFalse(health.as_dict()["dispatchable"])
+        self.assertIn(runtime.model_env, health.reason)
+
     def test_probe_uses_bearer_token_without_exposing_it(self):
         with patch(
             "app.services.agent_runtimes._fetch_tags",

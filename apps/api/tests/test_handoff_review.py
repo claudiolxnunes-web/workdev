@@ -15,7 +15,10 @@ import pydantic
 
 from app.models.handoff import AgentRun, AgentRunReview
 from app.schemas.handoff import BuildRequest
+from app.services.agent_runtimes import OLLAMA_AGENT_IDS
 from app.services.handoff import (
+    AGENTS_WITH_REVIEW_CHANNEL,
+    CLI_AGENTS,
     RUN_TRANSITIONS,
     HandoffError,
     queue_build,
@@ -107,6 +110,47 @@ class ReviewPairValidationTest(unittest.TestCase):
 
     def test_distinct_pair_is_accepted(self):
         self.assertEqual(validate_review_pair("claude", "codex"), "codex")
+
+    def test_reviewer_without_review_channel_is_rejected(self):
+        """Achado 3: runtime Ollama era aceito como revisor.
+
+        Não é preferência de qualidade — é ausência de capacidade. Ninguém
+        dispara `POST /runs/{id}/reviews` para essas identidades, então a run
+        ficaria parada em `review` para sempre.
+        """
+        for runtime_id in ("local-code", "gpu-hostinger", "gpu-runpod"):
+            with self.subTest(reviewer=runtime_id):
+                with self.assertRaises(HandoffError) as ctx:
+                    validate_review_pair("claude", runtime_id)
+
+                self.assertEqual(
+                    ctx.exception.code,
+                    "reviewer_has_no_review_channel",
+                )
+                self.assertIn("canal de veredito", str(ctx.exception))
+                self.assertIn("parada em review", str(ctx.exception))
+
+    def test_ollama_runtime_remains_valid_as_executor(self):
+        """A restrição é só do papel de revisor, não da identidade."""
+        self.assertEqual(
+            validate_review_pair("local-code", "codex"),
+            "codex",
+        )
+
+    def test_every_cli_agent_has_a_review_channel(self):
+        """qwen incluído: tem sessão tmux e CLI de veredito.
+
+        Posicioná-lo como executor é decisão de UI do operador; o backend não
+        remove a capacidade que ele de fato tem.
+        """
+        self.assertEqual(AGENTS_WITH_REVIEW_CHANNEL, frozenset(CLI_AGENTS))
+        self.assertIn("qwen", AGENTS_WITH_REVIEW_CHANNEL)
+
+    def test_no_ollama_runtime_has_a_review_channel(self):
+        self.assertEqual(
+            AGENTS_WITH_REVIEW_CHANNEL & set(OLLAMA_AGENT_IDS),
+            frozenset(),
+        )
 
 
 class BuildRequestReviewerTest(unittest.TestCase):

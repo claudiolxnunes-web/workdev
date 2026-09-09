@@ -39,6 +39,21 @@ CLI_AGENTS = {
 # modelo carregado; ficam fora do AUTO até haver benchmark.
 SUPPORTED_AGENTS = CLI_AGENTS | set(OLLAMA_AGENT_IDS)
 
+# Quem CONSEGUE emitir veredito — capacidade implementada, não preferência de
+# qualidade. Hoje são os agentes CLI: todos têm sessão tmux e a CLI
+# `workdev_agent.py verdict`, que é o único caminho até
+# `POST /runs/{id}/reviews`.
+#
+# A distinção é deliberada e não deve virar hierarquia. A escolha de executor e
+# revisor é sempre do operador; a UI ordena e recomenda, nunca proíbe por gosto.
+# O que este conjunto barra é outra coisa: escolher como revisor uma identidade
+# sem canal de veredito não produz revisão pior — produz uma run parada em
+# `review` para sempre, porque ninguém dispara o veredito. Isso é defeito.
+#
+# Para habilitar runtime Ollama como revisor não há regra a derrubar aqui: falta
+# implementar o canal (fatia opcional B de docs/plano-correcao-ollama.md).
+AGENTS_WITH_REVIEW_CHANNEL = frozenset(CLI_AGENTS)
+
 SUPPORTED_ROUTING_MODES = {"manual", "auto"}
 COMPLEXITY_LEVELS = {"low", "medium", "high", "critical"}
 
@@ -59,7 +74,17 @@ REVIEW_VERDICTS = {"approved", "rejected"}
 
 
 class HandoffError(RuntimeError):
-    pass
+    """Erro de contrato do handoff.
+
+    `code` é opcional e existe para o chamador distinguir a causa sem depender
+    do texto da mensagem, que é escrito para humanos e muda. As rotas continuam
+    devolvendo só a mensagem no corpo HTTP — o código é contrato interno e de
+    teste, não uma mudança na resposta da API.
+    """
+
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 class AutoRuntimeConfig(BaseModel):
@@ -135,7 +160,22 @@ def validate_review_pair(executor: str, reviewer: str | None) -> str:
 
     if reviewer not in SUPPORTED_AGENTS:
         raise HandoffError(
-            "Revisor inválido; escolha um dos agentes suportados"
+            "Revisor inválido; escolha um dos agentes suportados",
+            "reviewer_not_supported",
+        )
+
+    # Barra por capacidade ausente, não por preferência: sem canal de veredito
+    # ninguém dispara POST /runs/{id}/reviews e a run fica parada em `review`
+    # para sempre. A mensagem diz o motivo técnico de propósito — o operador
+    # continua dono da escolha, e precisa saber que esta não é uma opção pior,
+    # é uma opção que trava.
+    if reviewer not in AGENTS_WITH_REVIEW_CHANNEL:
+        raise HandoffError(
+            f"'{reviewer}' não tem canal de veredito implementado; a run "
+            "ficaria parada em review para sempre. Escolha um agente com CLI "
+            "e sessão tmux: "
+            + ", ".join(sorted(AGENTS_WITH_REVIEW_CHANNEL)),
+            "reviewer_has_no_review_channel",
         )
 
     if reviewer == executor:
@@ -290,7 +330,11 @@ def approve_plan(
             sinais = "; ".join(granularidade["signals"])
             raise HandoffError(
                 f"Plano grande demais para uma execução só ({sinais}). "
-                "Decomponha em fatias auditáveis antes de aprovar — use "
+                f"São exigidas {granularidade['required_slices']} fatias "
+                f"auditáveis e há {granularidade['matching_subtask_count']} "
+                f"subtask(s) correspondendo às fatias deste plano "
+                f"(de {granularidade['subtask_count']} no total). "
+                "Decomponha antes de aprovar — use "
                 f"POST /api/handoffs/plans/{plan.id}/decompose ou aprove com "
                 "force=true assumindo a exceção."
             )

@@ -340,6 +340,61 @@ describe("PlanningPanel", () => {
     })
   })
 
+  it("desabilita runtime Ollama como revisor mostrando o motivo", async () => {
+    // Achado 3: o seletor de revisor usava a mesma lista do executor, e
+    // escolher um runtime Ollama travava a run em `review` para sempre.
+    // A opção fica visível e desabilitada — sumir sem explicação esconderia
+    // o motivo de quem precisa entender a escolha.
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    getAgentRuntimes.mockResolvedValue([runtime()])
+    renderPanel()
+
+    const revisor = await screen.findByLabelText("Revisor independente")
+    await waitFor(() => {
+      const opcao = Array.from(revisor.querySelectorAll("option"))
+        .find((o) => o.value === "local-code")
+      expect(opcao).toBeDefined()
+      expect(opcao?.disabled).toBe(true)
+      expect(opcao?.textContent).toContain("sem canal de veredito")
+    })
+  })
+
+  it("ordena os revisores recomendados primeiro sem esconder os demais", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    renderPanel()
+
+    const revisor = await screen.findByLabelText("Revisor independente")
+    const opcoes = Array.from(revisor.querySelectorAll("option"))
+      .filter((o) => o.value !== "")
+
+    expect(opcoes.slice(0, 4).map((o) => o.value))
+      .toEqual(["claude", "codex", "gemini", "kimi"])
+    for (const opcao of opcoes.slice(0, 4)) {
+      expect(opcao.textContent).toContain("recomendado")
+    }
+
+    // qwen é posicionado como executor, mas continua elegível como revisor:
+    // recomendação é dica visual, nunca filtro.
+    const qwen = opcoes.find((o) => o.value === "qwen")
+    expect(qwen?.disabled).toBe(false)
+    expect(qwen?.textContent).not.toContain("recomendado")
+  })
+
+  it("rotula runtime Ollama como assessor no seletor de executor", async () => {
+    // Enquanto o worker da fatia 3 não existe, esses runtimes devolvem texto:
+    // não editam arquivo nem rodam gate. O rótulo não pode prometer mais.
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    getAgentRuntimes.mockResolvedValue([runtime()])
+    renderPanel()
+
+    const executor = await screen.findByLabelText("Executor")
+    await waitFor(() => {
+      const opcao = Array.from(executor.querySelectorAll("option"))
+        .find((o) => o.value === "local-code")
+      expect(opcao?.textContent).toContain("assessor (não edita arquivos)")
+    })
+  })
+
   it("mantém a aba utilizável quando a recomendação falha", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     getPlanRecommendation.mockRejectedValue(new Error("indisponível"))

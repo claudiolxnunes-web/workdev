@@ -17,6 +17,21 @@ export type AgentName = CliAgentName | RuntimeAgentName
 export const CLI_AGENTS: CliAgentName[] = ["codex", "claude", "kimi", "qwen", "gemini"]
 export const RUNTIME_AGENTS: RuntimeAgentName[] = ["local-code", "gpu-hostinger", "gpu-runpod"]
 
+/**
+ * Quem CONSEGUE emitir veredito. Espelha `AGENTS_WITH_REVIEW_CHANNEL` do
+ * backend (`app/services/handoff.py`): capacidade implementada, não hierarquia
+ * de qualidade. Só estes têm sessão tmux e a CLI `workdev_agent.py verdict`.
+ */
+export const AGENTS_WITH_REVIEW_CHANNEL: CliAgentName[] = [...CLI_AGENTS]
+
+/**
+ * Ordem de sugestão no seletor de revisor — dica visual, nunca filtro. A
+ * escolha do executor e do revisor é sempre do operador, em todo envio.
+ * `qwen` fica de fora por decisão dele (2026-09-09): é posicionado como
+ * executor. Continua habilitado como revisor, só sem destaque.
+ */
+export const RECOMMENDED_REVIEWERS: CliAgentName[] = ["claude", "codex", "gemini", "kimi"]
+
 export const agentLabels: Record<AgentName, string> = {
   claude: "Claude Code",
   codex: "Codex",

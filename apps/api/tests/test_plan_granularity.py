@@ -36,6 +36,17 @@ ESCOPO_GRANDE = (
 )
 
 
+def _subtasks_das_fatias(plan, quantidade=None):
+    """Subtasks como `decompose_plan` as materializa: título = título da fatia.
+
+    É o que o gate passa a exigir — correspondência, não contagem solta.
+    """
+    fatias = plan_granularity.suggest_slices(plan)
+    if quantidade is not None:
+        fatias = fatias[:quantidade]
+    return [SimpleNamespace(title=fatia["title"]) for fatia in fatias]
+
+
 class AssessmentTest(unittest.TestCase):
     def test_small_plan_is_not_flagged(self):
         resultado = plan_granularity.assess(_plan(), [])
@@ -64,14 +75,64 @@ class AssessmentTest(unittest.TestCase):
         )
 
     def test_already_decomposed_plan_does_not_require_decomposition(self):
+        plan = _plan(scope=ESCOPO_GRANDE)
+
+        resultado = plan_granularity.assess(plan, _subtasks_das_fatias(plan))
+
+        self.assertTrue(resultado["oversized"])
+        self.assertFalse(resultado["requires_decomposition"])
+        self.assertEqual(resultado["subtask_count"], 4)
+        self.assertEqual(resultado["matching_subtask_count"], 4)
+        self.assertEqual(resultado["missing_slices"], [])
+
+    def test_unrelated_subtask_does_not_satisfy_the_gate(self):
+        """Regressão do achado 10 (revisão independente do Codex, 2026-09-09).
+
+        `decomposed` era `bool(subtasks)`: uma subtask antiga, única e sem
+        relação com as fatias derrubava o bloqueio de um plano de 4 frentes.
+        """
         resultado = plan_granularity.assess(
             _plan(scope=ESCOPO_GRANDE),
             [SimpleNamespace(title="fatia 1"), SimpleNamespace(title="fatia 2")],
         )
 
         self.assertTrue(resultado["oversized"])
-        self.assertFalse(resultado["requires_decomposition"])
+        self.assertTrue(resultado["requires_decomposition"])
         self.assertEqual(resultado["subtask_count"], 2)
+        self.assertEqual(resultado["matching_subtask_count"], 0)
+        self.assertEqual(resultado["required_slices"], 4)
+        self.assertEqual(len(resultado["missing_slices"]), 4)
+
+    def test_partial_decomposition_still_requires_the_missing_slices(self):
+        plan = _plan(scope=ESCOPO_GRANDE)
+
+        resultado = plan_granularity.assess(
+            plan,
+            _subtasks_das_fatias(plan, quantidade=2),
+        )
+
+        self.assertTrue(resultado["requires_decomposition"])
+        self.assertEqual(resultado["matching_subtask_count"], 2)
+        self.assertEqual(resultado["required_slices"], 4)
+        self.assertIn(
+            "Histórico cumulativo de revisão.",
+            resultado["missing_slices"],
+        )
+
+    def test_matching_is_insensitive_to_case_and_spacing(self):
+        plan = _plan(scope=ESCOPO_GRANDE)
+        fatias = plan_granularity.suggest_slices(plan)
+
+        resultado = plan_granularity.assess(
+            plan,
+            [
+                SimpleNamespace(title=f"  {fatia['title'].upper()}  ")
+                for fatia in fatias
+            ],
+        )
+
+        self.assertFalse(resultado["requires_decomposition"])
+        self.assertEqual(resultado["matching_subtask_count"], 4)
 
     def test_suggested_slices_keep_one_objective_each(self):
         fatias = plan_granularity.suggest_slices(_plan(scope=ESCOPO_GRANDE))
@@ -122,11 +183,31 @@ class ApprovalGateTest(unittest.TestCase):
 
         with patch(
             "app.services.handoff.load_subtasks",
-            return_value=[SimpleNamespace(title="fatia 1")],
+            return_value=_subtasks_das_fatias(plan),
         ):
             approve_plan(self._db(), plan)
 
         self.assertEqual(plan.status, "approved")
+
+    def test_one_unrelated_subtask_does_not_unlock_approval(self):
+        """Regressão do achado 10 no ponto onde ele custava caro: a aprovação.
+
+        Uma subtask solta liberava um plano de 4 frentes para o Build.
+        """
+        plan = _plan(scope=ESCOPO_GRANDE)
+
+        with (
+            patch(
+                "app.services.handoff.load_subtasks",
+                return_value=[SimpleNamespace(title="fatia 1")],
+            ),
+            self.assertRaises(HandoffError) as ctx,
+        ):
+            approve_plan(self._db(), plan)
+
+        self.assertIn("4 fatias", str(ctx.exception))
+        self.assertIn("0 subtask(s)", str(ctx.exception))
+        self.assertEqual(plan.status, "draft")
 
     def test_operator_can_take_the_exception_explicitly(self):
         plan = _plan(scope=ESCOPO_GRANDE)

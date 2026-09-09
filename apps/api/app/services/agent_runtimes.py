@@ -240,7 +240,11 @@ STATUS_OFFLINE = "offline"
 STATUS_UNCONFIGURED = "unconfigured"
 STATUS_DEGRADED = "degraded"
 
-DISPATCHABLE_STATUSES = {STATUS_ONLINE, STATUS_DEGRADED}
+# Só `online` despacha. `degraded` significa que o endpoint responde mas o
+# modelo esperado não está carregado — despachar assim entrega a inferência a
+# um modelo que não é o configurado, silenciosamente. Ficar de fora é a
+# diferença entre "não deu" e "deu, com outro modelo".
+DISPATCHABLE_STATUSES = {STATUS_ONLINE}
 
 STATUS_LABEL = {
     STATUS_ONLINE: "Online",
@@ -355,7 +359,22 @@ async def check_runtime(runtime: OllamaRuntime) -> RuntimeHealth:
 
     expected = model_for(runtime)
 
-    if expected and expected not in models:
+    # Sem modelo resolvido o runtime NÃO é `online`. Antes, `expected=None`
+    # pulava o teste abaixo e caía direto em `online`: `ensure_dispatchable`
+    # liberava, a run era criada, e só o `dispatch()` estourava
+    # `model_not_configured` — com a run já parada na fila. O erro precisa
+    # aparecer no envio, não depois.
+    if not expected:
+        return RuntimeHealth(
+            runtime_id=runtime.id,
+            status=STATUS_UNCONFIGURED,
+            reason=f"{runtime.model_env} não configurada e sem default_model",
+            models=models,
+            checked_at=_now_iso(),
+            latency_ms=latency_ms,
+        )
+
+    if expected not in models:
         return RuntimeHealth(
             runtime_id=runtime.id,
             status=STATUS_DEGRADED,

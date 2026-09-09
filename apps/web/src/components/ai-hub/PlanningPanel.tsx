@@ -3,6 +3,7 @@ import { Link } from "react-router-dom"
 import {
   agentLabels, approvePlan, getAgentRuntimes, getPlanRecommendation, getPlans,
   sendToBuild, subscribeToHandoffs, updatePlan, CLI_AGENTS, HandoffApiError,
+  RECOMMENDED_REVIEWERS,
   type AgentName, type AgentRuntime, type ExecutionPlan,
   type PlanRecommendation,
 } from "@/services/handoff.service"
@@ -33,21 +34,52 @@ type RolePair = { executor?: AgentName; reviewer?: AgentName }
 type AgentChoice = { name: AgentName; label: string; disabled: boolean; hint: string }
 
 /**
- * Opções de agente para executor e revisor. Agentes com CLI própria estão
- * sempre disponíveis; runtimes Ollama só quando o backend os reporta
- * despacháveis — endpoint offline não vira opção de envio.
+ * Opções de EXECUTOR. Agentes com CLI própria estão sempre disponíveis;
+ * runtimes Ollama só quando o backend os reporta despacháveis — endpoint
+ * offline não vira opção de envio.
+ *
+ * O rótulo diz "assessor" de propósito: hoje esses runtimes devolvem texto,
+ * não editam arquivo nem rodam gate. O worker que aplica a proposta é a fatia
+ * 3 do plano de correção; até ele existir, chamá-los de executor no seletor é
+ * prometer na UI o que o código não faz.
  */
-function agentChoices(runtimes: AgentRuntime[]): AgentChoice[] {
+function executorChoices(runtimes: AgentRuntime[]): AgentChoice[] {
   const cli: AgentChoice[] = CLI_AGENTS.map((name) => ({
     name, label: agentLabel[name], disabled: false, hint: "",
   }))
   const locais: AgentChoice[] = runtimes.map((runtime) => ({
     name: runtime.id,
-    label: `${runtime.label} · ${runtime.status_label}`,
+    label: `${runtime.label} · assessor (não edita arquivos) · ${runtime.status_label}`,
     disabled: !runtime.dispatchable,
     hint: runtime.reason ?? "",
   }))
   return [...cli, ...locais]
+}
+
+/**
+ * Opções de REVISOR. Os recomendados vêm primeiro e marcados; os demais
+ * agentes CLI seguem habilitados, só sem destaque — recomendação é dica
+ * visual, nunca filtro.
+ *
+ * Runtimes Ollama aparecem DESABILITADOS com o motivo à vista, em vez de
+ * sumirem sem explicação: escolhê-los não daria uma revisão pior, daria uma
+ * run parada em `review` para sempre, porque não existe canal de veredito
+ * para essas identidades.
+ */
+function reviewerChoices(runtimes: AgentRuntime[]): AgentChoice[] {
+  const recomendados: AgentChoice[] = RECOMMENDED_REVIEWERS.map((name) => ({
+    name, label: `${agentLabel[name]} · recomendado`, disabled: false, hint: "",
+  }))
+  const demais: AgentChoice[] = CLI_AGENTS
+    .filter((name) => !RECOMMENDED_REVIEWERS.includes(name))
+    .map((name) => ({ name, label: agentLabel[name], disabled: false, hint: "" }))
+  const semCanal: AgentChoice[] = runtimes.map((runtime) => ({
+    name: runtime.id,
+    label: runtime.label,
+    disabled: true,
+    hint: "sem canal de veredito; a run ficaria parada em revisão",
+  }))
+  return [...recomendados, ...demais, ...semCanal]
 }
 
 function RoleSelect({
@@ -182,7 +214,8 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const requestedRecommendations = useRef<Set<string>>(new Set())
 
-  const choices = agentChoices(runtimes)
+  const executores = executorChoices(runtimes)
+  const revisores = reviewerChoices(runtimes)
 
   function setRole(planId: string, field: keyof RolePair, agent: AgentName) {
     setRoles((current) => ({
@@ -399,7 +432,7 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
                       id={`executor-${plan.id}`}
                       titulo="Executor"
                       valor={roles[plan.id]?.executor}
-                      choices={choices}
+                      choices={executores}
                       disabled={busy === plan.id}
                       onChange={(agent) => setRole(plan.id, "executor", agent)}
                     />
@@ -407,7 +440,7 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
                       id={`revisor-${plan.id}`}
                       titulo="Revisor independente"
                       valor={roles[plan.id]?.reviewer}
-                      choices={choices}
+                      choices={revisores}
                       disabled={busy === plan.id}
                       onChange={(agent) => setRole(plan.id, "reviewer", agent)}
                     />
