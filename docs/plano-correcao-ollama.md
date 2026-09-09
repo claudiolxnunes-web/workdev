@@ -1,7 +1,7 @@
 # Plano de correção — integração Ollama (revisão independente)
 
-**Status: APROVADO em 2026-09-09 — ADR 005 aceito, migrações liberadas.
-Nenhuma fatia de código implementada ainda.**
+**Status: APROVADO em 2026-09-09 — ADR 005 aceito, as 3 migrações aplicadas em
+produção. Nenhuma fatia de código implementada ainda.**
 Base: `f54c9b8` (develop). Commits revisados: `38c944d`, `5a8615a`, `bef40b8`,
 `61d459c`, `20f0714`.
 
