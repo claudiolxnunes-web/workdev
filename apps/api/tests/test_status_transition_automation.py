@@ -123,7 +123,7 @@ class StatusTransitionAutomationTest(unittest.TestCase):
 
     def test_update_run_completed_sets_task_done_and_promotes_if_no_deploy_required(self):
         db = Mock()
-        run = SimpleNamespace(id=uuid4(), backlog_id=uuid4(), status="running", agent="gemini")
+        run = SimpleNamespace(id=uuid4(), backlog_id=uuid4(), status="review", agent="gemini")
         task = SimpleNamespace(id=run.backlog_id, status="doing")
         db.query.return_value.filter.return_value.first.return_value = task
 
@@ -140,7 +140,7 @@ class StatusTransitionAutomationTest(unittest.TestCase):
 
     def test_update_run_completed_keeps_task_doing_if_deploy_required(self):
         db = Mock()
-        run = SimpleNamespace(id=uuid4(), backlog_id=uuid4(), status="running", agent="gemini")
+        run = SimpleNamespace(id=uuid4(), backlog_id=uuid4(), status="review", agent="gemini")
         task = SimpleNamespace(id=run.backlog_id, status="doing")
         db.query.return_value.filter.return_value.first.return_value = task
 

@@ -318,7 +318,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
     @patch("app.routers.handoffs.graph_sync.sync_safely")
     @patch("app.routers.handoffs.start_agent_runtime")
     @patch("app.routers.handoffs.SessionLocal")
-    def test_auto_runtime_completes_successful_headless_run(
+    def test_auto_runtime_hands_successful_headless_run_to_review(
         self, session_local, start_runtime, _sync, _finalize,
     ):
         db = Mock()
@@ -363,7 +363,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
 
         self.assertEqual(
             [call.args[2]["status"] for call in update_mock.call_args_list],
-            ["running", "completed"],
+            ["running", "review"],
         )
         start_runtime.assert_called_once_with(
             "gemini", "prompt", model="gemini-2.5-flash", run_id="run-1",

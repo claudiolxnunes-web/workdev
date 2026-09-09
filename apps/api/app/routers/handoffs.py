@@ -17,6 +17,7 @@ from app.schemas.handoff import (
     PlanCreate,
     PlanUpdate,
     RunEventCreate,
+    RunReviewCreate,
     RunTransfer,
     RunUpdate,
     SubtaskProgress,
@@ -28,8 +29,10 @@ from app.services.handoff import (
     approve_plan,
     build_context,
     create_plan,
+    load_reviews,
     load_subtasks,
     queue_build,
+    record_review,
     transfer_run,
     update_plan,
     update_run,
@@ -409,14 +412,19 @@ def _run_auto_agent(
 
             # Decidir status baseado no gate
             if gate_evidence.passed:
-                # Gate PASS: pode completar
+                # Gate PASS: entrega ao revisor independente. Execução técnica
+                # terminada nunca é conclusão — quem conclui é a revisão.
+                reviewer = getattr(run, "reviewer_agent", None)
                 run, event = update_run(
                     db,
                     run,
                     {
-                        "status": "completed",
-                        "result": f"{agent} headless encerrou com sucesso",
-                        "message": "Runtime AUTO concluiu; sessão encerrada e agente em standby",
+                        "status": "review",
+                        "summary": f"{agent} headless encerrou com sucesso",
+                        "message": (
+                            "Runtime AUTO concluiu a execução; aguardando "
+                            f"revisão de {reviewer or 'revisor designado'}"
+                        ),
                     },
                 )
                 finalize_auto_runtime(agent, run_id)
@@ -1053,6 +1061,79 @@ def transfer_agent_run(
         db,
         new_run,
     )
+
+
+def _review_out(review) -> dict:
+    return {
+        "id": review.id,
+        "run_id": review.run_id,
+        "attempt": review.attempt,
+        "executor_agent": review.executor_agent,
+        "reviewer_agent": review.reviewer_agent,
+        "verdict": review.verdict,
+        "feedback": review.feedback,
+        "gate_passed": review.gate_passed,
+        "created_at": review.created_at,
+    }
+
+
+@router.get("/runs/{run_id}/reviews")
+def list_run_reviews(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Trilha cumulativa: toda rodada de revisão fica, mesmo as rejeitadas."""
+    run = _get_run(db, run_id)
+
+    return {
+        "run_id": run.id,
+        "executor_agent": run.agent,
+        "reviewer_agent": run.reviewer_agent,
+        "review_attempts": run.review_attempts or 0,
+        "reviews": [
+            _review_out(review)
+            for review in load_reviews(db, run.id)
+        ],
+    }
+
+
+@router.post(
+    "/runs/{run_id}/reviews",
+    status_code=201,
+)
+def create_run_review(
+    run_id: UUID,
+    payload: RunReviewCreate,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Veredito do revisor independente sobre uma execução em revisão."""
+    run = _get_run(db, run_id)
+
+    try:
+        run, review = record_review(
+            db,
+            run,
+            payload.reviewer,
+            payload.verdict,
+            payload.feedback,
+        )
+    except HandoffError as error:
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+    _sync_run(
+        background,
+        db,
+        run,
+    )
+
+    return {
+        "review": _review_out(review),
+        "run": _run_out(db, run),
+    }
 
 
 @router.post(

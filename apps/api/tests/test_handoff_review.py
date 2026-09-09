@@ -2,6 +2,7 @@
 
 Fatia 1 — modelagem dos papéis executor/revisor e da trilha de revisões.
 Fatia 2 — validação executor != revisor no envio ao Build.
+Fatia 3 — histórico cumulativo e ciclo BUILD → REVIEW → correção → DONE.
 """
 
 import unittest
@@ -14,8 +15,10 @@ import pydantic
 from app.models.handoff import AgentRun, AgentRunReview
 from app.schemas.handoff import BuildRequest
 from app.services.handoff import (
+    RUN_TRANSITIONS,
     HandoffError,
     queue_build,
+    record_review,
     transfer_run,
     validate_review_pair,
 )
@@ -212,6 +215,163 @@ class TransferPreservesReviewerTest(unittest.TestCase):
             transfer_run(Mock(), run, "codex", "sem cota")
 
         self.assertIn("revisor", str(ctx.exception))
+
+
+class ReviewIsMandatoryBeforeDoneTest(unittest.TestCase):
+    def test_running_cannot_jump_straight_to_completed(self):
+        self.assertNotIn("completed", RUN_TRANSITIONS["running"])
+        self.assertIn("review", RUN_TRANSITIONS["running"])
+
+    def test_completed_is_only_reachable_from_review(self):
+        origens = {
+            origem
+            for origem, destinos in RUN_TRANSITIONS.items()
+            if "completed" in destinos
+        }
+        self.assertEqual(origens, {"review"})
+
+    def test_review_can_send_the_run_back_to_the_executor(self):
+        self.assertIn("running", RUN_TRANSITIONS["review"])
+
+
+class _ReviewRun(SimpleNamespace):
+    """Run em revisão, com os campos que record_review toca."""
+
+    def __init__(self, **overrides):
+        base = {
+            "id": uuid4(),
+            "backlog_id": uuid4(),
+            "agent": "claude",
+            "reviewer_agent": "codex",
+            "status": "review",
+            "review_attempts": 0,
+            "result": None,
+        }
+        base.update(overrides)
+        super().__init__(**base)
+
+
+class RecordReviewTest(unittest.TestCase):
+    def setUp(self):
+        self.db = Mock()
+        self.added = []
+        self.db.add.side_effect = self.added.append
+
+    def _transition(self, _db, run, data):
+        run.status = data["status"]
+        return run, SimpleNamespace(id=f"event-{data['status']}")
+
+    def test_rejection_returns_the_run_to_the_executor_with_feedback(self):
+        run = _ReviewRun()
+
+        with patch(
+            "app.services.handoff.update_run",
+            side_effect=self._transition,
+        ):
+            updated, review = record_review(
+                self.db,
+                run,
+                "codex",
+                "rejected",
+                "Faltou teste do caso de timeout",
+            )
+
+        self.assertEqual(updated.status, "running")
+        self.assertEqual(review.verdict, "rejected")
+        self.assertEqual(review.attempt, 1)
+        self.assertEqual(review.executor_agent, "claude")
+        self.assertEqual(review.reviewer_agent, "codex")
+        self.assertEqual(review.feedback, "Faltou teste do caso de timeout")
+        self.assertEqual(run.review_attempts, 1)
+
+    def test_rejection_without_feedback_is_refused(self):
+        with self.assertRaises(HandoffError) as ctx:
+            record_review(self.db, _ReviewRun(), "codex", "rejected", "   ")
+        self.assertIn("feedback", str(ctx.exception))
+
+    def test_two_rejections_accumulate_instead_of_overwriting(self):
+        run = _ReviewRun()
+
+        with patch(
+            "app.services.handoff.update_run",
+            side_effect=self._transition,
+        ):
+            record_review(self.db, run, "codex", "rejected", "primeira volta")
+            run.status = "review"
+            record_review(self.db, run, "codex", "rejected", "segunda volta")
+
+        registros = [
+            item for item in self.added if isinstance(item, AgentRunReview)
+        ]
+        self.assertEqual([item.attempt for item in registros], [1, 2])
+        self.assertEqual(
+            [item.feedback for item in registros],
+            ["primeira volta", "segunda volta"],
+        )
+        self.assertEqual(run.review_attempts, 2)
+
+    def test_approval_completes_the_run_when_the_gate_passes(self):
+        run = _ReviewRun()
+
+        with (
+            patch(
+                "app.services.test_gate.validate_run_for_status_change",
+                return_value=(True, "Gate aprovado"),
+            ),
+            patch(
+                "app.services.handoff.update_run",
+                side_effect=self._transition,
+            ),
+        ):
+            updated, review = record_review(self.db, run, "codex", "approved")
+
+        self.assertEqual(updated.status, "completed")
+        self.assertEqual(review.verdict, "approved")
+        self.assertTrue(review.gate_passed)
+
+    def test_reviewer_opinion_does_not_override_objective_gate(self):
+        run = _ReviewRun()
+
+        with (
+            patch(
+                "app.services.test_gate.validate_run_for_status_change",
+                return_value=(False, "pytest falhou"),
+            ),
+            patch("app.services.handoff.update_run") as update_mock,
+            self.assertRaises(HandoffError) as ctx,
+        ):
+            record_review(self.db, run, "codex", "approved")
+
+        self.assertIn("Gate objetivo reprovado", str(ctx.exception))
+        update_mock.assert_not_called()
+        self.assertEqual(run.status, "review")
+        self.assertEqual(run.review_attempts, 0)
+        self.assertEqual(
+            [item for item in self.added if isinstance(item, AgentRunReview)],
+            [],
+        )
+
+    def test_executor_cannot_review_its_own_run(self):
+        with self.assertRaises(HandoffError):
+            record_review(self.db, _ReviewRun(), "claude", "approved")
+
+    def test_other_agent_cannot_hijack_the_designated_review(self):
+        with self.assertRaises(HandoffError) as ctx:
+            record_review(self.db, _ReviewRun(), "kimi", "approved")
+        self.assertIn("troque o revisor", str(ctx.exception))
+
+    def test_run_outside_review_cannot_be_reviewed(self):
+        with self.assertRaises(HandoffError):
+            record_review(
+                self.db,
+                _ReviewRun(status="running"),
+                "codex",
+                "approved",
+            )
+
+    def test_unknown_verdict_is_refused(self):
+        with self.assertRaises(HandoffError):
+            record_review(self.db, _ReviewRun(), "codex", "aprovadinho")
 
 
 if __name__ == "__main__":

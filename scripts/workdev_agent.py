@@ -65,6 +65,15 @@ def main() -> int:
     item.add_argument("run_id")
     item.add_argument("agent", choices=("codex", "claude", "kimi", "qwen"))
     item.add_argument("reason")
+    # Veredito do revisor independente. Quem executou não usa isto: o executor
+    # entrega com `review` e o revisor decide aqui, depois dos gates.
+    item = sub.add_parser("verdict")
+    item.add_argument("run_id")
+    item.add_argument("reviewer")
+    item.add_argument("verdict", choices=("approved", "rejected"))
+    item.add_argument("feedback", nargs="?")
+    item = sub.add_parser("reviews")
+    item.add_argument("run_id")
     args = parser.parse_args()
 
     if args.command == "context":
@@ -77,6 +86,22 @@ def main() -> int:
             f"/handoffs/runs/{args.run_id}/subtasks/{args.subtask_id}",
             {"status": args.status, "result": args.result},
         )
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "verdict":
+        data = request(
+            "POST",
+            f"/handoffs/runs/{args.run_id}/reviews",
+            {
+                "reviewer": args.reviewer,
+                "verdict": args.verdict,
+                "feedback": args.feedback,
+            },
+        )
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "reviews":
+        data = request("GET", f"/handoffs/runs/{args.run_id}/reviews")
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return 0
     if args.command == "transfer":

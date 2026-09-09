@@ -198,6 +198,38 @@ class RunTransfer(BaseModel):
     reason: str = Field(min_length=1)
 
 
+ReviewVerdict = Literal["approved", "rejected"]
+
+
+class RunReviewCreate(BaseModel):
+    reviewer: AgentName
+    verdict: ReviewVerdict
+    feedback: str | None = None
+
+    @model_validator(mode="after")
+    def require_feedback_on_rejection(self):
+        if self.verdict == "rejected" and not (self.feedback or "").strip():
+            raise ValueError(
+                "feedback é obrigatório ao rejeitar: o executor precisa saber "
+                "o que corrigir"
+            )
+        return self
+
+
+class RunReviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    run_id: UUID
+    attempt: int
+    executor_agent: str
+    reviewer_agent: str
+    verdict: ReviewVerdict
+    feedback: str | None = None
+    gate_passed: bool | None = None
+    created_at: datetime
+
+
 class RunEventCreate(BaseModel):
     event_type: str = Field(
         min_length=2,

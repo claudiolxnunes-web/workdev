@@ -10,7 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.adr import ADR
 from app.models.backlog import BacklogItem
 from app.models.decision import Decision
-from app.models.handoff import AgentRun, AgentRunEvent, ExecutionPlan
+from app.models.handoff import (
+    AgentRun,
+    AgentRunEvent,
+    AgentRunReview,
+    ExecutionPlan,
+)
 from app.models.knowledge import KnowledgeEntry
 from app.models.project import Project
 from app.models.subtask import BacklogSubtask
@@ -31,15 +36,20 @@ SUPPORTED_AGENTS = {
 SUPPORTED_ROUTING_MODES = {"manual", "auto"}
 COMPLEXITY_LEVELS = {"low", "medium", "high", "critical"}
 
+# `running` não fecha direto em `completed`: terminar a execução entrega a run
+# ao revisor independente (`review`), e só a revisão — depois dos gates
+# objetivos — conclui. Rejeição devolve de `review` para `running`.
 RUN_TRANSITIONS = {
     "queued": {"running", "cancelled"},
-    "running": {"blocked", "review", "completed", "failed", "cancelled"},
+    "running": {"blocked", "review", "failed", "cancelled"},
     "blocked": {"running", "cancelled", "failed"},
     "review": {"running", "blocked", "completed", "failed"},
     "completed": set(),
     "failed": set(),
     "cancelled": set(),
 }
+
+REVIEW_VERDICTS = {"approved", "rejected"}
 
 
 class HandoffError(RuntimeError):
@@ -601,6 +611,147 @@ def transfer_run(
     return cancelled_run, new_run
 
 
+def load_reviews(db: Session, run_id) -> list[AgentRunReview]:
+    """Histórico completo de revisões da execução, da mais antiga à mais nova."""
+    return (
+        db.query(AgentRunReview)
+        .filter(AgentRunReview.run_id == run_id)
+        .order_by(AgentRunReview.attempt.asc())
+        .all()
+    )
+
+
+def record_review(
+    db: Session,
+    run: AgentRun,
+    reviewer: str,
+    verdict: str,
+    feedback: str | None = None,
+) -> tuple[AgentRun, AgentRunReview]:
+    """Registra o veredito do revisor independente e move a execução.
+
+    - `approved` só passa depois dos gates objetivos: a opinião do revisor não
+      substitui teste, lint ou build. Gate reprovado nem chega a virar
+      aprovação — vira evento de auditoria e erro.
+    - `rejected` devolve a execução ao executor com o feedback escrito, sem
+      apagar nada: cada rodada é uma linha nova em agent_run_reviews.
+    """
+    if verdict not in REVIEW_VERDICTS:
+        raise HandoffError(
+            "Veredito inválido; use approved ou rejected"
+        )
+
+    if run.status != "review":
+        raise HandoffError(
+            f"Execução em '{run.status}' não está aguardando revisão"
+        )
+
+    validate_review_pair(run.agent, reviewer)
+
+    if run.reviewer_agent and reviewer != run.reviewer_agent:
+        raise HandoffError(
+            f"Revisor designado desta execução é {run.reviewer_agent}; "
+            "troque o revisor pela rota de troca auditada antes de revisar"
+        )
+
+    feedback = (feedback or "").strip() or None
+
+    if verdict == "rejected" and not feedback:
+        raise HandoffError(
+            "Rejeição precisa de feedback escrito para o executor corrigir"
+        )
+
+    gate_passed = None
+
+    if verdict == "approved":
+        from app.services.test_gate import validate_run_for_status_change
+
+        gate_passed, gate_reason = validate_run_for_status_change(
+            db,
+            run,
+            "completed",
+        )
+
+        if not gate_passed:
+            add_run_event(
+                db,
+                run,
+                "review.blocked_by_gate",
+                (
+                    "Aprovação do revisor não aplicada: gate objetivo "
+                    f"reprovado ({gate_reason})"
+                ),
+                {
+                    "reviewer_agent": reviewer,
+                    "executor_agent": run.agent,
+                    "gate_reason": gate_reason,
+                },
+            )
+            db.commit()
+            raise HandoffError(
+                f"Gate objetivo reprovado: {gate_reason}. A aprovação do "
+                "revisor não substitui testes, lint e build."
+            )
+
+    attempt = (run.review_attempts or 0) + 1
+
+    review = AgentRunReview(
+        run_id=run.id,
+        attempt=attempt,
+        executor_agent=run.agent,
+        reviewer_agent=reviewer,
+        verdict=verdict,
+        feedback=feedback,
+        gate_passed=gate_passed,
+        payload={"status_before": run.status},
+    )
+
+    db.add(review)
+    db.flush()
+
+    run.review_attempts = attempt
+
+    add_run_event(
+        db,
+        run,
+        f"review.{verdict}",
+        feedback or f"Revisão {verdict} por {reviewer}",
+        {
+            "attempt": attempt,
+            "reviewer_agent": reviewer,
+            "executor_agent": run.agent,
+            "gate_passed": gate_passed,
+        },
+    )
+
+    if verdict == "approved":
+        run, _event = update_run(
+            db,
+            run,
+            {
+                "status": "completed",
+                "result": run.result
+                or f"Aprovado na revisão {attempt} por {reviewer}",
+                "message": f"Revisão aprovada por {reviewer}",
+            },
+        )
+    else:
+        run, _event = update_run(
+            db,
+            run,
+            {
+                "status": "running",
+                "message": (
+                    f"Revisão {attempt} rejeitada por {reviewer}: {feedback}"
+                ),
+            },
+        )
+
+    db.refresh(review)
+
+    return run, review
+
+
 def load_subtasks(db: Session, backlog_id) -> list[BacklogSubtask]:
     """Fonte única das subtasks reais, na ordem estável de execução."""
     return (
@@ -907,7 +1058,10 @@ Use a CLI local, que não exibe secrets:
 `python3 /opt/workdev/scripts/workdev_agent.py start {run['id']}`
 `python3 /opt/workdev/scripts/workdev_agent.py block {run['id']} "motivo"`
 `python3 /opt/workdev/scripts/workdev_agent.py review {run['id']} "resumo"`
-`python3 /opt/workdev/scripts/workdev_agent.py complete {run['id']} "resultado"`
+
+O revisor independente registra o veredito (e só ele):
+`python3 /opt/workdev/scripts/workdev_agent.py verdict {run['id']} <revisor> approved`
+`python3 /opt/workdev/scripts/workdev_agent.py verdict {run['id']} <revisor> rejected "feedback"`
 
 Preserve alterações preexistentes, execute as validações do plano e registre o
 resultado real. Não declare testes, commit ou deploy que não tenham ocorrido.
