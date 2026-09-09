@@ -98,6 +98,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
 
         payload = BuildRequest(
             routing_mode="auto",
+            reviewer="codex",
         )
 
         with (
@@ -182,6 +183,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
             db,
             plan,
             "gemini",
+            reviewer="codex",
             model="gemini-2.5-flash",
             reasoning_effort=None,
             routing_mode="auto",
@@ -291,7 +293,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
         ):
             result = send_to_build(
                 plan_id="plan-1",
-                payload=BuildRequest(routing_mode="auto"),
+                payload=BuildRequest(routing_mode="auto", reviewer="codex"),
                 background=background,
                 db=db,
             )
@@ -540,7 +542,9 @@ class HandoffAutoRouteTest(unittest.TestCase):
         self.assertIn("exige resultado", str(raised.exception.detail))
 
     def test_premium_confirmation_continues_auto_without_manual_choice(self):
-        payload = BuildRequest(routing_mode="auto", premium_confirmed=True)
+        payload = BuildRequest(
+            routing_mode="auto", premium_confirmed=True, reviewer="codex",
+        )
         self.assertTrue(payload.premium_confirmed)
         self.assertIsNone(payload.agent)
         self.assertIsNone(payload.model)

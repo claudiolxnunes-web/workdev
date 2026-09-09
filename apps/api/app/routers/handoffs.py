@@ -148,6 +148,8 @@ def _run_out(
         "plan_id": run.plan_id,
         "backlog_id": run.backlog_id,
         "agent": run.agent,
+        "reviewer_agent": run.reviewer_agent,
+        "review_attempts": run.review_attempts or 0,
         "model": run.model,
         "reasoning_effort": run.reasoning_effort,
         "complexity": run.complexity,
@@ -809,6 +811,7 @@ def send_to_build(
             db,
             plan,
             agent,
+            reviewer=payload.reviewer,
             model=model,
             reasoning_effort=(
                 reasoning_effort

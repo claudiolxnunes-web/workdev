@@ -96,6 +96,32 @@ def _validate_routing_metadata(
             )
 
 
+def validate_review_pair(executor: str, reviewer: str | None) -> str:
+    """Garante revisão independente: quem executa nunca é quem aprova.
+
+    Vale tanto no envio ao Build quanto na revisão final e nas trocas
+    auditadas de agente — é a mesma regra, aplicada em um lugar só.
+    """
+    if not reviewer:
+        raise HandoffError(
+            "Revisor é obrigatório: escolha um agente diferente do executor "
+            "antes de enviar ao Build"
+        )
+
+    if reviewer not in SUPPORTED_AGENTS:
+        raise HandoffError(
+            "Revisor inválido; escolha um dos agentes suportados"
+        )
+
+    if reviewer == executor:
+        raise HandoffError(
+            "Executor e revisor precisam ser agentes diferentes; "
+            "o executor não aprova o próprio trabalho"
+        )
+
+    return reviewer
+
+
 
 def _lista_de_texto(valor):
     if not valor:
@@ -279,6 +305,7 @@ def queue_build(
     plan: ExecutionPlan,
     agent: str,
     *,
+    reviewer: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
     routing_mode: str = "manual",
@@ -298,6 +325,8 @@ def queue_build(
         complexity_score,
     )
 
+    reviewer = validate_review_pair(agent, reviewer)
+
     active = db.query(AgentRun).filter(
         AgentRun.backlog_id == plan.backlog_id,
         AgentRun.status.in_(ACTIVE_RUN_STATUSES),
@@ -312,6 +341,8 @@ def queue_build(
         plan_id=plan.id,
         backlog_id=plan.backlog_id,
         agent=agent,
+        reviewer_agent=reviewer,
+        review_attempts=0,
         model=model,
         reasoning_effort=reasoning_effort,
         complexity=complexity,
@@ -326,6 +357,7 @@ def queue_build(
 
     routing_payload = {
         "agent": agent,
+        "reviewer_agent": reviewer,
         "model": model,
         "reasoning_effort": reasoning_effort,
         "routing_mode": routing_mode,
@@ -344,7 +376,7 @@ def queue_build(
         db,
         run,
         "build.queued",
-        f"Build enviado para {agent}",
+        f"Build enviado para {agent} (revisor: {reviewer})",
         routing_payload,
     )
 
@@ -504,6 +536,15 @@ def transfer_run(
             "Escolha um agente diferente do atual para transferir"
         )
 
+    # A transferência preserva o revisor escolhido na aprovação do PLAN; se o
+    # novo executor for justamente o revisor, a independência some — recusa.
+    reviewer = run.reviewer_agent
+    if reviewer and new_agent == reviewer:
+        raise HandoffError(
+            f"{new_agent} é o revisor desta execução; troque o revisor antes "
+            "de transferir a execução para ele"
+        )
+
     if run.status not in TRANSFERABLE_RUN_STATUSES:
         raise HandoffError(
             f"Execução em '{run.status}' não pode ser transferida "
@@ -536,6 +577,7 @@ def transfer_run(
         db,
         plan,
         new_agent,
+        reviewer=reviewer,
         routing_mode="manual",
         routing_reason=(
             f"Transferência manual de {previous_agent}: {reason}"
@@ -666,6 +708,8 @@ def build_context(
         "run": {
             "id": str(run.id),
             "agent": run.agent,
+            "reviewer_agent": run.reviewer_agent,
+            "review_attempts": run.review_attempts or 0,
             "model": run.model,
             "reasoning_effort": run.reasoning_effort,
             "routing_mode": run.routing_mode,
@@ -812,7 +856,8 @@ Se descobrir uma decisão arquitetural incompatível, marque a execução como b
 e descreva a revisão necessária em vez de mudar o plano silenciosamente.
 
 ## Roteamento
-- Agente: {run['agent']}
+- Executor: {run['agent']}
+- Revisor independente: {run.get('reviewer_agent') or 'não informado'}
 - Modelo: {run['model'] or 'não informado'}
 - Esforço: {run['reasoning_effort'] or 'não informado'}
 - Modo: {run['routing_mode']}
@@ -866,6 +911,10 @@ Use a CLI local, que não exibe secrets:
 
 Preserve alterações preexistentes, execute as validações do plano e registre o
 resultado real. Não declare testes, commit ou deploy que não tenham ocorrido.
+
+Você é o executor, não o aprovador: ao terminar, use `review` para entregar a
+execução ao revisor independente. Concluir a task é decisão dele, depois dos
+gates objetivos.
 """
 
 

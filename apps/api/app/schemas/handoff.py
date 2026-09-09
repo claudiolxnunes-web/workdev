@@ -107,6 +107,7 @@ class BuildRequest(BaseModel):
     routing_mode: RoutingMode = "manual"
     premium_confirmed: bool = False
     agent: AgentName | None = None
+    reviewer: AgentName | None = None
     model: str | None = Field(
         default=None,
         min_length=1,
@@ -130,6 +131,17 @@ class BuildRequest(BaseModel):
             raise ValueError(
                 "AUTO seleciona agente e modelo automaticamente"
             )
+        # O executor nunca aprova o próprio trabalho: aprovar o PLAN e mandar
+        # para o Build exige escolher executor E revisor, sempre distintos.
+        if self.reviewer is None:
+            raise ValueError(
+                "reviewer é obrigatório: escolha um revisor diferente do "
+                "executor antes de enviar ao Build"
+            )
+        if self.agent is not None and self.reviewer == self.agent:
+            raise ValueError(
+                "executor e revisor precisam ser agentes diferentes"
+            )
         return self
 
 
@@ -152,6 +164,8 @@ class RunOut(BaseModel):
     backlog_id: UUID
 
     agent: AgentName
+    reviewer_agent: AgentName | None = None
+    review_attempts: int = 0
     model: str | None = None
     reasoning_effort: str | None = None
 

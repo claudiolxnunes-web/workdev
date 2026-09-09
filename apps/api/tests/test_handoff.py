@@ -197,6 +197,7 @@ class ManualModelChoiceTest(unittest.TestCase):
                     payload=BuildRequest(
                         routing_mode="manual",
                         agent="claude",
+                        reviewer="codex",
                         model=model,
                     ),
                     background=Mock(),
