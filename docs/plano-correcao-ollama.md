@@ -246,19 +246,28 @@ de capacidade, não de regra: se um dia você quiser um runtime Ollama revisando
 Todas **aditivas**, com `downgrade()` funcional. Nenhum `DROP`, nenhuma reescrita
 de dado.
 
-**Aprovadas pelo Cláudio em 2026-09-09** para aplicação. Estado real no Postgres
-de produção (container `postgres` da VPS1, db `workdev`):
+**Aprovadas e APLICADAS em 2026-09-09** no Postgres de produção (container
+`postgres` da VPS1, db `workdev`), pelo Cláudio via `alembic upgrade head`.
 
-- Head do repositório: `d4a1c7e39b52`.
-- `alembic current` no banco: `a1c7e5b93f10` — as três continuam **pendentes de
-  aplicação**.
-- Backup tirado antes de qualquer tentativa:
-  `/opt/backups/workdev/workdev-pre-ollama-20260909-1550.dump` (formato custom,
-  719 KB).
-- Não foi possível validar em banco de staging: o usuário `workdev_app` não tem
-  `CREATEDB`. Mitigação aceita: o DDL do Postgres é transacional (falha reverte
-  inteira), as migrações são aditivas e nenhum código consome as colunas novas
-  ainda.
+Estado verificado por consulta direta ao banco, não pela saída do comando:
+
+| Verificação | Resultado |
+|---|---|
+| `alembic_version` | `d4a1c7e39b52` (head) |
+| Colunas em `agent_runs` | `dispatch_state` NOT NULL default `idle`, `dispatch_attempts` NOT NULL default 0, `last_dispatch_at` nullable, `dispatch_token` uuid nullable |
+| `agent_build_jobs` | criada, 13 colunas, 0 linhas |
+| Índice único parcial | `uq_agent_build_jobs_active_run` sobre `(run_id) WHERE state IN ('queued','running')` — confirmado em `pg_indexes` |
+| FK | `agent_build_jobs_run_id_fkey → agent_runs(id) ON DELETE CASCADE` |
+| `projects.context_classification` | NOT NULL default `internal` |
+| Dados preservados | `agent_runs` 57 linhas (todas `dispatch_state='idle'`), `projects` 19 (todas `internal'`) |
+| API após a migração | `/health` 200; `GET /api/projects` autenticado 200 em 28 ms — sem restart, sem rota pendurada |
+
+- Backup pré-migração:
+  `/opt/backups/workdev/workdev-pre-ollama-20260909-1550.dump` (custom, 719 KB).
+- Não houve validação em staging: o usuário `workdev_app` não tem `CREATEDB`.
+  Mitigação aceita: DDL transacional, migrações aditivas, nenhum código
+  consumindo as colunas ainda. **O `downgrade()` continua não exercitado** —
+  está escrito e é simétrico, não foi rodado.
 
 Rollback: `alembic downgrade a1c7e5b93f10`, ou um passo por vez com
 `alembic downgrade -1`.
@@ -447,6 +456,7 @@ Pendências que continuam abertas:
   status `proposed` e as 3 migrações escritas para revisão (não aplicadas).
   Nenhuma fatia de código implementada.
 - **2026-09-09, v4** — ADR 005 aprovado (`accepted`); ownership de `main.py`
-  destravado; `qwen` definido como executor; migrações aprovadas para aplicação.
+  destravado; `qwen` definido como executor; as 3 migrações **aplicadas** em
+  produção (`alembic_version = d4a1c7e39b52`, verificado por consulta direta).
   Reafirmada como regra permanente a eleição manual de executor e revisor pelo
   operador. Continua sem nenhuma fatia de código implementada.
