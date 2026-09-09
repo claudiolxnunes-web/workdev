@@ -1,3 +1,4 @@
+import inspect
 import asyncio
 import json
 import os
@@ -306,9 +307,16 @@ class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(_stop_standby_session("kimi"))
 
     async def test_stop_requires_explicit_confirmation(self):
+        # A rota é chamada direto aqui, sem o FastAPI resolver os defaults —
+        # `Query(default=False)` chegaria como objeto (truthy) e passaria pelo
+        # guard. Por isso o confirm vai explícito, e o default declarado é
+        # conferido à parte: é ele a garantia de "exige confirmação".
         with self.assertRaises(HTTPException) as ctx:
-            await stop_agent_session("codex")
+            await stop_agent_session("codex", confirm=False)
         self.assertEqual(ctx.exception.status_code, 409)
+
+        declarado = inspect.signature(stop_agent_session).parameters["confirm"]
+        self.assertFalse(declarado.default.default)
 
     @patch("app.routers.terminal._start_standby_session", return_value=True)
     async def test_start_endpoint_reconnects_standby_agent(self, start):
