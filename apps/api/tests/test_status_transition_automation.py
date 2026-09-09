@@ -28,7 +28,8 @@ class StatusTransitionAutomationTest(unittest.TestCase):
             created_by="ai_hub",
         )
 
-        result = approve_plan(db, plan)
+        with patch("app.services.handoff.load_subtasks", return_value=[]):
+            result = approve_plan(db, plan)
 
         self.assertEqual(result.status, "approved")
         self.assertIsNotNone(result.approved_at)
@@ -49,6 +50,7 @@ class StatusTransitionAutomationTest(unittest.TestCase):
         with (
             patch("app.services.agent_router.route_agent") as route_mock,
             patch("app.services.handoff.queue_build") as queue_mock,
+            patch("app.services.handoff.load_subtasks", return_value=[]),
         ):
             result = approve_plan(db, plan)
 

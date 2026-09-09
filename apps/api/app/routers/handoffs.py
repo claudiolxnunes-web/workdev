@@ -25,6 +25,7 @@ from app.schemas.handoff import (
 )
 from app.services.agent_runtimes import is_ollama_agent
 from app.services.build_rag import augment_prompt
+from app.services.plan_granularity import assess as assess_plan_granularity
 from app.services.engineering_graph import graph_sync
 from app.services.ollama_driver import (
     OllamaDispatchError,
@@ -37,6 +38,7 @@ from app.services.handoff import (
     approve_plan,
     build_context,
     create_plan,
+    decompose_plan,
     load_reviews,
     load_subtasks,
     queue_build,
@@ -583,10 +585,73 @@ def edit_execution_plan(
     )
 
 
+@router.get("/plans/{plan_id}/granularity")
+def get_plan_granularity(
+    plan_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Diagnóstico de tamanho do plano e fatias sugeridas. Não altera nada."""
+    plan = _get_plan(db, plan_id)
+
+    payload = assess_plan_granularity(
+        plan,
+        load_subtasks(db, plan.backlog_id),
+    )
+    payload["plan_id"] = str(plan.id)
+    payload["plan_version"] = plan.version
+
+    return payload
+
+
+@router.post(
+    "/plans/{plan_id}/decompose",
+    status_code=201,
+)
+def decompose_execution_plan(
+    plan_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Cria as fatias sugeridas como subtasks auditáveis da task."""
+    plan = _get_plan(db, plan_id)
+
+    try:
+        criadas = decompose_plan(db, plan)
+    except HandoffError as error:
+        raise HTTPException(409, str(error)) from error
+
+    return {
+        "plan_id": plan.id,
+        "created": [
+            {
+                "id": row.id,
+                "order": row.execution_order,
+                "title": row.title,
+            }
+            for row in criadas
+        ],
+        "subtasks": [
+            {
+                "id": row.id,
+                "order": row.execution_order,
+                "title": row.title,
+                "status": row.status,
+            }
+            for row in load_subtasks(db, plan.backlog_id)
+        ],
+    }
+
+
 @router.post("/plans/{plan_id}/approve")
 def approve_execution_plan(
     plan_id: UUID,
     background: BackgroundTasks,
+    force: bool = Query(
+        False,
+        description=(
+            "Aprova mesmo com o plano acima do tamanho de uma unidade "
+            "auditável, assumindo a exceção"
+        ),
+    ),
     db: Session = Depends(get_db),
 ):
     try:
@@ -596,6 +661,7 @@ def approve_execution_plan(
                 db,
                 plan_id,
             ),
+            allow_oversized=force,
         )
     except HandoffError as error:
         raise HTTPException(

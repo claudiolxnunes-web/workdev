@@ -260,6 +260,8 @@ def update_plan(
 def approve_plan(
     db: Session,
     plan: ExecutionPlan,
+    *,
+    allow_oversized: bool = False,
 ) -> ExecutionPlan:
     if plan.status not in PLAN_EDITABLE:
         raise HandoffError(
@@ -275,6 +277,23 @@ def approve_plan(
         raise HandoffError(
             "Inclua pelo menos uma etapa de validação antes de aprovar"
         )
+
+    # Trabalho grande só é aprovado fatiado: cada unidade precisa ter objetivo
+    # único e gate próprio, senão a falha não tem como ser localizada. O
+    # operador pode assumir a exceção explicitamente com allow_oversized.
+    if not allow_oversized:
+        from app.services.plan_granularity import assess
+
+        granularidade = assess(plan, load_subtasks(db, plan.backlog_id))
+
+        if granularidade["requires_decomposition"]:
+            sinais = "; ".join(granularidade["signals"])
+            raise HandoffError(
+                f"Plano grande demais para uma execução só ({sinais}). "
+                "Decomponha em fatias auditáveis antes de aprovar — use "
+                f"POST /api/handoffs/plans/{plan.id}/decompose ou aprove com "
+                "force=true assumindo a exceção."
+            )
 
     (
         db.query(ExecutionPlan)
@@ -303,6 +322,63 @@ def approve_plan(
     db.refresh(plan)
 
     return plan
+
+
+def decompose_plan(
+    db: Session,
+    plan: ExecutionPlan,
+) -> list[BacklogSubtask]:
+    """Materializa as fatias sugeridas como subtasks da task do plano.
+
+    Idempotente por título: rodar de novo não duplica fatia já criada.
+    """
+    from app.services.plan_granularity import assess, suggest_slices
+
+    existentes = load_subtasks(db, plan.backlog_id)
+    granularidade = assess(plan, existentes)
+
+    if not granularidade["oversized"]:
+        raise HandoffError(
+            "Plano já está no tamanho de uma unidade auditável; não há o que "
+            "decompor"
+        )
+
+    fatias = suggest_slices(plan)
+
+    if len(fatias) < 2:
+        raise HandoffError(
+            "Não foi possível derivar fatias do escopo; enumere as frentes no "
+            "escopo do plano (1., 2., 3.) e tente de novo"
+        )
+
+    titulos = {row.title.strip() for row in existentes}
+    proxima_ordem = max(
+        (row.execution_order or 0 for row in existentes),
+        default=0,
+    )
+    criadas: list[BacklogSubtask] = []
+
+    for fatia in fatias:
+        if fatia["title"] in titulos:
+            continue
+
+        proxima_ordem += 1
+        subtask = BacklogSubtask(
+            backlog_id=plan.backlog_id,
+            title=fatia["title"],
+            description=fatia["description"],
+            status="todo",
+            execution_order=proxima_ordem,
+        )
+        db.add(subtask)
+        criadas.append(subtask)
+
+    db.commit()
+
+    for subtask in criadas:
+        db.refresh(subtask)
+
+    return criadas
 
 
 def add_run_event(
