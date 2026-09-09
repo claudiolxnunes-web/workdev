@@ -121,9 +121,11 @@ class AssessmentTest(unittest.TestCase):
         self.assertTrue(resultado["requires_decomposition"])
         self.assertEqual(resultado["matching_subtask_count"], 2)
         self.assertEqual(resultado["required_slices"], 4)
-        self.assertIn(
-            "Histórico cumulativo de revisão.",
-            resultado["missing_slices"],
+        self.assertTrue(
+            any(
+                "Histórico cumulativo de revisão." in titulo
+                for titulo in resultado["missing_slices"]
+            )
         )
 
     def test_duplicated_subtasks_of_one_slice_do_not_cover_the_others(self):
@@ -167,14 +169,72 @@ class AssessmentTest(unittest.TestCase):
 
         # E uma única subtask, que é tudo o que decompose_plan consegue
         # materializar aqui, fecha o gate.
+        unica = plan_granularity.suggest_slices(plan)[0]["title"]
         resultado = plan_granularity.assess(
             plan,
-            [SimpleNamespace(title="Ajustar o driver de despacho.")],
+            [SimpleNamespace(title=unica)],
         )
 
         self.assertEqual(resultado["covered_slices"], 1)
         self.assertFalse(resultado["requires_decomposition"])
         self.assertEqual(resultado["missing_slices"], [])
+
+    def test_titles_do_not_collide_after_truncation(self):
+        """Regressão do 3º passe do Codex: colisão por truncamento.
+
+        O título era `item[:120]`. Duas frentes distintas que compartilhassem
+        os primeiros 120 caracteres viravam o mesmo título: as fatias
+        distintas contavam 1 e UMA subtask cobria as DUAS frentes.
+        """
+        prefixo = (
+            "Reescrever o driver de despacho cobrindo timeout, retry, "
+            "backoff, idempotencia, telemetria e limites de payload do "
+            "endpoint remoto, para "
+        )
+        self.assertGreater(
+            len(prefixo),
+            plan_granularity.MAX_SLICE_TITLE_CHARS,
+            "o prefixo precisa exceder o truncamento para haver colisão",
+        )
+
+        plan = _plan(
+            scope=(
+                f"1. {prefixo}o runtime local.\n"
+                f"2. {prefixo}as GPUs remotas.\n"
+            ),
+        )
+
+        fatias = plan_granularity.suggest_slices(plan)
+        self.assertEqual(len({fatia["title"] for fatia in fatias}), 2)
+
+        # Uma subtask da primeira frente não pode cobrir a segunda.
+        resultado = plan_granularity.assess(
+            plan,
+            [SimpleNamespace(title=fatias[0]["title"])],
+        )
+
+        self.assertEqual(resultado["required_slices"], 2)
+        self.assertEqual(resultado["covered_slices"], 1)
+        self.assertTrue(resultado["requires_decomposition"])
+        self.assertEqual(len(resultado["missing_slices"]), 1)
+
+    def test_slice_id_is_stable_under_reordering(self):
+        """O id vem do conteúdo, não da posição.
+
+        Reordenar o escopo não pode renomear fatias já materializadas como
+        subtask — senão a decomposição existente deixaria de corresponder.
+        """
+        antes = plan_granularity.suggest_slices(
+            _plan(scope="1. Frente A.\n2. Frente B.\n")
+        )
+        depois = plan_granularity.suggest_slices(
+            _plan(scope="1. Frente B.\n2. Frente A.\n")
+        )
+
+        self.assertEqual(
+            sorted(fatia["title"] for fatia in antes),
+            sorted(fatia["title"] for fatia in depois),
+        )
 
     def test_gate_stays_closed_when_no_slice_can_be_derived(self):
         """Sem fatia derivável, `exigidas` é 0 — e `0 >= 0` liberaria tudo.
@@ -241,10 +301,13 @@ class AssessmentTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(
-            [item["title"] for item in fatias],
-            ["Primeiro aceite", "Segundo aceite"],
-        )
+        # O texto da frente abre o título; o identificador do conteúdo vem
+        # depois, entre colchetes, para que frentes distintas nunca colidam.
+        self.assertEqual(len(fatias), 2)
+        self.assertTrue(fatias[0]["title"].startswith("Primeiro aceite ["))
+        self.assertTrue(fatias[1]["title"].startswith("Segundo aceite ["))
+        for item in fatias:
+            self.assertRegex(item["title"], r" \[[0-9a-f]{8}\]$")
 
 
 class ApprovalGateTest(unittest.TestCase):
@@ -304,7 +367,9 @@ class ApprovalGateTest(unittest.TestCase):
         with patch(
             "app.services.handoff.load_subtasks",
             return_value=[
-                SimpleNamespace(title="Ajustar o driver de despacho.")
+                SimpleNamespace(
+                    title=plan_granularity.suggest_slices(plan)[0]["title"]
+                )
             ],
         ):
             approve_plan(self._db(), plan)

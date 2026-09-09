@@ -11,6 +11,7 @@ quando o plano está grande demais, (b) propõe as fatias a partir do próprio
 texto do escopo.
 """
 
+import hashlib
 import re
 
 
@@ -18,6 +19,10 @@ MAX_ACCEPTANCE_CRITERIA = 8
 MAX_VALIDATION_STEPS = 8
 MAX_SCOPE_CHARS = 1500
 MIN_SLICES_WHEN_OVERSIZED = 2
+MAX_SLICE_TITLE_CHARS = 120
+# 8 hex = 4 bilhões de valores para um punhado de fatias por plano. Curto o
+# bastante para não poluir o título na UI.
+SLICE_ID_CHARS = 8
 
 # Itens numerados do escopo: "1. algo", "2) outra coisa", "- item".
 _NUMBERED = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s+(.+)$")
@@ -49,6 +54,37 @@ def _scope_items(scope: str | None) -> list[str]:
 def _normalizar_titulo(valor) -> str:
     """Título comparável: espaços colapsados e caixa neutra."""
     return " ".join(str(valor or "").split()).casefold()
+
+
+def _slice_id(item: str) -> str:
+    """Identificador estável derivado do texto ÍNTEGRO da frente.
+
+    Derivado do conteúdo, não da posição: reordenar o escopo não renomeia as
+    fatias já materializadas. Duas frentes de texto idêntico continuam com o
+    mesmo id de propósito — são a mesma fatia, e é isso que mantém o gate
+    satisfazível quando o escopo repete uma frente.
+    """
+    normalizado = _normalizar_titulo(item)
+    digest = hashlib.sha256(normalizado.encode("utf-8")).hexdigest()
+    return digest[:SLICE_ID_CHARS]
+
+
+def _titulo_de_fatia(item: str) -> str:
+    """Título da fatia: texto truncado mais o identificador do conteúdo.
+
+    O truncamento sozinho colidia: duas frentes distintas que compartilhassem
+    os primeiros 120 caracteres viravam o mesmo título, `titulos_de_fatia`
+    contava 1, e uma única subtask cobria as duas. O identificador vem do
+    texto completo, antes do corte, então frentes diferentes nunca colapsam
+    numa fatia só.
+    """
+    texto = item.strip()
+    corpo = texto[:MAX_SLICE_TITLE_CHARS].rstrip()
+
+    if len(texto) > MAX_SLICE_TITLE_CHARS:
+        corpo += "…"
+
+    return f"{corpo} [{_slice_id(texto)}]"
 
 
 def assess(plan, subtasks=None) -> dict:
@@ -182,8 +218,7 @@ def suggest_slices(plan) -> list[dict]:
     fatias = []
 
     for ordem, item in enumerate(itens, start=1):
-        titulo = item.strip()
-        titulo = titulo[:120].rstrip() + ("…" if len(titulo) > 120 else "")
+        titulo = _titulo_de_fatia(item)
         fatias.append(
             {
                 "order": ordem,
