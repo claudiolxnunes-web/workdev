@@ -1,7 +1,10 @@
 # Plano de correção — integração Ollama (revisão independente)
 
-**Status: APROVADO em 2026-09-09 — ADR 005 aceito, as 3 migrações aplicadas em
-produção. Nenhuma fatia de código implementada ainda.**
+**Status: EM EXECUÇÃO em 2026-09-09 — ADR 005 aceito, as 3 migrações aplicadas
+em produção, fatia 1 implementada (`f79add7`) e o achado 10 fechado após quatro
+rodadas de rejeição do Codex (`9eacb8e`, `a557efb`, `9767b13`, `895565e`).
+`895565e` está em produção desde 18:08 UTC, o que fecha o achado 11. Fatias 2 a 5
+não começaram.**
 Base: `f54c9b8` (develop). Commits revisados: `38c944d`, `5a8615a`, `bef40b8`,
 `61d459c`, `20f0714`.
 
@@ -29,7 +32,7 @@ achados adicionais apareceram na verificação.
 | 8 | média | `agent_runtimes` router pendurado dentro de `terminal.py` | `terminal.py:737-739` inclui o router porque `apps/api/app/main.py` é `root:root 644` e não pôde ser editado pelo usuário `workdev`. É a pendência de ownership já registrada no `CLAUDE.md`, agora com efeito estrutural na árvore de rotas |
 | 9 | baixa | `test_gate` é fixo em `/opt/workdev` | `WORKDIR = Path("/opt/workdev")` (`test_gate.py:28`). Qualquer execução isolada (worktree) exige parametrizar isso antes |
 | 10 | alta | Gate de fatiamento aceita qualquer subtask como decomposição | `plan_granularity.py:91` faz `"decomposed": bool(subtasks)` e a linha 93, `"requires_decomposition": oversized and not subtasks`. **Uma** subtask antiga, única e sem relação com as fatias sugeridas satisfaz o gate. Não há checagem de quantidade, de correspondência com as fatias propostas, nem de gate próprio por fatia — exatamente o que `72b5360` prometia exigir. Achado da revisão independente do Codex em 2026-09-09 |
-| 11 | crítico | Release em produção está ~11 commits atrás | A release promovida (`/opt/workdev-runtime/current`, de 2026-09-08 23:37) **não contém** `routers/agent_runtimes.py`, `services/ollama_driver.py` nem `services/plan_granularity.py`, e seu `handoffs.py` tem **zero** ocorrências de `reviews`. Consequência concreta: `workdev_agent.py verdict` responde **HTTP 405** porque a rota `POST /runs/{run_id}/reviews` (presente no repo em `handoffs.py:1326`) não existe em produção. O Codex não conseguiu gravar o veredito na trilha oficial por causa disso |
+| 11 | ~~crítico~~ ✅ | ~~Release em produção está ~11 commits atrás~~ — **fechado em 2026-09-09** | Deploy às 18:08 UTC, prova `1a26f2f9-e37f-4782-bb40-1b405be49402`, actor `claudio`, promoveu `895565e`. Release verificada byte-idêntica ao repo em `plan_granularity.py` e `handoff.py`; `POST /runs/{id}/reviews` responde **401** (existe), não mais 405 |
 
 Suíte atual passa: `45 passed` em `tests/test_ollama_dispatch.py` + `tests/test_agent_runtimes.py`.
 Os testes existentes são honestos — eles testam o driver de texto, não um executor
@@ -61,7 +64,15 @@ são de contrato, não de teste quebrado:
 
 O veredito **não pôde ser gravado na trilha oficial**: `workdev_agent.py verdict`
 devolveu `HTTP 405` — ver achado 11. A rejeição existe como transcrição de sessão,
-não como registro em `agent_run_reviews`. Regularizar isso depende de deploy.
+não como registro em `agent_run_reviews`.
+
+**Situação em 2026-09-09, após o deploy das 18:08:** a rota existe em produção e o
+bloqueio técnico acabou, mas `agent_run_reviews` continua com **zero linhas** para
+esta run. As quatro rejeições seguem só como transcrição. Elas **não serão gravadas
+retroativamente pelo executor** — quem assina veredito é o revisor, e o executor
+escrever no lugar dele destruiria justamente a garantia que a revisão cruzada
+existe para dar. O registro oficial nasce na próxima rodada, emitida pelo próprio
+Codex.
 
 ---
 
@@ -445,7 +456,7 @@ não roda deploy, não faz push, não mexe em `/root/.ssh`, não altera
 
 | Ordem | Fatia | Bloqueio |
 |---|---|---|
-| ~~1º~~ | ~~1 — rótulo, recomendação de revisor, portas fechadas~~ | ✅ feita em `f79add7` |
+| ~~1º~~ | ~~1 — rótulo, recomendação de revisor, portas fechadas~~ | ✅ feita em `f79add7`; achado 10 estabilizado em `895565e` após 4 rodadas |
 | 2º | 4 — classificação e redaction | nenhum (independe do worker) |
 | 3º | 2 — estado, lock, idempotência | migração precisa do seu OK |
 | 4º | ADR 005 | sua aprovação |
@@ -496,3 +507,12 @@ Pendências que continuam abertas:
   produção (`alembic_version = d4a1c7e39b52`, verificado por consulta direta).
   Reafirmada como regra permanente a eleição manual de executor e revisor pelo
   operador. Continua sem nenhuma fatia de código implementada.
+- **2026-09-09, v5** — primeira fatia de código em produção. `f79add7` entregou a
+  fatia 1; o achado 10 exigiu quatro rodadas de rejeição do Codex até fechar
+  (`9eacb8e` cobertura em vez de contagem, `a557efb` remoção do piso
+  insatisfazível, `9767b13` identificador estável no título, `895565e` piso de
+  duas fatias + compatibilidade com os 216 títulos legados). Deploy às 18:08 UTC
+  (prova `1a26f2f9`, actor `claudio`) levou `895565e` para produção e **fechou o
+  achado 11**: a rota de veredito responde de novo. Pendem: 5ª rodada de revisão
+  sobre `895565e`, `agent_run_reviews` ainda vazia para a run `8491f6db`, e as
+  fatias 2 a 5.
