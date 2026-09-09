@@ -24,6 +24,7 @@ from app.schemas.handoff import (
     SubtaskProgress,
 )
 from app.services.agent_runtimes import is_ollama_agent
+from app.services.build_rag import augment_prompt
 from app.services.engineering_graph import graph_sync
 from app.services.ollama_driver import (
     OllamaDispatchError,
@@ -1121,10 +1122,14 @@ async def dispatch_run_to_ollama(
     except HandoffError as error:
         raise HTTPException(409, str(error)) from error
 
+    # O prompt sai daqui com os trechos recuperados já embutidos em texto: a
+    # recuperação acontece na VPS, o runtime só lê.
+    prompt = augment_prompt(context)
+
     try:
         result = await dispatch_to_ollama(
             run.agent,
-            context["prompt"],
+            prompt,
             model=run.model,
         )
     except OllamaDispatchError as error:
