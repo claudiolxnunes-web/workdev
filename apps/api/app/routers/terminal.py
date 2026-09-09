@@ -729,3 +729,11 @@ async def agent_terminal(websocket: WebSocket, agent: str):
                     os.close(slave_fd)
         finally:
             await _release(session)
+
+
+# Runtimes Ollama locais/GPU ficam no mesmo router de agentes (`/api/agents*`,
+# `/api/agent-runtimes`), mas em módulo próprio: eles não têm sessão tmux e não
+# compartilham nada com o terminal — só a área de Agents.
+from app.routers.agent_runtimes import router as _agent_runtimes_router  # noqa: E402
+
+router.include_router(_agent_runtimes_router)

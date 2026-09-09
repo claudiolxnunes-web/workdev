@@ -1,10 +1,14 @@
 """Runtimes Ollama locais/GPU: registry, segredos e disponibilidade.
 
 Fatia 5 — registry de runtimes com credenciais fora do banco.
+Fatia 6 — health check assíncrono no backend, com timeout de 2s.
 """
 
+import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+import httpx
 
 from app.schemas.handoff import AgentName
 from app.services import agent_runtimes
@@ -115,6 +119,174 @@ class RuntimeIdentityIsAcceptedTest(unittest.TestCase):
     def test_runtimes_are_not_auto_eligible(self):
         for runtime in agent_runtimes.RUNTIMES:
             self.assertFalse(runtime.auto_eligible)
+
+
+def _tags(*names):
+    return 200, {"models": [{"name": name} for name in names]}
+
+
+class RuntimeHealthTest(unittest.TestCase):
+    def setUp(self):
+        agent_runtimes.reset_health_cache()
+
+    def _check(self, runtime_id, env=None):
+        runtime = agent_runtimes.get_runtime(runtime_id)
+        with patch.dict("os.environ", env or {}, clear=True):
+            return asyncio.run(agent_runtimes.check_runtime(runtime))
+
+    def test_timeout_budget_is_two_seconds(self):
+        self.assertEqual(agent_runtimes.HEALTH_TIMEOUT_SECONDS, 2.0)
+
+    def test_client_is_built_with_the_two_second_timeout(self):
+        captured = {}
+
+        class _FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, _url, headers=None):
+                raise httpx.TimeoutException("estourou")
+
+        with patch("httpx.AsyncClient", _FakeClient):
+            health = self._check("local-code")
+
+        self.assertEqual(captured["timeout"], 2.0)
+        self.assertEqual(health.status, agent_runtimes.STATUS_OFFLINE)
+
+    def test_timeout_reports_offline_without_raising(self):
+        with patch(
+            "app.services.agent_runtimes._fetch_tags",
+            side_effect=httpx.TimeoutException("estourou"),
+        ):
+            health = self._check("local-code")
+
+        self.assertEqual(health.status, agent_runtimes.STATUS_OFFLINE)
+        self.assertIn("2s", health.reason)
+        self.assertFalse(health.as_dict()["dispatchable"])
+
+    def test_connection_error_reports_offline(self):
+        with patch(
+            "app.services.agent_runtimes._fetch_tags",
+            side_effect=httpx.ConnectError("recusou"),
+        ):
+            health = self._check("local-code")
+
+        self.assertEqual(health.status, agent_runtimes.STATUS_OFFLINE)
+        self.assertEqual(health.reason, "ConnectError")
+
+    def test_http_error_reports_offline(self):
+        with patch(
+            "app.services.agent_runtimes._fetch_tags",
+            new=AsyncMock(return_value=(503, {})),
+        ):
+            health = self._check("local-code")
+
+        self.assertEqual(health.status, agent_runtimes.STATUS_OFFLINE)
+        self.assertEqual(health.reason, "HTTP 503")
+
+    def test_unconfigured_gpu_is_not_probed(self):
+        with patch(
+            "app.services.agent_runtimes._fetch_tags",
+            new=AsyncMock(),
+        ) as fetch:
+            health = self._check("gpu-runpod")
+
+        fetch.assert_not_called()
+        self.assertEqual(health.status, agent_runtimes.STATUS_UNCONFIGURED)
+        self.assertFalse(health.as_dict()["dispatchable"])
+
+    def test_online_when_expected_model_is_loaded(self):
+        with patch(
+            "app.services.agent_runtimes._fetch_tags",
+            new=AsyncMock(return_value=_tags("qwen2.5-coder:7b")),
+        ):
+            health = self._check(
+                "local-code",
+                {"WORKDEV_OLLAMA_LOCAL_MODEL": "qwen2.5-coder:7b"},
+            )
+
+        self.assertEqual(health.status, agent_runtimes.STATUS_ONLINE)
+        self.assertEqual(health.models, ("qwen2.5-coder:7b",))
+        self.assertTrue(health.as_dict()["dispatchable"])
+
+    def test_degraded_when_expected_model_is_missing(self):
+        with patch(
+            "app.services.agent_runtimes._fetch_tags",
+            new=AsyncMock(return_value=_tags("llama3:8b")),
+        ):
+            health = self._check(
+                "local-code",
+                {"WORKDEV_OLLAMA_LOCAL_MODEL": "qwen2.5-coder:7b"},
+            )
+
+        self.assertEqual(health.status, agent_runtimes.STATUS_DEGRADED)
+        self.assertIn("qwen2.5-coder:7b", health.reason)
+
+    def test_probe_uses_bearer_token_without_exposing_it(self):
+        with patch(
+            "app.services.agent_runtimes._fetch_tags",
+            new=AsyncMock(return_value=_tags("qwen3-coder")),
+        ) as fetch:
+            health = self._check(
+                "gpu-hostinger",
+                {
+                    "WORKDEV_OLLAMA_HOSTINGER_URL": "https://gpu.invalid",
+                    "WORKDEV_OLLAMA_HOSTINGER_TOKEN": "token-secreto",
+                },
+            )
+
+        url, headers = fetch.await_args.args
+        self.assertEqual(url, "https://gpu.invalid/api/tags")
+        self.assertEqual(headers, {"Authorization": "Bearer token-secreto"})
+        self.assertNotIn("token-secreto", repr(health.as_dict()))
+
+    def test_one_offline_gpu_does_not_break_the_other_runtimes(self):
+        async def flaky(url, _headers):
+            if "gpu" in url:
+                raise httpx.ConnectError("GPU desligada")
+            return _tags("qwen2.5-coder:7b")
+
+        env = {
+            "WORKDEV_OLLAMA_HOSTINGER_URL": "https://gpu-h.invalid",
+            "WORKDEV_OLLAMA_RUNPOD_URL": "https://gpu-r.invalid",
+            "WORKDEV_OLLAMA_LOCAL_MODEL": "qwen2.5-coder:7b",
+        }
+
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("app.services.agent_runtimes._fetch_tags", side_effect=flaky),
+        ):
+            snapshot = asyncio.run(agent_runtimes.check_all(refresh=True))
+
+        self.assertEqual(
+            snapshot["local-code"].status,
+            agent_runtimes.STATUS_ONLINE,
+        )
+        self.assertEqual(
+            snapshot["gpu-hostinger"].status,
+            agent_runtimes.STATUS_OFFLINE,
+        )
+        self.assertEqual(
+            snapshot["gpu-runpod"].status,
+            agent_runtimes.STATUS_OFFLINE,
+        )
+
+    def test_cache_avoids_reprobing_within_the_ttl(self):
+        with patch(
+            "app.services.agent_runtimes._fetch_tags",
+            new=AsyncMock(return_value=_tags("qwen2.5-coder:7b")),
+        ) as fetch:
+            runtime = agent_runtimes.get_runtime("local-code")
+            asyncio.run(agent_runtimes.check_runtime_cached(runtime))
+            asyncio.run(agent_runtimes.check_runtime_cached(runtime))
+
+        self.assertEqual(fetch.await_count, 1)
 
 
 if __name__ == "__main__":

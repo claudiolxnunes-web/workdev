@@ -23,7 +23,13 @@ from app.schemas.handoff import (
     RunUpdate,
     SubtaskProgress,
 )
+from app.services.agent_runtimes import is_ollama_agent
 from app.services.engineering_graph import graph_sync
+from app.services.ollama_driver import (
+    OllamaDispatchError,
+    dispatch as dispatch_to_ollama,
+    ensure_dispatchable_blocking,
+)
 from app.services.handoff import (
     HandoffError,
     add_run_event,
@@ -771,6 +777,21 @@ def send_to_build(
                 },
             )
 
+    if payload.routing_mode == "manual" and is_ollama_agent(agent):
+        # Endpoint indisponível não vira run pendurada: recusa antes de criar
+        # qualquer estado. Os demais agentes seguem utilizáveis normalmente.
+        try:
+            ensure_dispatchable_blocking(agent)
+        except OllamaDispatchError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": error.code,
+                    "message": error.message,
+                    "details": error.details,
+                },
+            ) from error
+
     if payload.routing_mode == "auto":
         task, _project = _task_project(
             db,
@@ -1064,6 +1085,105 @@ def transfer_agent_run(
         db,
         new_run,
     )
+
+
+@router.post(
+    "/runs/{run_id}/dispatch",
+    status_code=201,
+)
+async def dispatch_run_to_ollama(
+    run_id: UUID,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Envia o contexto de Build da run ao runtime Ollama e guarda a resposta.
+
+    O modelo recebe texto e devolve texto. Nada é executado a partir da
+    resposta: repositório, comandos e gates continuam na VPS principal, e o
+    resultado fica registrado como evento auditável da run.
+    """
+    run = _get_run(db, run_id)
+
+    if not is_ollama_agent(run.agent):
+        raise HTTPException(
+            409,
+            f"{run.agent} não é um runtime Ollama; use a sessão do agente",
+        )
+
+    if run.status not in {"queued", "running"}:
+        raise HTTPException(
+            409,
+            f"Execução em '{run.status}' não aceita despacho",
+        )
+
+    try:
+        context = build_context(db, run)
+    except HandoffError as error:
+        raise HTTPException(409, str(error)) from error
+
+    try:
+        result = await dispatch_to_ollama(
+            run.agent,
+            context["prompt"],
+            model=run.model,
+        )
+    except OllamaDispatchError as error:
+        add_run_event(
+            db,
+            run,
+            "build.dispatch_failed",
+            error.message,
+            {"code": error.code, **error.details},
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": error.code,
+                "message": error.message,
+                "details": error.details,
+            },
+        ) from error
+
+    if run.status == "queued":
+        run, _event = update_run(
+            db,
+            run,
+            {
+                "status": "running",
+                "message": f"Despacho para {run.agent} iniciado",
+            },
+        )
+
+    event = add_run_event(
+        db,
+        run,
+        "build.ollama_response",
+        f"Resposta de {result['runtime_id']} ({result['model']})",
+        {
+            "runtime_id": result["runtime_id"],
+            "model": result["model"],
+            "duration_ms": result["duration_ms"],
+            "truncated": result["truncated"],
+            "response": result["response"],
+        },
+    )
+    db.commit()
+    db.refresh(event)
+
+    _sync_run(background, db, run, event)
+
+    return {
+        "run": _run_out(db, run),
+        "dispatch": {
+            "runtime_id": result["runtime_id"],
+            "model": result["model"],
+            "duration_ms": result["duration_ms"],
+            "truncated": result["truncated"],
+            "response": result["response"],
+        },
+        "event_id": event.id,
+    }
 
 
 @router.post("/runs/{run_id}/reviewer")

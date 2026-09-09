@@ -14,8 +14,13 @@ Três regras estruturam este módulo:
    Nenhum dos dois pode ser dependência permanente do Build.
 """
 
+import asyncio
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import os
+
+import httpx
 
 
 PROVIDER = "ollama"
@@ -158,3 +163,222 @@ def describe(runtime: OllamaRuntime) -> dict:
 
 def list_runtimes() -> list[dict]:
     return [describe(runtime) for runtime in RUNTIMES]
+
+
+# --------------------------------------------------------------------------
+# Health check
+#
+# A UI nunca fala com o Ollama: quem sonda é o backend, com timeout curto, e
+# devolve só o estado. Endpoint GPU fora do ar é resposta normal da sonda, não
+# exceção — nada no WorkDev pode quebrar porque uma GPU está desligada.
+# --------------------------------------------------------------------------
+
+HEALTH_TIMEOUT_SECONDS = 2.0
+HEALTH_CACHE_TTL_SECONDS = 10.0
+
+STATUS_ONLINE = "online"
+STATUS_OFFLINE = "offline"
+STATUS_UNCONFIGURED = "unconfigured"
+STATUS_DEGRADED = "degraded"
+
+DISPATCHABLE_STATUSES = {STATUS_ONLINE, STATUS_DEGRADED}
+
+STATUS_LABEL = {
+    STATUS_ONLINE: "Online",
+    STATUS_OFFLINE: "Indisponível",
+    STATUS_UNCONFIGURED: "Não configurado",
+    STATUS_DEGRADED: "Online sem o modelo esperado",
+}
+
+
+@dataclass(frozen=True)
+class RuntimeHealth:
+    runtime_id: str
+    status: str
+    reason: str | None
+    models: tuple[str, ...]
+    checked_at: str
+    latency_ms: int | None
+
+    def as_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "status_label": STATUS_LABEL.get(self.status, self.status),
+            "reason": self.reason,
+            "models": list(self.models),
+            "checked_at": self.checked_at,
+            "latency_ms": self.latency_ms,
+            "dispatchable": self.status in DISPATCHABLE_STATUSES,
+        }
+
+
+_health_cache: dict[str, tuple[float, RuntimeHealth]] = {}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _fetch_tags(url: str, headers: dict[str, str]) -> tuple[int, dict]:
+    async with httpx.AsyncClient(timeout=HEALTH_TIMEOUT_SECONDS) as client:
+        response = await client.get(url, headers=headers)
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        return response.status_code, payload
+
+
+def auth_headers(runtime: OllamaRuntime) -> dict[str, str]:
+    token = api_key(runtime)
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+async def check_runtime(runtime: OllamaRuntime) -> RuntimeHealth:
+    """Sonda `/api/tags` do endpoint. Nunca levanta exceção para o chamador."""
+    url = base_url(runtime)
+
+    if not url:
+        return RuntimeHealth(
+            runtime_id=runtime.id,
+            status=STATUS_UNCONFIGURED,
+            reason=f"{runtime.base_url_env} não configurada",
+            models=(),
+            checked_at=_now_iso(),
+            latency_ms=None,
+        )
+
+    started = time.monotonic()
+
+    try:
+        status_code, payload = await _fetch_tags(
+            f"{url}/api/tags",
+            auth_headers(runtime),
+        )
+    except httpx.TimeoutException:
+        return RuntimeHealth(
+            runtime_id=runtime.id,
+            status=STATUS_OFFLINE,
+            reason=(
+                f"sem resposta em {HEALTH_TIMEOUT_SECONDS:g}s"
+            ),
+            models=(),
+            checked_at=_now_iso(),
+            latency_ms=None,
+        )
+    except Exception as error:  # rede, DNS, TLS, GPU desligada…
+        return RuntimeHealth(
+            runtime_id=runtime.id,
+            status=STATUS_OFFLINE,
+            reason=type(error).__name__,
+            models=(),
+            checked_at=_now_iso(),
+            latency_ms=None,
+        )
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+
+    if status_code != 200:
+        return RuntimeHealth(
+            runtime_id=runtime.id,
+            status=STATUS_OFFLINE,
+            reason=f"HTTP {status_code}",
+            models=(),
+            checked_at=_now_iso(),
+            latency_ms=latency_ms,
+        )
+
+    models = tuple(
+        str(item.get("name"))
+        for item in (payload.get("models") or [])
+        if isinstance(item, dict) and item.get("name")
+    )
+
+    expected = model_for(runtime)
+
+    if expected and expected not in models:
+        return RuntimeHealth(
+            runtime_id=runtime.id,
+            status=STATUS_DEGRADED,
+            reason=f"modelo {expected} não está carregado neste endpoint",
+            models=models,
+            checked_at=_now_iso(),
+            latency_ms=latency_ms,
+        )
+
+    return RuntimeHealth(
+        runtime_id=runtime.id,
+        status=STATUS_ONLINE,
+        reason=None,
+        models=models,
+        checked_at=_now_iso(),
+        latency_ms=latency_ms,
+    )
+
+
+async def check_runtime_cached(
+    runtime: OllamaRuntime,
+    *,
+    refresh: bool = False,
+) -> RuntimeHealth:
+    cached = _health_cache.get(runtime.id)
+
+    if (
+        not refresh
+        and cached
+        and time.monotonic() - cached[0] < HEALTH_CACHE_TTL_SECONDS
+    ):
+        return cached[1]
+
+    health = await check_runtime(runtime)
+    _health_cache[runtime.id] = (time.monotonic(), health)
+
+    return health
+
+
+async def check_all(*, refresh: bool = False) -> dict[str, RuntimeHealth]:
+    """Sonda todos os runtimes em paralelo. Um caindo não afeta os outros."""
+    results = await asyncio.gather(
+        *(
+            check_runtime_cached(runtime, refresh=refresh)
+            for runtime in RUNTIMES
+        ),
+        return_exceptions=True,
+    )
+
+    snapshot: dict[str, RuntimeHealth] = {}
+
+    for runtime, result in zip(RUNTIMES, results):
+        if isinstance(result, BaseException):
+            snapshot[runtime.id] = RuntimeHealth(
+                runtime_id=runtime.id,
+                status=STATUS_OFFLINE,
+                reason=type(result).__name__,
+                models=(),
+                checked_at=_now_iso(),
+                latency_ms=None,
+            )
+            continue
+        snapshot[runtime.id] = result
+
+    return snapshot
+
+
+def check_runtime_blocking(
+    runtime: OllamaRuntime,
+    *,
+    refresh: bool = True,
+) -> RuntimeHealth:
+    """Sonda a partir de uma rota síncrona (FastAPI as roda em threadpool)."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(check_runtime_cached(runtime, refresh=refresh))
+
+    raise RuntimeError(
+        "Em contexto async use check_runtime_cached, não a versão bloqueante"
+    )
+
+
+def reset_health_cache() -> None:
+    _health_cache.clear()
