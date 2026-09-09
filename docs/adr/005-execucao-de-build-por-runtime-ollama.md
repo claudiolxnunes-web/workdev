@@ -1,7 +1,8 @@
 # ADR 005 — Execução de Build por runtime Ollama via worker isolado
 
-- Status: **proposed**
+- Status: **accepted**
 - Data: 2026-09-09
+- Aprovado por: Cláudio em 2026-09-09
 - Projeto: WorkDev Core
 - Relacionado: [ADR 004](004-plan-build-handoff.md), `docs/plano-correcao-ollama.md`
 
@@ -89,14 +90,15 @@ envio).
 
 **Negativas / custos**
 
-- Superfície nova: worker, envelope, worktrees, 2 migrações.
+- Superfície nova: worker, envelope, worktrees, 3 migrações.
 - Inferência em CPU é lenta (171 s medidos para uma pergunta de uma linha na
   VPS1, `20f0714`); um Build real será bem mais caro. A qualidade do envelope de
   um modelo 14B quantizado é incógnita até haver medição.
 - `workdev-build-worker` não é reiniciado por `deploy.sh` (que só toca
   `workdev-api.service`): exige item explícito no runbook, sob pena de rodar
   código velho após deploy.
-- Depende de destravar o ownership `root:root` de `apps/api/app/main.py`.
+- ~~Depende de destravar o ownership `root:root` de `apps/api/app/main.py`.~~
+  Resolvido em 2026-09-09 (ver Condições de aceite).
 
 **Riscos aceitos**
 
@@ -121,8 +123,30 @@ Tudo atrás de `WORKDEV_OLLAMA_BUILD_ENABLED` (default `false`).
 `systemctl stop workdev-build-worker` para a execução sem afetar a API. As
 migrações são aditivas com `downgrade()` funcional. Worktrees são descartáveis.
 
-## Pendente para aceitar este ADR
+## Condições de aceite
 
-- [ ] Aprovação do Cláudio
-- [ ] Destravar ownership de `apps/api/app/main.py`
-- [ ] Medição do custo real de um Build completo em `local-code`
+- [x] Aprovação do Cláudio — 2026-09-09
+- [x] Destravar ownership de `apps/api/app/main.py` — feito em 2026-09-09
+      (`chown workdev:workdev` no arquivo, isolado; a pendência geral de
+      ownership de `/opt/workdev` continua aberta no `CLAUDE.md`). O achado 8
+      deixa de bloquear: o router `agent_runtimes` pode sair de dentro de
+      `terminal.py` para `main.py` quando a fatia correspondente for feita.
+- [ ] Medição do custo real de um Build completo em `local-code` — **não é
+      condição de aceite**, e sim de promoção a `WORKDEV_OLLAMA_BUILD_ENABLED=true`.
+      O ADR está aceito; ligar a flag exige o número medido.
+
+## Escolha de papéis — regra permanente
+
+O operador (Cláudio) elege **executor e revisor** em todo envio. Nenhum código
+infere, sugere de forma vinculante ou sobrescreve qualquer um dos dois papéis:
+
+- `reviewer` continua obrigatório no `BuildRequest`, inclusive no modo AUTO — o
+  roteador escolhe apenas o executor.
+- A ordenação de "recomendados" na UI é **dica visual**, nunca filtro. Nada é
+  escondido por preferência.
+- A única recusa possível no backend é por **capacidade ausente**
+  (`AGENTS_WITH_REVIEW_CHANNEL`): identidade sem canal de veredito deixaria a run
+  parada em `review` para sempre. Isso é defeito, não gosto.
+- `qwen` é posicionado como **executor**, por decisão do operador em 2026-09-09.
+  Mantém canal de veredito e continua elegível como revisor se o operador
+  escolher — a decisão é de posicionamento na UI, não de bloqueio.

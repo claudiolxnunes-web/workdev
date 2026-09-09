@@ -1,12 +1,14 @@
 # Plano de correção — integração Ollama (revisão independente)
 
-**Status: PROPOSTO — aguardando aprovação do Cláudio. Nada implementado.**
+**Status: APROVADO em 2026-09-09 — ADR 005 aceito, migrações liberadas.
+Nenhuma fatia de código implementada ainda.**
 Base: `f54c9b8` (develop). Commits revisados: `38c944d`, `5a8615a`, `bef40b8`,
 `61d459c`, `20f0714`.
 
 O objetivo original (PLAN → BUILD com revisão cruzada obrigatória) **não muda**.
 A fatia 2 abaixo altera o *significado* de "runtime Ollama como executor" e por
-isso está condicionada a um ADR `proposed` aprovado antes de qualquer código.
+isso estava condicionada a um ADR aprovado antes de qualquer código — condição
+**satisfeita**: o ADR 005 foi aceito em 2026-09-09.
 
 ---
 
@@ -77,21 +79,35 @@ Consequências no código:
 - Se um dia você quiser Ollama revisando, o que falta é a **fatia opcional B**
   (seção 4) — não é uma regra a derrubar.
 
-Ponto aberto: `qwen` tem sessão tmux e canal de veredito, mas não foi citado
-entre os de ponta. Fica **habilitado** (tem canal) e apenas **fora do destaque de
-recomendado** — diga se prefere o contrário.
+**Resolvido (Cláudio, 2026-09-09): `qwen` é executor.** Ele mantém sessão tmux e
+canal de veredito, então continua tecnicamente elegível como revisor — o que muda é
+o posicionamento na UI: aparece entre os executores, fora do destaque de revisor
+recomendado. Não vira bloqueio de backend, porque não é ausência de capacidade.
+
+E a regra que governa tudo isto, reafirmada pelo operador no mesmo dia:
+
+> **Todas as decisões de papel são do Cláudio. Ele elege executor e revisor, sempre.**
+
+Nenhum código infere, trava ou sobrescreve qualquer um dos dois papéis. "Recomendado"
+é dica visual, nunca filtro: nada some do seletor por preferência. A única recusa que
+o backend faz é por **capacidade ausente** — identidade sem canal de veredito
+deixaria a run parada em `review` para sempre, o que é defeito, não gosto.
 
 ## 3. ADR necessário antes da fatia 3
 
-`docs/adr/005-execucao-de-build-por-runtime-ollama.md`, status **`proposed`**.
+`docs/adr/005-execucao-de-build-por-runtime-ollama.md`, status **`accepted`**
+(aprovado pelo Cláudio em 2026-09-09).
 
-Decisão a registrar: um runtime Ollama **não é** um agente CLI com acesso a shell.
+Decisão registrada: um runtime Ollama **não é** um agente CLI com acesso a shell.
 Ele produz uma *proposta estruturada de mudança*; quem aplica, testa e commita é um
 worker da VPS, dentro de um worktree isolado. O modelo nunca executa comando, nunca
 recebe credencial, nunca toca `develop`/`main`, nunca dispara deploy.
 
-Sem esse ADR aprovado, a fatia 2 não começa e os runtimes Ollama ficam rotulados
-como **assessor** (fatia 1), não executor.
+Enquanto o ADR estava `proposed`, os runtimes Ollama ficariam rotulados como
+**assessor** (fatia 1), não executor. Com a aprovação, o rótulo de executor passa
+a ser legítimo — mas só depois que a fatia 3 existir. Até lá o rótulo honesto da
+fatia 1 continua valendo: prometer na UI o que o código não faz é justamente o
+defeito que originou este documento.
 
 ---
 
@@ -228,8 +244,24 @@ de capacidade, não de regra: se um dia você quiser um runtime Ollama revisando
 ## 5. Migrações necessárias
 
 Todas **aditivas**, com `downgrade()` funcional. Nenhum `DROP`, nenhuma reescrita
-de dado. Conforme o `CLAUDE.md`, ficam **propostas** — não aplico sem seu OK
-explícito, e nem em produção sem janela combinada.
+de dado.
+
+**Aprovadas pelo Cláudio em 2026-09-09** para aplicação. Estado real no Postgres
+de produção (container `postgres` da VPS1, db `workdev`):
+
+- Head do repositório: `d4a1c7e39b52`.
+- `alembic current` no banco: `a1c7e5b93f10` — as três continuam **pendentes de
+  aplicação**.
+- Backup tirado antes de qualquer tentativa:
+  `/opt/backups/workdev/workdev-pre-ollama-20260909-1550.dump` (formato custom,
+  719 KB).
+- Não foi possível validar em banco de staging: o usuário `workdev_app` não tem
+  `CREATEDB`. Mitigação aceita: o DDL do Postgres é transacional (falha reverte
+  inteira), as migrações são aditivas e nenhum código consome as colunas novas
+  ainda.
+
+Rollback: `alembic downgrade a1c7e5b93f10`, ou um passo por vez com
+`alembic downgrade -1`.
 
 | Fatia | Migração | Conteúdo |
 |---|---|---|
@@ -387,13 +419,22 @@ Decisões tomadas (2026-09-09):
    `alembic history` (head único, linear). **Nenhum `alembic upgrade` foi
    executado, em banco nenhum.**
 
-Pendências que continuam bloqueando:
+3. ✅ **ADR 005 aprovado** pelo Cláudio em 2026-09-09. Status mudou de
+   `proposed` para `accepted`. A fatia 3 está desbloqueada.
+4. ✅ **Ownership de `apps/api/app/main.py` destravado** em 2026-09-09
+   (`chown workdev:workdev`, arquivo isolado — não foi `chown -R`). O achado 8
+   deixa de bloquear: o router `agent_runtimes` pode migrar de `terminal.py`
+   para `main.py`. A pendência geral de ownership de `/opt/workdev` continua
+   aberta no `CLAUDE.md` e não foi tocada.
+5. ✅ **`qwen` é executor** (Cláudio, 2026-09-09) — ver seção 2.
+6. ✅ **Migrações aprovadas** pelo Cláudio em 2026-09-09 para aplicação.
 
-3. **Aprovar o ADR 005** — a fatia 3 não começa sem isso.
-4. **`apps/api/app/main.py` está `root:root`** — sem destravar, o worker novo
-   herda a mesma gambiarra de router aninhado do achado 8.
-5. **`qwen` como revisor recomendado?** Tem canal de veredito, não foi citado
-   entre os de ponta. Default do plano: habilitado, sem destaque.
+Pendências que continuam abertas:
+
+7. **Medição do custo real de um Build completo em `local-code`.** Não bloqueia o
+   ADR (já aceito); bloqueia ligar `WORKDEV_OLLAMA_BUILD_ENABLED=true`.
+8. **`/opt/workdev-builds` ainda não existe** — precondição de infra da fatia 3,
+   tem que nascer `workdev:workdev`.
 
 ## Histórico de revisão
 
@@ -405,3 +446,7 @@ Pendências que continuam bloqueando:
 - **2026-09-09, v3** — Ollama confirmado como executor real: ADR 005 escrito com
   status `proposed` e as 3 migrações escritas para revisão (não aplicadas).
   Nenhuma fatia de código implementada.
+- **2026-09-09, v4** — ADR 005 aprovado (`accepted`); ownership de `main.py`
+  destravado; `qwen` definido como executor; migrações aprovadas para aplicação.
+  Reafirmada como regra permanente a eleição manual de executor e revisor pelo
+  operador. Continua sem nenhuma fatia de código implementada.
