@@ -16,7 +16,7 @@ const LABEL: Record<string, string> = {
   licao: "lição",
   solucao: "solução",
   referencia: "referência",
-  operacoes: "operações",
+  operacoes: "operação",
 };
 
 export function KnowledgeTab() {

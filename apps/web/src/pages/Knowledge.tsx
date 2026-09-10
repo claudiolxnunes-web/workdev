@@ -22,7 +22,7 @@ const COR_BADGE: Record<string, string> = {
 const LABEL: Record<string, string> = {
   decisao: "decisão", licao: "lição",
   solucao: "solução", referencia: "referência",
-  operacoes: "operações",
+  operacoes: "operação",
 }
 
 export default function Knowledge() {
