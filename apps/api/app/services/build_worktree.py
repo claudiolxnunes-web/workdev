@@ -140,6 +140,8 @@ def ephemeral_worktree(
     )
     _git_ok(["checkout", "-b", branch], destino, "branch_create_failed")
 
+    _preparar_ambiente(destino, repo)
+
     worktree = Worktree(
         run_id=str(run_id),
         path=destino,
@@ -151,6 +153,68 @@ def ephemeral_worktree(
         yield worktree
     finally:
         _remover(destino, branch, repo)
+
+
+# `node_modules` e a config do Vite não são versionados, então `git worktree
+# add` não os traz. Sem eles o gate não roda dentro do worktree: `vitest` e
+# `vite build` são obrigatórios, e sem dependência nem `VITE_SUPABASE_URL` todo
+# build caía em `blocked` por ambiente ausente, não por código ruim.
+#
+# REGRA QUE NÃO PODE SER QUEBRADA: o gate NUNCA invoca `pnpm` dentro de um
+# worktree. O pnpm confere o `node_modules` antes de rodar script, vê um
+# diretório de outro projeto e decide purgar — e como aqui é symlink para o do
+# repositório real, isso apagaria as dependências de produção. Medido em
+# 2026-09-10 (`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`, que só não purgou
+# por falta de TTY). Quem garante a regra é `GatePaths.node_bin`, em test_gate.
+#
+# São symlinks e não cópia porque o store tem gigabytes. O acoplamento que isso
+# deixa, dito em vez de escondido: o worktree compartilha o `node_modules` do
+# repo real, cache de build incluído. O isolamento da fatia 3 vale para o
+# CÓDIGO, não para a árvore de dependências.
+DEPENDENCY_LINKS: tuple[str, ...] = (
+    "node_modules",
+    "apps/web/node_modules",
+)
+
+# Lista EXPLÍCITA, nunca glob. `.env.local` está fora de propósito: ele tem
+# precedência no Vite e já vazou `VITE_API_URL=localhost` para bundle de
+# produção uma vez (registrado no CLAUDE.md). O `.env` do apps/api também fica
+# fora — o worktree não precisa de credencial de banco para rodar o gate.
+CONFIG_FILES: tuple[str, ...] = (
+    "apps/web/.env",
+    "apps/web/.env.development",
+    "apps/web/.env.production",
+)
+
+
+def _preparar_ambiente(destino: Path, repo: Path) -> dict[str, list[str]]:
+    """Liga dependências e materializa a config que o gate precisa."""
+    ligados: list[str] = []
+    copiados: list[str] = []
+
+    for relativo in DEPENDENCY_LINKS:
+        origem = repo / relativo
+        alvo = destino / relativo
+
+        if not origem.exists() or alvo.exists():
+            continue
+
+        alvo.parent.mkdir(parents=True, exist_ok=True)
+        alvo.symlink_to(origem, target_is_directory=True)
+        ligados.append(relativo)
+
+    for relativo in CONFIG_FILES:
+        origem = repo / relativo
+        alvo = destino / relativo
+
+        if not origem.is_file() or alvo.exists():
+            continue
+
+        alvo.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(origem, alvo)
+        copiados.append(relativo)
+
+    return {"links": ligados, "config": copiados}
 
 
 def write_files(worktree: Worktree, envelope: BuildEnvelope) -> list[str]:

@@ -518,3 +518,66 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_gate_nunca_invoca_pnpm_dentro_do_worktree(tmp_path, monkeypatch):
+    """A regra que não pode ser quebrada (achado 4, 2026-09-10).
+
+    O pnpm confere o estado do node_modules antes de rodar qualquer script e,
+    ao ver um diretório de outro projeto, decide PURGAR. Como o node_modules do
+    worktree é symlink para o do repositório real, isso apagaria as
+    dependências de produção — só não apagou na medição porque faltava TTY
+    (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY).
+
+    Se alguém trocar o binário direto de volta por `pnpm`, este teste quebra.
+    """
+    from app.services import test_gate
+
+    web = tmp_path / "apps/web/node_modules/.bin"
+    web.mkdir(parents=True)
+    for tool in ("vitest", "tsc", "vite", "eslint"):
+        alvo = web / tool
+        alvo.write_text("#!/bin/sh\nexit 0\n")
+        alvo.chmod(0o755)
+
+    paths = test_gate.GatePaths(root=tmp_path)
+    assert paths.in_worktree is True
+
+    comandos: list[list[str]] = []
+
+    def _falso(cmd, cwd, timeout=300):
+        comandos.append(cmd)
+        return 0, "", "", 1
+
+    monkeypatch.setattr(test_gate, "_run_command", _falso)
+
+    test_gate._check_vitest(paths)
+    test_gate._check_build(paths)
+    test_gate._check_lint(paths)
+
+    assert comandos, "nenhum comando foi executado"
+
+    for cmd in comandos:
+        assert "pnpm" not in Path(cmd[0]).name, (
+            f"gate invocou pnpm dentro do worktree: {cmd}"
+        )
+
+
+def test_gate_na_arvore_principal_continua_usando_pnpm(monkeypatch):
+    """O caminho histórico não muda: fora do worktree, `pnpm` como sempre."""
+    from app.services import test_gate
+
+    paths = test_gate.DEFAULT_PATHS
+    assert paths.in_worktree is False
+
+    comandos: list[list[str]] = []
+
+    def _falso(cmd, cwd, timeout=300):
+        comandos.append(cmd)
+        return 0, "", "", 1
+
+    monkeypatch.setattr(test_gate, "_run_command", _falso)
+    test_gate._check_vitest(paths)
+
+    assert comandos
+    assert "pnpm" in Path(comandos[0][0]).name

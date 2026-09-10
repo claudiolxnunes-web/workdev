@@ -190,3 +190,54 @@ class TestCommit:
             f"{build_worktree.COMMIT_AUTHOR_NAME} "
             f"<{build_worktree.COMMIT_AUTHOR_EMAIL}>"
         )
+
+
+class TestAmbienteDoWorktree:
+    """`node_modules` e config do Vite dentro do worktree (achado 4).
+
+    Sem eles o gate não roda: vitest e vite build são obrigatórios, e todo build
+    caía em `blocked` por ambiente ausente — não por código ruim.
+    """
+
+    def test_liga_dependencias_e_copia_config(self, repo, tmp_path):
+        (repo / "node_modules").mkdir()
+        (repo / "apps/web/node_modules").mkdir(parents=True)
+        (repo / "apps/web/.env").write_text("VITE_X=1\n")
+        (repo / "apps/web/.env.production").write_text("VITE_API_URL=\n")
+
+        destino = tmp_path / "wt"
+        destino.mkdir()
+
+        info = build_worktree._preparar_ambiente(destino, repo)
+
+        assert "node_modules" in info["links"]
+        assert "apps/web/node_modules" in info["links"]
+        assert (destino / "node_modules").is_symlink()
+        assert "apps/web/.env" in info["config"]
+        assert (destino / "apps/web/.env").read_text() == "VITE_X=1\n"
+        # Cópia, não link: o build escreve no worktree e não pode alcançar a
+        # config do repositório real.
+        assert not (destino / "apps/web/.env").is_symlink()
+
+    def test_nao_leva_env_local(self, repo, tmp_path):
+        """`.env.local` tem precedência no Vite e já vazou localhost em bundle
+        de produção uma vez — está registrado no CLAUDE.md."""
+        (repo / "apps/web").mkdir(parents=True, exist_ok=True)
+        (repo / "apps/web/.env.local").write_text("VITE_API_URL=localhost:8000\n")
+
+        destino = tmp_path / "wt"
+        destino.mkdir()
+
+        info = build_worktree._preparar_ambiente(destino, repo)
+
+        assert "apps/web/.env.local" not in info["config"]
+        assert not (destino / "apps/web/.env.local").exists()
+
+    def test_config_e_lista_explicita_sem_env_da_api(self):
+        """O worktree não precisa de credencial de banco para rodar o gate."""
+        assert not any(
+            alvo.startswith("apps/api/") for alvo in build_worktree.CONFIG_FILES
+        )
+        assert all(
+            alvo.startswith("apps/web/") for alvo in build_worktree.CONFIG_FILES
+        )

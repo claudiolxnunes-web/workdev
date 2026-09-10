@@ -73,6 +73,34 @@ class GatePaths:
         return candidato if candidato.exists() else API_VENV
 
 
+    @property
+    def in_worktree(self) -> bool:
+        return self.root != WORKDIR
+
+    def node_bin(self, tool: str) -> Path | None:
+        """Binário de Node a invocar, ou None se não houver.
+
+        Dentro de um worktree o gate NUNCA pode chamar `pnpm`. O pnpm confere o
+        estado do `node_modules` antes de rodar qualquer script e, ao ver um
+        diretório que pertence a outro projeto, decide PURGAR e reinstalar —
+        `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`. Como o `node_modules` do
+        worktree é symlink para o do repositório real, com TTY ou `CI=true` essa
+        purga apagaria as dependências de produção. Medido em 2026-09-10 criando
+        um worktree de verdade.
+
+        Invocar o binário direto resolve: `pnpm` não entra, a conferência não
+        acontece, e o `node_modules` compartilhado é só lido.
+        """
+        candidato = self.web_dir / "node_modules/.bin" / tool
+
+        if candidato.exists():
+            return candidato
+
+        # Fallback para o store da raiz do workspace.
+        raiz = self.root / "node_modules/.bin" / tool
+        return raiz if raiz.exists() else None
+
+
 DEFAULT_PATHS = GatePaths()
 
 
@@ -201,8 +229,26 @@ def _check_vitest(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
             reason="pnpm não encontrado no PATH",
         )
 
+    vitest_bin = paths.node_bin("vitest")
+
+    if paths.in_worktree and vitest_bin is None:
+        return CheckResult(
+            name="vitest",
+            passed=False,  # FAIL-CLOSED
+            mandatory=True,
+            reason="node_modules ausente no worktree",
+        )
+
+    # Dentro do worktree, binário direto — ver GatePaths.node_bin: `pnpm` ali
+    # purgaria o node_modules compartilhado.
+    comando = (
+        [str(vitest_bin), "run"]
+        if paths.in_worktree
+        else [pnpm_path, "test", "--", "--run"]
+    )
+
     exit_code, stdout, stderr, duration = _run_command(
-        [pnpm_path, "test", "--", "--run"],
+        comando,
         paths.web_dir,
         timeout=300,
     )
@@ -241,8 +287,15 @@ def _check_lint(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
             reason="pnpm não encontrado no PATH",
         )
 
+    eslint_bin = paths.node_bin("eslint")
+    comando = (
+        [str(eslint_bin), "."]
+        if paths.in_worktree and eslint_bin is not None
+        else [pnpm_path, "lint"]
+    )
+
     exit_code, stdout, stderr, duration = _run_command(
-        [pnpm_path, "lint"],
+        comando,
         paths.web_dir,
         timeout=120,
     )
@@ -283,8 +336,43 @@ def _check_build(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
             reason="pnpm não encontrado no PATH",
         )
 
+    # `pnpm build` é `tsc -b && vite build`. No worktree os dois viram binário
+    # direto, encadeados pelo shell do próprio gate — ver GatePaths.node_bin.
+    tsc_bin = paths.node_bin("tsc")
+    vite_bin = paths.node_bin("vite")
+
+    if paths.in_worktree and (tsc_bin is None or vite_bin is None):
+        return CheckResult(
+            name="build",
+            passed=False,  # FAIL-CLOSED
+            mandatory=True,
+            reason="node_modules ausente no worktree",
+        )
+
+    if paths.in_worktree:
+        tsc_code, tsc_out, tsc_err, tsc_ms = _run_command(
+            [str(tsc_bin), "-b"],
+            paths.web_dir,
+            timeout=300,
+        )
+
+        if tsc_code != 0:
+            return CheckResult(
+                name="build",
+                passed=False,
+                mandatory=True,
+                reason=f"tsc falhou: {(tsc_err or tsc_out).strip()[:200]}",
+                duration_ms=tsc_ms,
+            )
+
+    comando = (
+        [str(vite_bin), "build"]
+        if paths.in_worktree
+        else [pnpm_path, "build"]
+    )
+
     exit_code, stdout, stderr, duration = _run_command(
-        [pnpm_path, "build"],
+        comando,
         paths.web_dir,
         timeout=300,
     )
