@@ -220,6 +220,14 @@ export interface DispatchJob {
    *  o que sobra se a geração morrer no meio. */
   partial_response: string
   partial_chars: number
+  /** Resultado do build isolado (ADR 005), preenchido quando o envelope vira
+   *  commit. Nulo enquanto o job só trocou texto: um job pode terminar sem
+   *  produzir branch (envelope recusado), e a tela precisa distinguir os dois. */
+  branch: string | null
+  commit_sha: string | null
+  gate_passed: boolean | null
+  files: string[]
+  diffstat: string | null
 }
 
 export interface AgentContext {

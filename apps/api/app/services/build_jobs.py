@@ -196,4 +196,13 @@ def job_out(job: AgentBuildJob) -> dict:
         # modelo pensa, e é o que sobra se a geração morrer no meio.
         "partial_response": (job.payload or {}).get("partial_response") or "",
         "partial_chars": (job.payload or {}).get("partial_chars") or 0,
+        # Resultado do build isolado (ADR 005). Preenchido pelo worker quando o
+        # envelope vira commit; nulo enquanto o job só trocou texto. Sem isto a
+        # tela sabia que o job terminou mas não o que ele produziu — e o branch,
+        # que é o entregável, ficava só no log do worker.
+        "branch": (job.payload or {}).get("branch"),
+        "commit_sha": (job.payload or {}).get("commit_sha"),
+        "gate_passed": (job.payload or {}).get("gate_passed"),
+        "files": (job.payload or {}).get("files") or [],
+        "diffstat": (job.payload or {}).get("diffstat"),
     }

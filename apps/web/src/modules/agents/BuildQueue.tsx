@@ -259,6 +259,46 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
                   </pre>
                 </details>
               )}
+              {/* Resultado do build isolado. O branch é o entregável: sem ele
+                  na tela, o operador teria de ir ao log do worker para saber
+                  o que a execução produziu. */}
+              {jobDaRun?.branch && (
+                <div className="mt-2 rounded border border-slate-700 bg-slate-950/60 p-2">
+                  <p className="text-[11px] text-slate-300">
+                    Branch: <code className="text-sky-300">{jobDaRun.branch}</code>
+                    {jobDaRun.commit_sha
+                      ? ` · ${jobDaRun.commit_sha.slice(0, 8)}`
+                      : ""}
+                  </p>
+                  {jobDaRun.gate_passed !== null && (
+                    <p className={`mt-1 text-[11px] ${
+                      jobDaRun.gate_passed ? "text-emerald-300" : "text-amber-300"
+                    }`}>
+                      Gate {jobDaRun.gate_passed ? "aprovado" : "reprovado"}
+                      {jobDaRun.gate_passed
+                        ? " · aguardando revisão independente"
+                        : " · execução bloqueada"}
+                    </p>
+                  )}
+                  {jobDaRun.files.length > 0 && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-[11px] text-slate-400">
+                        {jobDaRun.files.length} arquivo(s) alterado(s)
+                      </summary>
+                      <ul className="mt-1 space-y-0.5">
+                        {jobDaRun.files.map((caminho) => (
+                          <li key={caminho} className="text-[11px] text-slate-500">
+                            {caminho}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Nada foi promovido: o commit vive só neste branch.
+                  </p>
+                </div>
+              )}
             </div>
           )}
           {context.subtasks.length > 0 && <div><p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">Subtasks</p>{context.subtasks.map((item) => <label key={item.id} className="flex cursor-pointer gap-2 py-1 text-xs text-slate-300"><input type="checkbox" disabled={busy} checked={item.status === "done"} onChange={() => void toggleSubtask(item.id, item.status)} /><span className={item.status === "done" ? "text-slate-500 line-through" : ""}>{item.order}. {item.title}</span></label>)}</div>}

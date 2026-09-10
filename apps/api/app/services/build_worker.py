@@ -20,7 +20,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.handoff import AgentBuildJob, AgentRun
-from app.services import build_jobs
+from app.services import build_jobs, context_egress
+from app.services.context_egress import EgressDenied
 from app.services.build_executor import (
     BuildOutcome,
     build_enabled,
@@ -124,10 +125,37 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
     except HandoffError as error:
         return _falhar(db, run, job, "build.dispatch_failed", str(error))
 
+    # Política de egresso ANTES do envio: para runtime remoto, o texto só sai
+    # com projeto não-restrito, consentimento registrado e depois de redaction.
+    # Recusar aqui e não no driver é deliberado — depois que o prompt entra no
+    # cliente HTTP, já saiu.
+    try:
+        decisao = context_egress.prepare(db, run, job.runtime_id, prompt)
+    except EgressDenied as error:
+        return _falhar(
+            db, run, job, "build.egress_denied", error.message,
+            {"code": error.code, **error.details},
+        )
+
+    if decisao.remote:
+        add_run_event(
+            db,
+            run,
+            "build.context_redacted",
+            decisao.redaction_summary,
+            {
+                "runtime_id": job.runtime_id,
+                "classification": decisao.classification,
+                # Contagem por tipo, jamais o valor encontrado.
+                "counts": dict(decisao.redaction.counts),
+            },
+        )
+        db.commit()
+
     try:
         resultado = await dispatch_to_ollama(
             job.runtime_id,
-            prompt,
+            decisao.prompt,
             model=job.model,
         )
     except OllamaDispatchError as error:
