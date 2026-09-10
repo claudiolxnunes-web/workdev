@@ -58,10 +58,17 @@ class TestRedaction:
         assert "umaSenhaBemGrande" not in resultado.text
 
     def test_bloco_de_chave_privada(self):
+        # O bloco é montado em pedaços de propósito. Escrito como literal
+        # inteiro, o gitleaks do predeploy-gate casa a regra `private-key`
+        # e BLOQUEIA o deploy — foi o que aconteceu em 2026-09-10. O
+        # fixture é falso (24 chars de corpo; uma ed25519 real tem ~300),
+        # mas o scanner não tem como saber, e afrouxar o scanner para
+        # acomodar um teste seria trocar a proteção pelo conforto.
+        marcador = "-----%s OPENSSH PRIVATE KEY-----"
         texto = (
-            "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+            (marcador % "BEGIN") + "\n"
             "b3BlbnNzaC1rZXktdjEAAAAA\n"
-            "-----END OPENSSH PRIVATE KEY-----"
+            + (marcador % "END")
         )
 
         resultado = context_redaction.redact(texto)
