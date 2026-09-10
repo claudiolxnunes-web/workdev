@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import AgentsPage from "./AgentsPage"
@@ -34,6 +34,7 @@ describe("AgentsPage", () => {
   const fetchMock = vi.fn()
 
   beforeEach(() => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true)
     fetchMock.mockReset()
     getAgentRuntimes.mockReset()
     getAgentRuntimes.mockResolvedValue([])
@@ -47,6 +48,39 @@ describe("AgentsPage", () => {
       }),
     })
     vi.stubGlobal("fetch", fetchMock)
+  })
+
+
+  it("pausa fora de foco e oculta, respeita 5s e limpa ao desmontar", async () => {
+    vi.useFakeTimers()
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false)
+    const view = render(<AgentsPage />)
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      await act(async () => { await vi.advanceTimersByTimeAsync(4999) })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      fireEvent(window, new Event("blur"))
+      await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      fireEvent(window, new Event("focus"))
+      hidden.mockReturnValue(true)
+      fireEvent(document, new Event("visibilitychange"))
+      await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      hidden.mockReturnValue(false)
+      fireEvent(document, new Event("visibilitychange"))
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      view.unmount()
+      await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    } finally {
+      view.unmount()
+      vi.useRealTimers()
+    }
   })
 
   it("highlights approval on the agent tab and selected status", async () => {

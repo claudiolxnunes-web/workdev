@@ -28,7 +28,9 @@ const RUNTIME_DOT: Record<string, string> = {
   unconfigured: "bg-slate-500",
 }
 
-const STATUS_POLL_MS = 2000
+const configuredStatusPollMs = Number(import.meta.env.VITE_AGENTS_STATUS_POLL_MS)
+const STATUS_POLL_MS = Number.isFinite(configuredStatusPollMs)
+  ? Math.max(5000, configuredStatusPollMs) : 5000
 const RUNTIME_POLL_MS = 10000
 
 type HealthStatus = "idle" | "busy" | "blocked" | "offline" | "degraded"
@@ -76,9 +78,21 @@ export default function AgentsPage() {
 
   useEffect(() => {
     let cancelled = false
+    let focused = document.hasFocus()
+    let inFlight = false
+    let timer: number | undefined
+    let controller: AbortController | undefined
+    const active = () => !cancelled && focused && !document.hidden
+    function schedule() {
+      window.clearTimeout(timer)
+      if (active()) timer = window.setTimeout(poll, STATUS_POLL_MS)
+    }
     async function poll() {
+      if (!active() || inFlight) return
+      inFlight = true
+      controller = new AbortController()
       try {
-        const response = await fetch("/api/agents/status")
+        const response = await fetch("/api/agents/status", { signal: controller.signal })
         if (!response.ok) return
         const data = await response.json()
         if (cancelled || !Array.isArray(data.agents)) return
@@ -98,10 +112,27 @@ export default function AgentsPage() {
         setHealth(nextHealth)
         setOperations(nextOperations)
       } catch { /* próxima rodada tenta de novo */ }
+      finally { inFlight = false; schedule() }
     }
+    function visibilityChanged() {
+      window.clearTimeout(timer)
+      if (active()) schedule()
+      else controller?.abort()
+    }
+    function focus() { focused = true; visibilityChanged() }
+    function blur() { focused = false; visibilityChanged() }
+    document.addEventListener("visibilitychange", visibilityChanged)
+    window.addEventListener("focus", focus)
+    window.addEventListener("blur", blur)
     void poll()
-    const interval = window.setInterval(poll, STATUS_POLL_MS)
-    return () => { cancelled = true; window.clearInterval(interval) }
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+      controller?.abort()
+      document.removeEventListener("visibilitychange", visibilityChanged)
+      window.removeEventListener("focus", focus)
+      window.removeEventListener("blur", blur)
+    }
   }, [])
 
   useEffect(() => {

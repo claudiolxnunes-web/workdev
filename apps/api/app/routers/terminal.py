@@ -627,8 +627,14 @@ def agent_runtime_snapshot() -> dict[str, dict]:
     return snapshot
 
 
-@router.get("/api/agents/status")
-async def agents_status():
+_STATUS_CACHE_SECONDS = 2.0
+_status_cache: dict | None = None
+_status_cache_until = 0.0
+_status_refresh_task: asyncio.Task | None = None
+
+
+async def _refresh_agents_status() -> dict:
+    global _status_cache, _status_cache_until
     supervisor = await asyncio.to_thread(_load_supervisor_health)
     run_states = await asyncio.to_thread(_load_run_states)
     results = await asyncio.gather(
@@ -637,7 +643,20 @@ async def agents_status():
             for agent, session in ALLOWED_SESSIONS.items()
         )
     )
-    return {"agents": list(results)}
+    _status_cache = {"agents": list(results)}
+    _status_cache_until = time.monotonic() + _STATUS_CACHE_SECONDS
+    return _status_cache
+
+
+@router.get("/api/agents/status")
+async def agents_status():
+    global _status_refresh_task
+    if _status_cache is not None and time.monotonic() < _status_cache_until:
+        return _status_cache
+    # Uma única coleta por worker, inclusive se o cliente desconectar.
+    if _status_refresh_task is None or _status_refresh_task.done():
+        _status_refresh_task = asyncio.create_task(_refresh_agents_status())
+    return await asyncio.shield(_status_refresh_task)
 
 
 @router.websocket("/ws/agents/{agent}")
