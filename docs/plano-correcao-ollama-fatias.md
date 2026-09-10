@@ -154,8 +154,16 @@ Gate FAIL → `blocked` com os checks reprovados.
 `workdev-build-worker.service` (`User=workdev`, `NoNewPrivileges=true`, unit
 separada de `workdev-api`), consumo com `SELECT ... FOR UPDATE SKIP LOCKED`,
 limite `WORKDEV_OLLAMA_BUILD_MAX_ATTEMPTS` (default 3), tudo atrás de
-`WORKDEV_OLLAMA_BUILD_ENABLED` (default `false`). **Remove o consumidor
-in-process provisório** da fatia 2.
+`WORKDEV_OLLAMA_BUILD_ENABLED` (default `false`).
+
+> **Corrigido em 2026-09-10:** aqui dizia que 3f **remove** o consumidor
+> in-process provisório da fatia 2. Removê-lo deixaria o despacho sem executor
+> nenhum, porque a unit do worker não está instalada — a UI aceitaria o clique e
+> nada aconteceria. O consumidor passa a ser **condicionado** a
+> `build_enabled()`: flag ligada, ele sai de cena e o worker assume; desligada,
+> continua sendo o executor. Ele sai de vez quando a unit estiver de pé, não
+> antes. Se um agente futuro ler a versão antiga e "consertar" removendo, quebra
+> o despacho.
 
 **Aceite:**
 - unit ativa e job consumido fora do ciclo da requisição;

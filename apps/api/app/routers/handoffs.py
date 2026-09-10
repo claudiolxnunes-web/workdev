@@ -28,7 +28,8 @@ from app.schemas.handoff import (
     RunUpdate,
     SubtaskProgress,
 )
-from app.services import agent_runtimes, build_jobs
+from app.services import agent_runtimes, build_jobs, context_egress
+from app.services.build_executor import build_enabled
 from app.services.agent_runtimes import is_ollama_agent
 from app.services.build_rag import augment_prompt
 from app.services.plan_granularity import assess as assess_plan_granularity
@@ -1166,13 +1167,6 @@ def transfer_agent_run(
     )
 
 
-# A cada 5s o parcial vai para o banco. Numa geração de 15 minutos são ~180
-# updates de alguns KB — irrelevante — e o que se salva é tudo que foi gerado
-# até o instante da queda.
-PARTIAL_FLUSH_SECONDS = 5.0
-PARTIAL_MAX_CHARS = 60_000
-
-
 async def _consume_dispatch_job(
     run_id: UUID,
     job_id: UUID,
@@ -1206,43 +1200,15 @@ async def _consume_dispatch_job(
     erro: OllamaDispatchError | None = None
     result: dict | None = None
 
-    # O parcial é gravado no Postgres, não em arquivo: a fonte oficial é o
-    # banco, a UI já consulta GET /runs/{id}/dispatch/{job_id} de 5 em 5s, e um
-    # arquivo temporário criaria uma segunda verdade fora da trilha — além de
-    # cair na pendência de ownership de /opt/workdev já registrada no CLAUDE.md.
-    ultimo_flush = 0.0
-
-    async def _gravar_parcial(texto: str, raciocinio: str) -> None:
-        nonlocal ultimo_flush
-        agora = time.monotonic()
-        if agora - ultimo_flush < PARTIAL_FLUSH_SECONDS:
-            return
-        ultimo_flush = agora
-
-        parcial_db = SessionLocal()
-        try:
-            atual = (
-                parcial_db.query(AgentBuildJob)
-                .filter(AgentBuildJob.id == job_id)
-                .first()
-            )
-            if atual is None:
-                return
-            atual.payload = {
-                **(atual.payload or {}),
-                "partial_response": texto[-PARTIAL_MAX_CHARS:],
-                "partial_chars": len(texto),
-                "partial_thinking_chars": len(raciocinio),
-            }
-            parcial_db.commit()
-        except Exception:  # pragma: no cover - parcial nunca derruba a geração
-            parcial_db.rollback()
-        finally:
-            parcial_db.close()
-
+    # O gravador de parcial vive em build_jobs, usado igual aqui e no worker
+    # isolado: duas cópias divergiriam, e é justamente o parcial que sobra
+    # quando a geração morre no meio.
     try:
         result = await dispatch_to_ollama(
-            runtime_id, prompt, model=model, on_chunk=_gravar_parcial,
+            runtime_id,
+            prompt,
+            model=model,
+            on_chunk=build_jobs.partial_writer(job_id),
         )
     except OllamaDispatchError as falha:
         erro = falha
@@ -1394,6 +1360,36 @@ def dispatch_run_to_ollama(
     # recuperação acontece na VPS, o runtime só lê.
     prompt = augment_prompt(context)
 
+    # Política de egresso ANTES de abrir o job, e não depois: uma recusa entre
+    # o open_job e o envio deixaria uma linha órfã em `queued`, que o índice
+    # parcial usaria para recusar todo redespacho daquela run.
+    #
+    # A checagem vive aqui, e não só no worker isolado, porque a proteção não
+    # pode depender de qual executor está ligado — com a flag desligada é este
+    # caminho que roda, e era ele que mandava o prompt inteiro, sem redaction
+    # nem consentimento, para um runtime remoto.
+    try:
+        decisao_egresso = context_egress.prepare(db, run, run.agent, prompt)
+    except context_egress.EgressDenied as recusa:
+        add_run_event(
+            db,
+            run,
+            "build.egress_denied",
+            recusa.message,
+            {"code": recusa.code, **recusa.details},
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": recusa.code,
+                "message": recusa.message,
+                "details": recusa.details,
+            },
+        ) from recusa
+
+    prompt = decisao_egresso.prompt
+
     try:
         job = build_jobs.open_job(
             db,
@@ -1431,7 +1427,24 @@ def dispatch_run_to_ollama(
     db.refresh(job)
 
     _sync_run(background, db, run, event)
-    background.add_task(_consume_dispatch_job, run.id, job.id, prompt, model)
+
+    # Quem consome o job depende da flag, e só um dos dois pode consumir.
+    #
+    # Com WORKDEV_OLLAMA_BUILD_ENABLED ligada, o worker isolado é o executor e
+    # este consumidor sai de cena. Sem essa condição os dois disputavam o mesmo
+    # job: este roda no ato, o worker faz poll a cada 5s, então este ganhava
+    # sempre — e o build isolado, que é o motivo da fatia 3 existir, nunca
+    # executava. Na janela em que ambos liam `queued`, a mesma inferência
+    # rodava duas vezes.
+    #
+    # A fatia 3f previa REMOVER este consumidor. Removê-lo hoje deixaria o
+    # despacho sem executor nenhum, porque a unit do worker não está instalada:
+    # a UI voltaria a aceitar o clique e não acontecer nada. Ele sai quando o
+    # worker estiver de pé, não antes.
+    if not build_enabled():
+        background.add_task(
+            _consume_dispatch_job, run.id, job.id, prompt, model
+        )
 
     return {
         "run": _run_out(db, run),

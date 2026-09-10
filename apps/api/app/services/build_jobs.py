@@ -14,6 +14,7 @@ duas réplicas: o perdedor recebe IntegrityError e vira 409.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from hashlib import sha256
 from uuid import UUID, uuid4
@@ -21,8 +22,12 @@ from uuid import UUID, uuid4
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.database import SessionLocal
 from app.models.handoff import AgentBuildJob, AgentRun
 
+
+PARTIAL_FLUSH_SECONDS = 5.0
+PARTIAL_MAX_CHARS = 60_000
 
 ACTIVE_STATES = ("queued", "running")
 FINAL_STATES = ("done", "failed", "cancelled")
@@ -175,6 +180,50 @@ def fail_job(
         run.dispatch_state = DISPATCH_FAILED
     db.flush()
     return job
+
+
+def partial_writer(job_id: UUID):
+    """Devolve o `on_chunk` que grava o parcial da geração no Postgres.
+
+    A sessão é própria e efêmera de propósito: a sessão do worker fica dentro
+    de uma transação durante toda a inferência, e escrever o parcial por ela
+    só o tornaria visível no commit final — ou seja, tarde demais para servir
+    de parcial.
+
+    Falha aqui nunca derruba a geração: perder o parcial é ruim, perder a
+    resposta inteira porque o parcial não gravou seria pior.
+    """
+    ultimo_flush = 0.0
+
+    async def _gravar(texto: str, raciocinio: str) -> None:
+        nonlocal ultimo_flush
+        agora = time.monotonic()
+        if agora - ultimo_flush < PARTIAL_FLUSH_SECONDS:
+            return
+        ultimo_flush = agora
+
+        sessao = SessionLocal()
+        try:
+            atual = (
+                sessao.query(AgentBuildJob)
+                .filter(AgentBuildJob.id == job_id)
+                .first()
+            )
+            if atual is None:
+                return
+            atual.payload = {
+                **(atual.payload or {}),
+                "partial_response": texto[-PARTIAL_MAX_CHARS:],
+                "partial_chars": len(texto),
+                "partial_thinking_chars": len(raciocinio),
+            }
+            sessao.commit()
+        except Exception:  # pragma: no cover - parcial nunca derruba a geração
+            sessao.rollback()
+        finally:
+            sessao.close()
+
+    return _gravar
 
 
 def job_out(job: AgentBuildJob) -> dict:

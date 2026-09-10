@@ -118,6 +118,23 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
         return None
 
     build_jobs.start_job(db, job)
+
+    # A run TEM que sair de `queued` aqui. RUN_TRANSITIONS só admite
+    # queued→{running, cancelled}: sem este passo, tanto o sucesso
+    # (running→review) quanto a falha (running→blocked) eram recusados pelo
+    # contrato, e todo build terminava congelando a run em `queued` com um
+    # evento `build.transition_refused`. O trabalho rodava e não chegava a
+    # ninguém.
+    if run.status == "queued":
+        run, _evento = update_run(
+            db,
+            run,
+            {
+                "status": "running",
+                "message": f"Build isolado iniciado em {job.runtime_id}",
+            },
+        )
+
     db.commit()
 
     try:
@@ -157,6 +174,10 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
             job.runtime_id,
             decisao.prompt,
             model=job.model,
+            # Sem isto o parcial volta a não ser gravado, e uma geração que
+            # morre aos 899s de 900 não deixa nada — a regressão que af33f42
+            # tinha justamente corrigido.
+            on_chunk=build_jobs.partial_writer(job.id),
         )
     except OllamaDispatchError as error:
         return _falhar(
@@ -258,8 +279,21 @@ def _falhar(
                     "message": f"Build isolado falhou: {mensagem}",
                 },
             )
-        except HandoffError:  # pragma: no cover - contrato recusou
-            pass
+        except HandoffError as error:
+            # Engolir com `pass` escondia o caso real: com a run em `queued`,
+            # `blocked` também é transição inválida, e a falha sumia sem deixar
+            # rastro. O trabalho não pode ser apagado por causa disto, mas a
+            # recusa tem que aparecer na trilha.
+            add_run_event(
+                db,
+                run,
+                "build.transition_refused",
+                (
+                    f"Transição para 'blocked' recusada pelo contrato: "
+                    f"{error}"
+                ),
+                {"job_id": str(job.id), "target": "blocked", "de": run.status},
+            )
 
     db.commit()
     return None
