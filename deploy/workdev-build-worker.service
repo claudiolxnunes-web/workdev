@@ -1,0 +1,51 @@
+# Worker de Build isolado — ADR 005.
+#
+# NÃO INSTALADO. Este arquivo é a proposta; instalar exige root e é decisão do
+# operador:
+#   sudo cp deploy/workdev-build-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now workdev-build-worker
+#
+# ⚠️ `deploy.sh` só reinicia `workdev-api.service`. Depois de todo deploy que
+# mexa no worker, reiniciar explicitamente:
+#   sudo systemctl restart workdev-build-worker
+# Sem isso o worker segue rodando código velho — descompasso silencioso, que é
+# o modo de falha já registrado duas vezes no CLAUDE.md desta VPS.
+#
+# Unit SEPARADA de workdev-agents.service de propósito: aquele é Type=oneshot
+# com RemainAfterExit e carrega o tmux server de TODAS as sessões de agente.
+# Reiniciar o worker não pode derrubar as sessões do Codex/Kimi/Qwen.
+
+[Unit]
+Description=WorkDev Build Worker (execução isolada de runs Ollama)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=workdev
+Group=workdev
+SupplementaryGroups=workdev-runtime
+
+WorkingDirectory=/opt/workdev
+Environment=WORKDEV_API_ENV_FILE=/etc/workdev/workdev-api.env
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/workdev/apps/api/venv/bin/python /opt/workdev/scripts/workdev_build_worker.py
+
+Restart=always
+RestartSec=10
+
+# O worker escreve worktrees; precisa do diretório de builds.
+ReadWritePaths=/opt/workdev-builds
+
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=full
+ProtectHome=true
+
+# Um build travado não pode segurar a fila para sempre.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

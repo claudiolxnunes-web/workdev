@@ -32,6 +32,50 @@ WEB_DIR = WORKDIR / "apps/web"
 STATE_DIR = WORKDIR / ".workdev" / "review-gates"
 
 
+@dataclass(frozen=True)
+class GatePaths:
+    """Onde o gate roda.
+
+    Existe porque o worker de build (ADR 005) executa o gate DENTRO de um
+    worktree efêmero, não na árvore de `/opt/workdev`. Enquanto os caminhos
+    eram constantes de módulo, um build isolado rodaria os testes na árvore de
+    produção — que é exatamente o que o isolamento existe para impedir.
+
+    O default reproduz o comportamento histórico, então quem chama sem
+    argumento continua idêntico.
+    """
+
+    root: Path = WORKDIR
+
+    @property
+    def api_dir(self) -> Path:
+        return self.root / "apps/api"
+
+    @property
+    def web_dir(self) -> Path:
+        return self.root / "apps/web"
+
+    @property
+    def api_venv(self) -> Path:
+        # Na árvore padrão, devolve a CONSTANTE do módulo — não um caminho
+        # recalculado. Recalcular parecia inofensivo e não é: testes que
+        # apontam `API_VENV` para um caminho inexistente (para o check falhar
+        # rápido, sem subprocesso) passariam a receber o venv real de volta, e
+        # o gate rodaria `pytest` de verdade DENTRO do pytest — recursão que
+        # derrubou a carga da VPS durante esta fatia.
+        if self.root == WORKDIR:
+            return API_VENV
+
+        # Worktree: `venv/` não é versionado, então não vem no `worktree add`.
+        # Cair no interpretador da árvore principal é intencional — é o mesmo
+        # Python rodando sobre o código do worktree via `cwd`.
+        candidato = self.root / "apps/api/venv/bin/python"
+        return candidato if candidato.exists() else API_VENV
+
+
+DEFAULT_PATHS = GatePaths()
+
+
 @dataclass
 class CheckResult:
     """Resultado de um check individual."""
@@ -102,19 +146,21 @@ def _run_command(cmd: list[str], cwd: Path, timeout: int = 300) -> tuple[int, st
         return -1, "", str(e), duration
 
 
-def _check_pytest() -> CheckResult:
+def _check_pytest(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
     """Executar pytest no ambiente correto da API."""
-    if not API_VENV.exists():
+    venv = paths.api_venv
+
+    if not venv.exists():
         return CheckResult(
             name="pytest",
             passed=False,
             mandatory=True,
-            reason=f"Venv da API não encontrado em {API_VENV}",
+            reason=f"Venv da API não encontrado em {venv}",
         )
 
     exit_code, stdout, stderr, duration = _run_command(
-        [str(API_VENV), "-m", "pytest", "-v", "--tb=short"],
-        API_DIR,
+        [str(venv), "-m", "pytest", "-v", "--tb=short"],
+        paths.api_dir,
         timeout=300,
     )
 
@@ -141,7 +187,7 @@ def _check_pytest() -> CheckResult:
     )
 
 
-def _check_vitest() -> CheckResult:
+def _check_vitest(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
     """Executar vitest no diretório correto do web. OBRIGATÓRIO."""
     import shutil
 
@@ -157,7 +203,7 @@ def _check_vitest() -> CheckResult:
 
     exit_code, stdout, stderr, duration = _run_command(
         [pnpm_path, "test", "--", "--run"],
-        WEB_DIR,
+        paths.web_dir,
         timeout=300,
     )
 
@@ -182,7 +228,7 @@ def _check_vitest() -> CheckResult:
     )
 
 
-def _check_lint() -> CheckResult:
+def _check_lint(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
     """Executar lint no frontend. OBRIGATÓRIO, mas com tratamento de dívida histórica."""
     import shutil
 
@@ -197,7 +243,7 @@ def _check_lint() -> CheckResult:
 
     exit_code, stdout, stderr, duration = _run_command(
         [pnpm_path, "lint"],
-        WEB_DIR,
+        paths.web_dir,
         timeout=120,
     )
 
@@ -224,7 +270,7 @@ def _check_lint() -> CheckResult:
     )
 
 
-def _check_build() -> CheckResult:
+def _check_build(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
     """Executar build do web (tsc -b + vite). OBRIGATÓRIO."""
     import shutil
 
@@ -239,7 +285,7 @@ def _check_build() -> CheckResult:
 
     exit_code, stdout, stderr, duration = _run_command(
         [pnpm_path, "build"],
-        WEB_DIR,
+        paths.web_dir,
         timeout=300,
     )
 
@@ -264,15 +310,18 @@ def _check_build() -> CheckResult:
     )
 
 
-def _get_git_commit_sha() -> str | None:
-    """Obter SHA do commit git atual do código sendo testado."""
+def _get_git_commit_sha(paths: GatePaths = DEFAULT_PATHS) -> str | None:
+    """Obter SHA do commit git atual do código sendo testado.
+
+    Num build isolado isto devolve o SHA do worktree, não o da árvore
+    principal — é o que amarra a evidência ao código que realmente rodou.
+    """
     import subprocess
 
     try:
-        # Tentar obter SHA do workdir atual
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=WORKDIR,
+            cwd=paths.root,
             capture_output=True,
             text=True,
             timeout=10,
@@ -286,7 +335,10 @@ def _get_git_commit_sha() -> str | None:
     return None
 
 
-def execute_gate(run: AgentRun) -> GateEvidence:
+def execute_gate(
+    run: AgentRun,
+    paths: GatePaths = DEFAULT_PATHS,
+) -> GateEvidence:
     """
     Executar todos os checks do gate e retornar evidência auditável.
 
@@ -303,7 +355,7 @@ def execute_gate(run: AgentRun) -> GateEvidence:
     now = datetime.now(timezone.utc)
 
     # Obter fingerprint do código sendo testado
-    git_commit_sha = _get_git_commit_sha()
+    git_commit_sha = _get_git_commit_sha(paths)
 
     evidence = GateEvidence(
         run_id=run.id,
@@ -316,10 +368,10 @@ def execute_gate(run: AgentRun) -> GateEvidence:
     try:
         # Executar checks
         checks = [
-            _check_pytest(),      # Obrigatório
-            _check_vitest(),      # Opcional
-            _check_lint(),        # Opcional
-            _check_build(),       # Opcional
+            _check_pytest(paths),      # Obrigatório
+            _check_vitest(paths),      # Opcional
+            _check_lint(paths),        # Opcional
+            _check_build(paths),       # Opcional
         ]
 
         evidence.checks = checks
