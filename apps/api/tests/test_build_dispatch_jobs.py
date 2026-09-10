@@ -164,7 +164,8 @@ class CicloDeVida(unittest.TestCase):
 class ModelDeclaraOQueOBancoTem(unittest.TestCase):
     """O ORM tem que declarar as colunas que a migração criou.
 
-    Este teste nasceu de um 500 em produção. A migração `b2e8f4a17c30` criou
+    Este teste nasceu de um 500 em produção (2026-09-09, 7 ocorrências no
+    journal do workdev-api às 23:21). A migração `b2e8f4a17c30` criou
     dispatch_state/attempts/last_dispatch_at/token em `agent_runs`, mas o model
     AgentRun nunca foi atualizado — ler `run.dispatch_state` pelo ORM levantava
     AttributeError e derrubava toda rota que serializasse uma run.

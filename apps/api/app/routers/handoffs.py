@@ -1260,6 +1260,9 @@ async def _consume_dispatch_job(
                 "duration_ms": result["duration_ms"],
                 "truncated": result["truncated"],
                 "response": result["response"],
+                # Guardado para auditoria: sem isto, num modelo com raciocínio
+                # explícito o evento não registra nada do que ele produziu.
+                "thinking": result.get("thinking") or "",
                 "job_id": str(job.id),
             },
         )

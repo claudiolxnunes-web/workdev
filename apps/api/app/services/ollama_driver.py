@@ -182,12 +182,43 @@ async def dispatch(
         ) from error
 
     text = str(payload.get("response") or "")
+
+    # Modelos com `thinking` (qwen3.5, por exemplo) devolvem o raciocínio num
+    # campo separado. Ler só `response` fazia o driver jogar fora a única coisa
+    # que o modelo produziu: em 2026-09-09 um despacho ao qwen3.5:9b rodou 186s,
+    # gerou ~1.500 tokens, e chegou aqui com `response` vazio.
+    thinking = str(payload.get("thinking") or "")
+
+    if not text.strip():
+        # Resposta vazia NÃO é sucesso. Antes disto o job era marcado `done`
+        # sem conteúdo nenhum — pior que falhar, porque afirma que deu certo.
+        raise OllamaDispatchError(
+            "empty_response",
+            (
+                f"{runtime.label} concluiu sem devolver resposta"
+                + (
+                    " (o modelo gastou a geração no campo 'thinking'; "
+                    "use um modelo sem raciocínio explícito ou peça saída "
+                    "direta)"
+                    if thinking.strip()
+                    else ""
+                )
+            ),
+            {
+                "runtime_id": runtime.id,
+                "model": chosen_model,
+                "thinking_chars": len(thinking),
+                "eval_count": payload.get("eval_count"),
+            },
+        )
+
     truncated = len(text) > MAX_RESPONSE_CHARS
 
     return {
         "runtime_id": runtime.id,
         "model": chosen_model,
         "response": text[:MAX_RESPONSE_CHARS],
+        "thinking": thinking[:MAX_RESPONSE_CHARS],
         "truncated": truncated,
         "duration_ms": int((time.monotonic() - started) * 1000),
     }

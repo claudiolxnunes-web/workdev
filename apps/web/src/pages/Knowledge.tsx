@@ -8,6 +8,7 @@ const CATEGORIAS = [
   { id: "licao", label: "Lições", cor: "bg-amber-600" },
   { id: "solucao", label: "Soluções", cor: "bg-emerald-600" },
   { id: "referencia", label: "Referências", cor: "bg-purple-600" },
+  { id: "operacoes", label: "Operações", cor: "bg-cyan-600" },
 ]
 
 const COR_BADGE: Record<string, string> = {
@@ -15,11 +16,13 @@ const COR_BADGE: Record<string, string> = {
   licao: "bg-amber-600/20 text-amber-400 border-amber-600/40",
   solucao: "bg-emerald-600/20 text-emerald-400 border-emerald-600/40",
   referencia: "bg-purple-600/20 text-purple-400 border-purple-600/40",
+  operacoes: "bg-cyan-600/20 text-cyan-400 border-cyan-600/40",
 }
 
 const LABEL: Record<string, string> = {
   decisao: "decisão", licao: "lição",
   solucao: "solução", referencia: "referência",
+  operacoes: "operações",
 }
 
 export default function Knowledge() {

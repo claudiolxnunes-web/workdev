@@ -130,6 +130,85 @@ class DispatchTest(unittest.TestCase):
         ):
             return asyncio.run(dispatch("local-code", prompt, model=model))
 
+    def test_resposta_vazia_nao_e_sucesso(self):
+        """Job `done` sem conteúdo é pior que job `failed`: afirma que deu certo.
+
+        Aconteceu em 2026-09-09 com qwen3.5:9b — 186s de geração, ~1.500
+        tokens, e `response` vazio porque o modelo gastou tudo no campo
+        `thinking`. O driver guardava string vazia e o job era marcado `done`.
+        """
+        class _Vazio(_FakeClient):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.response = _FakeResponse(
+                    200, {"response": "", "thinking": "pensei muito"},
+                )
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"WORKDEV_OLLAMA_LOCAL_MODEL": "qwen3.5:9b"},
+                clear=True,
+            ),
+            patch("httpx.AsyncClient", _Vazio),
+            self.assertRaises(OllamaDispatchError) as ctx,
+        ):
+            asyncio.run(dispatch("local-code", "faça X"))
+
+        self.assertEqual(ctx.exception.code, "empty_response")
+        # A mensagem tem que dizer POR QUE veio vazio, senão o operador troca
+        # de modelo no escuro.
+        self.assertIn("thinking", ctx.exception.message)
+        self.assertEqual(ctx.exception.details["thinking_chars"], len("pensei muito"))
+
+    def test_resposta_so_com_espaco_tambem_falha(self):
+        class _Branco(_FakeClient):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.response = _FakeResponse(200, {"response": "   \n  "})
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"WORKDEV_OLLAMA_LOCAL_MODEL": "qwen2.5-coder:7b"},
+                clear=True,
+            ),
+            patch("httpx.AsyncClient", _Branco),
+            self.assertRaises(OllamaDispatchError) as ctx,
+        ):
+            asyncio.run(dispatch("local-code", "faça X"))
+
+        self.assertEqual(ctx.exception.code, "empty_response")
+
+    def test_thinking_e_preservado_quando_ha_resposta(self):
+        """O raciocínio é auditoria, não lixo: guardado junto da resposta."""
+        class _ComRaciocinio(_FakeClient):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.response = _FakeResponse(
+                    200,
+                    {"response": "a resposta", "thinking": "o raciocínio"},
+                )
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"WORKDEV_OLLAMA_LOCAL_MODEL": "qwen3.5:9b"},
+                clear=True,
+            ),
+            patch("httpx.AsyncClient", _ComRaciocinio),
+        ):
+            result = asyncio.run(dispatch("local-code", "faça X"))
+
+        self.assertEqual(result["response"], "a resposta")
+        self.assertEqual(result["thinking"], "o raciocínio")
+
+    def test_modelo_sem_thinking_devolve_campo_vazio(self):
+        result = self._dispatch("faça X")
+
+        self.assertEqual(result["response"], "plano de ataque")
+        self.assertEqual(result["thinking"], "")
+
     def test_sends_prompt_as_text_without_streaming(self):
         result = self._dispatch("implemente a fatia 7")
 

@@ -1,7 +1,8 @@
 import { startTransition, useCallback, useEffect, useState } from "react"
 import {
   getRunContext, getRuns, subscribeToHandoffs, transferRun, updateRun,
-  updateRunSubtask, agentLabels, dispatchRun, HandoffApiError, RUNTIME_AGENTS,
+  updateRunSubtask, agentLabels, dispatchRun, getDispatchJob, HandoffApiError,
+  RUNTIME_AGENTS,
   type AgentContext, type AgentName, type AgentRun, type DispatchJob,
   type RunStatus,
 } from "@/services/handoff.service"
@@ -30,6 +31,10 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
   const [error, setError] = useState("")
   const [copied, setCopied] = useState(false)
   const [job, setJob] = useState<DispatchJob | null>(null)
+  // Separado de `error` de propósito: loadRuns() limpa `error` a cada 12s, e
+  // o aviso de despacho já ativo carrega informação acionável (qual job está
+  // vivo) que não pode sumir sozinha antes de o operador ler.
+  const [dispatchNotice, setDispatchNotice] = useState("")
 
   const loadRuns = useCallback(async () => {
     try {
@@ -60,6 +65,10 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
   }, [loadRuns])
 
   useEffect(() => {
+    // O job pertence à run selecionada. Sem zerar aqui, o painel da run B
+    // mostrava o despacho da run A — o `run_id` do job existe justamente para
+    // essa fronteira não depender de disciplina de quem lê.
+    startTransition(() => { setJob(null); setDispatchNotice("") })
     if (selectedId) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadContext(selectedId)
@@ -67,6 +76,21 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
       startTransition(() => setContext(null))
     }
   }, [selectedId, loadContext])
+
+  useEffect(() => {
+    // Enquanto o job está vivo, quem manda é o estado fresco do banco — não o
+    // snapshot do 202. Sem este polling o painel travava em "queued" para
+    // sempre, e o motivo de uma falha nunca chegava à tela.
+    if (!job || !selectedId) return
+    if (!["queued", "running"].includes(job.state)) return
+    let cancelado = false
+    const timer = window.setInterval(() => {
+      void getDispatchJob(selectedId, job.job_id)
+        .then((fresco) => { if (!cancelado) setJob(fresco) })
+        .catch(() => { /* próxima rodada tenta de novo */ })
+    }, 5000)
+    return () => { cancelado = true; window.clearInterval(timer) }
+  }, [job, selectedId])
 
   async function move(status: RunStatus) {
     if (!selectedId) return
@@ -135,7 +159,7 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
    */
   async function dispatch() {
     if (!selectedId) return
-    setBusy(true); setError("")
+    setBusy(true); setError(""); setDispatchNotice("")
     try {
       const resposta = await dispatchRun(selectedId)
       setJob(resposta.dispatch)
@@ -146,7 +170,7 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
         // Não é erro do operador: já existe um despacho vivo. Mostramos qual.
         const vivo = cause.detail.details as DispatchJob | undefined
         if (vivo) setJob(vivo)
-        setError("Já existe um despacho ativo para esta execução.")
+        setDispatchNotice("Já existe um despacho ativo para esta execução.")
       } else {
         setError(cause instanceof Error ? cause.message : "Falha ao despachar")
       }
@@ -160,6 +184,9 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
   }
 
   const selected = runs.find((run) => run.id === selectedId)
+  // O job só vale para a run a que pertence. A checagem é por `run_id` e não
+  // por confiança no reset de estado.
+  const jobDaRun = job && job.run_id === selected?.id ? job : null
   return (
     <section className={`flex w-full shrink-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900 md:max-h-none md:w-80 ${mobileExpanded ? "min-h-0 flex-1" : "max-h-80"}`}>
       <div className="border-b border-slate-800 p-3">
@@ -206,12 +233,19 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
                 não commita — a proposta chega no Histórico como
                 build.ollama_response, para você aplicar.
               </p>
-              {(job || selected.dispatch_attempts > 0) && (
+              {dispatchNotice && (
+                <p className="mt-2 text-[11px] text-amber-200">{dispatchNotice}</p>
+              )}
+              {(jobDaRun || selected.dispatch_attempts > 0) && (
                 <p className="mt-1 text-[11px] text-slate-500">
-                  Despacho: {job?.state ?? selected.dispatch_state}
-                  {job?.model ? ` · ${job.model}` : ""}
-                  {` · tentativa ${job?.attempt ?? selected.dispatch_attempts}`}
-                  {job?.error ? ` · ${job.error}` : ""}
+                  Despacho: {jobDaRun?.state ?? selected.dispatch_state}
+                  {jobDaRun?.model ? ` · ${jobDaRun.model}` : ""}
+                  {` · tentativa ${jobDaRun?.attempt ?? selected.dispatch_attempts}`}
+                </p>
+              )}
+              {jobDaRun?.error && (
+                <p className="mt-1 text-[11px] text-red-300">
+                  Falhou: {jobDaRun.error}
                 </p>
               )}
             </div>

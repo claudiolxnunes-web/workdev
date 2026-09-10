@@ -8,6 +8,7 @@ const COR_BADGE: Record<string, string> = {
   licao: "bg-amber-600/20 text-amber-400 border-amber-600/40",
   solucao: "bg-emerald-600/20 text-emerald-400 border-emerald-600/40",
   referencia: "bg-purple-600/20 text-purple-400 border-purple-600/40",
+  operacoes: "bg-cyan-600/20 text-cyan-400 border-cyan-600/40",
 };
 
 const LABEL: Record<string, string> = {
@@ -15,6 +16,7 @@ const LABEL: Record<string, string> = {
   licao: "lição",
   solucao: "solução",
   referencia: "referência",
+  operacoes: "operações",
 };
 
 export function KnowledgeTab() {

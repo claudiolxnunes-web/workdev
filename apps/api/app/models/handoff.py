@@ -105,10 +105,11 @@ class AgentRun(Base):
         server_default="0",
     )
 
-    # Estado do despacho para runtime Ollama. As colunas nasceram na migração
-    # b2e8f4a17c30 e ficaram meses no banco sem existir aqui: quem lesse
-    # run.dispatch_state pelo ORM levava AttributeError, não None. O detalhe de
-    # cada tentativa vive em agent_build_jobs; isto aqui é o resumo na run.
+    # Estado do despacho para runtime Ollama. A migração b2e8f4a17c30 criou as
+    # colunas no banco e o model não foi atualizado junto: entre a aplicação da
+    # migração e este commit, quem lesse run.dispatch_state pelo ORM levava
+    # AttributeError, não None — e derrubou toda rota que serializa uma run.
+    # O detalhe de cada tentativa vive em agent_build_jobs; isto é o resumo.
     dispatch_state = Column(
         String(16),
         nullable=False,
