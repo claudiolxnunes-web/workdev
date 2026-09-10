@@ -241,3 +241,43 @@ class TestAmbienteDoWorktree:
         assert all(
             alvo.startswith("apps/web/") for alvo in build_worktree.CONFIG_FILES
         )
+
+
+class TestCommitNaoLevaAmbiente:
+    """O commit contém o envelope, e só ele (validação de 2026-09-10).
+
+    `git add -A` varria o que `_preparar_ambiente` cria para o gate rodar. O
+    symlink `node_modules` entrou num commit de build de verdade: o `.gitignore`
+    não o barra porque o padrão é `node_modules/`, com barra, que casa diretório
+    e não casa symlink. O mesmo valeria para a config copiada.
+    """
+
+    def test_symlink_de_ambiente_nao_entra_no_commit(self, repo, tmp_path):
+        from app.services.build_worktree import commit, ephemeral_worktree
+
+        (repo / "node_modules").mkdir()
+
+        with ephemeral_worktree(str(uuid4())) as wt:
+            (wt.path / "novo.txt").write_text("conteudo\n")
+            assert (wt.path / "node_modules").is_symlink()
+
+            sha = commit(wt, "teste", paths=["novo.txt"])
+
+            listados = git(
+                ["show", "--name-only", "--format=", sha], wt.path
+            ).stdout
+
+        assert "novo.txt" in listados
+        assert "node_modules" not in listados
+
+    def test_sem_paths_mantem_o_comportamento_antigo(self, repo):
+        from app.services.build_worktree import commit, ephemeral_worktree
+
+        with ephemeral_worktree(str(uuid4())) as wt:
+            (wt.path / "a.txt").write_text("a\n")
+            sha = commit(wt, "teste")
+            listados = git(
+                ["show", "--name-only", "--format=", sha], wt.path
+            ).stdout
+
+        assert "a.txt" in listados

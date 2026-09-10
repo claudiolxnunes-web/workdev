@@ -315,9 +315,28 @@ def diffstat(worktree: Worktree, *, desde: str | None = None) -> str:
     return _git(["diff", "--stat", "HEAD"], worktree.path).stdout.strip()
 
 
-def commit(worktree: Worktree, message: str) -> str:
-    """Commita no branch do worktree. Nunca faz push — não existe rede aqui."""
-    _git_ok(["add", "-A"], worktree.path, "git_add_failed")
+def commit(
+    worktree: Worktree,
+    message: str,
+    *,
+    paths: list[str] | None = None,
+) -> str:
+    """Commita no branch do worktree. Nunca faz push — não existe rede aqui.
+
+    Com `paths`, adiciona EXATAMENTE os caminhos do envelope. Isso não é
+    detalhe: `git add -A` varria também o que `_preparar_ambiente` cria para o
+    gate rodar — e o symlink `node_modules` entrou num commit de build na
+    validação de 2026-09-10. O `.gitignore` não o barrou porque o padrão é
+    `node_modules/`, com barra, que casa diretório e não casa symlink.
+
+    O mesmo `add -A` levaria a config do Vite copiada para o worktree se ela
+    não fosse ignorada. Um commit de build deve conter o que o modelo propôs,
+    nada mais — o envelope é o contrato, e o que não está nele não entra.
+    """
+    if paths:
+        _git_ok(["add", "--", *paths], worktree.path, "git_add_failed")
+    else:
+        _git_ok(["add", "-A"], worktree.path, "git_add_failed")
 
     resultado = _git(
         [

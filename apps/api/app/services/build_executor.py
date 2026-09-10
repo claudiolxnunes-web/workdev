@@ -168,6 +168,9 @@ def _executar(
         commit_sha = build_worktree.commit(
             worktree,
             _mensagem_de_commit(run, envelope, gate_passou),
+            # Só os caminhos do envelope: nada de node_modules, config ou
+            # qualquer coisa que o preparo do ambiente deixou na árvore.
+            paths=tocados,
         )
 
         # Depois do commit e contra a base: é o que enxerga arquivo novo sem
