@@ -248,6 +248,17 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
                   Falhou: {jobDaRun.error}
                 </p>
               )}
+              {jobDaRun && jobDaRun.partial_chars > 0 && (
+                <details className="mt-2" open={jobDaRun.state === "running"}>
+                  <summary className="cursor-pointer text-[11px] text-sky-400">
+                    Saída parcial ({jobDaRun.partial_chars} chars)
+                    {jobDaRun.state === "running" ? " · gerando…" : ""}
+                  </summary>
+                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-[11px] text-slate-400">
+                    {jobDaRun.partial_response}
+                  </pre>
+                </details>
+              )}
             </div>
           )}
           {context.subtasks.length > 0 && <div><p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">Subtasks</p>{context.subtasks.map((item) => <label key={item.id} className="flex cursor-pointer gap-2 py-1 text-xs text-slate-300"><input type="checkbox" disabled={busy} checked={item.status === "done"} onChange={() => void toggleSubtask(item.id, item.status)} /><span className={item.status === "done" ? "text-slate-500 line-through" : ""}>{item.order}. {item.title}</span></label>)}</div>}

@@ -192,4 +192,8 @@ def job_out(job: AgentBuildJob) -> dict:
         "finished_at": (
             job.finished_at.isoformat() if job.finished_at else None
         ),
+        # O que já foi gerado até agora. É isto que a tela mostra enquanto o
+        # modelo pensa, e é o que sobra se a geração morrer no meio.
+        "partial_response": (job.payload or {}).get("partial_response") or "",
+        "partial_chars": (job.payload or {}).get("partial_chars") or 0,
     }

@@ -216,6 +216,10 @@ export interface DispatchJob {
   created_at: string | null
   started_at: string | null
   finished_at: string | null
+  /** O que o modelo já gerou até agora. Cresce enquanto o job está vivo e é
+   *  o que sobra se a geração morrer no meio. */
+  partial_response: string
+  partial_chars: number
 }
 
 export interface AgentContext {

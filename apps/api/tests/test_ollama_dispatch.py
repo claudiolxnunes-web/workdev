@@ -4,6 +4,7 @@ Fatia 7 — driver de conexão e bloqueio de despacho para endpoint indisponíve
 """
 
 import asyncio
+import json
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -30,12 +31,36 @@ def _health(status, reason=None):
 
 
 class _FakeResponse:
-    def __init__(self, status_code=200, payload=None):
+    """Resposta de streaming: o payload vira uma linha NDJSON com done=true.
+
+    Os testes continuam declarando o resultado como um dicionário só; quem
+    traduz para o formato de stream é este dublê, para o caso de uma linha
+    única (o mais comum) não poluir cada teste.
+    """
+
+    def __init__(self, status_code=200, payload=None, linhas=None):
         self.status_code = status_code
         self._payload = payload if payload is not None else {}
+        self._linhas = linhas
 
     def json(self):
         return self._payload
+
+    async def aread(self):
+        return b""
+
+    async def aiter_lines(self):
+        if self._linhas is not None:
+            for linha in self._linhas:
+                yield json.dumps(linha)
+            return
+        yield json.dumps({**self._payload, "done": True})
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
 
 
 class _FakeClient:
@@ -54,9 +79,9 @@ class _FakeClient:
     async def __aexit__(self, *_args):
         return False
 
-    async def post(self, url, headers=None, json=None):
+    def stream(self, method, url, headers=None, json=None):
         _FakeClient.last_request.update(
-            {"url": url, "headers": headers, "json": json}
+            {"url": url, "headers": headers, "json": json, "method": method}
         )
         if self.error:
             raise self.error
@@ -209,15 +234,28 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(result["response"], "plano de ataque")
         self.assertEqual(result["thinking"], "")
 
-    def test_sends_prompt_as_text_without_streaming(self):
+    def test_sends_prompt_as_text_in_streaming(self):
+        """Streaming é obrigatório: sem ele, geração interrompida não deixa nada.
+
+        Este teste já afirmou `stream: False`. Mudou de propósito em
+        2026-09-10, depois de uma geração de 15 minutos e 2.040 tokens ser
+        perdida inteira num timeout.
+        """
         result = self._dispatch("implemente a fatia 7")
 
         body = _FakeClient.last_request["json"]
         self.assertEqual(body["prompt"], "implemente a fatia 7")
         self.assertEqual(body["model"], "qwen2.5-coder:7b")
-        self.assertFalse(body["stream"])
+        self.assertTrue(body["stream"])
         self.assertEqual(result["response"], "plano de ataque")
         self.assertEqual(result["runtime_id"], "local-code")
+
+    def test_janela_de_contexto_e_explicita(self):
+        """Sem num_ctx o Ollama trunca o prompt em ~4096 e não avisa."""
+        self._dispatch()
+
+        body = _FakeClient.last_request["json"]
+        self.assertGreaterEqual(body["options"]["num_ctx"], 8192)
 
     def test_payload_carries_no_shell_or_repository_access(self):
         self._dispatch()
@@ -225,7 +263,44 @@ class DispatchTest(unittest.TestCase):
         body = _FakeClient.last_request["json"]
         # O contrato do despacho é texto: nada de comando, caminho de repo,
         # ferramenta ou credencial atravessa a fronteira.
-        self.assertEqual(set(body), {"model", "prompt", "stream"})
+        self.assertEqual(set(body), {"model", "prompt", "stream", "options"})
+        # `options` existe só para a janela de contexto. Se um dia couber
+        # `tools` ou caminho aqui dentro, é este teste que tem que barrar.
+        self.assertEqual(set(body["options"]), {"num_ctx"})
+
+    def test_parcial_chega_ao_chamador_durante_a_geracao(self):
+        """O parcial é o que sobra quando a geração morre no meio."""
+        class _EmPedacos(_FakeClient):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.response = _FakeResponse(200, linhas=[
+                    {"response": "primeiro "},
+                    {"response": "segundo "},
+                    {"response": "terceiro", "done": True},
+                ])
+
+        vistos = []
+
+        async def _anotar(texto, _raciocinio):
+            vistos.append(texto)
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"WORKDEV_OLLAMA_LOCAL_MODEL": "qwen2.5-coder:7b"},
+                clear=True,
+            ),
+            patch("httpx.AsyncClient", _EmPedacos),
+        ):
+            result = asyncio.run(
+                dispatch("local-code", "faça X", on_chunk=_anotar)
+            )
+
+        self.assertEqual(
+            vistos,
+            ["primeiro ", "primeiro segundo ", "primeiro segundo terceiro"],
+        )
+        self.assertEqual(result["response"], "primeiro segundo terceiro")
 
     def test_missing_model_is_refused_before_the_call(self):
         with self.assertRaises(OllamaDispatchError) as ctx:

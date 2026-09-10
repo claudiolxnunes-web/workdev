@@ -1166,6 +1166,13 @@ def transfer_agent_run(
     )
 
 
+# A cada 5s o parcial vai para o banco. Numa geração de 15 minutos são ~180
+# updates de alguns KB — irrelevante — e o que se salva é tudo que foi gerado
+# até o instante da queda.
+PARTIAL_FLUSH_SECONDS = 5.0
+PARTIAL_MAX_CHARS = 60_000
+
+
 async def _consume_dispatch_job(
     run_id: UUID,
     job_id: UUID,
@@ -1199,8 +1206,44 @@ async def _consume_dispatch_job(
     erro: OllamaDispatchError | None = None
     result: dict | None = None
 
+    # O parcial é gravado no Postgres, não em arquivo: a fonte oficial é o
+    # banco, a UI já consulta GET /runs/{id}/dispatch/{job_id} de 5 em 5s, e um
+    # arquivo temporário criaria uma segunda verdade fora da trilha — além de
+    # cair na pendência de ownership de /opt/workdev já registrada no CLAUDE.md.
+    ultimo_flush = 0.0
+
+    async def _gravar_parcial(texto: str, raciocinio: str) -> None:
+        nonlocal ultimo_flush
+        agora = time.monotonic()
+        if agora - ultimo_flush < PARTIAL_FLUSH_SECONDS:
+            return
+        ultimo_flush = agora
+
+        parcial_db = SessionLocal()
+        try:
+            atual = (
+                parcial_db.query(AgentBuildJob)
+                .filter(AgentBuildJob.id == job_id)
+                .first()
+            )
+            if atual is None:
+                return
+            atual.payload = {
+                **(atual.payload or {}),
+                "partial_response": texto[-PARTIAL_MAX_CHARS:],
+                "partial_chars": len(texto),
+                "partial_thinking_chars": len(raciocinio),
+            }
+            parcial_db.commit()
+        except Exception:  # pragma: no cover - parcial nunca derruba a geração
+            parcial_db.rollback()
+        finally:
+            parcial_db.close()
+
     try:
-        result = await dispatch_to_ollama(runtime_id, prompt, model=model)
+        result = await dispatch_to_ollama(
+            runtime_id, prompt, model=model, on_chunk=_gravar_parcial,
+        )
     except OllamaDispatchError as falha:
         erro = falha
 

@@ -11,10 +11,13 @@ Fronteira de segurança deste módulo:
   código, e o despacho é recusado antes de qualquer efeito colateral.
 """
 
+import json
 import os
 import time
 
 import httpx
+
+from collections.abc import Awaitable, Callable
 
 from app.services import agent_runtimes
 from app.services.agent_runtimes import OllamaRuntime
@@ -25,6 +28,26 @@ from app.services.agent_runtimes import OllamaRuntime
 # padrão precisa de folga — ajustável por WORKDEV_OLLAMA_DISPATCH_TIMEOUT_SECONDS.
 DEFAULT_DISPATCH_TIMEOUT_SECONDS = 900.0
 MAX_RESPONSE_CHARS = 60_000
+
+# O Ollama NÃO usa a janela do modelo por padrão: sem `num_ctx` explícito ele
+# aplica ~4096 e trunca o resto do prompt em silêncio. Foi o que aconteceu em
+# 2026-09-09 — o log do despacho ao qwen2.5-coder:14b (ctx declarado 32768)
+# encerrou com `n_tokens = 3997, truncated = 1`, ou seja, o modelo passou 15
+# minutos raciocinando sobre um prompt cortado. O prompt de Build carrega ADRs,
+# knowledge e o plano inteiro; 4096 não serve.
+DEFAULT_NUM_CTX = 16384
+
+
+def num_ctx() -> int:
+    raw = os.getenv("WORKDEV_OLLAMA_NUM_CTX")
+
+    try:
+        value = int(raw) if raw else DEFAULT_NUM_CTX
+    except ValueError:
+        value = DEFAULT_NUM_CTX
+
+    # Teto: janela grande demais estoura a RAM da VPS no cache de KV.
+    return max(2048, min(65536, value))
 
 
 class OllamaDispatchError(RuntimeError):
@@ -109,11 +132,19 @@ async def dispatch(
     prompt: str,
     *,
     model: str | None = None,
+    on_chunk: "Callable[[str, str], Awaitable[None]] | None" = None,
 ) -> dict:
     """Envia o prompt ao endpoint e devolve a resposta em texto.
 
     Nada é executado a partir do retorno: quem decide o que fazer com o texto
     é o operador/revisor, dentro do WorkDev.
+
+    A geração é lida em streaming e `on_chunk(texto_acumulado, raciocínio)` é
+    chamado durante o percurso. Com `stream: False`, uma geração que morresse
+    aos 899s de 900 não deixava nada — nem no banco, nem em memória. Foi o que
+    aconteceu com o qwen2.5-coder:14b em 2026-09-09: 2.040 tokens gerados em 15
+    minutos, todos perdidos, e o Ollama ainda cancelou a task ao ver o cliente
+    sumir. Quem persiste o parcial é o chamador; aqui só entregamos o pedaço.
     """
     runtime = await ensure_dispatchable(runtime_id)
 
@@ -133,61 +164,107 @@ async def dispatch(
     headers = agent_runtimes.auth_headers(runtime)
     started = time.monotonic()
 
+    corpo = {
+        "model": chosen_model,
+        "prompt": prompt,
+        "stream": True,
+        # Sem isto o Ollama trunca o prompt em ~4096 tokens sem avisar.
+        "options": {"num_ctx": num_ctx()},
+    }
+
+    partes: list[str] = []
+    raciocinio: list[str] = []
+    final: dict = {}
+
+    async def _emitir() -> None:
+        if on_chunk is not None:
+            await on_chunk("".join(partes), "".join(raciocinio))
+
     try:
         async with httpx.AsyncClient(
             timeout=dispatch_timeout_seconds()
         ) as client:
-            response = await client.post(
-                url,
-                headers=headers,
-                json={
-                    "model": chosen_model,
-                    "prompt": prompt,
-                    "stream": False,
-                },
-            )
+            async with client.stream(
+                "POST", url, headers=headers, json=corpo
+            ) as response:
+                if response.status_code != 200:
+                    await response.aread()
+                    raise OllamaDispatchError(
+                        "dispatch_rejected",
+                        (
+                            f"{runtime.label} respondeu HTTP "
+                            f"{response.status_code}"
+                        ),
+                        {
+                            "runtime_id": runtime.id,
+                            "status_code": response.status_code,
+                        },
+                    )
+
+                async for linha in response.aiter_lines():
+                    if not linha.strip():
+                        continue
+
+                    try:
+                        evento = json.loads(linha)
+                    except ValueError as error:
+                        raise OllamaDispatchError(
+                            "invalid_response",
+                            f"{runtime.label} devolveu linha que não é JSON",
+                            {"runtime_id": runtime.id},
+                        ) from error
+
+                    if evento.get("error"):
+                        raise OllamaDispatchError(
+                            "dispatch_rejected",
+                            f"{runtime.label}: {evento['error']}",
+                            {"runtime_id": runtime.id},
+                        )
+
+                    if evento.get("response"):
+                        partes.append(str(evento["response"]))
+                    if evento.get("thinking"):
+                        raciocinio.append(str(evento["thinking"]))
+
+                    await _emitir()
+
+                    if evento.get("done"):
+                        final = evento
+    except OllamaDispatchError:
+        raise
     except httpx.TimeoutException as error:
+        # O parcial já foi entregue ao chamador pelos on_chunk anteriores: o
+        # que se perdia antes desta mudança agora está gravado.
         raise OllamaDispatchError(
             "dispatch_timeout",
             (
                 f"{runtime.label} não respondeu em "
                 f"{dispatch_timeout_seconds():g}s"
             ),
-            {"runtime_id": runtime.id},
+            {
+                "runtime_id": runtime.id,
+                "partial_chars": len("".join(partes)),
+            },
         ) from error
     except Exception as error:
         raise OllamaDispatchError(
             "dispatch_failed",
             f"Falha ao falar com {runtime.label}: {type(error).__name__}",
-            {"runtime_id": runtime.id},
-        ) from error
-
-    if response.status_code != 200:
-        raise OllamaDispatchError(
-            "dispatch_rejected",
-            f"{runtime.label} respondeu HTTP {response.status_code}",
             {
                 "runtime_id": runtime.id,
-                "status_code": response.status_code,
+                "partial_chars": len("".join(partes)),
             },
-        )
-
-    try:
-        payload = response.json()
-    except ValueError as error:
-        raise OllamaDispatchError(
-            "invalid_response",
-            f"{runtime.label} devolveu corpo que não é JSON",
-            {"runtime_id": runtime.id},
         ) from error
 
-    text = str(payload.get("response") or "")
+    payload = final
+
+    text = "".join(partes)
 
     # Modelos com `thinking` (qwen3.5, por exemplo) devolvem o raciocínio num
     # campo separado. Ler só `response` fazia o driver jogar fora a única coisa
     # que o modelo produziu: em 2026-09-09 um despacho ao qwen3.5:9b rodou 186s,
     # gerou ~1.500 tokens, e chegou aqui com `response` vazio.
-    thinking = str(payload.get("thinking") or "")
+    thinking = "".join(raciocinio)
 
     if not text.strip():
         # Resposta vazia NÃO é sucesso. Antes disto o job era marcado `done`
