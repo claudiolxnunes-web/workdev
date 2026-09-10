@@ -271,3 +271,41 @@ class TestDecisao:
         )
 
         assert "local" in decisao.redaction_summary
+
+
+class TestConsentimentoConcedivel:
+    """`record_consent` precisa ter como ser chamado (achado 12).
+
+    A função existia e nenhuma rota ou CLI a chamava: com a política ativa,
+    todo despacho remoto falhava em `remote_egress_not_consented` sem caminho
+    para conceder. Proteção que não pode ser satisfeita não protege — bloqueia.
+    """
+
+    def test_rota_existe_e_e_post(self):
+        from app.routers import handoffs
+
+        rotas = [
+            r for r in handoffs.router.routes
+            if getattr(r, "path", "") == "/handoffs/runs/{run_id}/egress-consent"
+        ]
+
+        assert rotas, "rota de consentimento não existe"
+        assert "POST" in rotas[0].methods
+
+    def test_cli_expoe_o_comando(self):
+        import subprocess
+        import sys
+
+        saida = subprocess.run(
+            [sys.executable, "/opt/workdev/scripts/workdev_agent.py", "--help"],
+            capture_output=True,
+            text=True,
+        )
+
+        assert "consent" in saida.stdout
+
+    def test_consentimento_e_por_runtime(self, *_):
+        """Autorizar a Hostinger não autoriza a RunPod."""
+        from app.services import context_egress
+
+        assert context_egress.CONSENT_EVENT == "build.egress_consent"

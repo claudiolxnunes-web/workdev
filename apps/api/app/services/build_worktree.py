@@ -25,8 +25,30 @@ from pathlib import Path
 from app.services.build_envelope import BuildEnvelope
 
 
+# Lidos no import por compatibilidade com quem já os monkeypatcha, mas o valor
+# EFETIVO vem de repo_root()/builds_root(), que releem o ambiente a cada
+# chamada. Só com constante de import, definir WORKDEV_BUILDS_ROOT no unit do
+# systemd não tinha efeito nenhum — e o docstring de ephemeral_worktree
+# prometia o contrário.
 REPO_ROOT = Path(os.getenv("WORKDEV_REPO_ROOT", "/opt/workdev"))
 BUILDS_ROOT = Path(os.getenv("WORKDEV_BUILDS_ROOT", "/opt/workdev-builds"))
+
+
+def repo_root() -> Path:
+    """Raiz do repositório, resolvida na chamada."""
+    if REPO_ROOT != Path("/opt/workdev"):
+        # Alguém monkeypatchou o módulo: respeita, é o que os testes fazem.
+        return REPO_ROOT
+
+    return Path(os.getenv("WORKDEV_REPO_ROOT", "/opt/workdev"))
+
+
+def builds_root() -> Path:
+    """Raiz dos builds isolados, resolvida na chamada."""
+    if BUILDS_ROOT != Path("/opt/workdev-builds"):
+        return BUILDS_ROOT
+
+    return Path(os.getenv("WORKDEV_BUILDS_ROOT", "/opt/workdev-builds"))
 
 GIT_TIMEOUT_SECONDS = 120
 
@@ -86,8 +108,19 @@ def head_sha(repo: Path | None = None) -> str:
     return _git_ok(["rev-parse", "HEAD"], repo or REPO_ROOT, "head_unavailable")
 
 
-def branch_name(run_id: str) -> str:
-    return f"build/{run_id}"
+def branch_name(run_id: str, attempt: int | None = None) -> str:
+    """Nome do branch do build.
+
+    A tentativa entra no nome porque nada é pushado: o branch é o ÚNICO lugar
+    onde o commit do build existe. Com o nome dependendo só do `run_id`, um
+    redespacho da mesma run apagava o branch anterior com `branch -D` e tornava
+    aquele commit inalcançável — o oposto do que o `_remover` promete ao manter
+    o branch "para inspeção".
+    """
+    if attempt is None:
+        return f"build/{run_id}"
+
+    return f"build/{run_id}/{attempt}"
 
 
 def _remover(worktree_path: Path, branch: str, repo: Path) -> None:
@@ -108,6 +141,7 @@ def ephemeral_worktree(
     *,
     repo: Path | None = None,
     base: str | None = None,
+    attempt: int | None = None,
 ):
     """Cria a árvore isolada e garante a remoção, inclusive em exceção.
 
@@ -117,13 +151,13 @@ def ephemeral_worktree(
     não teria efeito nenhum. Foi exatamente isso que fez uma rodada de testes
     criar worktree no repositório real em vez do temporário.
     """
-    repo = repo or REPO_ROOT
-    builds_root = BUILDS_ROOT
+    repo = repo or repo_root()
+    raiz_builds = builds_root()
 
-    builds_root.mkdir(parents=True, exist_ok=True)
+    raiz_builds.mkdir(parents=True, exist_ok=True)
 
-    destino = builds_root / str(run_id)
-    branch = branch_name(run_id)
+    destino = raiz_builds / str(run_id)
+    branch = branch_name(run_id, attempt)
     base_sha = base or head_sha(repo)
 
     if destino.exists():
@@ -261,7 +295,23 @@ def has_changes(worktree: Worktree) -> bool:
     return bool(_git(["status", "--porcelain"], worktree.path).stdout.strip())
 
 
-def diffstat(worktree: Worktree) -> str:
+def diffstat(worktree: Worktree, *, desde: str | None = None) -> str:
+    """Resumo do que mudou, incluindo arquivo NOVO.
+
+    Chamado DEPOIS do commit, com `desde=base_sha`: comparar dois commits vê
+    arquivo novo naturalmente. Antes disto era `git diff --stat HEAD` na árvore
+    suja, que só enxerga o que o índice já conhece — um build que apenas cria
+    arquivos devolvia resumo vazio na UI, com `files` preenchido.
+
+    Marcar os untracked com `--intent-to-add` resolveria o diff e estragaria o
+    commit: os arquivos entram no índice com conteúdo vazio e é assim que são
+    commitados. Foi testado e descartado.
+    """
+    if desde:
+        return _git(
+            ["diff", "--stat", f"{desde}..HEAD"], worktree.path
+        ).stdout.strip()
+
     return _git(["diff", "--stat", "HEAD"], worktree.path).stdout.strip()
 
 

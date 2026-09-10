@@ -169,6 +169,13 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
         )
         db.commit()
 
+    # Solta o banco ANTES de esperar o modelo. Sem isto a sessão ficava `idle in
+    # transaction` por até 900s: `build_prompt` e `context_egress.prepare` abrem
+    # transação nova depois do commit do `start_job`, e o await ficava dentro
+    # dela. Era o achado 6 de volta, pela porta do worker — e o consumidor da
+    # rota, que é provisório, já fazia certo.
+    db.commit()
+
     try:
         resultado = await dispatch_to_ollama(
             job.runtime_id,
@@ -185,7 +192,11 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
             {"code": error.code, **error.details},
         )
 
-    outcome = execute_build(run, resultado.get("response") or "")
+    outcome = execute_build(
+        run,
+        resultado.get("response") or "",
+        attempt=job.attempt,
+    )
 
     if not outcome.ok:
         esgotou = (run.dispatch_attempts or 0) >= max_attempts()

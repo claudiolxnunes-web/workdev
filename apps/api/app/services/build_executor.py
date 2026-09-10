@@ -88,6 +88,7 @@ def execute_build(
     response_text: str,
     *,
     run_gate: bool = True,
+    attempt: int | None = None,
 ) -> BuildOutcome:
     """Texto do modelo → commit num branch isolado, ou recusa explicada.
 
@@ -112,7 +113,7 @@ def execute_build(
         )
 
     try:
-        return _executar(run, envelope, run_gate=run_gate)
+        return _executar(run, envelope, run_gate=run_gate, attempt=attempt)
     except WorktreeError as error:
         return BuildOutcome(
             ok=False,
@@ -133,8 +134,15 @@ def _executar(
     envelope: BuildEnvelope,
     *,
     run_gate: bool,
+    attempt: int | None = None,
 ) -> BuildOutcome:
-    with build_worktree.ephemeral_worktree(str(run.id)) as worktree:
+    # A tentativa entra no nome do branch: sem ela, redespachar a mesma run
+    # apagava o branch anterior e tornava aquele commit inalcançável — e o
+    # branch é o único lugar onde o commit do build existe, já que nada é
+    # pushado.
+    with build_worktree.ephemeral_worktree(
+        str(run.id), attempt=attempt
+    ) as worktree:
         tocados = build_worktree.write_files(worktree, envelope)
 
         if not build_worktree.has_changes(worktree):
@@ -150,8 +158,6 @@ def _executar(
                 files=tocados,
             )
 
-        diffstat = build_worktree.diffstat(worktree)
-
         evidencia: GateEvidence | None = None
         gate_passou: bool | None = None
 
@@ -163,6 +169,10 @@ def _executar(
             worktree,
             _mensagem_de_commit(run, envelope, gate_passou),
         )
+
+        # Depois do commit e contra a base: é o que enxerga arquivo novo sem
+        # mexer no índice antes da hora.
+        diffstat = build_worktree.diffstat(worktree, desde=worktree.base_sha)
 
         return BuildOutcome(
             ok=True,

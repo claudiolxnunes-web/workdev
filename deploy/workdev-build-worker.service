@@ -37,11 +37,24 @@ Restart=always
 RestartSec=10
 
 # O worker escreve worktrees; precisa do diretório de builds.
-ReadWritePaths=/opt/workdev-builds
+# `full` só protege /usr, /boot e /etc — /opt continuava GRAVÁVEL, e
+# ReadWritePaths apenas ADICIONA permissão, não restringe. Com isso o
+# isolamento da fatia 3 existia só na lógica da aplicação, nunca no systemd.
+# Com `strict` tudo fica somente-leitura e só o que está abaixo é gravável.
+ProtectSystem=strict
+# O `-` é necessário: sem ele o systemd RECUSA iniciar a unit quando o
+# diretório não existe, e /opt/workdev-builds é criado na primeira execução.
+ReadWritePaths=-/opt/workdev-builds
+# O worktree é criado por `git worktree add` rodando sobre o repositório, que
+# precisa escrever em .git/worktrees.
+ReadWritePaths=-/opt/workdev/.git
+# O gate roda vite/vitest dentro do worktree e eles escrevem cache.
+ReadWritePaths=-/opt/workdev/node_modules
+ReadWritePaths=-/opt/workdev/apps/web/node_modules
+# Postgres por socket/TCP local e o tmux do Agent Hub continuam acessíveis.
+PrivateTmp=false
 
 NoNewPrivileges=true
-PrivateTmp=false
-ProtectSystem=full
 ProtectHome=true
 
 # Um build travado não pode segurar a fila para sempre.

@@ -72,6 +72,14 @@ def main() -> int:
     item.add_argument("reviewer")
     item.add_argument("verdict", choices=("approved", "rejected"))
     item.add_argument("feedback", nargs="?")
+    item = sub.add_parser(
+        "consent",
+        help="autoriza egresso do contexto desta run para um runtime remoto",
+    )
+    item.add_argument("run_id")
+    item.add_argument("runtime_id")
+    item.add_argument("actor")
+
     item = sub.add_parser("reviews")
     item.add_argument("run_id")
     args = parser.parse_args()
@@ -100,6 +108,18 @@ def main() -> int:
         )
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return 0
+    if args.command == "consent":
+        data = request(
+            "POST",
+            f"/handoffs/runs/{args.run_id}/egress-consent",
+            {"runtime_id": args.runtime_id, "actor": args.actor},
+        )
+        print(
+            f"egresso autorizado: {data['runtime_id']} "
+            f"por {data['actor']} (evento {data['event_id']})"
+        )
+        return
+
     if args.command == "reviews":
         data = request("GET", f"/handoffs/runs/{args.run_id}/reviews")
         print(json.dumps(data, ensure_ascii=False, indent=2))

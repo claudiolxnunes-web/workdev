@@ -5,6 +5,7 @@ import threading
 import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
@@ -1449,6 +1450,71 @@ def dispatch_run_to_ollama(
     return {
         "run": _run_out(db, run),
         "dispatch": build_jobs.job_out(job),
+    }
+
+
+class EgressConsent(BaseModel):
+    runtime_id: str
+    actor: str
+
+
+@router.post("/runs/{run_id}/egress-consent", status_code=201)
+def grant_egress_consent(
+    run_id: UUID,
+    payload: EgressConsent,
+    db: Session = Depends(get_db),
+):
+    """Autoriza o egresso do contexto desta run para UM runtime remoto.
+
+    Existe porque `record_consent` não tinha chamador nenhum: com a política de
+    egresso ativa, todo despacho remoto falhava em `remote_egress_not_consented`
+    e não havia como conceder. Proteção que não pode ser satisfeita não protege,
+    bloqueia.
+
+    O consentimento é por run E por runtime — autorizar a Hostinger não autoriza
+    a RunPod — e fica na trilha com quem autorizou. Para projeto `restricted`
+    não serve de nada: lá o egresso é recusado antes de olhar consentimento.
+    """
+    run = _get_run(db, run_id)
+
+    if not is_ollama_agent(payload.runtime_id):
+        raise HTTPException(
+            409,
+            f"{payload.runtime_id} não é um runtime Ollama",
+        )
+
+    if not payload.actor.strip():
+        raise HTTPException(422, "Informe quem está autorizando")
+
+    classificacao = context_egress.classification_for_run(db, run)
+
+    if classificacao == context_egress.CLASSIFICATION_RESTRICTED:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "context_restricted",
+                "message": (
+                    "Projeto restrito: consentimento não libera egresso. "
+                    "Reclassifique o projeto, com a decisão registrada."
+                ),
+                "details": {"classification": classificacao},
+            },
+        )
+
+    evento = context_egress.record_consent(
+        db,
+        run,
+        payload.runtime_id,
+        actor=payload.actor.strip(),
+    )
+    db.commit()
+
+    return {
+        "run_id": str(run.id),
+        "runtime_id": payload.runtime_id,
+        "actor": payload.actor.strip(),
+        "event_id": str(evento.id),
+        "classification": classificacao,
     }
 
 

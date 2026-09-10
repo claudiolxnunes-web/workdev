@@ -88,6 +88,10 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+# Reconhece um marcador já inserido, para nenhum padrão redigir duas vezes.
+_PLACEHOLDER = re.compile(r"\[REDACTED:[a-z_]+\]")
+
+
 def _marcador(tipo: str) -> str:
     return f"[REDACTED:{tipo}]"
 
@@ -104,10 +108,25 @@ def redact(texto: str) -> RedactionResult:
         if tipo == "assigned_secret":
             # Preserva o NOME da variável e substitui só o valor: perder o nome
             # tornaria o contexto inútil ("配置 [REDACTED] = [REDACTED]").
-            def _troca(match: re.Match) -> str:
+            #
+            # E não redige o que já foi redigido: sem isto, `TOKEN=<jwt>` virava
+            # `TOKEN=[REDACTED:jwt]` no passo do jwt, este padrão casava com o
+            # resultado e contava de novo. `counts` é evidência de auditoria —
+            # estava relatando o dobro do que havia.
+            trocados = 0
+
+            def _troca(match: "re.Match") -> str:
+                nonlocal trocados
+                inteiro = match.group(0)
+
+                if _PLACEHOLDER.search(inteiro):
+                    return inteiro
+
+                trocados += 1
                 return f"{match.group(1)}={_marcador('assigned_secret')}"
 
-            resultado, n = padrao.subn(_troca, resultado)
+            resultado = padrao.sub(_troca, resultado)
+            n = trocados
         else:
             resultado, n = padrao.subn(_marcador(tipo), resultado)
 
