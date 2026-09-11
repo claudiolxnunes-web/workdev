@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app.auth import websocket_is_authenticated
 from app.database import SessionLocal
 from app.models.handoff import AgentRun
+from app.services import agent_lifecycle
 from app.services.terminal_transcript import clean_terminal_text, read_transcript
 
 
@@ -384,6 +385,137 @@ def finalize_auto_runtime(agent: str, run_id) -> dict:
         "standby_started": standby_started,
         "standby_process": process,
     }
+
+def _lifecycle_session(agent: str) -> str:
+    """Sessão do agente para o ciclo de vida.
+
+    Runtime Ollama (`local-code`, `gpu-*`) não tem sessão tmux: ele é um
+    endpoint HTTP. Ligar/desligar ali é sobre o MODELO, não sobre processo — daí
+    a sessão poder ser None sem que isso seja erro.
+    """
+    from app.services import agent_runtimes
+
+    if agent_runtimes.is_ollama_agent(agent):
+        return None
+
+    return _standby_session(agent)
+
+
+@router.post("/api/agents/{agent}/start")
+async def start_agent_lifecycle(agent: str):
+    """Liga o agente. Idempotente: se já está rodando, não recria a sessão.
+
+    Recriar mataria o trabalho em curso do agente que já estava no ar — por
+    isso a idempotência aqui é correção, não conveniência.
+    """
+    session = _lifecycle_session(agent)
+
+    if session is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "runtime_has_no_session",
+                "message": (
+                    f"{agent} é runtime Ollama e não tem sessão para ligar; "
+                    "o modelo carrega sob demanda no primeiro despacho"
+                ),
+            },
+        )
+
+    try:
+        resultado = await asyncio.to_thread(
+            agent_lifecycle.start, agent, session, STANDBY_COMMANDS[agent],
+        )
+    except agent_lifecycle.LifecycleError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": error.code, "message": error.message},
+        ) from error
+    except (RuntimeError, subprocess.TimeoutExpired) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    return resultado
+
+
+@router.post("/api/agents/{agent}/stop")
+async def stop_agent_lifecycle(
+    agent: str,
+    confirm: bool = Query(default=False),
+):
+    """Desliga o agente de verdade: sessão, process group e modelo órfão.
+
+    Recusa apenas com trabalho FÍSICO em curso (run `running` ou despacho
+    vivo). `blocked` e `review` não seguram o agente ligado: são espera por
+    decisão humana, e o estado vive no Postgres, não no processo.
+    """
+    if agent not in ALLOWED_SESSIONS:
+        from app.services import agent_runtimes
+
+        if not agent_runtimes.is_ollama_agent(agent):
+            raise HTTPException(status_code=404, detail="Agente inválido")
+
+    session = _lifecycle_session(agent)
+
+    if not confirm:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "confirmation_required",
+                "message": (
+                    "Encerramento recusado: use confirm=true após verificar "
+                    "tarefas ativas"
+                ),
+            },
+        )
+
+    db = SessionLocal()
+    try:
+        trabalho = await asyncio.to_thread(agent_lifecycle.active_work, db, agent)
+    finally:
+        db.close()
+
+    if trabalho:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_busy",
+                "message": (
+                    "Encerramento recusado: o agente tem trabalho em execução "
+                    "agora"
+                ),
+                "details": trabalho,
+            },
+        )
+
+    try:
+        resultado = await asyncio.to_thread(
+            agent_lifecycle.stop, agent, session,
+        )
+    except agent_lifecycle.LifecycleError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": error.code, "message": error.message},
+        ) from error
+    except (RuntimeError, subprocess.TimeoutExpired) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    return resultado
+
+
+@router.get("/api/agents/{agent}/lifecycle")
+async def agent_lifecycle_state(agent: str):
+    """Estado lido do sistema — sessão, process group, modelo e RSS."""
+    if agent not in ALLOWED_SESSIONS:
+        from app.services import agent_runtimes
+
+        if not agent_runtimes.is_ollama_agent(agent):
+            raise HTTPException(status_code=404, detail="Agente inválido")
+
+    session = _lifecycle_session(agent)
+    estado = await asyncio.to_thread(agent_lifecycle.read_state, agent, session)
+
+    return estado.as_dict()
+
 
 @router.post("/api/agents/{agent}/session")
 async def start_agent_session(agent: str):
