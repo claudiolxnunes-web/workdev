@@ -230,7 +230,7 @@ class TestIdempotencia:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda agent, session, known_pgid=None: AgentState(
+            lambda agent, session, known_pgid=None, db=None: AgentState(
                 agent=agent, session=session,
                 session_exists=True, current_process="node",
             ),
@@ -251,7 +251,7 @@ class TestIdempotencia:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda agent, session, known_pgid=None: AgentState(agent=agent, session=session),
+            lambda agent, session, known_pgid=None, db=None: AgentState(agent=agent, session=session),
         )
 
         resultado = agent_lifecycle.stop("kimi", "kimi")
@@ -263,7 +263,7 @@ class TestIdempotencia:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda agent, session, known_pgid=None: AgentState(agent=agent, session=session),
+            lambda agent, session, known_pgid=None, db=None: AgentState(agent=agent, session=session),
         )
 
         primeiro = agent_lifecycle.stop("kimi", "kimi")
@@ -478,7 +478,7 @@ class TestDescarregamentoAssincrono:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda a, s, known_pgid=None: AgentState(
+            lambda a, s, known_pgid=None, db=None: AgentState(
                 agent=a, session=s, model="preso", model_loaded=True,
             ),
         )
@@ -502,7 +502,7 @@ class TestDescarregamentoAssincrono:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda a, s, known_pgid=None: AgentState(
+            lambda a, s, known_pgid=None, db=None: AgentState(
                 agent=a, session=s, model="incerto", model_loaded=None,
             ),
         )
@@ -538,7 +538,7 @@ class TestLiberacaoDeMemoria:
 
         monkeypatch.setattr(
             agent_lifecycle, "read_state",
-            lambda a, s, known_pgid=None: next(estados),
+            lambda a, s, known_pgid=None, db=None: next(estados),
         )
         monkeypatch.setattr(agent_lifecycle, "_run", lambda *a, **k: None)
         monkeypatch.setattr(agent_lifecycle, "group_pids", lambda _p: [])
@@ -553,7 +553,7 @@ class TestLiberacaoDeMemoria:
         processo vivo segurando RAM."""
         chamadas = []
 
-        def leitura(agent, session, known_pgid=None):
+        def leitura(agent, session, known_pgid=None, db=None):
             chamadas.append(known_pgid)
             if len(chamadas) == 1:
                 return AgentState(
@@ -588,7 +588,7 @@ class TestLiberacaoDeMemoria:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda a, s, known_pgid=None: AgentState(
+            lambda a, s, known_pgid=None, db=None: AgentState(
                 agent=a, session=s, session_exists=True,
                 model="compartilhado", model_loaded=True,
                 current_process="node",
@@ -619,7 +619,7 @@ class TestLiberacaoDeMemoria:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda a, s, known_pgid=None: AgentState(
+            lambda a, s, known_pgid=None, db=None: AgentState(
                 agent=a, session=s, model="orfao", model_loaded=True,
             ),
         )
@@ -644,7 +644,7 @@ class TestLigarRuntimeOllama:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda a, s, known_pgid=None: AgentState(
+            lambda a, s, known_pgid=None, db=None: AgentState(
                 agent=a, session=s, model="m:1", model_loaded=False,
                 endpoint_configured=True,
             ),
@@ -670,7 +670,7 @@ class TestLigarRuntimeOllama:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda a, s, known_pgid=None: AgentState(
+            lambda a, s, known_pgid=None, db=None: AgentState(
                 agent=a, session=s, model="m:1", model_loaded=True,
             ),
         )
@@ -691,7 +691,7 @@ class TestLigarRuntimeOllama:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda a, s, known_pgid=None: AgentState(
+            lambda a, s, known_pgid=None, db=None: AgentState(
                 agent=a, session=s, model="m:1", model_loaded=False,
             ),
         )
@@ -725,7 +725,7 @@ class TestSerializacao:
         criadas = []
         existe = {"valor": False}
 
-        def leitura(agent, session, known_pgid=None):
+        def leitura(agent, session, known_pgid=None, db=None):
             return AgentState(
                 agent=agent, session=session,
                 session_exists=existe["valor"],
@@ -824,3 +824,197 @@ class TestUsoAtivoDoModelo:
         )
 
         assert usuarios
+
+
+class TestSelecaoPorPGID:
+    """Achado P1 da 2ª revisão: `ps -g` seleciona SESSÃO, não process group.
+
+    Com `-g`, um `setsid sleep` com PID=PGID=951896 devolveu quatro PIDs (três
+    de outra árvore) e, num caso com PGID != SID, devolveu lista vazia com o
+    processo vivo. O efeito era duplo: `terminate_group` era pulado e a
+    liberação de memória saía "confirmada" sem nada ter sido encerrado.
+    """
+
+    def test_nao_usa_a_flag_g(self):
+        """`-g` e `--pgid` (inexistente neste procps) não podem voltar."""
+        import ast
+        from pathlib import Path
+
+        fonte = Path(agent_lifecycle.__file__).read_text()
+        arvore = ast.parse(fonte)
+
+        for no in ast.walk(arvore):
+            if not isinstance(no, ast.Call):
+                continue
+            if not (isinstance(no.func, ast.Name) and no.func.id == "_run"):
+                continue
+            if not no.args or not isinstance(no.args[0], ast.List):
+                continue
+            argumentos = [
+                elemento.value
+                for elemento in no.args[0].elts
+                if isinstance(elemento, ast.Constant)
+            ]
+            if argumentos and argumentos[0] == "ps":
+                assert "-g" not in argumentos, "`ps -g` seleciona sessão"
+                assert "--pgid" not in argumentos, "não existe neste procps"
+
+    def test_filtra_pela_coluna_pgid(self, monkeypatch):
+        saida = "  100   100\n  101   100\n  200   200\n  201   199\n"
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "_run",
+            lambda *a, **k: SimpleNamespace(returncode=0, stdout=saida),
+        )
+
+        assert agent_lifecycle.group_pids(100) == [100, 101]
+        assert agent_lifecycle.group_pids(200) == [200]
+        assert agent_lifecycle.group_pids(199) == [201]
+
+    def test_processo_real_com_pgid_proprio_e_encontrado(self):
+        """Contra o sistema de verdade, não contra mock."""
+        import os
+        import subprocess
+
+        processo = subprocess.Popen(
+            ["sleep", "30"], start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            pgid = os.getpgid(processo.pid)
+            encontrados = agent_lifecycle.group_pids(pgid)
+
+            assert processo.pid in encontrados, (
+                f"processo vivo {processo.pid} (pgid {pgid}) precisa aparecer"
+            )
+        finally:
+            processo.kill()
+            processo.wait(timeout=5)
+
+
+class TestMemoriaDoGrupo:
+    """Achado P1 da 2ª revisão: identidade do grupo precisa durar entre chamadas."""
+
+    def setup_method(self):
+        agent_lifecycle.forget_group("kimi")
+
+    def teardown_method(self):
+        agent_lifecycle.forget_group("kimi")
+
+    def test_lembra_e_recupera(self):
+        agent_lifecycle.remember_group("kimi", 4242)
+
+        assert agent_lifecycle.recall_group("kimi") == 4242
+
+    def test_sem_registro_devolve_none(self):
+        assert agent_lifecycle.recall_group("kimi") is None
+
+    def test_pid_reciclado_nao_e_confundido(self, monkeypatch):
+        """Guardar só o número arriscaria matar processo alheio."""
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "111"
+        )
+        agent_lifecycle.remember_group("kimi", 4242)
+
+        # Mesmo PID, outro processo: starttime diferente.
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "999"
+        )
+
+        assert agent_lifecycle.recall_group("kimi") is None
+        assert agent_lifecycle.recall_group("kimi") is None, "precisa esquecer"
+
+    def test_lider_morto_mantem_o_grupo(self, monkeypatch):
+        """Filho sobrevivente no mesmo PGID é justamente o caso que importa."""
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "111"
+        )
+        agent_lifecycle.remember_group("kimi", 4242)
+
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: None
+        )
+
+        assert agent_lifecycle.recall_group("kimi") == 4242
+
+    def test_consulta_seguinte_ainda_ve_sobrevivente(self, monkeypatch):
+        """stop -> GET: a segunda leitura não pode dizer offline."""
+        agent_lifecycle.remember_group("kimi", 555)
+
+        monkeypatch.setattr(agent_lifecycle, "session_exists", lambda s: False)
+        monkeypatch.setattr(agent_lifecycle, "group_pids", lambda p: [98765])
+        monkeypatch.setattr(agent_lifecycle, "group_rss_kb", lambda p: 900)
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: None
+        )
+
+        estado = agent_lifecycle.read_state("kimi", "kimi")
+
+        assert estado.pgid == 555, "identidade precisa vir da memória"
+        assert estado.group_pids == [98765]
+        assert estado.offline is False
+
+
+class TestTrabalhoAtivoNoEstado:
+    """Achado P1 da 2ª revisão: OFFLINE ignorava runs executáveis."""
+
+    def test_run_ativa_impede_offline(self):
+        estado = AgentState(agent="kimi", session="kimi")
+        assert estado.offline is True
+
+        estado.active_work = {"reason": "run_running", "run_id": "x"}
+        assert estado.offline is False, (
+            "run running com sessão derrubada é trabalho órfão, não agente ocioso"
+        )
+
+    def test_read_state_consulta_quando_recebe_db(self, monkeypatch):
+        monkeypatch.setattr(agent_lifecycle, "session_exists", lambda s: False)
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "active_work",
+            lambda db, agent: {"reason": "run_running"},
+        )
+
+        estado = agent_lifecycle.read_state("kimi", "kimi", db=object())
+
+        assert estado.work_checked is True
+        assert estado.offline is False
+
+    def test_sem_db_nao_inventa_trabalho(self, monkeypatch):
+        monkeypatch.setattr(agent_lifecycle, "session_exists", lambda s: False)
+
+        estado = agent_lifecycle.read_state("kimi", "kimi")
+
+        assert estado.work_checked is False
+        assert estado.active_work is None
+
+
+class TestEscopoLocal:
+    """Restrição do plano: não afetar agentes SaaS ou remotos."""
+
+    @pytest.mark.parametrize("agente", ["gpu-hostinger", "gpu-runpod"])
+    def test_start_recusa_runtime_remoto(self, agente):
+        with pytest.raises(agent_lifecycle.LifecycleError) as exc:
+            agent_lifecycle.start(agente, None, None)
+
+        assert exc.value.code == "remote_runtime_out_of_scope"
+
+    @pytest.mark.parametrize("agente", ["gpu-hostinger", "gpu-runpod"])
+    def test_stop_recusa_runtime_remoto(self, agente):
+        with pytest.raises(agent_lifecycle.LifecycleError) as exc:
+            agent_lifecycle.stop(agente, None)
+
+        assert exc.value.code == "remote_runtime_out_of_scope"
+
+    def test_local_code_continua_permitido(self):
+        agent_lifecycle.ensure_local_scope("local-code")
+
+    def test_agentes_cli_continuam_permitidos(self):
+        for agente in ("codex", "claude", "kimi", "qwen", "gemini"):
+            agent_lifecycle.ensure_local_scope(agente)
+
+    def test_sondar_remoto_continua_liberado(self):
+        """Ler estado não afeta ninguém — só ligar/desligar é restrito."""
+        estado = agent_lifecycle.read_state("gpu-runpod", None)
+
+        assert estado.agent == "gpu-runpod"

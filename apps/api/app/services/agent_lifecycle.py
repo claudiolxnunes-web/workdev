@@ -63,6 +63,31 @@ class LifecycleError(RuntimeError):
         self.details = details or {}
 
 
+def ensure_local_scope(agent: str) -> None:
+    """Recusa runtime remoto. O plano aprovado restringe a agentes LOCAIS.
+
+    "Não afetar agentes SaaS ou remotos" é restrição do plano, e ligar/desligar
+    um endpoint de GPU alugada é justamente afetar infraestrutura remota — com
+    o agravante de que `keep_alive: 0` lá derrubaria o modelo para qualquer
+    outro consumidor daquele host, fora do alcance deste WorkDev.
+
+    Sondar continua permitido: ler estado não afeta ninguém.
+    """
+    from app.services import agent_runtimes
+
+    runtime = agent_runtimes.get_runtime(agent)
+
+    if runtime is not None and runtime.kind == agent_runtimes.KIND_GPU:
+        raise LifecycleError(
+            "remote_runtime_out_of_scope",
+            (
+                f"{agent} é runtime remoto (GPU): ligar e desligar está fora "
+                "do escopo do plano aprovado, que cobre agentes locais"
+            ),
+            {"agent": agent, "kind": runtime.kind},
+        )
+
+
 # --------------------------------------------------------------------------
 # Exclusão mútua por agente (achado P2 da revisão)
 #
@@ -82,6 +107,82 @@ def agent_lock(agent: str) -> threading.Lock:
         return _agent_locks[agent]
 
 
+# --------------------------------------------------------------------------
+# Identidade persistente do process group
+#
+# `known_pgid` como parâmetro resolvia só o instante do stop: a consulta
+# seguinte (GET /lifecycle) e um segundo stop voltavam a ler sem identidade,
+# reportavam offline=True e nem tentavam encerrar os sobreviventes. O grupo
+# precisa ser lembrado ENTRE chamadas.
+#
+# PID é reciclado pelo kernel, então guardar o número sozinho arriscaria matar
+# um processo alheio que herdou o mesmo PGID. Por isso guardamos junto o
+# `starttime` do líder (campo 22 de /proc/<pid>/stat, em ticks desde o boot):
+# se o número voltar a existir com outro starttime, não é o nosso grupo.
+# --------------------------------------------------------------------------
+
+_groups_guard = threading.Lock()
+_known_groups: dict[str, tuple[int, str | None]] = {}
+
+
+def process_starttime(pid: int) -> str | None:
+    """Assinatura temporal do processo. Distingue PID reciclado do original."""
+    try:
+        with open(f"/proc/{pid}/stat", "r") as arquivo:
+            conteudo = arquivo.read()
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+        return None
+
+    # O comm pode conter espaços e parênteses; tudo depois do ')' é estável.
+    fechamento = conteudo.rfind(")")
+
+    if fechamento == -1:
+        return None
+
+    campos = conteudo[fechamento + 2:].split()
+
+    # Campo 22 do stat = campo 20 depois de pid e comm.
+    return campos[19] if len(campos) > 19 else None
+
+
+def remember_group(agent: str, pgid: int | None) -> None:
+    if not pgid:
+        return
+
+    with _groups_guard:
+        _known_groups[agent] = (pgid, process_starttime(pgid))
+
+
+def recall_group(agent: str) -> int | None:
+    """PGID lembrado, se ainda for o MESMO grupo. Senão esquece e devolve None."""
+    with _groups_guard:
+        registro = _known_groups.get(agent)
+
+    if not registro:
+        return None
+
+    pgid, assinatura = registro
+    atual = process_starttime(pgid)
+
+    if atual is None:
+        # Líder morreu. Pode haver filho sobrevivente no mesmo PGID, e é
+        # exatamente esse o caso que interessa — mantemos o PGID.
+        return pgid
+
+    if assinatura is not None and atual != assinatura:
+        # PID reciclado por outro processo: não é o nosso grupo. Esquecer é
+        # obrigatório, senão mataríamos processo alheio.
+        forget_group(agent)
+        return None
+
+    return pgid
+
+
+def forget_group(agent: str) -> None:
+    with _groups_guard:
+        _known_groups.pop(agent, None)
+
+
 @dataclass
 class AgentState:
     """Retrato do agente lido do sistema, não do que se espera dele."""
@@ -99,6 +200,10 @@ class AgentState:
     model_loaded: bool | None = False
     endpoint_configured: bool = False
     rss_kb: int = 0
+    # Trabalho executável do agente agora. `None` quando não foi consultado —
+    # ver `work_state_known`.
+    active_work: dict | None = None
+    work_checked: bool = False
 
     @property
     def agent_process_running(self) -> bool:
@@ -127,6 +232,10 @@ class AgentState:
             not self.session_exists
             and not self.group_pids
             and self.model_loaded is False
+            # O aceite exige "sem runs ativos executáveis". Uma run `running`
+            # com a sessão derrubada não é um agente ocioso: é trabalho órfão,
+            # e chamar isso de OFFLINE esconderia o problema em vez de mostrá-lo.
+            and not self.active_work
         )
 
     def as_dict(self) -> dict:
@@ -144,6 +253,8 @@ class AgentState:
             "model_state_known": self.model_state_known,
             "endpoint_configured": self.endpoint_configured,
             "rss_kb": self.rss_kb,
+            "active_work": self.active_work,
+            "work_checked": self.work_checked,
             "offline": self.offline,
         }
 
@@ -197,20 +308,35 @@ def pgid_of(pid: int) -> int | None:
 
 
 def group_pids(pgid: int) -> list[int]:
-    """PIDs vivos do process group. É o escopo exato do que pode ser morto."""
+    """PIDs vivos do process group. É o escopo exato do que pode ser morto.
+
+    `ps -g` NÃO serve: no procps deste host ele seleciona por **sessão**, não
+    por process group. Reproduzido em 2026-09-11 — um `setsid sleep` com
+    PID=PGID=951896 devolveu quatro PIDs, três deles de outra árvore, e num
+    caso com PGID != SID devolveu lista vazia com o processo vivo. O efeito era
+    duplo e grave: `terminate_group` era pulado (nada a matar) e a liberação de
+    memória era "confirmada" sem que nada tivesse sido encerrado.
+
+    `ps --pgid` também não existe nesta versão. A forma correta e portável é
+    listar PID e PGID de todos e filtrar aqui.
+    """
     if not pgid:
         return []
 
-    resultado = _run(["ps", "-o", "pid=", "-g", str(pgid)], 5)
+    resultado = _run(["ps", "-eo", "pid=,pgid="], 5)
 
     if resultado.returncode != 0:
         return []
 
-    return [
-        int(linha.strip())
-        for linha in resultado.stdout.splitlines()
-        if linha.strip().isdigit()
-    ]
+    pids = []
+
+    for linha in resultado.stdout.splitlines():
+        partes = linha.split()
+        if len(partes) == 2 and partes[0].isdigit() and partes[1].isdigit():
+            if int(partes[1]) == pgid:
+                pids.append(int(partes[0]))
+
+    return pids
 
 
 def group_rss_kb(pids: list[int]) -> int:
@@ -452,14 +578,18 @@ def read_state(
     session: str | None,
     *,
     known_pgid: int | None = None,
+    db=None,
 ) -> AgentState:
     """Lê o estado do sistema.
 
-    `known_pgid` existe por causa do achado P1 da revisão: depois que a sessão
-    tmux morre não há mais `pane_pid` de onde tirar o grupo, e a leitura
-    ingênua concluía "sem processos" — reportando OFFLINE com sobreviventes
-    vivos segurando RAM. Quem já conhecia o PGID passa ele adiante para que os
-    sobreviventes continuem visíveis.
+    A identidade do grupo vem de três fontes, nesta ordem: a sessão tmux viva,
+    o `known_pgid` de quem está no meio de um stop, e a memória do módulo. A
+    terceira é o que faz o sobrevivente continuar visível em CHAMADAS
+    POSTERIORES — sem ela, o `GET /lifecycle` logo depois de um stop voltava a
+    dizer offline com o processo vivo segurando RAM.
+
+    `db` permite incorporar trabalho executável ao estado, como o aceite exige
+    ("sem runs ativos executáveis").
     """
     estado = AgentState(agent=agent, session=session)
 
@@ -482,15 +612,25 @@ def read_state(
 
             if estado.pane_pid:
                 estado.pgid = pgid_of(estado.pane_pid)
+                remember_group(agent, estado.pgid)
 
     # O PGID conhecido prevalece quando a sessão já não existe — é ele que
     # revela o processo órfão que o tmux não enxerga mais.
-    if estado.pgid is None and known_pgid:
-        estado.pgid = known_pgid
+    if estado.pgid is None:
+        estado.pgid = known_pgid or recall_group(agent)
 
     if estado.pgid:
         estado.group_pids = group_pids(estado.pgid)
         estado.rss_kb = group_rss_kb(estado.group_pids)
+
+        # Grupo extinto: esquecer evita que um PID reciclado no futuro seja
+        # confundido com este agente.
+        if not estado.group_pids and not estado.session_exists:
+            forget_group(agent)
+
+    if db is not None:
+        estado.active_work = active_work(db, agent)
+        estado.work_checked = True
 
     return estado
 
@@ -609,6 +749,8 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
     curso do agente que já estava rodando. O lock por agente garante que duas
     chamadas simultâneas não leiam "ausente" ao mesmo tempo.
     """
+    ensure_local_scope(agent)
+
     with agent_lock(agent):
         antes = read_state(agent, session)
 
@@ -692,8 +834,10 @@ def stop(agent: str, session: str | None, *, unload: bool = True, db=None) -> di
     Idempotente e serializado. Com o agente já desligado, devolve o estado
     offline sem erro — desligar o que já está desligado não é falha.
     """
+    ensure_local_scope(agent)
+
     with agent_lock(agent):
-        antes = read_state(agent, session)
+        antes = read_state(agent, session, db=db)
         rss_antes = antes.rss_kb
         pgid = antes.pgid
 
@@ -751,7 +895,7 @@ def stop(agent: str, session: str | None, *, unload: bool = True, db=None) -> di
 
         # Releitura carregando o PGID original: sem isso, sobrevivente do grupo
         # ficaria invisível e o estado alegaria offline (achado P1).
-        depois = read_state(agent, session, known_pgid=pgid)
+        depois = read_state(agent, session, known_pgid=pgid, db=db)
 
         return {
             "agent": agent,

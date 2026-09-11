@@ -512,7 +512,17 @@ async def agent_lifecycle_state(agent: str):
             raise HTTPException(status_code=404, detail="Agente inválido")
 
     session = _lifecycle_session(agent)
-    estado = await asyncio.to_thread(agent_lifecycle.read_state, agent, session)
+
+    # `db` não é opcional aqui: o aceite exige "sem runs ativos executáveis", e
+    # sem consultar o Postgres a rota reportaria OFFLINE para um agente com run
+    # `running` órfã — escondendo o problema em vez de mostrá-lo.
+    db = SessionLocal()
+    try:
+        estado = await asyncio.to_thread(
+            agent_lifecycle.read_state, agent, session, db=db,
+        )
+    finally:
+        db.close()
 
     return estado.as_dict()
 
