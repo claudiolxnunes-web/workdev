@@ -33,11 +33,14 @@ describe('RuntimeControls', () => {
 
   it('desconecta pelo lifecycle e expõe falha como ERROR', async () => {
     setAgentConnection.mockRejectedValue(new Error('runtime inconsistente'))
-    render(<RuntimeControls agent="codex" runtimeState="ONLINE" />)
+    const { rerender } = render(<RuntimeControls agent="codex" runtimeState="ONLINE" checkedAt="first" />)
     fireEvent.click(screen.getByRole('button', { name: 'Desconectar' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('runtime inconsistente'))
     expect(setAgentConnection).toHaveBeenCalledWith('codex', false)
     expect(screen.getByText('ERROR')).toBeInTheDocument()
+    rerender(<RuntimeControls agent="codex" runtimeState="ONLINE" checkedAt="next" />)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByText('ONLINE')).toBeInTheDocument()
   })
 
   it('parada forçada refletida pelo snapshot muda ONLINE para OFFLINE', () => {

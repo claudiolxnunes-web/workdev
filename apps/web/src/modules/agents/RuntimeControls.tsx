@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { setAgentConnection, type AgentName, type RuntimeState, type ActivityState } from '@/services/handoff.service'
 
 export function RuntimeControls({ agent, runtimeState = 'ERROR', activityState = 'IDLE', persistent = true, checkedAt, onRefresh }: {
@@ -6,19 +6,19 @@ export function RuntimeControls({ agent, runtimeState = 'ERROR', activityState =
   persistent?: boolean; checkedAt?: string | null; onRefresh?: () => void
 }) {
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  useEffect(() => { setError(null) }, [checkedAt])
+  const [failure, setFailure] = useState<{ message: string; checkedAt?: string | null } | null>(null)
+  const error = failure?.checkedAt === checkedAt ? failure?.message : null
   const remote = agent.startsWith('gpu-')
   const transition = runtimeState === 'STARTING' || runtimeState === 'STOPPING'
   async function connect(connected: boolean) {
     setPending(true)
-    setError(null)
+    setFailure(null)
     try {
       await setAgentConnection(agent, connected)
       onRefresh?.()
       window.dispatchEvent(new Event('agent-runtime-refresh'))
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Falha no controle do agente')
+      setFailure({ message: cause instanceof Error ? cause.message : 'Falha no controle do agente', checkedAt })
     } finally { setPending(false) }
   }
   return <div className="flex flex-wrap items-center gap-2 rounded border border-slate-700 p-2 text-xs" aria-label="Estado do agente">

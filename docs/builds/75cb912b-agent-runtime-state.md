@@ -37,6 +37,8 @@ Frontend (`apps/web`): `pnpm test`: **75 testes em 13 arquivos passaram**. Inclu
 
 `pnpm run build`: **passou** (TypeScript + Vite). Bundle `index-*.js` sem `localhost:8000`. `git diff --check` sem erros.
 
+O gate formal completo também executou a suíte inteira de Python: **940 testes e 23 subtests passaram**, com 19 skips e 35 avisos. Vitest e build passaram. Lint global apresentou dívida preexistente em DatabaseTab, MonitoringTab, RepositoryTab e AIHub; o lint dos fontes frontend desta task passou após correção do componente de controles. A política existente do gate trata o lint histórico como não bloqueante. O resultado final vinculado ao commit fica nos eventos da execução.
+
 ## Limites e ativação
 
 Os reinícios são de processos FastAPI isolados usando ASGI/TestClient; não houve restart do serviço de produção. A UI foi validada por testes de componentes, sem teste de navegador contra produção.
