@@ -56,8 +56,18 @@ ReadWritePaths=-/opt/workdev/.git
 # O gate roda vite/vitest dentro do worktree e eles escrevem cache.
 ReadWritePaths=-/opt/workdev/node_modules
 ReadWritePaths=-/opt/workdev/apps/web/node_modules
-# Postgres por socket/TCP local e o tmux do Agent Hub continuam acessíveis.
-PrivateTmp=false
+# /tmp PRIVADO e gravável. Com ProtectSystem=strict o /tmp compartilhado vira
+# somente-leitura, e o gate precisa dele: pytest cria `tmp_path` lá e o vite
+# cria diretório temporário. Com PrivateTmp=false, TODO build caía em `blocked`
+# por ambiente — 5 testes do pytest e 3 arquivos do vitest falhando no primeiro
+# build real (2026-09-11), com código que não tinha como quebrá-los.
+#
+# `false` foi herdado da unit da API, onde é necessário: o Agent Hub precisa
+# enxergar o socket do tmux em /tmp/tmux-<uid>. O worker não usa tmux.
+#
+# Validado sob o sandbox exato desta unit via systemd-run: pytest 854 passed,
+# vitest 70 passed.
+PrivateTmp=true
 
 NoNewPrivileges=true
 ProtectHome=true
