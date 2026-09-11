@@ -26,7 +26,13 @@ def registro_isolado(tmp_path, monkeypatch):
     monkeypatch.setattr(
         agent_lifecycle, "GROUPS_FILE", tmp_path / "agent-groups.json"
     )
+    # O fallback em memória e o sinal de degradação são globais do módulo:
+    # sem limpar, um teste contamina o seguinte.
+    agent_lifecycle._memory_groups.clear()
+    agent_lifecycle.reset_registry_status()
     yield
+    agent_lifecycle._memory_groups.clear()
+    agent_lifecycle.reset_registry_status()
 
 
 class TestDefinicaoDeOffline:
@@ -1149,7 +1155,7 @@ class TestIdentidadePersistida:
         assert agent_lifecycle.GROUPS_FILE.exists()
         assert agent_lifecycle.recall_groups("kimi") == [4242]
 
-    def test_boot_diferente_descarta_tudo(self, monkeypatch):
+    def test_boot_diferente_descarta_o_registro_em_arquivo(self, monkeypatch):
         monkeypatch.setattr(
             agent_lifecycle, "process_starttime", lambda pid: "t"
         )
@@ -1157,26 +1163,48 @@ class TestIdentidadePersistida:
         agent_lifecycle.remember_group("kimi", 4242)
         assert agent_lifecycle.recall_groups("kimi") == [4242]
 
-        # Outro boot: o PID 4242 não se refere a nada daqui.
+        # Outro boot: o PID 4242 não se refere a nada daqui. A memória do
+        # processo também não sobrevive a um reboot na prática — aqui ela é
+        # limpa para representar o processo novo.
         monkeypatch.setattr(agent_lifecycle, "_boot_id", lambda: "boot-B")
+        agent_lifecycle._memory_groups.clear()
 
         assert agent_lifecycle.recall_groups("kimi") == []
 
-    def test_arquivo_corrompido_nao_quebra(self, monkeypatch):
+    def test_arquivo_corrompido_degrada_em_vez_de_fingir_vazio(self):
+        """Corrompido não é "sem grupos": é "não sei"."""
         agent_lifecycle.GROUPS_FILE.parent.mkdir(parents=True, exist_ok=True)
         agent_lifecycle.GROUPS_FILE.write_text("{não é json")
 
-        assert agent_lifecycle.recall_groups("kimi") == []
+        agent_lifecycle.recall_groups("kimi")
+        ok, motivo = agent_lifecycle.registry_status()
 
-    def test_falha_de_escrita_nao_derruba_o_stop(self, monkeypatch):
-        """Perder a memória é ruim; derrubar um desligamento é pior."""
+        assert ok is False
+        assert "corrompido" in motivo
+
+    def test_falha_de_escrita_sinaliza_e_mantem_em_memoria(self, monkeypatch):
+        """Não basta não levantar: a falha precisa ser visível E a identidade
+        precisa continuar conhecida dentro desta execução."""
         monkeypatch.setattr(
             agent_lifecycle,
             "GROUPS_FILE",
             Path("/proc/impossivel/agent-groups.json"),
         )
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "t"
+        )
 
-        agent_lifecycle.remember_group("kimi", 1)  # não pode levantar
+        duravel = agent_lifecycle.remember_group("kimi", 4242)
+
+        assert duravel is False, "precisa informar que não ficou durável"
+
+        ok, motivo = agent_lifecycle.registry_status()
+        assert ok is False
+        assert "gravável" in motivo
+
+        # E o grupo não pode sumir: é o fallback que impede um stop logo em
+        # seguida concluir "nada a fazer".
+        assert agent_lifecycle.recall_groups("kimi") == [4242]
 
     def test_pid_reciclado_e_descartado(self, monkeypatch):
         monkeypatch.setattr(
@@ -1191,3 +1219,151 @@ class TestIdentidadePersistida:
         assert agent_lifecycle.recall_groups("kimi") == [], (
             "PID reciclado por processo alheio não pode ser sinalizado"
         )
+
+
+class TestRegistroDegradado:
+    """Achado P1 da 4ª revisão: falha de persistência virava OFFLINE.
+
+    Reprodução do revisor: com o grupo 98765 registrado e vivo, a leitura dava
+    offline=False; ao corromper o JSON, a MESMA situação passava a offline=True
+    e o stop respondia already_offline=True. Ou seja, a falha de infraestrutura
+    era convertida em "agente desligado" — o defeito central da task, de volta
+    por outro caminho.
+    """
+
+    def _com_grupo_vivo(self, monkeypatch, pgid=98765):
+        monkeypatch.setattr(agent_lifecycle, "session_exists", lambda s: False)
+        monkeypatch.setattr(
+            agent_lifecycle, "group_pids", lambda p: [pgid] if p == pgid else []
+        )
+        monkeypatch.setattr(agent_lifecycle, "group_rss_kb", lambda p: 900)
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: None
+        )
+
+    def test_registro_integro_ve_o_grupo(self, monkeypatch):
+        agent_lifecycle.remember_group("kimi", 98765)
+        self._com_grupo_vivo(monkeypatch)
+
+        assert agent_lifecycle.read_state("kimi", "kimi").offline is False
+
+    def test_json_corrompido_nao_vira_offline(self, monkeypatch):
+        """O cenário exato da reprodução do revisor."""
+        agent_lifecycle.remember_group("kimi", 98765)
+        self._com_grupo_vivo(monkeypatch)
+        agent_lifecycle._memory_groups.clear()  # simula processo novo
+        agent_lifecycle.GROUPS_FILE.write_text("{corrompido")
+
+        estado = agent_lifecycle.read_state("kimi", "kimi")
+
+        assert estado.registry_ok is False
+        assert estado.offline is False, (
+            "registro ilegível é ignorância sobre o grupo, não prova de ausência"
+        )
+
+    def test_stop_nao_alega_already_offline_com_registro_degradado(
+        self, monkeypatch
+    ):
+        agent_lifecycle.GROUPS_FILE.write_text("{corrompido")
+        monkeypatch.setattr(agent_lifecycle, "session_exists", lambda s: False)
+        monkeypatch.setattr(agent_lifecycle, "group_pids", lambda p: [])
+        monkeypatch.setattr(agent_lifecycle, "_run", lambda *a, **k: None)
+
+        resultado = agent_lifecycle.stop("kimi", "kimi")
+
+        assert resultado["already_offline"] is False
+        assert resultado["state"]["registry_ok"] is False
+
+    def test_ausencia_legitima_continua_sendo_offline(self, monkeypatch):
+        """Arquivo inexistente é primeiro uso, não falha: OFFLINE é válido."""
+        monkeypatch.setattr(agent_lifecycle, "session_exists", lambda s: False)
+        monkeypatch.setattr(agent_lifecycle, "group_pids", lambda p: [])
+
+        estado = agent_lifecycle.read_state("kimi", "kimi")
+
+        assert estado.registry_ok is True
+        assert estado.offline is True
+
+    def test_stop_aborta_preservando_a_sessao_se_identidade_nao_e_duravel(
+        self, monkeypatch
+    ):
+        """Matar a sessão sem guardar o PGID cria o órfão invisível.
+
+        A sessão é a única fonte do pane_pid; destruí-la às cegas é
+        irrecuperável, enquanto abortar deixa tudo como estava.
+        """
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "read_state",
+            lambda a, s, known_pgid=None, db=None: AgentState(
+                agent=a, session=s, session_exists=True,
+                pane_pid=500, pgid=500, group_pids=[500],
+                current_process="node",
+            ),
+        )
+        monkeypatch.setattr(
+            agent_lifecycle, "remember_group", lambda agent, pgid: False
+        )
+
+        mortes = []
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "_run",
+            lambda args, timeout=10: mortes.append(args),
+        )
+
+        with pytest.raises(agent_lifecycle.LifecycleError) as exc:
+            agent_lifecycle.stop("kimi", "kimi")
+
+        assert exc.value.code == "identity_not_durable"
+        assert not any("kill-session" in str(m) for m in mortes), (
+            "a sessão precisa sobreviver ao aborto"
+        )
+
+    def test_stop_prossegue_quando_a_identidade_e_duravel(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "read_state",
+            lambda a, s, known_pgid=None, db=None: AgentState(
+                agent=a, session=s, session_exists=True,
+                pane_pid=500, pgid=500, group_pids=[500],
+                current_process="node", live_pgids=[500],
+            ),
+        )
+        monkeypatch.setattr(
+            agent_lifecycle, "remember_group", lambda agent, pgid: True
+        )
+        monkeypatch.setattr(agent_lifecycle, "group_pids", lambda p: [])
+
+        mortes = []
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "_run",
+            lambda args, timeout=10: mortes.append(args),
+        )
+
+        resultado = agent_lifecycle.stop("kimi", "kimi")
+
+        assert resultado["stopped"] is True
+        assert any("kill-session" in str(m) for m in mortes)
+
+    def test_erro_de_leitura_tambem_degrada(self, monkeypatch):
+        def explode(*_a, **_k):
+            raise OSError("disco fora")
+
+        agent_lifecycle.GROUPS_FILE.write_text("{}")
+        monkeypatch.setattr(Path, "read_text", explode)
+
+        agent_lifecycle.recall_groups("kimi")
+        ok, motivo = agent_lifecycle.registry_status()
+
+        assert ok is False
+        assert "ilegível" in motivo
+
+    def test_forget_nao_apaga_registro_que_nao_conseguiu_ler(self, monkeypatch):
+        """Reescrever por cima do ilegível destruiria o que não se conhece."""
+        agent_lifecycle.GROUPS_FILE.write_text("{corrompido")
+
+        agent_lifecycle.forget_group("kimi", 1)
+
+        assert agent_lifecycle.GROUPS_FILE.read_text() == "{corrompido"

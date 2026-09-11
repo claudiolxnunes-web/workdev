@@ -164,71 +164,120 @@ def process_starttime(pid: int) -> str | None:
     return campos[19] if len(campos) > 19 else None
 
 
-def _ler_registro() -> dict:
+# Fallback em memória e sinal de degradação.
+#
+# Engolir falha de persistência recriava o defeito central da task: JSON
+# corrompido ou caminho não gravável viravam "nenhum grupo", e daí OFFLINE sem
+# nada ter sido comprovado. Ausência LEGÍTIMA (primeiro uso, arquivo não
+# existe) é diferente de registro INACESSÍVEL — e só a primeira permite
+# concluir que não há grupo.
+_memory_groups: dict[str, list[dict]] = {}
+_registry_status: dict = {"ok": True, "reason": None}
+
+
+def registry_status() -> tuple[bool, str | None]:
+    with _groups_guard:
+        return _registry_status["ok"], _registry_status["reason"]
+
+
+def _marcar_degradado(motivo: str) -> None:
+    _registry_status["ok"] = False
+    _registry_status["reason"] = motivo
+
+
+def reset_registry_status() -> None:
+    with _groups_guard:
+        _registry_status["ok"] = True
+        _registry_status["reason"] = None
+
+
+def _ler_registro() -> tuple[dict, bool]:
+    """Devolve (dados, integro).
+
+    `integro=False` significa que NÃO dá para afirmar que o agente não tem
+    grupo — o arquivo existe mas não pôde ser lido ou entendido.
+    """
+    vazio = {"boot_id": _boot_id(), "agents": {}}
+
+    if not GROUPS_FILE.exists():
+        # Ausência legítima: nunca houve registro neste boot.
+        return vazio, True
+
     try:
-        dados = json.loads(GROUPS_FILE.read_text())
-    except (FileNotFoundError, ValueError, OSError):
-        return {"boot_id": _boot_id(), "agents": {}}
+        bruto = GROUPS_FILE.read_text()
+    except OSError as erro:
+        _marcar_degradado(f"registro ilegível: {type(erro).__name__}")
+        return vazio, False
 
-    if not isinstance(dados, dict) or dados.get("boot_id") != _boot_id():
+    try:
+        dados = json.loads(bruto)
+    except ValueError:
+        _marcar_degradado("registro corrompido: JSON inválido")
+        return vazio, False
+
+    if not isinstance(dados, dict) or not isinstance(dados.get("agents"), dict):
+        _marcar_degradado("registro corrompido: formato inesperado")
+        return vazio, False
+
+    if dados.get("boot_id") != _boot_id():
         # Outro boot: PIDs antigos não se referem a processo nenhum daqui.
-        return {"boot_id": _boot_id(), "agents": {}}
+        # Isso é descarte legítimo, não corrupção.
+        return vazio, True
 
-    if not isinstance(dados.get("agents"), dict):
-        dados["agents"] = {}
-
-    return dados
+    return dados, True
 
 
-def _gravar_registro(dados: dict) -> None:
+def _gravar_registro(dados: dict) -> bool:
     try:
         GROUPS_FILE.parent.mkdir(parents=True, exist_ok=True)
         temporario = GROUPS_FILE.with_suffix(".tmp")
         temporario.write_text(json.dumps(dados))
         temporario.replace(GROUPS_FILE)
-    except OSError:
-        # Não poder persistir degrada a memória entre reinícios, mas não pode
-        # derrubar um ligar/desligar em curso.
-        pass
+    except OSError as erro:
+        # Não derruba a operação em curso, mas NÃO passa por bem-sucedida: a
+        # identidade deixou de ser durável e quem for desligar precisa saber.
+        _marcar_degradado(f"registro não gravável: {type(erro).__name__}")
+        return False
+
+    return True
 
 
-def remember_group(agent: str, pgid: int | None) -> None:
-    """ACRESCENTA um grupo ao agente. Nunca substitui um grupo ainda vivo.
+def remember_group(agent: str, pgid: int | None) -> bool:
+    """Acrescenta um grupo ao agente. Devolve se a identidade ficou DURÁVEL.
 
-    Um agente pode ter mais de um grupo seu ao mesmo tempo: basta um stop
-    deixar sobreviventes e um start criar sessão nova. Guardar um PGID só fazia
-    o grupo antigo ser esquecido — e, quando o novo morria, o estado dizia
-    OFFLINE com o antigo ainda consumindo RAM.
+    A memória do processo é atualizada sempre — perder a identidade dentro da
+    própria execução seria pior que não persistir. `False` significa que ela
+    não sobrevive a um restart, e quem vai destruir a sessão precisa decidir o
+    que fazer com essa informação.
     """
     if not pgid:
-        return
+        return True
 
     with _groups_guard:
-        dados = _ler_registro()
-        registros = dados["agents"].setdefault(agent, [])
+        registros = _memory_groups.setdefault(agent, [])
+        assinatura = process_starttime(pgid)
 
-        for item in registros:
-            if item.get("pgid") == pgid:
-                return
+        if not any(item.get("pgid") == pgid for item in registros):
+            registros.append({"pgid": pgid, "starttime": assinatura})
 
-        registros.append(
-            {"pgid": pgid, "starttime": process_starttime(pgid)}
-        )
-        _gravar_registro(dados)
+        dados, integro = _ler_registro()
+        persistidos = dados["agents"].setdefault(agent, [])
+
+        if not any(item.get("pgid") == pgid for item in persistidos):
+            persistidos.append({"pgid": pgid, "starttime": assinatura})
+
+        gravou = _gravar_registro(dados)
+
+        return gravou and integro
 
 
-def recall_groups(agent: str) -> list[int]:
-    """PGIDs do agente que ainda podem ser dele, já filtrados por reuso de PID."""
-    with _groups_guard:
-        dados = _ler_registro()
-        registros = list(dados["agents"].get(agent, []))
-
-    validos = []
+def _validos(registros: list[dict]) -> list[int]:
+    saida = []
 
     for item in registros:
         pgid = item.get("pgid")
 
-        if not isinstance(pgid, int):
+        if not isinstance(pgid, int) or pgid in saida:
             continue
 
         assinatura = item.get("starttime")
@@ -237,7 +286,7 @@ def recall_groups(agent: str) -> list[int]:
         # Líder morto: pode haver filho sobrevivente no mesmo PGID, que é
         # justamente o caso que interessa. Mantemos.
         if atual is None:
-            validos.append(pgid)
+            saida.append(pgid)
             continue
 
         # PID reciclado por outro processo: não é nosso. Sinalizar seria pedir
@@ -245,9 +294,24 @@ def recall_groups(agent: str) -> list[int]:
         if assinatura is not None and atual != assinatura:
             continue
 
-        validos.append(pgid)
+        saida.append(pgid)
 
-    return validos
+    return saida
+
+
+def recall_groups(agent: str) -> list[int]:
+    """PGIDs do agente, unindo arquivo e memória, filtrados por reuso de PID.
+
+    A união importa: com o arquivo inacessível, a memória do processo ainda
+    conhece os grupos criados nesta execução — e é ela que impede um stop de
+    concluir "nada a fazer" logo depois de uma falha de escrita.
+    """
+    with _groups_guard:
+        dados, _integro = _ler_registro()
+        registros = list(dados["agents"].get(agent, []))
+        registros.extend(_memory_groups.get(agent, []))
+
+    return _validos(registros)
 
 
 def recall_group(agent: str) -> int | None:
@@ -259,7 +323,22 @@ def recall_group(agent: str) -> int | None:
 def forget_group(agent: str, pgid: int | None = None) -> None:
     """Esquece um grupo (ou todos, sem `pgid`). Só depois de extinto."""
     with _groups_guard:
-        dados = _ler_registro()
+        if pgid is None:
+            _memory_groups.pop(agent, None)
+        else:
+            _memory_groups[agent] = [
+                item
+                for item in _memory_groups.get(agent, [])
+                if item.get("pgid") != pgid
+            ]
+            if not _memory_groups[agent]:
+                _memory_groups.pop(agent, None)
+
+        dados, integro = _ler_registro()
+
+        if not integro:
+            # Sem conseguir ler, reescrever apagaria o que não se conhece.
+            return
 
         if pgid is None:
             dados["agents"].pop(agent, None)
@@ -299,6 +378,10 @@ class AgentState:
     # ver `work_state_known`.
     active_work: dict | None = None
     work_checked: bool = False
+    # Falso quando o registro de identidade não pôde ser lido/gravado.
+    # Sem ele não dá para AFIRMAR ausência de grupo — só suspeitar dela.
+    registry_ok: bool = True
+    registry_reason: str | None = None
 
     @property
     def agent_process_running(self) -> bool:
@@ -327,6 +410,9 @@ class AgentState:
             not self.session_exists
             and not self.group_pids
             and self.model_loaded is False
+            # Registro degradado: a ausência de grupo pode ser ignorância, não
+            # fato. Declarar OFFLINE aqui repetiria o defeito central da task.
+            and self.registry_ok
             # O aceite exige "sem runs ativos executáveis". Uma run `running`
             # com a sessão derrubada não é um agente ocioso: é trabalho órfão,
             # e chamar isso de OFFLINE esconderia o problema em vez de mostrá-lo.
@@ -350,6 +436,8 @@ class AgentState:
             "rss_kb": self.rss_kb,
             "active_work": self.active_work,
             "work_checked": self.work_checked,
+            "registry_ok": self.registry_ok,
+            "registry_reason": self.registry_reason,
             "offline": self.offline,
         }
 
@@ -740,6 +828,8 @@ def read_state(
     if estado.pgid is None and vivos:
         estado.pgid = vivos[-1]
 
+    estado.registry_ok, estado.registry_reason = registry_status()
+
     if db is not None:
         estado.active_work = active_work(db, agent)
         estado.work_checked = True
@@ -969,6 +1059,9 @@ def stop(agent: str, session: str | None, *, unload: bool = True, db=None) -> di
         rss_antes = antes.rss_kb
         pgid = antes.pgid
 
+        # `antes.offline` já exige registry_ok, então um registro degradado
+        # nunca cai neste atalho: com a identidade em dúvida, seguimos o
+        # caminho completo em vez de alegar que não há nada a fazer.
         if antes.offline:
             return {
                 "agent": agent,
@@ -986,6 +1079,29 @@ def stop(agent: str, session: str | None, *, unload: bool = True, db=None) -> di
         encerramento = {"signalled": False, "survivors": [], "escalated": False}
 
         if session and antes.session_exists:
+            # A sessão tmux é a ÚNICA fonte do `pane_pid`, e o pane_pid é a
+            # única forma de descobrir o process group. Destruí-la sem ter a
+            # identidade guardada de forma durável cria exatamente o órfão
+            # invisível que esta task existe para eliminar: processo vivo,
+            # consumindo RAM, e ninguém mais sabe qual é.
+            #
+            # Por isso: garantir a identidade ANTES, ou abortar preservando a
+            # sessão. Abortar é recuperável; matar às cegas não é.
+            duravel = remember_group(agent, antes.pgid)
+
+            if not duravel and antes.pgid:
+                _ok, motivo = registry_status()
+                raise LifecycleError(
+                    "identity_not_durable",
+                    (
+                        "Encerramento abortado: não foi possível guardar a "
+                        f"identidade do process group ({motivo}). A sessão foi "
+                        "preservada — matá-la agora deixaria processos órfãos "
+                        "sem forma de encontrá-los depois"
+                    ),
+                    {"pgid": antes.pgid, "reason": motivo},
+                )
+
             # tmux primeiro: é a saída limpa, e costuma levar o grupo junto.
             _run(["tmux", "kill-session", "-t", f"={session}"], 5)
 
