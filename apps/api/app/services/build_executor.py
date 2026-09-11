@@ -223,9 +223,22 @@ def persist_outcome(
     run: AgentRun,
     outcome: BuildOutcome,
 ) -> None:
-    """Grava a evidência de gate da execução isolada, se houve."""
+    """Grava na run o que a execução isolada produziu.
+
+    Até 2026-09-11 gravava só a evidência de gate. Branch e commit ficavam no
+    payload do evento e do job, e nunca chegavam à run — que é o registro que o
+    revisor e a Fila de Build leem. O primeiro build a chegar em `review` pelo
+    worker chegou com `branch` e `commit_sha` vazios: a revisão independente
+    começava sem saber qual branch revisar.
+    """
     if outcome.gate_evidence is not None:
         persist_gate_evidence(db, outcome.gate_evidence)
+
+    # Só quando houve commit: um envelope recusado não pode apagar o branch
+    # de uma tentativa anterior que chegou a commitar.
+    if outcome.commit_sha:
+        run.branch = outcome.branch
+        run.commit_sha = outcome.commit_sha
 
 
 def outcome_payload(outcome: BuildOutcome) -> dict:

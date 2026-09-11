@@ -287,3 +287,43 @@ class TestMensagemDeCommit:
         assert str(run.id) in mensagem
         assert "ADR 005" in mensagem
         assert "revisão independente pendente" in mensagem
+
+
+class TestPersistOutcomeGravaNaRun:
+    """A run precisa saber onde está o próprio trabalho (2026-09-11).
+
+    O primeiro build a chegar em `review` pelo worker chegou com `branch` e
+    `commit_sha` vazios na run: o revisor não tinha como saber o que revisar.
+    """
+
+    def _run(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(branch=None, commit_sha=None)
+
+    def test_commit_grava_branch_e_sha(self):
+        from unittest.mock import Mock
+        from app.services.build_executor import BuildOutcome, persist_outcome
+
+        run = self._run()
+        outcome = BuildOutcome(
+            ok=True, code="build_committed", message="ok",
+            branch="build/abc/2", commit_sha="c7bac3708365",
+        )
+
+        persist_outcome(Mock(), run, outcome)
+
+        assert run.branch == "build/abc/2"
+        assert run.commit_sha == "c7bac3708365"
+
+    def test_recusa_nao_apaga_o_branch_anterior(self):
+        from unittest.mock import Mock
+        from app.services.build_executor import BuildOutcome, persist_outcome
+
+        run = self._run()
+        run.branch, run.commit_sha = "build/abc/2", "c7bac3708365"
+
+        recusa = BuildOutcome(ok=False, code="invalid_json", message="ruim")
+        persist_outcome(Mock(), run, recusa)
+
+        assert run.branch == "build/abc/2"
+        assert run.commit_sha == "c7bac3708365"
