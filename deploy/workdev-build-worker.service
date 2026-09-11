@@ -33,7 +33,12 @@ Environment=PYTHONUNBUFFERED=1
 
 ExecStart=/opt/workdev/apps/api/venv/bin/python /opt/workdev/scripts/workdev_build_worker.py
 
-Restart=always
+# on-failure, NUNCA always. Com a flag desligada o worker sai com código 0 de
+# propósito, e `always` reinicia mesmo em saída limpa: a unit ficaria subindo e
+# descendo a cada RestartSec para sempre — crash-loop silencioso, que já
+# derrubou esta VPS (NRestarts passou de 7300 em 2026-08-03, ver CLAUDE.md).
+# `on-failure` reinicia só em saída com erro ou morte por sinal.
+Restart=on-failure
 RestartSec=10
 
 # O worker escreve worktrees; precisa do diretório de builds.
