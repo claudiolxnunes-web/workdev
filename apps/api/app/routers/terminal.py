@@ -408,23 +408,20 @@ async def start_agent_lifecycle(agent: str):
     Recriar mataria o trabalho em curso do agente que já estava no ar — por
     isso a idempotência aqui é correção, não conveniência.
     """
+    from app.services import agent_runtimes
+
+    if agent not in ALLOWED_SESSIONS and not agent_runtimes.is_ollama_agent(agent):
+        raise HTTPException(status_code=404, detail="Agente inválido")
+
     session = _lifecycle_session(agent)
 
-    if session is None:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "runtime_has_no_session",
-                "message": (
-                    f"{agent} é runtime Ollama e não tem sessão para ligar; "
-                    "o modelo carrega sob demanda no primeiro despacho"
-                ),
-            },
-        )
+    # Runtime Ollama não tem sessão: ligar é carregar o modelo no endpoint.
+    # A primeira versão devolvia 409 aqui e o "Ligar" do plano não existia.
+    launcher = STANDBY_COMMANDS.get(agent) if session else None
 
     try:
         resultado = await asyncio.to_thread(
-            agent_lifecycle.start, agent, session, STANDBY_COMMANDS[agent],
+            agent_lifecycle.start, agent, session, launcher,
         )
     except agent_lifecycle.LifecycleError as error:
         raise HTTPException(
@@ -471,26 +468,27 @@ async def stop_agent_lifecycle(
     db = SessionLocal()
     try:
         trabalho = await asyncio.to_thread(agent_lifecycle.active_work, db, agent)
-    finally:
-        db.close()
 
-    if trabalho:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "agent_busy",
-                "message": (
-                    "Encerramento recusado: o agente tem trabalho em execução "
-                    "agora"
-                ),
-                "details": trabalho,
-            },
-        )
+        if trabalho:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "agent_busy",
+                    "message": (
+                        "Encerramento recusado: o agente tem trabalho em "
+                        "execução agora"
+                    ),
+                    "details": trabalho,
+                },
+            )
 
-    try:
+        # `db` segue aberto: `model_users` precisa dele para distinguir runtime
+        # que de fato usa o modelo de runtime apenas configurado com ele.
         resultado = await asyncio.to_thread(
-            agent_lifecycle.stop, agent, session,
+            agent_lifecycle.stop, agent, session, db=db,
         )
+    except HTTPException:
+        raise
     except agent_lifecycle.LifecycleError as error:
         raise HTTPException(
             status_code=503,
@@ -498,6 +496,8 @@ async def stop_agent_lifecycle(
         ) from error
     except (RuntimeError, subprocess.TimeoutExpired) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    finally:
+        db.close()
 
     return resultado
 

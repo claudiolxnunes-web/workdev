@@ -6,17 +6,23 @@ process group continua vivo segurando GB de RAM, e o modelo carregado no Ollama
 permanece residente em RAM/VRAM até alguém mandar descarregar. A tela dizia
 OFFLINE; a memória dizia outra coisa.
 
-Três separações que estruturam o módulo:
+Quatro regras estruturam o módulo:
 
-1. **Ciclo do agente ≠ ciclo do modelo.** O modelo do Ollama é recurso
-   compartilhado: descarregá-lo porque UM agente parou pode derrubar outro que
-   ainda o usa. Só se descarrega modelo órfão.
-2. **Encerrar é seletivo, nunca varredura.** Mata-se o process group da sessão
-   daquele agente — obtido do `pane_pid` do tmux. Nada de `pkill ollama` ou
-   `killall node`: isso mataria agente de terceiro e processo do host.
-3. **OFFLINE é uma verificação, não uma suposição.** Depois de encerrar, o
-   estado é lido de novo do sistema: sessão, processos do grupo e modelo. Só
-   quando os três estão limpos é que o agente está offline.
+1. **Ciclo do agente ≠ ciclo do modelo.** O modelo é recurso compartilhado:
+   descarregá-lo porque UM agente parou pode derrubar outro que ainda o usa.
+2. **O endpoint é parte da pergunta.** Sondar e descarregar acontecem via HTTP
+   no endpoint DAQUELE runtime. A CLI `ollama` fala sempre com o Ollama local —
+   usá-la para uma GPU remota responderia sobre a máquina errada e, ao
+   descarregar, derrubaria o modelo do `local-code`.
+3. **Encerrar é seletivo, nunca varredura.** Mata-se o process group da sessão
+   daquele agente, obtido do `pane_pid`. Nada de varrer `ps` por nome: isso
+   atingiria agente de terceiro e processo do host.
+4. **Desconhecido não é limpo.** Sondagem que não respondeu vira estado
+   desconhecido, nunca "nada carregado". Fail-open aqui faria a API declarar
+   OFFLINE e confirmar liberação de memória sem prova alguma.
+
+Revisão independente do Codex (2026-09-11, run 818d6076) rejeitou a primeira
+versão por seis achados; os comentários abaixo marcam o que cada um mudou.
 """
 
 from __future__ import annotations
@@ -24,22 +30,23 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 
-
-# `ollama stop` descarrega o modelo da RAM/VRAM sem derrubar o servidor.
-OLLAMA_BIN = os.getenv("WORKDEV_OLLAMA_BIN", "ollama")
 
 # Janela entre SIGTERM e SIGKILL. Curta o bastante para o operador não achar que
 # travou; longa o bastante para uma CLI salvar estado e sair sozinha.
 GRACEFUL_TIMEOUT_SECONDS = 8.0
 POLL_INTERVAL_SECONDS = 0.25
 
-# `ollama stop` é assíncrono e mente no exit code (ver `unload_model`). Estes
-# controlam a CONFIRMAÇÃO de que o modelo saiu da memória.
+# Descarregar é assíncrono no Ollama. Estes controlam a CONFIRMAÇÃO de que o
+# modelo saiu da memória — ver `unload_model`.
 UNLOAD_VERIFY_TIMEOUT_SECONDS = 20.0
 UNLOAD_POLL_SECONDS = 1.0
+
+PROBE_TIMEOUT_SECONDS = 5.0
+LOAD_TIMEOUT_SECONDS = 300.0
 
 CMD_TIMEOUT_SECONDS = 10
 
@@ -56,6 +63,25 @@ class LifecycleError(RuntimeError):
         self.details = details or {}
 
 
+# --------------------------------------------------------------------------
+# Exclusão mútua por agente (achado P2 da revisão)
+#
+# Sem isto, dois `start` concorrentes liam "sessão ausente" ao mesmo tempo e o
+# segundo estourava com `duplicate session` — ou pior, matava a sessão que o
+# primeiro acabara de criar. Idempotência sem serialização é só sorte.
+# --------------------------------------------------------------------------
+
+_locks_guard = threading.Lock()
+_agent_locks: dict[str, threading.Lock] = {}
+
+
+def agent_lock(agent: str) -> threading.Lock:
+    with _locks_guard:
+        if agent not in _agent_locks:
+            _agent_locks[agent] = threading.Lock()
+        return _agent_locks[agent]
+
+
 @dataclass
 class AgentState:
     """Retrato do agente lido do sistema, não do que se espera dele."""
@@ -68,7 +94,10 @@ class AgentState:
     group_pids: list[int] = field(default_factory=list)
     current_process: str = ""
     model: str | None = None
-    model_loaded: bool = False
+    # None = desconhecido (sondagem não respondeu). Distinguir de False é o
+    # que impede declarar OFFLINE sem prova (achado P1 da revisão).
+    model_loaded: bool | None = False
+    endpoint_configured: bool = False
     rss_kb: int = 0
 
     @property
@@ -80,16 +109,24 @@ class AgentState:
         )
 
     @property
+    def model_state_known(self) -> bool:
+        return self.model_loaded is not None
+
+    @property
     def offline(self) -> bool:
         """Definição de aceite da task.
 
         Não basta a sessão ter sumido: enquanto houver processo do grupo vivo
         ou modelo residente, há consumo de memória e o agente NÃO está offline.
+
+        Estado de modelo desconhecido também não é offline — afirmar que a
+        memória voltou sem ter conseguido olhar seria exatamente a mentira que
+        esta task veio corrigir.
         """
         return (
             not self.session_exists
             and not self.group_pids
-            and not self.model_loaded
+            and self.model_loaded is False
         )
 
     def as_dict(self) -> dict:
@@ -104,6 +141,8 @@ class AgentState:
             "agent_process_running": self.agent_process_running,
             "model": self.model,
             "model_loaded": self.model_loaded,
+            "model_state_known": self.model_state_known,
+            "endpoint_configured": self.endpoint_configured,
             "rss_kb": self.rss_kb,
             "offline": self.offline,
         }
@@ -193,40 +232,76 @@ def group_rss_kb(pids: list[int]) -> int:
     )
 
 
-def running_models() -> list[str]:
-    """Modelos residentes agora, via `ollama ps`.
+# --------------------------------------------------------------------------
+# Endpoint do runtime
+# --------------------------------------------------------------------------
 
-    Detecção primária conforme o plano. Ollama ausente ou fora do ar não é
-    exceção: é 'nenhum modelo carregado' — desligar agente não pode quebrar
-    porque o Ollama não está instalado.
+
+def endpoint_for(agent: str) -> tuple[str | None, dict]:
+    """Endpoint e cabeçalhos do runtime. Agente CLI não tem — devolve None."""
+    from app.services import agent_runtimes
+
+    runtime = agent_runtimes.get_runtime(agent)
+
+    if runtime is None:
+        return None, {}
+
+    return agent_runtimes.base_url(runtime), agent_runtimes.auth_headers(runtime)
+
+
+def running_models(endpoint: str | None, headers: dict | None = None):
+    """Modelos residentes NO ENDPOINT informado, via `GET /api/ps`.
+
+    Por que HTTP e não o binário `ollama`: a CLI fala sempre com o Ollama
+    **local**. Usá-la para um runtime de GPU remota responderia sobre a máquina
+    errada — e, no caminho de descarregar, derrubaria o modelo do `local-code`
+    achando que estava mexendo na GPU. Foi o achado mais grave da revisão.
+
+    Devolve `None` para **estado desconhecido** (timeout, rede, HTTP != 200).
+    Desconhecido não é "vazio".
     """
+    if not endpoint:
+        return None
+
     try:
-        resultado = _run([OLLAMA_BIN, "ps"])
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return []
+        import httpx
 
-    if resultado.returncode != 0:
-        return []
+        with httpx.Client(timeout=PROBE_TIMEOUT_SECONDS) as client:
+            resposta = client.get(f"{endpoint}/api/ps", headers=headers or {})
+    except Exception:
+        return None
 
-    linhas = resultado.stdout.strip().splitlines()
+    if resposta.status_code != 200:
+        return None
 
-    if len(linhas) <= 1:  # só o cabeçalho NAME/ID/SIZE/...
-        return []
+    try:
+        payload = resposta.json()
+    except ValueError:
+        return None
 
-    modelos = []
+    modelos = payload.get("models")
 
-    for linha in linhas[1:]:
-        nome = linha.split()[0] if linha.split() else ""
-        if nome:
-            modelos.append(nome)
+    if not isinstance(modelos, list):
+        return None
 
-    return modelos
+    return [
+        str(item.get("name") or item.get("model") or "")
+        for item in modelos
+        if isinstance(item, dict) and (item.get("name") or item.get("model"))
+    ]
 
 
-def model_is_loaded(model: str | None) -> bool:
+def model_is_loaded(model: str | None, endpoint: str | None, headers=None):
+    """True/False quando se sabe; **None** quando a sondagem não respondeu."""
     if not model:
         return False
-    return model in running_models()
+
+    carregados = running_models(endpoint, headers)
+
+    if carregados is None:
+        return None
+
+    return model in carregados
 
 
 # --------------------------------------------------------------------------
@@ -238,8 +313,7 @@ def model_for_agent(agent: str) -> str | None:
     """Modelo Ollama do agente, quando ele for um runtime Ollama.
 
     Agente CLI (codex, claude, kimi, qwen, gemini) fala com API remota e não
-    tem modelo residente aqui — devolve None, e nada é descarregado por causa
-    dele.
+    tem modelo residente aqui — devolve None, e nada é descarregado por ele.
     """
     from app.services import agent_runtimes
 
@@ -248,27 +322,24 @@ def model_for_agent(agent: str) -> str | None:
     return agent_runtimes.model_for(runtime) if runtime else None
 
 
-def _endpoint_of(agent: str) -> str | None:
-    from app.services import agent_runtimes
+def model_users(model: str, *, excluding: str, db=None) -> list[str]:
+    """Runtimes que de fato SEGURAM este modelo no mesmo endpoint.
 
-    runtime = agent_runtimes.get_runtime(agent)
+    Duas correções da revisão vivem aqui:
 
-    return agent_runtimes.base_url(runtime) if runtime else None
-
-
-def model_users(model: str, *, excluding: str) -> list[str]:
-    """Outros runtimes que usam este modelo NO MESMO endpoint.
-
-    O endpoint importa: `gpu-runpod` pode carregar o mesmo modelo que
-    `local-code`, mas em outra máquina. `ollama stop` só alcança o Ollama
-    local, então um runtime remoto não é motivo para manter o modelo local
-    residente.
+    - o endpoint precisa ser o mesmo objeto de comparação usado para sondar e
+      descarregar, senão "órfão" vira uma conclusão sobre a máquina errada;
+    - configuração não é uso. Antes bastava outro runtime estar *configurado*
+      com o mesmo modelo para bloquear o unload para sempre, mesmo desligado e
+      sem trabalho nenhum. Agora só segura quem tem trabalho ativo — e, sem
+      `db`, o comportamento permanece conservador (qualquer configurado segura),
+      porque sem consultar não dá para afirmar que ninguém está usando.
     """
     from app.services import agent_runtimes
 
-    endpoint = _endpoint_of(excluding)
+    endpoint, _headers = endpoint_for(excluding)
 
-    return [
+    candidatos = [
         runtime.id
         for runtime in agent_runtimes.RUNTIMES
         if runtime.id != excluding
@@ -276,40 +347,98 @@ def model_users(model: str, *, excluding: str) -> list[str]:
         and agent_runtimes.base_url(runtime) == endpoint
     ]
 
+    if db is None:
+        return candidatos
 
-def unload_model(model: str, *, verify_timeout: float = None) -> bool:
-    """`ollama stop <model>` e CONFIRMA que ele saiu da memória.
+    return [
+        runtime_id
+        for runtime_id in candidatos
+        if active_work(db, runtime_id) is not None
+    ]
 
-    Medido nesta VPS em 2026-09-11, com `qwen2.5-coder:7b-instruct-q3_K_S`:
-    `ollama stop` retorna **exit 0 imediatamente**, mas o descarregamento é
-    assíncrono — o `ollama ps` manteve o modelo em `Stopping...` e o runner
-    `llama-server` continuou com 4.7 GB de RSS por **vários minutos** antes de
-    a memória voltar (RAM do host: 7831 MB → 3372 MB, só no fim).
 
-    Por isso o retorno aqui é o que o `ollama ps` mostra depois da janela de
-    verificação, não o que o comando alegou. `False` significa "ainda residente
-    quando olhei", não necessariamente "vai ficar para sempre" — e é a resposta
-    honesta para quem precisa saber se a memória já voltou AGORA.
+def load_model(
+    model: str,
+    endpoint: str | None,
+    headers: dict | None = None,
+) -> bool:
+    """Carrega o modelo no endpoint — o 'Ligar' de um runtime Ollama.
 
-    A janela é curta de propósito: uma rota HTTP não pode bloquear por minutos.
-    Quem quiser o desfecho consulta `GET /api/agents/{agent}/lifecycle` depois.
+    A revisão apontou que `POST /start` devolvia 409 para `local-code`: o plano
+    pede carregar/descarregar modelo, e só o descarregar existia. Um `generate`
+    sem prompt carrega o modelo e volta, sem gerar token.
     """
+    if not endpoint or not model:
+        return False
+
+    try:
+        import httpx
+
+        with httpx.Client(timeout=LOAD_TIMEOUT_SECONDS) as client:
+            resposta = client.post(
+                f"{endpoint}/api/generate",
+                headers=headers or {},
+                json={"model": model, "prompt": "", "stream": False},
+            )
+    except Exception:
+        return False
+
+    if resposta.status_code != 200:
+        return False
+
+    return model_is_loaded(model, endpoint, headers) is True
+
+
+def unload_model(
+    model: str,
+    endpoint: str | None,
+    headers: dict | None = None,
+    *,
+    verify_timeout: float | None = None,
+) -> bool:
+    """Descarrega o modelo do endpoint e CONFIRMA que ele saiu da memória.
+
+    `keep_alive: 0` é o mecanismo do próprio Ollama e funciona no endpoint
+    remoto — ao contrário de `ollama stop`, que só alcança o Ollama local.
+
+    Medido na VPS1 em 2026-09-11 com `qwen2.5-coder:7b-instruct-q3_K_S`: o
+    descarregamento é **assíncrono**. O `ollama ps` manteve o modelo em
+    `Stopping...` e o runner `llama-server` ficou com 4.7 GB de RSS por vários
+    minutos antes de a memória voltar (RAM do host 7831 MB → 3372 MB).
+
+    Por isso o retorno é o que a sondagem mostra depois, não o que a chamada
+    alegou. `False` significa "ainda residente, ou não consegui verificar" — e
+    é a resposta honesta para quem precisa saber se a memória voltou AGORA.
+    """
+    if not endpoint or not model:
+        return False
+
     if verify_timeout is None:
         verify_timeout = UNLOAD_VERIFY_TIMEOUT_SECONDS
 
     try:
-        _run([OLLAMA_BIN, "stop", model], 30)
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        import httpx
+
+        with httpx.Client(timeout=PROBE_TIMEOUT_SECONDS * 2) as client:
+            client.post(
+                f"{endpoint}/api/generate",
+                headers=headers or {},
+                json={"model": model, "keep_alive": 0},
+            )
+    except Exception:
         return False
 
     limite = time.monotonic() + verify_timeout
 
     while time.monotonic() < limite:
-        if not model_is_loaded(model):
+        carregado = model_is_loaded(model, endpoint, headers)
+
+        if carregado is False:
             return True
+        # `None` é desconhecido: não confirma liberação sem prova.
+
         time.sleep(UNLOAD_POLL_SECONDS)
 
-    # Continua residente. Quem chama precisa saber que a memória NÃO voltou.
     return False
 
 
@@ -318,25 +447,46 @@ def unload_model(model: str, *, verify_timeout: float = None) -> bool:
 # --------------------------------------------------------------------------
 
 
-def read_state(agent: str, session: str | None) -> AgentState:
+def read_state(
+    agent: str,
+    session: str | None,
+    *,
+    known_pgid: int | None = None,
+) -> AgentState:
+    """Lê o estado do sistema.
+
+    `known_pgid` existe por causa do achado P1 da revisão: depois que a sessão
+    tmux morre não há mais `pane_pid` de onde tirar o grupo, e a leitura
+    ingênua concluía "sem processos" — reportando OFFLINE com sobreviventes
+    vivos segurando RAM. Quem já conhecia o PGID passa ele adiante para que os
+    sobreviventes continuem visíveis.
+    """
     estado = AgentState(agent=agent, session=session)
 
     estado.model = model_for_agent(agent)
-    estado.model_loaded = model_is_loaded(estado.model)
+    endpoint, headers = endpoint_for(agent)
+    estado.endpoint_configured = bool(endpoint)
 
-    if not session:
-        return estado
+    if estado.model:
+        estado.model_loaded = model_is_loaded(estado.model, endpoint, headers)
+    else:
+        # Agente sem modelo residente: estado conhecido e vazio, não incerto.
+        estado.model_loaded = False
 
-    estado.session_exists = session_exists(session)
+    if session:
+        estado.session_exists = session_exists(session)
 
-    if not estado.session_exists:
-        return estado
+        if estado.session_exists:
+            estado.current_process = current_process(session)
+            estado.pane_pid = pane_pid(session)
 
-    estado.current_process = current_process(session)
-    estado.pane_pid = pane_pid(session)
+            if estado.pane_pid:
+                estado.pgid = pgid_of(estado.pane_pid)
 
-    if estado.pane_pid:
-        estado.pgid = pgid_of(estado.pane_pid)
+    # O PGID conhecido prevalece quando a sessão já não existe — é ele que
+    # revela o processo órfão que o tmux não enxerga mais.
+    if estado.pgid is None and known_pgid:
+        estado.pgid = known_pgid
 
     if estado.pgid:
         estado.group_pids = group_pids(estado.pgid)
@@ -353,9 +503,8 @@ def read_state(agent: str, session: str | None) -> AgentState:
 def terminate_group(pgid: int) -> dict:
     """SIGTERM no grupo, espera, SIGKILL no que sobrou.
 
-    Só o process group daquele agente. Sem `pkill`, sem varrer `ps` por nome:
-    matar por nome atingiria o agente do vizinho e processos do host que por
-    acaso compartilham o binário.
+    Só o process group daquele agente. Matar por nome atingiria o agente do
+    vizinho e processos do host que por acaso compartilham o binário.
     """
     if not pgid:
         return {"signalled": False, "survivors": [], "escalated": False}
@@ -426,7 +575,6 @@ def active_work(db, agent: str) -> dict | None:
     if run is not None:
         return {"run_id": str(run.id), "status": run.status, "reason": "run_running"}
 
-    # Run ainda `queued` mas com despacho vivo: o modelo está trabalhando.
     job = (
         db.query(AgentBuildJob)
         .join(AgentRun, AgentRun.id == AgentBuildJob.run_id)
@@ -450,118 +598,169 @@ def active_work(db, agent: str) -> dict | None:
 
 
 # --------------------------------------------------------------------------
-# Start / Stop idempotentes
+# Start / Stop idempotentes e serializados
 # --------------------------------------------------------------------------
 
 
-def start(agent: str, session: str, launcher: list[str]) -> dict:
+def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
     """Liga o agente. Chamar de novo com ele ligado não recria nada.
 
     Idempotência aqui não é cosmética: recriar a sessão mataria o trabalho em
-    curso do agente que já estava rodando.
+    curso do agente que já estava rodando. O lock por agente garante que duas
+    chamadas simultâneas não leiam "ausente" ao mesmo tempo.
     """
-    antes = read_state(agent, session)
+    with agent_lock(agent):
+        antes = read_state(agent, session)
 
-    if antes.agent_process_running:
-        return {
-            "agent": agent,
-            "started": False,
-            "already_running": True,
-            "state": antes.as_dict(),
-        }
+        # Runtime Ollama não tem sessão: ligar é CARREGAR O MODELO. Antes isto
+        # devolvia 409 e o 'Ligar' do plano simplesmente não existia.
+        if session is None:
+            if not antes.model:
+                raise LifecycleError(
+                    "model_not_configured",
+                    f"{agent} não tem modelo configurado para carregar",
+                )
 
-    # Sessão existe mas só com shell: é casca de standby, não agente. Recriar é
-    # seguro e é o que devolve o agente ao ar.
-    if antes.session_exists:
-        _run(["tmux", "kill-session", "-t", f"={session}"], 5)
+            if antes.model_loaded is True:
+                return {
+                    "agent": agent,
+                    "started": False,
+                    "already_running": True,
+                    "state": antes.as_dict(),
+                }
 
-    resultado = _run(
-        ["tmux", "new-session", "-d", "-s", session, "-c", "/opt/workdev", *launcher],
-        15,
-    )
+            endpoint, headers = endpoint_for(agent)
 
-    if resultado.returncode != 0:
-        raise LifecycleError(
-            "start_failed",
-            resultado.stderr.strip() or "Falha ao iniciar a sessão tmux",
+            if not endpoint:
+                raise LifecycleError(
+                    "endpoint_not_configured",
+                    f"{agent} não tem endpoint configurado",
+                )
+
+            carregou = load_model(antes.model, endpoint, headers)
+
+            if not carregou:
+                raise LifecycleError(
+                    "model_load_failed",
+                    f"Não foi possível carregar {antes.model} em {agent}",
+                )
+
+            return {
+                "agent": agent,
+                "started": True,
+                "already_running": False,
+                "state": read_state(agent, session).as_dict(),
+            }
+
+        if antes.agent_process_running:
+            return {
+                "agent": agent,
+                "started": False,
+                "already_running": True,
+                "state": antes.as_dict(),
+            }
+
+        # Sessão existe mas só com shell: casca de standby, não agente.
+        if antes.session_exists:
+            _run(["tmux", "kill-session", "-t", f"={session}"], 5)
+
+        resultado = _run(
+            [
+                "tmux", "new-session", "-d", "-s", session,
+                "-c", "/opt/workdev", *(launcher or []),
+            ],
+            15,
         )
 
-    depois = read_state(agent, session)
+        if resultado.returncode != 0:
+            raise LifecycleError(
+                "start_failed",
+                resultado.stderr.strip() or "Falha ao iniciar a sessão tmux",
+            )
 
-    return {
-        "agent": agent,
-        "started": True,
-        "already_running": False,
-        "state": depois.as_dict(),
-    }
-
-
-def stop(agent: str, session: str | None, *, unload: bool = True) -> dict:
-    """Desliga o agente de verdade: sessão, processos do grupo e modelo órfão.
-
-    Idempotente: com o agente já desligado, devolve o estado offline sem erro.
-    Desligar o que já está desligado não é falha operacional.
-    """
-    antes = read_state(agent, session)
-    rss_antes = antes.rss_kb
-
-    if antes.offline:
         return {
             "agent": agent,
-            "stopped": False,
-            "already_offline": True,
-            "rss_freed_kb": 0,
-            "model_unloaded": False,
-            "state": antes.as_dict(),
+            "started": True,
+            "already_running": False,
+            "state": read_state(agent, session).as_dict(),
         }
 
-    pgid = antes.pgid
-    encerramento = {"signalled": False, "survivors": [], "escalated": False}
 
-    if session and antes.session_exists:
-        # tmux primeiro: é a saída limpa, e costuma levar o grupo junto.
-        _run(["tmux", "kill-session", "-t", f"={session}"], 5)
+def stop(agent: str, session: str | None, *, unload: bool = True, db=None) -> dict:
+    """Desliga o agente de verdade: sessão, processos do grupo e modelo órfão.
 
-    # O grupo pode ter sobrevivido ao kill-session — filho reparentado para o
-    # init continua consumindo memória e é invisível para o tmux. É esse caso
-    # que fazia a tela mostrar OFFLINE com GB ainda ocupados.
-    if pgid and group_pids(pgid):
-        encerramento = terminate_group(pgid)
+    Idempotente e serializado. Com o agente já desligado, devolve o estado
+    offline sem erro — desligar o que já está desligado não é falha.
+    """
+    with agent_lock(agent):
+        antes = read_state(agent, session)
+        rss_antes = antes.rss_kb
+        pgid = antes.pgid
 
-    modelo_descarregado = False
-    motivo_modelo = "sem modelo associado"
+        if antes.offline:
+            return {
+                "agent": agent,
+                "stopped": False,
+                "already_offline": True,
+                "rss_freed_kb": 0,
+                "model_unloaded": False,
+                "model_reason": "já estava offline",
+                "termination": {
+                    "signalled": False, "survivors": [], "escalated": False,
+                },
+                "state": antes.as_dict(),
+            }
 
-    if unload and antes.model:
-        usuarios = model_users(antes.model, excluding=agent)
+        encerramento = {"signalled": False, "survivors": [], "escalated": False}
 
-        if usuarios:
-            motivo_modelo = (
-                f"mantido: também usado por {', '.join(usuarios)}"
-            )
-        elif not model_is_loaded(antes.model):
-            motivo_modelo = "já não estava carregado"
-        else:
-            modelo_descarregado = unload_model(antes.model)
-            motivo_modelo = (
-                "descarregado" if modelo_descarregado
-                else (
-                    "ollama stop aceito, mas o modelo ainda estava residente "
-                    f"após {UNLOAD_VERIFY_TIMEOUT_SECONDS:g}s; o "
-                    "descarregamento é assíncrono — consulte o lifecycle "
-                    "para confirmar a liberação"
+        if session and antes.session_exists:
+            # tmux primeiro: é a saída limpa, e costuma levar o grupo junto.
+            _run(["tmux", "kill-session", "-t", f"={session}"], 5)
+
+        # O grupo pode ter sobrevivido ao kill-session — filho reparentado para
+        # o init continua consumindo memória e é invisível para o tmux. É esse
+        # caso que fazia a tela mostrar OFFLINE com GB ainda ocupados.
+        if pgid and group_pids(pgid):
+            encerramento = terminate_group(pgid)
+
+        modelo_descarregado = False
+        motivo_modelo = "sem modelo associado"
+
+        if unload and antes.model:
+            endpoint, headers = endpoint_for(agent)
+            usuarios = model_users(antes.model, excluding=agent, db=db)
+
+            if usuarios:
+                motivo_modelo = f"mantido: em uso por {', '.join(usuarios)}"
+            elif antes.model_loaded is False:
+                motivo_modelo = "já não estava carregado"
+            elif antes.model_loaded is None:
+                motivo_modelo = (
+                    "estado desconhecido: a sondagem do endpoint não respondeu"
                 )
-            )
+            else:
+                modelo_descarregado = unload_model(antes.model, endpoint, headers)
+                motivo_modelo = (
+                    "descarregado" if modelo_descarregado
+                    else (
+                        "ainda residente após "
+                        f"{UNLOAD_VERIFY_TIMEOUT_SECONDS:g}s; o descarregamento "
+                        "é assíncrono — consulte o lifecycle para confirmar"
+                    )
+                )
 
-    depois = read_state(agent, session)
+        # Releitura carregando o PGID original: sem isso, sobrevivente do grupo
+        # ficaria invisível e o estado alegaria offline (achado P1).
+        depois = read_state(agent, session, known_pgid=pgid)
 
-    return {
-        "agent": agent,
-        "stopped": True,
-        "already_offline": False,
-        # Prova de liberação: RSS do grupo antes menos o que restou.
-        "rss_freed_kb": max(0, rss_antes - depois.rss_kb),
-        "model_unloaded": modelo_descarregado,
-        "model_reason": motivo_modelo,
-        "termination": encerramento,
-        "state": depois.as_dict(),
-    }
+        return {
+            "agent": agent,
+            "stopped": True,
+            "already_offline": False,
+            # Prova de liberação: RSS do grupo antes menos o que restou.
+            "rss_freed_kb": max(0, rss_antes - depois.rss_kb),
+            "model_unloaded": modelo_descarregado,
+            "model_reason": motivo_modelo,
+            "termination": encerramento,
+            "state": depois.as_dict(),
+        }

@@ -5,6 +5,7 @@ memória foi liberada". Eram a mesma coisa para a tela e nunca foram a mesma
 coisa para o host.
 """
 
+import time
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -114,103 +115,53 @@ class TestModeloCompartilhado:
         assert usuarios == []
 
 
-class TestOllamaAusente:
-    """Desligar agente não pode quebrar porque o Ollama não está lá."""
+class FakeResposta:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload if payload is not None else {"models": []}
 
-    def test_binario_ausente_vira_lista_vazia(self, monkeypatch):
-        def explode(*_a, **_k):
-            raise FileNotFoundError("ollama")
-
-        monkeypatch.setattr(agent_lifecycle, "_run", explode)
-
-        assert agent_lifecycle.running_models() == []
-
-    def test_saida_so_com_cabecalho(self, monkeypatch):
-        monkeypatch.setattr(
-            agent_lifecycle,
-            "_run",
-            lambda *a, **k: SimpleNamespace(
-                returncode=0, stdout="NAME  ID  SIZE  PROCESSOR  UNTIL\n"
-            ),
-        )
-
-        assert agent_lifecycle.running_models() == []
-
-    def test_parse_de_modelos_carregados(self, monkeypatch):
-        saida = (
-            "NAME                ID      SIZE    PROCESSOR  UNTIL\n"
-            "qwen2.5-coder:14b   abc123  9.0 GB  100% CPU   4 minutes\n"
-            "llama3:8b           def456  4.7 GB  100% CPU   2 minutes\n"
-        )
-        monkeypatch.setattr(
-            agent_lifecycle,
-            "_run",
-            lambda *a, **k: SimpleNamespace(returncode=0, stdout=saida),
-        )
-
-        assert agent_lifecycle.running_models() == [
-            "qwen2.5-coder:14b", "llama3:8b",
-        ]
-
-    def test_unload_falha_sem_quebrar(self, monkeypatch):
-        def explode(*_a, **_k):
-            raise FileNotFoundError("ollama")
-
-        monkeypatch.setattr(agent_lifecycle, "_run", explode)
-
-        assert agent_lifecycle.unload_model("x") is False
+    def json(self):
+        if self._payload is ValueError:
+            raise ValueError("corpo não é JSON")
+        return self._payload
 
 
-class TestDescarregamentoAssincrono:
-    """`ollama stop` retorna exit 0 antes de a memória voltar (medido na VPS1).
+class FakeClient:
+    """Substitui httpx.Client nos testes de sondagem."""
 
-    Em 2026-09-11 o modelo ficou em `Stopping...` com o runner segurando
-    4.7 GB por vários minutos após o exit 0. Confiar no código de saída faria
-    a API afirmar OFFLINE com a RAM ainda ocupada — o defeito que a task
-    existe para corrigir.
-    """
+    def __init__(self, resposta=None, erro=None, registro=None):
+        self._resposta = resposta
+        self._erro = erro
+        self._registro = registro if registro is not None else []
 
-    def test_exit_zero_com_modelo_residente_e_falha(self, monkeypatch):
-        monkeypatch.setattr(
-            agent_lifecycle,
-            "_run",
-            lambda *a, **k: SimpleNamespace(returncode=0, stdout=""),
-        )
-        # Continua aparecendo no `ollama ps` depois do stop.
-        monkeypatch.setattr(agent_lifecycle, "model_is_loaded", lambda m: True)
+    def __enter__(self):
+        return self
 
-        assert agent_lifecycle.unload_model("preso", verify_timeout=0.05) is False
+    def __exit__(self, *_a):
+        return False
 
-    def test_so_e_sucesso_quando_some_do_ps(self, monkeypatch):
-        monkeypatch.setattr(
-            agent_lifecycle,
-            "_run",
-            lambda *a, **k: SimpleNamespace(returncode=0, stdout=""),
-        )
-        monkeypatch.setattr(agent_lifecycle, "model_is_loaded", lambda m: False)
+    def _responder(self, url, **kwargs):
+        self._registro.append((url, kwargs))
+        if self._erro:
+            raise self._erro
+        return self._resposta or FakeResposta()
 
-        assert agent_lifecycle.unload_model("some", verify_timeout=5) is True
+    def get(self, url, **kwargs):
+        return self._responder(url, **kwargs)
 
-    def test_stop_reporta_memoria_nao_liberada(self, monkeypatch):
-        """O motivo precisa dizer a verdade para o operador."""
-        monkeypatch.setattr(
-            agent_lifecycle,
-            "read_state",
-            lambda a, s: AgentState(
-                agent=a, session=s, model="preso", model_loaded=True,
-            ),
-        )
-        monkeypatch.setattr(agent_lifecycle, "_run", lambda *a, **k: None)
-        monkeypatch.setattr(agent_lifecycle, "model_users", lambda m, excluding: [])
-        monkeypatch.setattr(agent_lifecycle, "model_is_loaded", lambda m: True)
-        monkeypatch.setattr(agent_lifecycle, "unload_model", lambda m: False)
+    def post(self, url, **kwargs):
+        return self._responder(url, **kwargs)
 
-        resultado = agent_lifecycle.stop("local-code", None)
 
-        assert resultado["model_unloaded"] is False
-        assert "ainda estava residente" in resultado["model_reason"]
-        # E o estado final não pode alegar offline com o modelo residente.
-        assert resultado["state"]["offline"] is False
+def fake_httpx(monkeypatch, resposta=None, erro=None, registro=None):
+    import httpx
+
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **_kw: FakeClient(resposta=resposta, erro=erro, registro=registro),
+    )
+    return registro
 
 
 class FakeQuery:
@@ -279,7 +230,7 @@ class TestIdempotencia:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda agent, session: AgentState(
+            lambda agent, session, known_pgid=None: AgentState(
                 agent=agent, session=session,
                 session_exists=True, current_process="node",
             ),
@@ -300,7 +251,7 @@ class TestIdempotencia:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda agent, session: AgentState(agent=agent, session=session),
+            lambda agent, session, known_pgid=None: AgentState(agent=agent, session=session),
         )
 
         resultado = agent_lifecycle.stop("kimi", "kimi")
@@ -312,7 +263,7 @@ class TestIdempotencia:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda agent, session: AgentState(agent=agent, session=session),
+            lambda agent, session, known_pgid=None: AgentState(agent=agent, session=session),
         )
 
         primeiro = agent_lifecycle.stop("kimi", "kimi")
@@ -408,6 +359,172 @@ class TestEncerramentoSeletivo:
             )
 
 
+class TestSondagemPorEndpoint:
+    """Achado P1: sondar via CLI local responde sobre a máquina errada."""
+
+    def test_sem_endpoint_e_desconhecido_nao_vazio(self):
+        assert agent_lifecycle.running_models(None) is None
+
+    def test_erro_de_rede_vira_desconhecido(self, monkeypatch):
+        fake_httpx(monkeypatch, erro=OSError("rede caiu"))
+
+        assert agent_lifecycle.running_models("http://x:11434") is None
+
+    def test_http_nao_200_vira_desconhecido(self, monkeypatch):
+        fake_httpx(monkeypatch, resposta=FakeResposta(status_code=503))
+
+        assert agent_lifecycle.running_models("http://x:11434") is None
+
+    def test_corpo_invalido_vira_desconhecido(self, monkeypatch):
+        fake_httpx(monkeypatch, resposta=FakeResposta(payload=ValueError))
+
+        assert agent_lifecycle.running_models("http://x:11434") is None
+
+    def test_lista_vazia_e_conhecida(self, monkeypatch):
+        fake_httpx(monkeypatch, resposta=FakeResposta(payload={"models": []}))
+
+        assert agent_lifecycle.running_models("http://x:11434") == []
+
+    def test_parse_de_modelos(self, monkeypatch):
+        fake_httpx(
+            monkeypatch,
+            resposta=FakeResposta(
+                payload={"models": [{"name": "a:1"}, {"model": "b:2"}]}
+            ),
+        )
+
+        assert agent_lifecycle.running_models("http://x:11434") == ["a:1", "b:2"]
+
+    def test_sonda_o_endpoint_recebido_e_nao_o_local(self, monkeypatch):
+        registro = fake_httpx(
+            monkeypatch,
+            resposta=FakeResposta(payload={"models": []}),
+            registro=[],
+        )
+
+        agent_lifecycle.running_models("http://gpu-remota:9999")
+
+        assert registro[0][0] == "http://gpu-remota:9999/api/ps"
+
+    def test_model_is_loaded_propaga_desconhecido(self, monkeypatch):
+        fake_httpx(monkeypatch, erro=OSError("timeout"))
+
+        assert agent_lifecycle.model_is_loaded("m", "http://x:11434") is None
+
+
+class TestUnloadPorEndpoint:
+    """Achado P1 grave: parar gpu-* não pode descarregar o modelo local."""
+
+    def test_unload_usa_o_endpoint_do_runtime(self, monkeypatch):
+        registro = fake_httpx(
+            monkeypatch,
+            resposta=FakeResposta(payload={"models": []}),
+            registro=[],
+        )
+
+        agent_lifecycle.unload_model(
+            "m", "http://gpu-remota:9999", verify_timeout=0.05
+        )
+
+        # Primeira chamada é o keep_alive:0, no endpoint REMOTO.
+        assert registro[0][0] == "http://gpu-remota:9999/api/generate"
+        assert registro[0][1]["json"]["keep_alive"] == 0
+
+    def test_sem_endpoint_nao_descarrega_nada(self):
+        """Sem endpoint não existe 'descarregar local por engano'."""
+        assert agent_lifecycle.unload_model("m", None) is False
+
+    def test_desconhecido_nao_confirma_liberacao(self, monkeypatch):
+        """Sondagem cega não pode virar 'memória liberada'."""
+        fake_httpx(monkeypatch, resposta=FakeResposta(status_code=500))
+
+        assert agent_lifecycle.unload_model(
+            "m", "http://x:11434", verify_timeout=0.05
+        ) is False
+
+
+class TestDescarregamentoAssincrono:
+    """Descarregar é assíncrono: a chamada volta antes de a memória voltar.
+
+    Medido na VPS1 em 2026-09-11: o modelo ficou em `Stopping...` com o runner
+    `llama-server` segurando 4.7 GB por vários minutos. Confiar no retorno da
+    chamada faria a API afirmar OFFLINE com a RAM ainda ocupada — o defeito que
+    a task existe para corrigir.
+    """
+
+    def test_residente_apos_a_janela_e_falha(self, monkeypatch):
+        fake_httpx(monkeypatch, resposta=FakeResposta(payload={"models": []}))
+        # Continua aparecendo na sondagem depois do keep_alive:0.
+        monkeypatch.setattr(
+            agent_lifecycle, "model_is_loaded", lambda m, e, h=None: True
+        )
+
+        assert agent_lifecycle.unload_model(
+            "preso", "http://x:11434", verify_timeout=0.05
+        ) is False
+
+    def test_so_e_sucesso_quando_some_da_sondagem(self, monkeypatch):
+        fake_httpx(monkeypatch, resposta=FakeResposta(payload={"models": []}))
+        monkeypatch.setattr(
+            agent_lifecycle, "model_is_loaded", lambda m, e, h=None: False
+        )
+
+        assert agent_lifecycle.unload_model(
+            "some", "http://x:11434", verify_timeout=5
+        ) is True
+
+    def test_stop_reporta_que_ainda_esta_residente(self, monkeypatch):
+        """O motivo precisa dizer a verdade para o operador."""
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "read_state",
+            lambda a, s, known_pgid=None: AgentState(
+                agent=a, session=s, model="preso", model_loaded=True,
+            ),
+        )
+        monkeypatch.setattr(agent_lifecycle, "_run", lambda *a, **k: None)
+        monkeypatch.setattr(
+            agent_lifecycle, "model_users", lambda m, excluding, db=None: []
+        )
+        monkeypatch.setattr(
+            agent_lifecycle, "unload_model", lambda m, e, h=None: False
+        )
+
+        resultado = agent_lifecycle.stop("local-code", None)
+
+        assert resultado["model_unloaded"] is False
+        assert "ainda residente" in resultado["model_reason"]
+        # E o estado final não pode alegar offline com o modelo residente.
+        assert resultado["state"]["offline"] is False
+
+    def test_estado_desconhecido_nao_tenta_descarregar(self, monkeypatch):
+        """Sem saber se está carregado, não se afirma nada sobre memória."""
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "read_state",
+            lambda a, s, known_pgid=None: AgentState(
+                agent=a, session=s, model="incerto", model_loaded=None,
+            ),
+        )
+        monkeypatch.setattr(agent_lifecycle, "_run", lambda *a, **k: None)
+        monkeypatch.setattr(
+            agent_lifecycle, "model_users", lambda m, excluding, db=None: []
+        )
+
+        tentou = []
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "unload_model",
+            lambda m, e, h=None: tentou.append(m) or True,
+        )
+
+        resultado = agent_lifecycle.stop("local-code", None)
+
+        assert tentou == []
+        assert "desconhecido" in resultado["model_reason"]
+        assert resultado["state"]["offline"] is False
+
+
 class TestLiberacaoDeMemoria:
     def test_rss_liberado_e_medido(self, monkeypatch):
         estados = iter([
@@ -420,7 +537,8 @@ class TestLiberacaoDeMemoria:
         ])
 
         monkeypatch.setattr(
-            agent_lifecycle, "read_state", lambda a, s: next(estados)
+            agent_lifecycle, "read_state",
+            lambda a, s, known_pgid=None: next(estados),
         )
         monkeypatch.setattr(agent_lifecycle, "_run", lambda *a, **k: None)
         monkeypatch.setattr(agent_lifecycle, "group_pids", lambda _p: [])
@@ -430,11 +548,47 @@ class TestLiberacaoDeMemoria:
         assert resultado["rss_freed_kb"] == 2_000_000
         assert resultado["state"]["offline"] is True
 
+    def test_sobrevivente_impede_offline(self, monkeypatch):
+        """Achado P1: PGID perdido fazia a resposta alegar offline com
+        processo vivo segurando RAM."""
+        chamadas = []
+
+        def leitura(agent, session, known_pgid=None):
+            chamadas.append(known_pgid)
+            if len(chamadas) == 1:
+                return AgentState(
+                    agent=agent, session=session, session_exists=True,
+                    pane_pid=555, pgid=555, group_pids=[555, 556],
+                    current_process="node", rss_kb=1_000,
+                )
+            # Sessão já morreu, mas o grupo sobreviveu.
+            return AgentState(
+                agent=agent, session=session, session_exists=False,
+                pgid=known_pgid, group_pids=[98765], rss_kb=900,
+            )
+
+        monkeypatch.setattr(agent_lifecycle, "read_state", leitura)
+        monkeypatch.setattr(agent_lifecycle, "_run", lambda *a, **k: None)
+        monkeypatch.setattr(agent_lifecycle, "group_pids", lambda _p: [98765])
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "terminate_group",
+            lambda _p: {"signalled": True, "survivors": [98765], "escalated": True},
+        )
+
+        resultado = agent_lifecycle.stop("kimi", "kimi")
+
+        assert chamadas[1] == 555, "o PGID original precisa ser repassado"
+        assert resultado["termination"]["survivors"] == [98765]
+        assert resultado["state"]["offline"] is False, (
+            "sobrevivente segurando RAM não pode ser reportado como offline"
+        )
+
     def test_modelo_em_uso_por_outro_nao_e_descarregado(self, monkeypatch):
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda a, s: AgentState(
+            lambda a, s, known_pgid=None: AgentState(
                 agent=a, session=s, session_exists=True,
                 model="compartilhado", model_loaded=True,
                 current_process="node",
@@ -443,14 +597,16 @@ class TestLiberacaoDeMemoria:
         monkeypatch.setattr(agent_lifecycle, "_run", lambda *a, **k: None)
         monkeypatch.setattr(agent_lifecycle, "group_pids", lambda _p: [])
         monkeypatch.setattr(
-            agent_lifecycle, "model_users", lambda m, excluding: ["gpu-runpod"]
+            agent_lifecycle,
+            "model_users",
+            lambda m, excluding, db=None: ["gpu-runpod"],
         )
 
         descarregou = []
         monkeypatch.setattr(
             agent_lifecycle,
             "unload_model",
-            lambda m: descarregou.append(m) or True,
+            lambda m, e, h=None: descarregou.append(m) or True,
         )
 
         resultado = agent_lifecycle.stop("local-code", None)
@@ -463,16 +619,208 @@ class TestLiberacaoDeMemoria:
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
-            lambda a, s: AgentState(
+            lambda a, s, known_pgid=None: AgentState(
                 agent=a, session=s, model="orfao", model_loaded=True,
             ),
         )
         monkeypatch.setattr(agent_lifecycle, "_run", lambda *a, **k: None)
-        monkeypatch.setattr(agent_lifecycle, "model_users", lambda m, excluding: [])
-        monkeypatch.setattr(agent_lifecycle, "model_is_loaded", lambda m: True)
-        monkeypatch.setattr(agent_lifecycle, "unload_model", lambda m: True)
+        monkeypatch.setattr(
+            agent_lifecycle, "model_users", lambda m, excluding, db=None: []
+        )
+        monkeypatch.setattr(
+            agent_lifecycle, "unload_model", lambda m, e, h=None: True
+        )
 
         resultado = agent_lifecycle.stop("local-code", None)
 
         assert resultado["model_unloaded"] is True
         assert resultado["model_reason"] == "descarregado"
+
+
+class TestLigarRuntimeOllama:
+    """Achado P1: `POST /start` devolvia 409 e o 'Ligar' do plano não existia."""
+
+    def test_carrega_o_modelo_quando_nao_esta_carregado(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "read_state",
+            lambda a, s, known_pgid=None: AgentState(
+                agent=a, session=s, model="m:1", model_loaded=False,
+                endpoint_configured=True,
+            ),
+        )
+        monkeypatch.setattr(
+            agent_lifecycle, "endpoint_for",
+            lambda a: ("http://x:11434", {}),
+        )
+
+        carregou = []
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "load_model",
+            lambda m, e, h=None: carregou.append((m, e)) or True,
+        )
+
+        resultado = agent_lifecycle.start("local-code", None, None)
+
+        assert resultado["started"] is True
+        assert carregou == [("m:1", "http://x:11434")]
+
+    def test_modelo_ja_carregado_e_idempotente(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "read_state",
+            lambda a, s, known_pgid=None: AgentState(
+                agent=a, session=s, model="m:1", model_loaded=True,
+            ),
+        )
+
+        carregou = []
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "load_model",
+            lambda m, e, h=None: carregou.append(m) or True,
+        )
+
+        resultado = agent_lifecycle.start("local-code", None, None)
+
+        assert resultado["already_running"] is True
+        assert carregou == []
+
+    def test_falha_ao_carregar_vira_erro_de_dominio(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "read_state",
+            lambda a, s, known_pgid=None: AgentState(
+                agent=a, session=s, model="m:1", model_loaded=False,
+            ),
+        )
+        monkeypatch.setattr(
+            agent_lifecycle, "endpoint_for", lambda a: ("http://x:11434", {})
+        )
+        monkeypatch.setattr(
+            agent_lifecycle, "load_model", lambda m, e, h=None: False
+        )
+
+        with pytest.raises(agent_lifecycle.LifecycleError) as exc:
+            agent_lifecycle.start("local-code", None, None)
+
+        assert exc.value.code == "model_load_failed"
+
+
+class TestSerializacao:
+    """Achado P2: start/stop sem exclusão mútua por agente."""
+
+    def test_lock_e_por_agente(self):
+        a = agent_lifecycle.agent_lock("kimi")
+        b = agent_lifecycle.agent_lock("kimi")
+        c = agent_lifecycle.agent_lock("qwen")
+
+        assert a is b, "mesmo agente precisa do mesmo lock"
+        assert a is not c, "agentes diferentes não podem se bloquear"
+
+    def test_start_concorrente_cria_uma_sessao_so(self, monkeypatch):
+        import threading
+
+        criadas = []
+        existe = {"valor": False}
+
+        def leitura(agent, session, known_pgid=None):
+            return AgentState(
+                agent=agent, session=session,
+                session_exists=existe["valor"],
+                current_process="node" if existe["valor"] else "",
+            )
+
+        def novo_run(args, timeout=10):
+            if "new-session" in args:
+                time.sleep(0.05)
+                criadas.append(args)
+                existe["valor"] = True
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(agent_lifecycle, "read_state", leitura)
+        monkeypatch.setattr(agent_lifecycle, "_run", novo_run)
+
+        threads = [
+            threading.Thread(
+                target=lambda: agent_lifecycle.start("kimi", "kimi", ["x"])
+            )
+            for _ in range(5)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(criadas) == 1, (
+            f"esperava 1 sessão criada, houve {len(criadas)} — sem lock, "
+            "chamadas simultâneas duplicam ou matam a recém-criada"
+        )
+
+
+class TestUsoAtivoDoModelo:
+    """Achado P2: configuração não é uso."""
+
+    def test_sem_db_e_conservador(self, monkeypatch):
+        from app.services import agent_runtimes
+
+        monkeypatch.setattr(
+            agent_runtimes, "model_for", lambda r: "compartilhado"
+        )
+        monkeypatch.setattr(agent_runtimes, "base_url", lambda r: "http://x")
+        monkeypatch.setattr(
+            agent_lifecycle, "endpoint_for", lambda a: ("http://x", {})
+        )
+
+        usuarios = agent_lifecycle.model_users(
+            "compartilhado", excluding="local-code"
+        )
+
+        assert usuarios, "sem consultar, não dá para afirmar que ninguém usa"
+
+    def test_com_db_runtime_ocioso_nao_segura_o_modelo(self, monkeypatch):
+        from app.services import agent_runtimes
+
+        monkeypatch.setattr(
+            agent_runtimes, "model_for", lambda r: "compartilhado"
+        )
+        monkeypatch.setattr(agent_runtimes, "base_url", lambda r: "http://x")
+        monkeypatch.setattr(
+            agent_lifecycle, "endpoint_for", lambda a: ("http://x", {})
+        )
+        # Nenhum runtime tem trabalho ativo.
+        monkeypatch.setattr(
+            agent_lifecycle, "active_work", lambda db, agent: None
+        )
+
+        usuarios = agent_lifecycle.model_users(
+            "compartilhado", excluding="local-code", db=object()
+        )
+
+        assert usuarios == [], (
+            "runtime apenas configurado, sem trabalho, não pode bloquear "
+            "o unload de um modelo órfão para sempre"
+        )
+
+    def test_com_db_runtime_trabalhando_segura_o_modelo(self, monkeypatch):
+        from app.services import agent_runtimes
+
+        monkeypatch.setattr(
+            agent_runtimes, "model_for", lambda r: "compartilhado"
+        )
+        monkeypatch.setattr(agent_runtimes, "base_url", lambda r: "http://x")
+        monkeypatch.setattr(
+            agent_lifecycle, "endpoint_for", lambda a: ("http://x", {})
+        )
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "active_work",
+            lambda db, agent: {"reason": "run_running"},
+        )
+
+        usuarios = agent_lifecycle.model_users(
+            "compartilhado", excluding="local-code", db=object()
+        )
+
+        assert usuarios
