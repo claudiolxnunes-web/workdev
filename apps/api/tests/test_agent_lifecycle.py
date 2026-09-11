@@ -6,6 +6,7 @@ coisa para o host.
 """
 
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -13,6 +14,19 @@ import pytest
 
 from app.services import agent_lifecycle
 from app.services.agent_lifecycle import AgentState
+
+
+@pytest.fixture(autouse=True)
+def registro_isolado(tmp_path, monkeypatch):
+    """Nenhum teste pode escrever no registro real de grupos.
+
+    Sem isto, rodar a suíte sujaria /opt/workdev/.workdev/agent-groups.json com
+    PGIDs inventados — e um stop seguinte tentaria sinalizar processo alheio.
+    """
+    monkeypatch.setattr(
+        agent_lifecycle, "GROUPS_FILE", tmp_path / "agent-groups.json"
+    )
+    yield
 
 
 class TestDefinicaoDeOffline:
@@ -1018,3 +1032,162 @@ class TestEscopoLocal:
         estado = agent_lifecycle.read_state("gpu-runpod", None)
 
         assert estado.agent == "gpu-runpod"
+
+
+class TestMultiplosGrupos:
+    """Achado P1 da 3ª revisão: um agente pode ter vários grupos vivos.
+
+    Reprodução do revisor: grupo antigo 100 vivo, `start` criou o 200 e
+    sobrescreveu o registro; quando o 200 morreu, o estado voltou a dizer
+    offline=True com `group_pids(100) == [100]` ainda vivo.
+    """
+
+    def test_registro_acumula_em_vez_de_substituir(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "t"
+        )
+
+        agent_lifecycle.remember_group("kimi", 100)
+        agent_lifecycle.remember_group("kimi", 200)
+
+        assert agent_lifecycle.recall_groups("kimi") == [100, 200]
+
+    def test_nao_duplica_o_mesmo_grupo(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "t"
+        )
+
+        agent_lifecycle.remember_group("kimi", 100)
+        agent_lifecycle.remember_group("kimi", 100)
+
+        assert agent_lifecycle.recall_groups("kimi") == [100]
+
+    def test_grupo_antigo_continua_visivel_apos_o_novo_morrer(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: None
+        )
+        agent_lifecycle.remember_group("kimi", 100)
+        agent_lifecycle.remember_group("kimi", 200)
+
+        monkeypatch.setattr(agent_lifecycle, "session_exists", lambda s: False)
+        # 200 morreu; 100 continua vivo.
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "group_pids",
+            lambda pgid: [100] if pgid == 100 else [],
+        )
+        monkeypatch.setattr(agent_lifecycle, "group_rss_kb", lambda p: 500)
+
+        estado = agent_lifecycle.read_state("kimi", "kimi")
+
+        assert 100 in estado.live_pgids
+        assert estado.group_pids == [100]
+        assert estado.offline is False, (
+            "grupo antigo vivo não pode desaparecer do estado"
+        )
+
+    def test_start_recusa_enquanto_houver_sobrevivente(self, monkeypatch):
+        """Subir sessão nova por cima abandonaria o grupo antigo para sempre."""
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "read_state",
+            lambda a, s, known_pgid=None, db=None: AgentState(
+                agent=a, session=s, session_exists=False,
+                group_pids=[98765], live_pgids=[100],
+            ),
+        )
+
+        with pytest.raises(agent_lifecycle.LifecycleError) as exc:
+            agent_lifecycle.start("kimi", "kimi", ["launcher"])
+
+        assert exc.value.code == "survivors_pending"
+
+    def test_stop_encerra_todos_os_grupos(self, monkeypatch):
+        encerrados = []
+
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "read_state",
+            lambda a, s, known_pgid=None, db=None: AgentState(
+                agent=a, session=s, session_exists=False,
+                group_pids=[1, 2], live_pgids=[100, 200],
+            ),
+        )
+        monkeypatch.setattr(agent_lifecycle, "_run", lambda *a, **k: None)
+        monkeypatch.setattr(agent_lifecycle, "group_pids", lambda p: [p])
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "terminate_group",
+            lambda p: encerrados.append(p) or {
+                "signalled": True, "survivors": [], "escalated": False,
+            },
+        )
+
+        agent_lifecycle.stop("kimi", "kimi")
+
+        assert encerrados == [100, 200], (
+            "sobrevivente de stop anterior precisa ser encerrado também"
+        )
+
+
+class TestIdentidadePersistida:
+    """Achado P1 da 3ª revisão: a API reinicia, o tmux dos agentes não.
+
+    O tmux vive no cgroup de workdev-agents.service (CLAUDE.md). Guardar a
+    identidade só em dicionário do processo fazia um restart da API apagar os
+    grupos enquanto os processos seguiam vivos: a leitura seguinte voltava a
+    OFFLINE e o stop não achava o que matar.
+    """
+
+    def test_sobrevive_a_reinicio_do_processo(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "t"
+        )
+        agent_lifecycle.remember_group("kimi", 4242)
+
+        # Simula processo novo: só o arquivo permanece.
+        assert agent_lifecycle.GROUPS_FILE.exists()
+        assert agent_lifecycle.recall_groups("kimi") == [4242]
+
+    def test_boot_diferente_descarta_tudo(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "t"
+        )
+        monkeypatch.setattr(agent_lifecycle, "_boot_id", lambda: "boot-A")
+        agent_lifecycle.remember_group("kimi", 4242)
+        assert agent_lifecycle.recall_groups("kimi") == [4242]
+
+        # Outro boot: o PID 4242 não se refere a nada daqui.
+        monkeypatch.setattr(agent_lifecycle, "_boot_id", lambda: "boot-B")
+
+        assert agent_lifecycle.recall_groups("kimi") == []
+
+    def test_arquivo_corrompido_nao_quebra(self, monkeypatch):
+        agent_lifecycle.GROUPS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        agent_lifecycle.GROUPS_FILE.write_text("{não é json")
+
+        assert agent_lifecycle.recall_groups("kimi") == []
+
+    def test_falha_de_escrita_nao_derruba_o_stop(self, monkeypatch):
+        """Perder a memória é ruim; derrubar um desligamento é pior."""
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "GROUPS_FILE",
+            Path("/proc/impossivel/agent-groups.json"),
+        )
+
+        agent_lifecycle.remember_group("kimi", 1)  # não pode levantar
+
+    def test_pid_reciclado_e_descartado(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "original"
+        )
+        agent_lifecycle.remember_group("kimi", 4242)
+
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "outro"
+        )
+
+        assert agent_lifecycle.recall_groups("kimi") == [], (
+            "PID reciclado por processo alheio não pode ser sinalizado"
+        )

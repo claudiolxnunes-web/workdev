@@ -27,12 +27,14 @@ versão por seis achados; os comentários abaixo marcam o que cada um mudou.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 # Janela entre SIGTERM e SIGKILL. Curta o bastante para o operador não achar que
@@ -122,14 +124,31 @@ def agent_lock(agent: str) -> threading.Lock:
 # --------------------------------------------------------------------------
 
 _groups_guard = threading.Lock()
-_known_groups: dict[str, tuple[int, str | None]] = {}
+
+# Onde a identidade vive fora da memória do processo. A API reinicia (deploy,
+# crash, restart) mas o tmux dos agentes vive em OUTRO cgroup e sobrevive —
+# então guardar só em dicionário fazia o registro sumir enquanto os processos
+# continuavam vivos, devolvendo OFFLINE e deixando o stop sem nada para matar.
+GROUPS_FILE = Path(
+    os.getenv(
+        "WORKDEV_AGENT_GROUPS_FILE",
+        "/opt/workdev/.workdev/agent-groups.json",
+    )
+)
+
+
+def _boot_id() -> str:
+    """Identidade do boot atual. PID de outro boot não diz nada sobre este."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return ""
 
 
 def process_starttime(pid: int) -> str | None:
     """Assinatura temporal do processo. Distingue PID reciclado do original."""
     try:
-        with open(f"/proc/{pid}/stat", "r") as arquivo:
-            conteudo = arquivo.read()
+        conteudo = Path(f"/proc/{pid}/stat").read_text()
     except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
         return None
 
@@ -145,42 +164,115 @@ def process_starttime(pid: int) -> str | None:
     return campos[19] if len(campos) > 19 else None
 
 
+def _ler_registro() -> dict:
+    try:
+        dados = json.loads(GROUPS_FILE.read_text())
+    except (FileNotFoundError, ValueError, OSError):
+        return {"boot_id": _boot_id(), "agents": {}}
+
+    if not isinstance(dados, dict) or dados.get("boot_id") != _boot_id():
+        # Outro boot: PIDs antigos não se referem a processo nenhum daqui.
+        return {"boot_id": _boot_id(), "agents": {}}
+
+    if not isinstance(dados.get("agents"), dict):
+        dados["agents"] = {}
+
+    return dados
+
+
+def _gravar_registro(dados: dict) -> None:
+    try:
+        GROUPS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporario = GROUPS_FILE.with_suffix(".tmp")
+        temporario.write_text(json.dumps(dados))
+        temporario.replace(GROUPS_FILE)
+    except OSError:
+        # Não poder persistir degrada a memória entre reinícios, mas não pode
+        # derrubar um ligar/desligar em curso.
+        pass
+
+
 def remember_group(agent: str, pgid: int | None) -> None:
+    """ACRESCENTA um grupo ao agente. Nunca substitui um grupo ainda vivo.
+
+    Um agente pode ter mais de um grupo seu ao mesmo tempo: basta um stop
+    deixar sobreviventes e um start criar sessão nova. Guardar um PGID só fazia
+    o grupo antigo ser esquecido — e, quando o novo morria, o estado dizia
+    OFFLINE com o antigo ainda consumindo RAM.
+    """
     if not pgid:
         return
 
     with _groups_guard:
-        _known_groups[agent] = (pgid, process_starttime(pgid))
+        dados = _ler_registro()
+        registros = dados["agents"].setdefault(agent, [])
+
+        for item in registros:
+            if item.get("pgid") == pgid:
+                return
+
+        registros.append(
+            {"pgid": pgid, "starttime": process_starttime(pgid)}
+        )
+        _gravar_registro(dados)
+
+
+def recall_groups(agent: str) -> list[int]:
+    """PGIDs do agente que ainda podem ser dele, já filtrados por reuso de PID."""
+    with _groups_guard:
+        dados = _ler_registro()
+        registros = list(dados["agents"].get(agent, []))
+
+    validos = []
+
+    for item in registros:
+        pgid = item.get("pgid")
+
+        if not isinstance(pgid, int):
+            continue
+
+        assinatura = item.get("starttime")
+        atual = process_starttime(pgid)
+
+        # Líder morto: pode haver filho sobrevivente no mesmo PGID, que é
+        # justamente o caso que interessa. Mantemos.
+        if atual is None:
+            validos.append(pgid)
+            continue
+
+        # PID reciclado por outro processo: não é nosso. Sinalizar seria pedir
+        # para matar processo alheio.
+        if assinatura is not None and atual != assinatura:
+            continue
+
+        validos.append(pgid)
+
+    return validos
 
 
 def recall_group(agent: str) -> int | None:
-    """PGID lembrado, se ainda for o MESMO grupo. Senão esquece e devolve None."""
+    """Compatibilidade: o grupo mais recente ainda válido."""
+    grupos = recall_groups(agent)
+    return grupos[-1] if grupos else None
+
+
+def forget_group(agent: str, pgid: int | None = None) -> None:
+    """Esquece um grupo (ou todos, sem `pgid`). Só depois de extinto."""
     with _groups_guard:
-        registro = _known_groups.get(agent)
+        dados = _ler_registro()
 
-    if not registro:
-        return None
+        if pgid is None:
+            dados["agents"].pop(agent, None)
+        else:
+            dados["agents"][agent] = [
+                item
+                for item in dados["agents"].get(agent, [])
+                if item.get("pgid") != pgid
+            ]
+            if not dados["agents"][agent]:
+                dados["agents"].pop(agent, None)
 
-    pgid, assinatura = registro
-    atual = process_starttime(pgid)
-
-    if atual is None:
-        # Líder morreu. Pode haver filho sobrevivente no mesmo PGID, e é
-        # exatamente esse o caso que interessa — mantemos o PGID.
-        return pgid
-
-    if assinatura is not None and atual != assinatura:
-        # PID reciclado por outro processo: não é o nosso grupo. Esquecer é
-        # obrigatório, senão mataríamos processo alheio.
-        forget_group(agent)
-        return None
-
-    return pgid
-
-
-def forget_group(agent: str) -> None:
-    with _groups_guard:
-        _known_groups.pop(agent, None)
+        _gravar_registro(dados)
 
 
 @dataclass
@@ -193,6 +285,9 @@ class AgentState:
     pane_pid: int | None = None
     pgid: int | None = None
     group_pids: list[int] = field(default_factory=list)
+    # Todos os process groups do agente com processo vivo. Mais de um acontece
+    # quando um stop deixa sobreviventes e um start cria sessão nova.
+    live_pgids: list[int] = field(default_factory=list)
     current_process: str = ""
     model: str | None = None
     # None = desconhecido (sondagem não respondeu). Distinguir de False é o
@@ -614,19 +709,36 @@ def read_state(
                 estado.pgid = pgid_of(estado.pane_pid)
                 remember_group(agent, estado.pgid)
 
-    # O PGID conhecido prevalece quando a sessão já não existe — é ele que
-    # revela o processo órfão que o tmux não enxerga mais.
-    if estado.pgid is None:
-        estado.pgid = known_pgid or recall_group(agent)
+    # TODOS os grupos que pertencem ao agente, não só o da sessão atual. Um
+    # stop que deixou sobreviventes seguido de um start cria dois grupos vivos;
+    # olhar só o mais novo faria o antigo sumir do estado enquanto ainda
+    # consome RAM.
+    candidatos: list[int] = []
 
-    if estado.pgid:
-        estado.group_pids = group_pids(estado.pgid)
-        estado.rss_kb = group_rss_kb(estado.group_pids)
+    for pgid in (estado.pgid, known_pgid, *recall_groups(agent)):
+        if pgid and pgid not in candidatos:
+            candidatos.append(pgid)
 
-        # Grupo extinto: esquecer evita que um PID reciclado no futuro seja
-        # confundido com este agente.
-        if not estado.group_pids and not estado.session_exists:
-            forget_group(agent)
+    vivos: list[int] = []
+    pids: list[int] = []
+
+    for pgid in candidatos:
+        do_grupo = group_pids(pgid)
+
+        if do_grupo:
+            vivos.append(pgid)
+            pids.extend(pid for pid in do_grupo if pid not in pids)
+        elif pgid != estado.pgid:
+            # Extinto e não é o grupo da sessão atual: esquecer evita que um
+            # PID reciclado no futuro seja confundido com este agente.
+            forget_group(agent, pgid)
+
+    estado.group_pids = pids
+    estado.rss_kb = group_rss_kb(pids)
+    estado.live_pgids = vivos
+
+    if estado.pgid is None and vivos:
+        estado.pgid = vivos[-1]
 
     if db is not None:
         estado.active_work = active_work(db, agent)
@@ -802,6 +914,22 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
                 "state": antes.as_dict(),
             }
 
+        # Sobrevivente de um stop incompleto: subir uma sessão nova por cima
+        # deixaria o grupo antigo consumindo RAM para sempre, invisível depois
+        # que o grupo novo morresse. Recusar é o que força a limpeza.
+        if antes.group_pids and not antes.session_exists:
+            raise LifecycleError(
+                "survivors_pending",
+                (
+                    f"{agent} ainda tem {len(antes.group_pids)} processo(s) de "
+                    "uma execução anterior; rode o stop antes de ligar de novo"
+                ),
+                {
+                    "group_pids": list(antes.group_pids),
+                    "pgids": list(antes.live_pgids),
+                },
+            )
+
         # Sessão existe mas só com shell: casca de standby, não agente.
         if antes.session_exists:
             _run(["tmux", "kill-session", "-t", f"={session}"], 5)
@@ -861,11 +989,24 @@ def stop(agent: str, session: str | None, *, unload: bool = True, db=None) -> di
             # tmux primeiro: é a saída limpa, e costuma levar o grupo junto.
             _run(["tmux", "kill-session", "-t", f"={session}"], 5)
 
-        # O grupo pode ter sobrevivido ao kill-session — filho reparentado para
-        # o init continua consumindo memória e é invisível para o tmux. É esse
-        # caso que fazia a tela mostrar OFFLINE com GB ainda ocupados.
-        if pgid and group_pids(pgid):
-            encerramento = terminate_group(pgid)
+        # Encerra TODOS os grupos do agente, não só o da sessão atual. Um
+        # sobrevivente de stop anterior é exatamente o processo órfão que esta
+        # task existe para eliminar; deixá-lo vivo repetiria o defeito.
+        alvos = list(antes.live_pgids) or ([pgid] if pgid else [])
+
+        for alvo in alvos:
+            if not group_pids(alvo):
+                continue
+
+            parcial = terminate_group(alvo)
+            encerramento = {
+                "signalled": encerramento["signalled"] or parcial["signalled"],
+                "survivors": encerramento["survivors"] + parcial["survivors"],
+                "escalated": encerramento["escalated"] or parcial["escalated"],
+            }
+
+            if not group_pids(alvo):
+                forget_group(agent, alvo)
 
         modelo_descarregado = False
         motivo_modelo = "sem modelo associado"
