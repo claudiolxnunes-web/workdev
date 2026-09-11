@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from app.auth import websocket_is_authenticated
 from app.database import SessionLocal
 from app.models.handoff import AgentRun
-from app.services import agent_lifecycle
+from app.services import agent_lifecycle, agent_snapshot, agent_runtimes
 from app.services.terminal_transcript import clean_terminal_text, read_transcript
 
 
@@ -47,7 +47,6 @@ _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
 _PROCESS_LABELS = {"qwen": "qwen-code"}
 _HEALTH_STATE_FILE = Path(os.getenv("AGENTS_HEALTH_STATE", "/var/lib/agents-healthcheck/status.json"))
-_HEALTH_MAX_AGE_SECONDS = 15 * 60
 
 
 def _session_target(session: str) -> str:
@@ -511,20 +510,8 @@ async def agent_lifecycle_state(agent: str):
         if not agent_runtimes.is_ollama_agent(agent):
             raise HTTPException(status_code=404, detail="Agente inválido")
 
-    session = _lifecycle_session(agent)
-
-    # `db` não é opcional aqui: o aceite exige "sem runs ativos executáveis", e
-    # sem consultar o Postgres a rota reportaria OFFLINE para um agente com run
-    # `running` órfã — escondendo o problema em vez de mostrá-lo.
-    db = SessionLocal()
-    try:
-        estado = await asyncio.to_thread(
-            agent_lifecycle.read_state, agent, session, db=db,
-        )
-    finally:
-        db.close()
-
-    return estado.as_dict()
+    row = agent_snapshot.read_snapshot([agent], _HEALTH_STATE_FILE)['agents'][0]
+    return {**(row.get('lifecycle') or {}), **row}
 
 
 @router.post("/api/agents/{agent}/session")
@@ -675,130 +662,20 @@ def _operational_status(
 
 
 def _load_supervisor_health() -> dict[str, dict]:
-    try:
-        payload = json.loads(_HEALTH_STATE_FILE.read_text(encoding="utf-8"))
-        updated_at = datetime.fromisoformat(payload["updated_at"])
-        if updated_at.tzinfo is None:
-            updated_at = updated_at.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - updated_at).total_seconds()
-        if age > _HEALTH_MAX_AGE_SECONDS:
-            return {}
-        agents = payload.get("agents", {})
-        return agents if isinstance(agents, dict) else {}
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return {}
+    return {row['agent']: row for row in agent_snapshot.read_snapshot(ALLOWED_SESSIONS, _HEALTH_STATE_FILE)['agents']}
 
 
-async def _agent_status(
-    agent: str,
-    session: str,
-    supervisor: dict | None = None,
-    run_status: str | None = None,
-) -> dict:
-    current_process = await asyncio.to_thread(_current_process, session)
-    running = bool(current_process and current_process not in _SHELL_PROCESSES)
-    awaiting_approval, approval_prompt = (
-        await asyncio.to_thread(_approval_state, session) if running else (False, None)
-    )
-    health = supervisor or {}
-    health_status = health.get("status")
-    if health_status not in {"idle", "busy", "blocked", "offline", "degraded"}:
-        health_status = "idle" if running else "offline"
-    return {
-        "agent": agent,
-        "running": running,
-        "process": _PROCESS_LABELS.get(agent, current_process) if running else current_process,
-        "awaiting_approval": awaiting_approval,
-        "approval_prompt": approval_prompt,
-        "operational_status": await asyncio.to_thread(
-            _operational_status,
-            session,
-            running,
-            health_status,
-            awaiting_approval,
-            run_status,
-        ),
-        "health": health_status,
-        "health_reason": health.get("reason"),
-        "checked_at": health.get("checked_at"),
-        "recovered": bool(health.get("recovered")),
-    }
+async def _agent_status(agent: str, session: str, supervisor=None, run_status=None) -> dict:
+    return agent_snapshot.read_snapshot([agent], _HEALTH_STATE_FILE)['agents'][0]
 
 
 def agent_runtime_snapshot() -> dict[str, dict]:
-    """Estado real das sessões, síncrono e tolerante a falha.
-
-    Usado pela recomendação consultiva do PLAN. Quando a sonda não consegue
-    ler o tmux, o agente fica marcado como NÃO verificado — nunca como
-    disponível por suposição.
-    """
-    supervisor = _load_supervisor_health()
-    snapshot: dict[str, dict] = {}
-
-    for agent, session in ALLOWED_SESSIONS.items():
-        try:
-            current_process = _current_process(session)
-        except Exception as error:  # tmux ausente, timeout, socket inacessível
-            snapshot[agent] = {
-                "agent": agent,
-                "checked": False,
-                "running": None,
-                "health": None,
-                "error": str(error),
-            }
-            continue
-
-        running = bool(
-            current_process and current_process not in _SHELL_PROCESSES
-        )
-        health = supervisor.get(agent) or {}
-        health_status = health.get("status")
-
-        if health_status not in {"idle", "busy", "blocked", "offline", "degraded"}:
-            health_status = "idle" if running else "offline"
-
-        snapshot[agent] = {
-            "agent": agent,
-            "checked": True,
-            "running": running,
-            "health": health_status,
-            "health_reason": health.get("reason"),
-            "checked_at": health.get("checked_at"),
-        }
-
-    return snapshot
-
-
-_STATUS_CACHE_SECONDS = 2.0
-_status_cache: dict | None = None
-_status_cache_until = 0.0
-_status_refresh_task: asyncio.Task | None = None
-
-
-async def _refresh_agents_status() -> dict:
-    global _status_cache, _status_cache_until
-    supervisor = await asyncio.to_thread(_load_supervisor_health)
-    run_states = await asyncio.to_thread(_load_run_states)
-    results = await asyncio.gather(
-        *(
-            _agent_status(agent, session, supervisor.get(agent), run_states.get(agent))
-            for agent, session in ALLOWED_SESSIONS.items()
-        )
-    )
-    _status_cache = {"agents": list(results)}
-    _status_cache_until = time.monotonic() + _STATUS_CACHE_SECONDS
-    return _status_cache
+    return _load_supervisor_health()
 
 
 @router.get("/api/agents/status")
-async def agents_status():
-    global _status_refresh_task
-    if _status_cache is not None and time.monotonic() < _status_cache_until:
-        return _status_cache
-    # Uma única coleta por worker, inclusive se o cliente desconectar.
-    if _status_refresh_task is None or _status_refresh_task.done():
-        _status_refresh_task = asyncio.create_task(_refresh_agents_status())
-    return await asyncio.shield(_status_refresh_task)
+def agents_status():
+    return agent_snapshot.read_snapshot([*ALLOWED_SESSIONS, *sorted(agent_runtimes.OLLAMA_AGENT_IDS)], _HEALTH_STATE_FILE)
 
 
 @router.websocket("/ws/agents/{agent}")

@@ -38,23 +38,20 @@ def _active_runs_by_agent(db: Session) -> dict[str, str]:
 
 
 @router.get("")
-async def list_agent_runtimes(
-    refresh: bool = Query(
-        False,
-        description="Ignora o cache de 10s e sonda os endpoints agora",
-    ),
-    db: Session = Depends(get_db),
-):
-    health = await agent_runtimes.check_all(refresh=refresh)
-    active = _active_runs_by_agent(db)
-
+def list_agent_runtimes(refresh: bool = False):
+    from app.services.agent_snapshot import read_snapshot
+    snapshot = read_snapshot([runtime.id for runtime in agent_runtimes.RUNTIMES])
+    rows = {row['agent']: row for row in snapshot['agents']}
     runtimes = []
-
     for runtime in agent_runtimes.RUNTIMES:
+        row = rows[runtime.id]
+        physical = row.get('lifecycle') or {}
         payload = agent_runtimes.describe(runtime)
-        payload.update(health[runtime.id].as_dict())
-        payload["active_run_id"] = active.get(runtime.id)
-        payload["busy"] = runtime.id in active
+        payload.update(row)
+        payload.update(status='online' if row['runtime_state'] == 'ONLINE' else 'offline',
+            status_label=row['runtime_state'], reason=row['reason'],
+            busy=row['activity_state'] == 'BUSY',
+            dispatchable=row['runtime_state'] == 'ONLINE', latency_ms=None,
+            models=[physical['model']] if physical.get('model_loaded') and physical.get('model') else [])
         runtimes.append(payload)
-
-    return {"runtimes": runtimes}
+    return {'runtimes': runtimes, 'updated_at': snapshot['updated_at']}

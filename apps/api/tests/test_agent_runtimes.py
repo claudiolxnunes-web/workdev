@@ -326,7 +326,7 @@ class RuntimeHealthTest(unittest.TestCase):
             agent_runtimes.STATUS_OFFLINE,
         )
 
-    def test_cache_avoids_reprobing_within_the_ttl(self):
+    def test_dispatch_health_does_not_depend_on_worker_cache(self):
         with patch(
             "app.services.agent_runtimes._fetch_tags",
             new=AsyncMock(return_value=_tags("qwen2.5-coder:7b")),
@@ -335,7 +335,7 @@ class RuntimeHealthTest(unittest.TestCase):
             asyncio.run(agent_runtimes.check_runtime_cached(runtime))
             asyncio.run(agent_runtimes.check_runtime_cached(runtime))
 
-        self.assertEqual(fetch.await_count, 1)
+        self.assertEqual(fetch.await_count, 2)
 
 
 class RemoteGpuAbstractionTest(unittest.TestCase):

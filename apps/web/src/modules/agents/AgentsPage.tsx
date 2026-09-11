@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from "react"
 import { AgentTerminal } from "./AgentTerminal"
 import type { OperationalStatus } from "./AgentTerminal"
 import { BuildQueue } from "./BuildQueue"
+import { RuntimeControls } from "./RuntimeControls"
 import { RuntimePanel } from "./RuntimePanel"
 import {
-  getAgentRuntimes, type AgentName, type AgentRuntime,
+  getAgentRuntimes, type AgentName, type AgentRuntime, type RuntimeState, type ActivityState,
 } from "@/services/handoff.service"
 
 const AGENTS: Array<{ id: AgentName; label: string }> = [
@@ -34,7 +35,7 @@ const STATUS_POLL_MS = Number.isFinite(configuredStatusPollMs)
 const RUNTIME_POLL_MS = 10000
 
 type HealthStatus = "idle" | "busy" | "blocked" | "offline" | "degraded"
-type AgentHealth = { health: HealthStatus; health_reason?: string | null; checked_at?: string | null }
+type AgentHealth = { runtime_state?: RuntimeState; activity_state?: ActivityState; persistent?: boolean; health: HealthStatus; health_reason?: string | null; checked_at?: string | null }
 type AgentOperation = { status: OperationalStatus; approvalPrompt?: string | null }
 
 const OPERATION_LABEL: Record<OperationalStatus, string> = {
@@ -93,16 +94,17 @@ export default function AgentsPage() {
       controller = new AbortController()
       try {
         const response = await fetch("/api/agents/status", { signal: controller.signal })
-        if (!response.ok) return
+        if (!response.ok) throw new Error("Snapshot indisponível")
         const data = await response.json()
-        if (cancelled || !Array.isArray(data.agents)) return
+        if (cancelled) return
+        if (!Array.isArray(data.agents)) throw new Error("Snapshot inválido")
         const next: Partial<Record<AgentName, boolean>> = {}
         const nextHealth: Partial<Record<AgentName, AgentHealth>> = {}
         const nextOperations: Partial<Record<AgentName, AgentOperation>> = {}
         for (const item of data.agents) {
           const name = item.agent as AgentName
           next[name] = Boolean(item.awaiting_approval)
-          nextHealth[name] = { health: item.health, health_reason: item.health_reason, checked_at: item.checked_at }
+          nextHealth[name] = { ...item, runtime_state: item.runtime_state ?? "ERROR", activity_state: item.activity_state ?? "IDLE" }
           nextOperations[name] = {
             status: item.operational_status as OperationalStatus,
             approvalPrompt: typeof item.approval_prompt === "string" ? item.approval_prompt : null,
@@ -111,7 +113,13 @@ export default function AgentsPage() {
         setAwaitingApproval(next)
         setHealth(nextHealth)
         setOperations(nextOperations)
-      } catch { /* próxima rodada tenta de novo */ }
+      } catch {
+        if (!cancelled) {
+          setHealth(Object.fromEntries(AGENTS.map(item => [item.id, { health: 'degraded', runtime_state: 'ERROR', activity_state: 'IDLE', health_reason: 'Snapshot indisponível' }])))
+          setAwaitingApproval({})
+          setOperations({})
+        }
+      }
       finally { inFlight = false; schedule() }
     }
     function visibilityChanged() {
@@ -124,8 +132,11 @@ export default function AgentsPage() {
     document.addEventListener("visibilitychange", visibilityChanged)
     window.addEventListener("focus", focus)
     window.addEventListener("blur", blur)
+    const refresh = () => { void poll() }
+    window.addEventListener("agent-runtime-refresh", refresh)
     void poll()
     return () => {
+      window.removeEventListener("agent-runtime-refresh", refresh)
       cancelled = true
       window.clearTimeout(timer)
       controller?.abort()
@@ -143,11 +154,14 @@ export default function AgentsPage() {
       try {
         const rows = await getAgentRuntimes()
         if (!cancelled) setRuntimes(rows)
-      } catch { /* próxima rodada tenta de novo */ }
+      } catch {
+        if (!cancelled) setRuntimes(previous => previous.map(row => ({ ...row, runtime_state: 'ERROR', activity_state: 'IDLE', status: 'offline', status_label: 'ERROR', reason: 'Snapshot indisponível', dispatchable: false, busy: false })))
+      }
     }
     void poll()
     const interval = window.setInterval(poll, RUNTIME_POLL_MS)
-    return () => { cancelled = true; window.clearInterval(interval) }
+    window.addEventListener('agent-runtime-refresh', poll)
+    return () => { cancelled = true; window.clearInterval(interval); window.removeEventListener('agent-runtime-refresh', poll) }
   }, [])
 
   const selectedRuntime = runtimes.find((runtime) => runtime.id === agent)
@@ -156,8 +170,7 @@ export default function AgentsPage() {
     if (filter === "runtimes") return []
     if (filter === "online") {
       return AGENTS.filter((item) => {
-        const current = health[item.id]?.health
-        return current === "idle" || current === "busy" || current === "degraded"
+        return health[item.id]?.runtime_state === "ONLINE"
       })
     }
     return AGENTS
@@ -208,6 +221,7 @@ export default function AgentsPage() {
           ))}
         </div>
       </div>
+      {!selectedRuntime && <RuntimeControls key={agent} agent={agent} runtimeState={health[agent]?.runtime_state} activityState={health[agent]?.activity_state} persistent={health[agent]?.persistent} checkedAt={health[agent]?.checked_at} />}
       {!selectedRuntime && health[agent] && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-300">
           <span className={`h-2.5 w-2.5 rounded-full ${HEALTH_STYLE[health[agent]!.health]}`} />

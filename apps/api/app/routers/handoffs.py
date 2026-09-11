@@ -716,31 +716,10 @@ def _auto_runtime_enabled() -> bool:
     }
 
 
-_RUNTIME_SNAPSHOT_TTL_SECONDS = 5
-_runtime_snapshot_cache: dict[str, Any] = {"at": 0.0, "value": None}
-_runtime_snapshot_lock = threading.Lock()
-
-
 def _cached_runtime_snapshot() -> dict[str, dict]:
-    """Evita varrer o tmux uma vez por plano renderizado na aba de PLAN."""
-    with _runtime_snapshot_lock:
-        now = time.monotonic()
-        cached = _runtime_snapshot_cache["value"]
-
-        if (
-            cached is not None
-            and now - _runtime_snapshot_cache["at"]
-            < _RUNTIME_SNAPSHOT_TTL_SECONDS
-        ):
-            return cached
-
-    snapshot = agent_runtime_snapshot()
-
-    with _runtime_snapshot_lock:
-        _runtime_snapshot_cache["at"] = time.monotonic()
-        _runtime_snapshot_cache["value"] = snapshot
-
-    return snapshot
+    # Compatibility name; operational reads are always the durable snapshot.
+    from app.routers.terminal import agent_runtime_snapshot
+    return agent_runtime_snapshot()
 
 
 @router.get("/plans/{plan_id}/recommendation")

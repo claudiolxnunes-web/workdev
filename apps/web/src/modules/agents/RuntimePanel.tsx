@@ -1,3 +1,4 @@
+import { RuntimeControls } from "./RuntimeControls"
 import type { AgentRuntime } from "@/services/handoff.service"
 
 const STATUS_STYLE: Record<string, string> = {
@@ -37,6 +38,7 @@ export function RuntimePanel({ runtime }: { runtime: AgentRuntime }) {
       aria-label={`Runtime ${runtime.label}`}
       className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-lg border border-slate-800 bg-slate-900/60 p-4 text-sm"
     >
+      <RuntimeControls key={runtime.id} agent={runtime.id} runtimeState={runtime.runtime_state} activityState={runtime.activity_state} persistent={runtime.persistent ?? false} checkedAt={runtime.checked_at} />
       <header className="flex flex-wrap items-center gap-2">
         <h3 className="text-base font-semibold text-slate-100">{runtime.label}</h3>
         <span className={`rounded px-2 py-1 text-xs font-bold ${STATUS_STYLE[runtime.status] ?? "bg-slate-800 text-slate-300"}`}>
@@ -51,7 +53,7 @@ export function RuntimePanel({ runtime }: { runtime: AgentRuntime }) {
       </header>
 
       <p className="text-xs text-slate-400">
-        Painel de leitura: o despacho não parte daqui. Este runtime só executa
+        O despacho de tarefas não parte daqui. Este runtime só executa
         se você o eleger como executor no AI Hub → Planejamento, no bloco
         "Quem executa e quem revisa" de um plano aprovado.
       </p>

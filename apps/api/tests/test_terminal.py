@@ -387,49 +387,19 @@ class AwaitingApprovalTest(unittest.TestCase):
 
 
 class AgentStatusTest(unittest.IsolatedAsyncioTestCase):
-    @patch("app.routers.terminal._approval_state")
-    @patch("app.routers.terminal._current_process")
-    async def test_reports_idle_shell_as_not_running_and_not_awaiting(self, current_process, approval):
-        current_process.return_value = "bash"
-        result = await _agent_status("codex", "codex")
-        self.assertFalse(result["running"])
-        self.assertEqual(result["health"], "offline")
-        self.assertFalse(result["awaiting_approval"])
-        approval.assert_not_called()
+    @patch('app.routers.terminal.agent_snapshot.read_snapshot')
+    @patch('app.routers.terminal._current_process')
+    async def test_status_delegates_to_snapshot_without_process_probe(self, process, read):
+        row = {'agent': 'codex', 'runtime_state': 'STOPPING', 'activity_state': 'IDLE'}
+        read.return_value = {'agents': [row]}
+        self.assertEqual(await _agent_status('codex', 'codex'), row)
+        process.assert_not_called()
 
-    @patch("app.routers.terminal._operational_status", return_value="awaiting_approval")
-    @patch("app.routers.terminal._approval_state")
-    @patch("app.routers.terminal._current_process")
-    async def test_checks_approval_only_when_agent_process_is_running(self, current_process, approval, _operational):
-        current_process.return_value = "claude"
-        approval.return_value = (True, "Allow execution?\n1. Yes\n2. No")
-        result = await _agent_status("claude", "code")
-        self.assertTrue(result["running"])
-        self.assertEqual(result["health"], "idle")
-        self.assertTrue(result["awaiting_approval"])
-        self.assertIn("Allow execution?", result["approval_prompt"])
-        self.assertEqual(result["operational_status"], "awaiting_approval")
-        approval.assert_called_once_with("code")
-
-    @patch("app.routers.terminal._load_run_states", return_value={})
-    @patch("app.routers.terminal._agent_status")
-    async def test_status_endpoint_reports_all_four_agents(self, mock_status, _runs):
-        mock_status.side_effect = lambda agent, session, supervisor=None, run_status=None: {
-            "agent": agent, "running": False, "process": "", "awaiting_approval": False,
-            "health": "offline", "health_reason": None, "checked_at": None, "recovered": False,
-        }
-        result = await agents_status()
-        self.assertEqual({item["agent"] for item in result["agents"]}, set(ALLOWED_SESSIONS))
-
-    @patch("app.routers.terminal._operational_status", return_value="blocked")
-    @patch("app.routers.terminal._approval_state", return_value=(False, None))
-    @patch("app.routers.terminal._current_process", return_value="kimi-code")
-    async def test_exposes_blocked_supervisor_state(self, _current, _approval, _operational):
-        result = await _agent_status(
-            "kimi", "kimi", {"status": "blocked", "reason": "billing", "checked_at": "now"}
-        )
-        self.assertEqual(result["health"], "blocked")
-        self.assertEqual(result["health_reason"], "billing")
+    @patch('app.routers.terminal.agent_snapshot.read_snapshot')
+    def test_status_endpoint_returns_snapshot_directly(self, read):
+        read.return_value = {'agents': []}
+        self.assertEqual(agents_status(), {'agents': []})
+        self.assertIn('local-code', read.call_args.args[0])
 
 
 class OperationalStatusTest(unittest.TestCase):
@@ -456,20 +426,22 @@ class SupervisorHealthStateTest(unittest.TestCase):
             path = Path(directory) / "status.json"
             path.write_text(json.dumps({
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-                "agents": {"kimi": {"status": "idle"}},
+                "version": 2,
+                "agents": {"kimi": {"agent": "kimi", "runtime_state": "ONLINE", "activity_state": "IDLE", "checked_at": datetime.now(timezone.utc).isoformat()}},
             }))
             with patch("app.routers.terminal._HEALTH_STATE_FILE", path):
-                self.assertEqual(_load_supervisor_health()["kimi"]["status"], "idle")
+                self.assertEqual(_load_supervisor_health()["kimi"]["runtime_state"], "ONLINE")
 
     def test_ignores_stale_state_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "status.json"
             path.write_text(json.dumps({
                 "updated_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
-                "agents": {"kimi": {"status": "idle"}},
+                "version": 2,
+                "agents": {"kimi": {"agent": "kimi", "runtime_state": "ONLINE", "activity_state": "IDLE", "checked_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()}},
             }))
             with patch("app.routers.terminal._HEALTH_STATE_FILE", path):
-                self.assertEqual(_load_supervisor_health(), {})
+                self.assertEqual(_load_supervisor_health()["kimi"]["runtime_state"], "ERROR")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/workdev/apps/api/venv/bin/python
 """Supervisiona as sessões tmux dos agentes sem expor credenciais."""
 
 from __future__ import annotations
@@ -9,10 +9,10 @@ import os
 import re
 import shlex
 import subprocess
-import tempfile
+import sys
 import urllib.parse
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -22,6 +22,9 @@ WORKDEV_DIR = Path(os.environ.get("WORKDEV_DIR", "/opt/workdev"))
 STATE_FILE = Path(os.environ.get("AGENTS_HEALTH_STATE", "/var/lib/agents-healthcheck/status.json"))
 ALERT_ENV = Path(os.environ.get("AGENTS_ALERT_ENV", "/opt/scripts/alerta.env"))
 LOG_TAG = "agents-healthcheck"
+sys.path.insert(0, str(WORKDEV_DIR / 'apps/api'))
+from app.services import agent_snapshot, agent_lifecycle, agent_runtimes
+
 
 AGENTS = {
     "claude": ("code", [str(WORKDEV_DIR / "scripts/start_claude_agent.sh")]),
@@ -38,6 +41,9 @@ BLOCKED_PATTERNS = (
     (re.compile(r"\b401\b|auth(?:entication)?[_ ]error|missing authentication", re.I), "authentication"),
     (re.compile(r"\b429\b|insufficient balance|recharge your account|billing", re.I), "billing"),
     (re.compile(r"api key.*(?:missing|invalid)|(?:missing|invalid).*api key", re.I), "api_key"),
+)
+WAITING_PATTERNS = (
+    re.compile(r'allow (?:execution|once|this)|do you (?:want|wish) to (?:proceed|allow)|would you like to proceed|approve this|waiting for (?:input|approval)|aguardando (?:aprovação|entrada)|yes, (?:proceed|allow)', re.I),
 )
 BUSY_PATTERNS = (
     re.compile(r"working\s*\(|esc to interrupt|ctrl\+c to cancel|press esc to interrupt", re.I),
@@ -59,18 +65,6 @@ def run(command: Sequence[str], timeout: int = 5) -> subprocess.CompletedProcess
     return subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
 
 
-def session_exists(session: str) -> bool:
-    return run(["tmux", "has-session", "-t", f"={session}"], timeout=2).returncode == 0
-
-
-def current_process(session: str) -> str:
-    result = run(
-        ["tmux", "display-message", "-p", "-t", f"={session}:", "#{pane_current_command}"],
-        timeout=2,
-    )
-    return result.stdout.strip() if result.returncode == 0 else ""
-
-
 def capture_recent(session: str, lines: int = 40) -> str:
     result = run(["tmux", "capture-pane", "-p", "-J", "-S", f"-{lines}", "-t", f"={session}:"])
     return result.stdout if result.returncode == 0 else ""
@@ -83,55 +77,70 @@ def classify(agent: str, session: str, process: str, output: str, checked_at: st
     for pattern, reason in BLOCKED_PATTERNS:
         if pattern.search(recent):
             return AgentHealth(agent, session, "blocked", process, reason, checked_at)
+    if any(pattern.search('\n'.join(output.splitlines()[-8:])) for pattern in WAITING_PATTERNS):
+        return AgentHealth(agent, session, "waiting_input", process, None, checked_at)
     if any(pattern.search(recent) for pattern in BUSY_PATTERNS):
         return AgentHealth(agent, session, "busy", process, None, checked_at)
     return AgentHealth(agent, session, "idle", process, None, checked_at)
 
 
-def start_session(session: str, command: Sequence[str]) -> bool:
-    result = run(
-        ["tmux", "new-session", "-d", "-s", session, "-c", str(WORKDEV_DIR), *command],
-        timeout=10,
-    )
-    return result.returncode == 0
+def collect_agent(agent: str, session: str | None, db, allow_restart=False):
+    checked_at = agent_snapshot.now()
+    operation = agent_lifecycle.read_operation(agent)
+    try:
+        state = agent_lifecycle.read_state(agent, session, db=db)
+        if (allow_restart and state.offline and not state.session_exists
+                and not operation):
+            agent_lifecycle.start(agent, session, AGENTS[agent][1])
+            state = agent_lifecycle.read_state(agent, session, db=db)
+            checked_at = agent_snapshot.now()
+        activity, reason = 'IDLE', None
+        if session and state.agent_process_running:
+            health = classify(agent, session, state.current_process,
+                capture_recent(session), checked_at)
+            activity = {'busy': 'BUSY', 'waiting_input': 'WAITING_INPUT'}.get(health.status, 'IDLE')
+            reason = health.reason
+        # Persisted runs contribute activity only after physical availability.
+        if state.active_work and activity != 'WAITING_INPUT':
+            activity = 'BUSY'
+        row = agent_snapshot.from_physical(agent, state, activity=activity,
+            reason=reason, checked_at=checked_at)
+        phase = operation.get('phase')
+        if phase in {'STARTING', 'STOPPING'}:
+            if agent_lifecycle.operation_active(operation):
+                row.runtime_state = agent_snapshot.RuntimeState(phase)
+                row.activity_state = agent_snapshot.ActivityState.IDLE
+                row.reason = None
+            elif row.runtime_state.value != operation.get('desired'):
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(operation['updated_at'])).total_seconds()
+                pending = not operation.get('running', True) and age < 60
+                row.runtime_state = agent_snapshot.RuntimeState(phase if pending else 'ERROR')
+                row.activity_state = agent_snapshot.ActivityState.IDLE
+                row.reason = None if pending else 'lifecycle_interrupted'
+        elif phase == 'ERROR':
+            row.runtime_state = agent_snapshot.RuntimeState.ERROR
+            row.activity_state = agent_snapshot.ActivityState.IDLE
+            row.reason = operation.get('reason') or 'lifecycle_failed'
+        elif operation.get('desired') == 'OFFLINE' and not state.offline:
+            row.runtime_state = agent_snapshot.RuntimeState.ERROR
+            row.activity_state = agent_snapshot.ActivityState.IDLE
+            row.reason = 'unexpected_runtime_after_stop'
+        return row
+    except Exception as error:
+        return agent_snapshot.AgentSnapshot(agent=agent, runtime_state='ERROR',
+            activity_state='IDLE', checked_at=checked_at,
+            reason=type(error).__name__, persistent=session is not None)
 
 
-def inspect_agent(agent: str, allow_restart: bool = True) -> AgentHealth:
-    session, command = AGENTS[agent]
-    checked_at = datetime.now(timezone.utc).isoformat()
-    exists = session_exists(session)
-    process = current_process(session) if exists else ""
-    output = capture_recent(session) if exists else ""
-    health = classify(agent, session, process, output, checked_at)
-    if health.status != "offline" or not allow_restart:
-        return health
-
-    if exists:
-        # Uma sessão existente pode conter shell, prompt ou artefatos ainda não
-        # registrados. O supervisor alerta, mas nunca a destrói automaticamente.
-        health.reason = "agent_process_missing_restart_required"
-        return health
-    if not start_session(session, command):
-        return health
-    process = current_process(session)
-    recovered = classify(agent, session, process, capture_recent(session), checked_at)
-    recovered.recovered = recovered.status != "offline"
-    return recovered
+def collect_snapshot(db, allow_restart=False):
+    rows = [collect_agent(agent, session, db, allow_restart and agent in ALWAYS_ON_AGENTS)
+        for agent, (session, _command) in AGENTS.items()]
+    rows.extend(collect_agent(runtime.id, None, db) for runtime in agent_runtimes.RUNTIMES)
+    return rows
 
 
-def write_state(health: list[AgentHealth]) -> None:
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "version": 1,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "agents": {item.agent: asdict(item) for item in health},
-    }
-    with tempfile.NamedTemporaryFile("w", dir=STATE_FILE.parent, delete=False) as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-        temporary = Path(handle.name)
-    temporary.chmod(0o644)
-    temporary.replace(STATE_FILE)
+def write_state(health):
+    agent_snapshot.publish(health, STATE_FILE)
 
 
 def read_previous_state() -> dict[str, dict]:
@@ -177,16 +186,17 @@ def send_alert(message: str) -> None:
         run(["logger", "-t", LOG_TAG, "falha ao enviar alerta do supervisor"], timeout=2)
 
 
-def notify_transitions(previous: dict[str, dict], health: list[AgentHealth]) -> None:
+def notify_transitions(previous, health) -> None:
     for item in health:
-        old_status = previous.get(item.agent, {}).get("status")
-        if old_status == item.status:
+        old = previous.get(item.agent, {})
+        old_status = old.get('runtime_state', old.get('status'))
+        current = item.runtime_state.value
+        if old_status == current:
             continue
-        if item.status in {"blocked", "offline"}:
-            detail = f" ({item.reason})" if item.reason else ""
-            send_alert(f"[agents-healthcheck] {item.agent}: {item.status}{detail}.")
-        elif old_status in {"blocked", "offline"}:
-            send_alert(f"[agents-healthcheck] {item.agent}: recuperado, estado {item.status}.")
+        if current in {'ERROR', 'OFFLINE'}:
+            send_alert(f"[agents-healthcheck] {item.agent}: {current} ({item.reason or 'sem processo'}).")
+        elif current == 'ONLINE' and old_status in {'ERROR', 'OFFLINE', 'blocked', 'offline'}:
+            send_alert(f"[agents-healthcheck] {item.agent}: recuperado, ONLINE.")
 
 
 def main() -> int:
@@ -194,20 +204,18 @@ def main() -> int:
     parser.add_argument("--once", action="store_true", help="executa uma única verificação")
     parser.add_argument("--no-restart", action="store_true", help="não recupera sessões offline")
     args = parser.parse_args()
-    previous = read_previous_state()
-    always_on = ALWAYS_ON_AGENTS
-    health = [
-        inspect_agent(
-            agent,
-            allow_restart=(not args.no_restart and agent in always_on),
-        )
-        for agent in AGENTS
-    ]
-    write_state(health)
+    # One systemd timer and one process-wide file lock. No API polling loop.
+    os.environ.setdefault('WORKDEV_API_ENV_FILE', os.getenv('WORKDEV_ENV_FILE', '/etc/workdev/workdev-api.env'))
+    from app.database import SessionLocal
+    with agent_snapshot.file_lock(STATE_FILE.with_suffix('.collector.lock')):
+        previous = read_previous_state()
+        with SessionLocal() as db:
+            health = collect_snapshot(db, allow_restart=not args.no_restart)
+        write_state(health)
     notify_transitions(previous, health)
     for item in health:
-        print(f"{item.agent}: {item.status} ({item.process or 'sem processo'})")
-    return 1 if any(item.agent in always_on and item.status == "offline" for item in health) else 0
+        print(f"{item.agent}: {item.runtime_state.value}/{item.activity_state.value}")
+    return 0
 
 
 if __name__ == "__main__":

@@ -45,7 +45,17 @@ export const agentLabels: Record<AgentName, string> = {
 
 export type RuntimeStatus = "online" | "offline" | "unconfigured" | "degraded"
 
+export type RuntimeState = 'OFFLINE' | 'STARTING' | 'ONLINE' | 'STOPPING' | 'ERROR'
+export type ActivityState = 'IDLE' | 'BUSY' | 'WAITING_INPUT'
+
+export async function setAgentConnection(agent: AgentName, connected: boolean): Promise<unknown> {
+  return read(fetch(`/api/agents/${agent}/${connected ? 'start' : 'stop?confirm=true'}`, { method: 'POST', headers }))
+}
+
 export interface AgentRuntime {
+  runtime_state?: RuntimeState
+  activity_state?: ActivityState
+  persistent?: boolean
   id: RuntimeAgentName
   label: string
   kind: "local" | "gpu"

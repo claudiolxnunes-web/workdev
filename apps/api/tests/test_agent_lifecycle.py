@@ -26,13 +26,9 @@ def registro_isolado(tmp_path, monkeypatch):
     monkeypatch.setattr(
         agent_lifecycle, "GROUPS_FILE", tmp_path / "agent-groups.json"
     )
-    # O fallback em memória e o sinal de degradação são globais do módulo:
-    # sem limpar, um teste contamina o seguinte.
-    agent_lifecycle._memory_groups.clear()
-    agent_lifecycle.reset_registry_status()
+    monkeypatch.setenv("AGENTS_HEALTH_STATE", str(tmp_path / "status.json"))
+    # Identidade, operações e snapshot são isolados em disco.
     yield
-    agent_lifecycle._memory_groups.clear()
-    agent_lifecycle.reset_registry_status()
 
 
 class TestDefinicaoDeOffline:
@@ -731,13 +727,10 @@ class TestLigarRuntimeOllama:
 class TestSerializacao:
     """Achado P2: start/stop sem exclusão mútua por agente."""
 
-    def test_lock_e_por_agente(self):
-        a = agent_lifecycle.agent_lock("kimi")
-        b = agent_lifecycle.agent_lock("kimi")
-        c = agent_lifecycle.agent_lock("qwen")
-
-        assert a is b, "mesmo agente precisa do mesmo lock"
-        assert a is not c, "agentes diferentes não podem se bloquear"
+    def test_agentes_diferentes_nao_se_bloqueiam(self):
+        with agent_lifecycle.agent_lock('kimi'):
+            with agent_lifecycle.agent_lock('qwen'):
+                assert agent_lifecycle.GROUPS_FILE.parent.joinpath('lifecycle/kimi.lock').exists()
 
     def test_start_concorrente_cria_uma_sessao_so(self, monkeypatch):
         import threading
@@ -970,7 +963,7 @@ class TestMemoriaDoGrupo:
 
         estado = agent_lifecycle.read_state("kimi", "kimi")
 
-        assert estado.pgid == 555, "identidade precisa vir da memória"
+        assert estado.pgid == 555, "identidade precisa vir do registro durável"
         assert estado.group_pids == [98765]
         assert estado.offline is False
 
@@ -1167,7 +1160,7 @@ class TestIdentidadePersistida:
         # processo também não sobrevive a um reboot na prática — aqui ela é
         # limpa para representar o processo novo.
         monkeypatch.setattr(agent_lifecycle, "_boot_id", lambda: "boot-B")
-        agent_lifecycle._memory_groups.clear()
+        # No volatile identity cache.
 
         assert agent_lifecycle.recall_groups("kimi") == []
 
@@ -1182,7 +1175,7 @@ class TestIdentidadePersistida:
         assert ok is False
         assert "corrompido" in motivo
 
-    def test_falha_de_escrita_sinaliza_e_mantem_em_memoria(self, monkeypatch):
+    def test_falha_de_escrita_sinaliza_sem_fallback_volatil(self, monkeypatch):
         """Não basta não levantar: a falha precisa ser visível E a identidade
         precisa continuar conhecida dentro desta execução."""
         monkeypatch.setattr(
@@ -1202,9 +1195,9 @@ class TestIdentidadePersistida:
         assert ok is False
         assert "gravável" in motivo
 
-        # E o grupo não pode sumir: é o fallback que impede um stop logo em
-        # seguida concluir "nada a fazer".
-        assert agent_lifecycle.recall_groups("kimi") == [4242]
+        # Sem persistência não há identidade recuperável; registry_ok=False
+        # impede concluir OFFLINE mesmo quando a lista de grupos está vazia.
+        assert agent_lifecycle.recall_groups("kimi") == []
 
     def test_pid_reciclado_e_descartado(self, monkeypatch):
         monkeypatch.setattr(
@@ -1251,7 +1244,7 @@ class TestRegistroDegradado:
         """O cenário exato da reprodução do revisor."""
         agent_lifecycle.remember_group("kimi", 98765)
         self._com_grupo_vivo(monkeypatch)
-        agent_lifecycle._memory_groups.clear()  # simula processo novo
+        # No volatile identity cache.  # simula processo novo
         agent_lifecycle.GROUPS_FILE.write_text("{corrompido")
 
         estado = agent_lifecycle.read_state("kimi", "kimi")
@@ -1438,8 +1431,8 @@ class TestRecuperacaoNaoApaga:
 
         # O arquivo bom nunca foi destruído; processo novo o relê.
         agent_lifecycle.GROUPS_FILE.write_text(bom)
-        agent_lifecycle._memory_groups.clear()
-        agent_lifecycle.reset_registry_status()
+        # No volatile identity cache.
+        # Registry status is read from disk.
 
         assert agent_lifecycle.recall_groups("kimi") == [98765], (
             "o grupo do kimi precisa ter sobrevivido à corrupção"

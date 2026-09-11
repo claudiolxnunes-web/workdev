@@ -31,10 +31,13 @@ import json
 import os
 import signal
 import subprocess
-import threading
+from contextlib import contextmanager
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+from functools import wraps
 from pathlib import Path
+
+from app.services import agent_snapshot
 
 
 # Janela entre SIGTERM e SIGKILL. Curta o bastante para o operador não achar que
@@ -98,15 +101,8 @@ def ensure_local_scope(agent: str) -> None:
 # primeiro acabara de criar. Idempotência sem serialização é só sorte.
 # --------------------------------------------------------------------------
 
-_locks_guard = threading.Lock()
-_agent_locks: dict[str, threading.Lock] = {}
-
-
-def agent_lock(agent: str) -> threading.Lock:
-    with _locks_guard:
-        if agent not in _agent_locks:
-            _agent_locks[agent] = threading.Lock()
-        return _agent_locks[agent]
+def agent_lock(agent: str):
+    return agent_snapshot.file_lock(GROUPS_FILE.parent / 'lifecycle' / f'{agent}.lock')
 
 
 # --------------------------------------------------------------------------
@@ -123,7 +119,8 @@ def agent_lock(agent: str) -> threading.Lock:
 # se o número voltar a existir com outro starttime, não é o nosso grupo.
 # --------------------------------------------------------------------------
 
-_groups_guard = threading.Lock()
+def groups_lock():
+    return agent_snapshot.file_lock(GROUPS_FILE.with_suffix(".lock"))
 
 # Onde a identidade vive fora da memória do processo. A API reinicia (deploy,
 # crash, restart) mas o tmux dos agentes vive em OUTRO cgroup e sobrevive —
@@ -164,31 +161,13 @@ def process_starttime(pid: int) -> str | None:
     return campos[19] if len(campos) > 19 else None
 
 
-# Fallback em memória e sinal de degradação.
-#
-# Engolir falha de persistência recriava o defeito central da task: JSON
-# corrompido ou caminho não gravável viravam "nenhum grupo", e daí OFFLINE sem
-# nada ter sido comprovado. Ausência LEGÍTIMA (primeiro uso, arquivo não
-# existe) é diferente de registro INACESSÍVEL — e só a primeira permite
-# concluir que não há grupo.
-_memory_groups: dict[str, list[dict]] = {}
-_registry_status: dict = {"ok": True, "reason": None}
-
-
 def registry_status() -> tuple[bool, str | None]:
-    with _groups_guard:
-        return _registry_status["ok"], _registry_status["reason"]
-
-
-def _marcar_degradado(motivo: str) -> None:
-    _registry_status["ok"] = False
-    _registry_status["reason"] = motivo
-
-
-def reset_registry_status() -> None:
-    with _groups_guard:
-        _registry_status["ok"] = True
-        _registry_status["reason"] = None
+    try:
+        with groups_lock():
+            _data, valid = _ler_registro()
+        return (True, None) if valid else (False, 'registro ilegível ou corrompido')
+    except OSError:
+        return False, 'registro não gravável ou ilegível'
 
 
 def _ler_registro() -> tuple[dict, bool]:
@@ -206,18 +185,23 @@ def _ler_registro() -> tuple[dict, bool]:
     try:
         bruto = GROUPS_FILE.read_text()
     except OSError as erro:
-        _marcar_degradado(f"registro ilegível: {type(erro).__name__}")
         return vazio, False
 
     try:
         dados = json.loads(bruto)
     except ValueError:
-        _marcar_degradado("registro corrompido: JSON inválido")
         return vazio, False
 
     if not isinstance(dados, dict) or not isinstance(dados.get("agents"), dict):
-        _marcar_degradado("registro corrompido: formato inesperado")
         return vazio, False
+
+    for entries in dados['agents'].values():
+        if not isinstance(entries, list) or any(
+            not isinstance(item, dict) or not isinstance(item.get('pgid'), int)
+            or item['pgid'] <= 0 or not isinstance(item.get('starttime'), (str, type(None)))
+            for item in entries
+        ):
+            return vazio, False
 
     if dados.get("boot_id") != _boot_id():
         # Outro boot: PIDs antigos não se referem a processo nenhum daqui.
@@ -229,58 +213,27 @@ def _ler_registro() -> tuple[dict, bool]:
 
 def _gravar_registro(dados: dict) -> bool:
     try:
-        GROUPS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        temporario = GROUPS_FILE.with_suffix(".tmp")
-        temporario.write_text(json.dumps(dados))
-        temporario.replace(GROUPS_FILE)
-    except OSError as erro:
-        # Não derruba a operação em curso, mas NÃO passa por bem-sucedida: a
-        # identidade deixou de ser durável e quem for desligar precisa saber.
-        _marcar_degradado(f"registro não gravável: {type(erro).__name__}")
+        agent_snapshot.atomic_json(GROUPS_FILE, dados)
+        return True
+    except OSError:
         return False
-
-    return True
 
 
 def remember_group(agent: str, pgid: int | None) -> bool:
-    """Acrescenta um grupo ao agente. Devolve se a identidade ficou DURÁVEL.
-
-    A memória do processo é atualizada sempre — perder a identidade dentro da
-    própria execução seria pior que não persistir. `False` significa que ela
-    não sobrevive a um restart, e quem vai destruir a sessão precisa decidir o
-    que fazer com essa informação.
-    """
+    """Never destroy a session unless its identity has been durably stored."""
     if not pgid:
         return True
-
-    with _groups_guard:
-        registros = _memory_groups.setdefault(agent, [])
-        assinatura = process_starttime(pgid)
-
-        if not any(item.get("pgid") == pgid for item in registros):
-            registros.append({"pgid": pgid, "starttime": assinatura})
-
-        dados, integro = _ler_registro()
-
-        if not integro:
-            # NÃO reescrever por cima de um registro ilegível. `_ler_registro`
-            # devolve um dicionário VAZIO nesse caso, então gravar aqui
-            # substituiria o arquivo pelo único grupo que conhecemos agora,
-            # apagando silenciosamente as identidades de outros agentes e
-            # grupos — e, pior, o arquivo voltaria a ser JSON válido, fazendo
-            # a chamada seguinte responder "durável" e mascarar a degradação.
-            #
-            # Recuperação não pode apagar o que não se conseguiu ler. O grupo
-            # fica no fallback em memória e o retorno diz a verdade: não é
-            # durável. É a mesma regra que `forget_group` já seguia.
-            return False
-
-        persistidos = dados["agents"].setdefault(agent, [])
-
-        if not any(item.get("pgid") == pgid for item in persistidos):
-            persistidos.append({"pgid": pgid, "starttime": assinatura})
-
-        return _gravar_registro(dados)
+    try:
+        with groups_lock():
+            dados, valid = _ler_registro()
+            if not valid:
+                return False
+            registros = dados['agents'].setdefault(agent, [])
+            if not any(item.get('pgid') == pgid for item in registros):
+                registros.append({'pgid': pgid, 'starttime': process_starttime(pgid)})
+            return _gravar_registro(dados)
+    except OSError:
+        return False
 
 
 def _validos(registros: list[dict]) -> list[int]:
@@ -312,18 +265,13 @@ def _validos(registros: list[dict]) -> list[int]:
 
 
 def recall_groups(agent: str) -> list[int]:
-    """PGIDs do agente, unindo arquivo e memória, filtrados por reuso de PID.
-
-    A união importa: com o arquivo inacessível, a memória do processo ainda
-    conhece os grupos criados nesta execução — e é ela que impede um stop de
-    concluir "nada a fazer" logo depois de uma falha de escrita.
-    """
-    with _groups_guard:
-        dados, _integro = _ler_registro()
-        registros = list(dados["agents"].get(agent, []))
-        registros.extend(_memory_groups.get(agent, []))
-
-    return _validos(registros)
+    """Only durable identity is authoritative across workers and restarts."""
+    try:
+        with groups_lock():
+            dados, valid = _ler_registro()
+            return _validos(dados['agents'].get(agent, [])) if valid else []
+    except OSError:
+        return []
 
 
 def recall_group(agent: str) -> int | None:
@@ -334,18 +282,7 @@ def recall_group(agent: str) -> int | None:
 
 def forget_group(agent: str, pgid: int | None = None) -> None:
     """Esquece um grupo (ou todos, sem `pgid`). Só depois de extinto."""
-    with _groups_guard:
-        if pgid is None:
-            _memory_groups.pop(agent, None)
-        else:
-            _memory_groups[agent] = [
-                item
-                for item in _memory_groups.get(agent, [])
-                if item.get("pgid") != pgid
-            ]
-            if not _memory_groups[agent]:
-                _memory_groups.pop(agent, None)
-
+    with groups_lock():
         dados, integro = _ler_registro()
 
         if not integro:
@@ -778,7 +715,7 @@ def read_state(
     """Lê o estado do sistema.
 
     A identidade do grupo vem de três fontes, nesta ordem: a sessão tmux viva,
-    o `known_pgid` de quem está no meio de um stop, e a memória do módulo. A
+    o `known_pgid` de quem está no meio de um stop, e o registro durável em disco. A
     terceira é o que faz o sobrevivente continuar visível em CHAMADAS
     POSTERIORES — sem ela, o `GET /lifecycle` logo depois de um stop voltava a
     dizer offline com o processo vivo segurando RAM.
@@ -787,6 +724,7 @@ def read_state(
     ("sem runs ativos executáveis").
     """
     estado = AgentState(agent=agent, session=session)
+    identity_durable = True
 
     estado.model = model_for_agent(agent)
     endpoint, headers = endpoint_for(agent)
@@ -807,7 +745,7 @@ def read_state(
 
             if estado.pane_pid:
                 estado.pgid = pgid_of(estado.pane_pid)
-                remember_group(agent, estado.pgid)
+                identity_durable = remember_group(agent, estado.pgid)
 
     # TODOS os grupos que pertencem ao agente, não só o da sessão atual. Um
     # stop que deixou sobreviventes seguido de um start cria dois grupos vivos;
@@ -841,6 +779,9 @@ def read_state(
         estado.pgid = vivos[-1]
 
     estado.registry_ok, estado.registry_reason = registry_status()
+    if not identity_durable:
+        estado.registry_ok = False
+        estado.registry_reason = "identity_not_durable"
 
     if db is not None:
         estado.active_work = active_work(db, agent)
@@ -956,6 +897,20 @@ def active_work(db, agent: str) -> dict | None:
 # --------------------------------------------------------------------------
 
 
+def tracked_operation(phase):
+    def decorate(function):
+        @wraps(function)
+        def invoke(agent, session, *args, **kwargs):
+            ensure_local_scope(agent)
+            with agent_lock(agent), lifecycle_operation(agent, session, phase) as outcome:
+                result = function(agent, session, *args, **kwargs)
+                outcome['state'] = result['state']
+                return result
+        return invoke
+    return decorate
+
+
+@tracked_operation("STARTING")
 def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
     """Liga o agente. Chamar de novo com ele ligado não recria nada.
 
@@ -965,50 +920,18 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
     """
     ensure_local_scope(agent)
 
-    with agent_lock(agent):
-        antes = read_state(agent, session)
+    antes = read_state(agent, session)
 
-        # Runtime Ollama não tem sessão: ligar é CARREGAR O MODELO. Antes isto
-        # devolvia 409 e o 'Ligar' do plano simplesmente não existia.
-        if session is None:
-            if not antes.model:
-                raise LifecycleError(
-                    "model_not_configured",
-                    f"{agent} não tem modelo configurado para carregar",
-                )
+    # Runtime Ollama não tem sessão: ligar é CARREGAR O MODELO. Antes isto
+    # devolvia 409 e o 'Ligar' do plano simplesmente não existia.
+    if session is None:
+        if not antes.model:
+            raise LifecycleError(
+                "model_not_configured",
+                f"{agent} não tem modelo configurado para carregar",
+            )
 
-            if antes.model_loaded is True:
-                return {
-                    "agent": agent,
-                    "started": False,
-                    "already_running": True,
-                    "state": antes.as_dict(),
-                }
-
-            endpoint, headers = endpoint_for(agent)
-
-            if not endpoint:
-                raise LifecycleError(
-                    "endpoint_not_configured",
-                    f"{agent} não tem endpoint configurado",
-                )
-
-            carregou = load_model(antes.model, endpoint, headers)
-
-            if not carregou:
-                raise LifecycleError(
-                    "model_load_failed",
-                    f"Não foi possível carregar {antes.model} em {agent}",
-                )
-
-            return {
-                "agent": agent,
-                "started": True,
-                "already_running": False,
-                "state": read_state(agent, session).as_dict(),
-            }
-
-        if antes.agent_process_running:
+        if antes.model_loaded is True:
             return {
                 "agent": agent,
                 "started": False,
@@ -1016,38 +939,20 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
                 "state": antes.as_dict(),
             }
 
-        # Sobrevivente de um stop incompleto: subir uma sessão nova por cima
-        # deixaria o grupo antigo consumindo RAM para sempre, invisível depois
-        # que o grupo novo morresse. Recusar é o que força a limpeza.
-        if antes.group_pids and not antes.session_exists:
+        endpoint, headers = endpoint_for(agent)
+
+        if not endpoint:
             raise LifecycleError(
-                "survivors_pending",
-                (
-                    f"{agent} ainda tem {len(antes.group_pids)} processo(s) de "
-                    "uma execução anterior; rode o stop antes de ligar de novo"
-                ),
-                {
-                    "group_pids": list(antes.group_pids),
-                    "pgids": list(antes.live_pgids),
-                },
+                "endpoint_not_configured",
+                f"{agent} não tem endpoint configurado",
             )
 
-        # Sessão existe mas só com shell: casca de standby, não agente.
-        if antes.session_exists:
-            _run(["tmux", "kill-session", "-t", f"={session}"], 5)
+        carregou = load_model(antes.model, endpoint, headers)
 
-        resultado = _run(
-            [
-                "tmux", "new-session", "-d", "-s", session,
-                "-c", "/opt/workdev", *(launcher or []),
-            ],
-            15,
-        )
-
-        if resultado.returncode != 0:
+        if not carregou:
             raise LifecycleError(
-                "start_failed",
-                resultado.stderr.strip() or "Falha ao iniciar a sessão tmux",
+                "model_load_failed",
+                f"Não foi possível carregar {antes.model} em {agent}",
             )
 
         return {
@@ -1057,7 +962,57 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
             "state": read_state(agent, session).as_dict(),
         }
 
+    if antes.agent_process_running:
+        return {
+            "agent": agent,
+            "started": False,
+            "already_running": True,
+            "state": antes.as_dict(),
+        }
 
+    # Sobrevivente de um stop incompleto: subir uma sessão nova por cima
+    # deixaria o grupo antigo consumindo RAM para sempre, invisível depois
+    # que o grupo novo morresse. Recusar é o que força a limpeza.
+    if antes.group_pids and not antes.session_exists:
+        raise LifecycleError(
+            "survivors_pending",
+            (
+                f"{agent} ainda tem {len(antes.group_pids)} processo(s) de "
+                "uma execução anterior; rode o stop antes de ligar de novo"
+            ),
+            {
+                "group_pids": list(antes.group_pids),
+                "pgids": list(antes.live_pgids),
+            },
+        )
+
+    # Sessão existe mas só com shell: casca de standby, não agente.
+    if antes.session_exists:
+        _run(["tmux", "kill-session", "-t", f"={session}"], 5)
+
+    resultado = _run(
+        [
+            "tmux", "new-session", "-d", "-s", session,
+            "-c", "/opt/workdev", *(launcher or []),
+        ],
+        15,
+    )
+
+    if resultado.returncode != 0:
+        raise LifecycleError(
+            "start_failed",
+            resultado.stderr.strip() or "Falha ao iniciar a sessão tmux",
+        )
+
+    return {
+        "agent": agent,
+        "started": True,
+        "already_running": False,
+        "state": read_state(agent, session).as_dict(),
+    }
+
+
+@tracked_operation("STOPPING")
 def stop(agent: str, session: str | None, *, unload: bool = True, db=None) -> dict:
     """Desliga o agente de verdade: sessão, processos do grupo e modelo órfão.
 
@@ -1066,114 +1021,181 @@ def stop(agent: str, session: str | None, *, unload: bool = True, db=None) -> di
     """
     ensure_local_scope(agent)
 
-    with agent_lock(agent):
-        antes = read_state(agent, session, db=db)
-        rss_antes = antes.rss_kb
-        pgid = antes.pgid
+    antes = read_state(agent, session, db=db)
+    rss_antes = antes.rss_kb
+    pgid = antes.pgid
 
-        # `antes.offline` já exige registry_ok, então um registro degradado
-        # nunca cai neste atalho: com a identidade em dúvida, seguimos o
-        # caminho completo em vez de alegar que não há nada a fazer.
-        if antes.offline:
-            return {
-                "agent": agent,
-                "stopped": False,
-                "already_offline": True,
-                "rss_freed_kb": 0,
-                "model_unloaded": False,
-                "model_reason": "já estava offline",
-                "termination": {
-                    "signalled": False, "survivors": [], "escalated": False,
-                },
-                "state": antes.as_dict(),
-            }
-
-        encerramento = {"signalled": False, "survivors": [], "escalated": False}
-
-        if session and antes.session_exists:
-            # A sessão tmux é a ÚNICA fonte do `pane_pid`, e o pane_pid é a
-            # única forma de descobrir o process group. Destruí-la sem ter a
-            # identidade guardada de forma durável cria exatamente o órfão
-            # invisível que esta task existe para eliminar: processo vivo,
-            # consumindo RAM, e ninguém mais sabe qual é.
-            #
-            # Por isso: garantir a identidade ANTES, ou abortar preservando a
-            # sessão. Abortar é recuperável; matar às cegas não é.
-            duravel = remember_group(agent, antes.pgid)
-
-            if not duravel and antes.pgid:
-                _ok, motivo = registry_status()
-                raise LifecycleError(
-                    "identity_not_durable",
-                    (
-                        "Encerramento abortado: não foi possível guardar a "
-                        f"identidade do process group ({motivo}). A sessão foi "
-                        "preservada — matá-la agora deixaria processos órfãos "
-                        "sem forma de encontrá-los depois"
-                    ),
-                    {"pgid": antes.pgid, "reason": motivo},
-                )
-
-            # tmux primeiro: é a saída limpa, e costuma levar o grupo junto.
-            _run(["tmux", "kill-session", "-t", f"={session}"], 5)
-
-        # Encerra TODOS os grupos do agente, não só o da sessão atual. Um
-        # sobrevivente de stop anterior é exatamente o processo órfão que esta
-        # task existe para eliminar; deixá-lo vivo repetiria o defeito.
-        alvos = list(antes.live_pgids) or ([pgid] if pgid else [])
-
-        for alvo in alvos:
-            if not group_pids(alvo):
-                continue
-
-            parcial = terminate_group(alvo)
-            encerramento = {
-                "signalled": encerramento["signalled"] or parcial["signalled"],
-                "survivors": encerramento["survivors"] + parcial["survivors"],
-                "escalated": encerramento["escalated"] or parcial["escalated"],
-            }
-
-            if not group_pids(alvo):
-                forget_group(agent, alvo)
-
-        modelo_descarregado = False
-        motivo_modelo = "sem modelo associado"
-
-        if unload and antes.model:
-            endpoint, headers = endpoint_for(agent)
-            usuarios = model_users(antes.model, excluding=agent, db=db)
-
-            if usuarios:
-                motivo_modelo = f"mantido: em uso por {', '.join(usuarios)}"
-            elif antes.model_loaded is False:
-                motivo_modelo = "já não estava carregado"
-            elif antes.model_loaded is None:
-                motivo_modelo = (
-                    "estado desconhecido: a sondagem do endpoint não respondeu"
-                )
-            else:
-                modelo_descarregado = unload_model(antes.model, endpoint, headers)
-                motivo_modelo = (
-                    "descarregado" if modelo_descarregado
-                    else (
-                        "ainda residente após "
-                        f"{UNLOAD_VERIFY_TIMEOUT_SECONDS:g}s; o descarregamento "
-                        "é assíncrono — consulte o lifecycle para confirmar"
-                    )
-                )
-
-        # Releitura carregando o PGID original: sem isso, sobrevivente do grupo
-        # ficaria invisível e o estado alegaria offline (achado P1).
-        depois = read_state(agent, session, known_pgid=pgid, db=db)
-
+    # `antes.offline` já exige registry_ok, então um registro degradado
+    # nunca cai neste atalho: com a identidade em dúvida, seguimos o
+    # caminho completo em vez de alegar que não há nada a fazer.
+    if antes.offline:
         return {
             "agent": agent,
-            "stopped": True,
-            "already_offline": False,
-            # Prova de liberação: RSS do grupo antes menos o que restou.
-            "rss_freed_kb": max(0, rss_antes - depois.rss_kb),
-            "model_unloaded": modelo_descarregado,
-            "model_reason": motivo_modelo,
-            "termination": encerramento,
-            "state": depois.as_dict(),
+            "stopped": False,
+            "already_offline": True,
+            "rss_freed_kb": 0,
+            "model_unloaded": False,
+            "model_reason": "já estava offline",
+            "termination": {
+                "signalled": False, "survivors": [], "escalated": False,
+            },
+            "state": antes.as_dict(),
         }
+
+    encerramento = {"signalled": False, "survivors": [], "escalated": False}
+
+    if session and antes.session_exists:
+        # A sessão tmux é a ÚNICA fonte do `pane_pid`, e o pane_pid é a
+        # única forma de descobrir o process group. Destruí-la sem ter a
+        # identidade guardada de forma durável cria exatamente o órfão
+        # invisível que esta task existe para eliminar: processo vivo,
+        # consumindo RAM, e ninguém mais sabe qual é.
+        #
+        # Por isso: garantir a identidade ANTES, ou abortar preservando a
+        # sessão. Abortar é recuperável; matar às cegas não é.
+        duravel = remember_group(agent, antes.pgid)
+
+        if not duravel and antes.pgid:
+            _ok, motivo = registry_status()
+            raise LifecycleError(
+                "identity_not_durable",
+                (
+                    "Encerramento abortado: não foi possível guardar a "
+                    f"identidade do process group ({motivo}). A sessão foi "
+                    "preservada — matá-la agora deixaria processos órfãos "
+                    "sem forma de encontrá-los depois"
+                ),
+                {"pgid": antes.pgid, "reason": motivo},
+            )
+
+        # tmux primeiro: é a saída limpa, e costuma levar o grupo junto.
+        _run(["tmux", "kill-session", "-t", f"={session}"], 5)
+
+    # Encerra TODOS os grupos do agente, não só o da sessão atual. Um
+    # sobrevivente de stop anterior é exatamente o processo órfão que esta
+    # task existe para eliminar; deixá-lo vivo repetiria o defeito.
+    alvos = list(antes.live_pgids) or ([pgid] if pgid else [])
+
+    for alvo in alvos:
+        if not group_pids(alvo):
+            continue
+
+        parcial = terminate_group(alvo)
+        encerramento = {
+            "signalled": encerramento["signalled"] or parcial["signalled"],
+            "survivors": encerramento["survivors"] + parcial["survivors"],
+            "escalated": encerramento["escalated"] or parcial["escalated"],
+        }
+
+        if not group_pids(alvo):
+            forget_group(agent, alvo)
+
+    modelo_descarregado = False
+    motivo_modelo = "sem modelo associado"
+
+    if unload and antes.model:
+        endpoint, headers = endpoint_for(agent)
+        usuarios = model_users(antes.model, excluding=agent, db=db)
+
+        if usuarios:
+            motivo_modelo = f"mantido: em uso por {', '.join(usuarios)}"
+        elif antes.model_loaded is False:
+            motivo_modelo = "já não estava carregado"
+        elif antes.model_loaded is None:
+            motivo_modelo = (
+                "estado desconhecido: a sondagem do endpoint não respondeu"
+            )
+        else:
+            modelo_descarregado = unload_model(antes.model, endpoint, headers)
+            motivo_modelo = (
+                "descarregado" if modelo_descarregado
+                else (
+                    "ainda residente após "
+                    f"{UNLOAD_VERIFY_TIMEOUT_SECONDS:g}s; o descarregamento "
+                    "é assíncrono — consulte o lifecycle para confirmar"
+                )
+            )
+
+    # Releitura carregando o PGID original: sem isso, sobrevivente do grupo
+    # ficaria invisível e o estado alegaria offline (achado P1).
+    depois = read_state(agent, session, known_pgid=pgid, db=db)
+
+    return {
+        "agent": agent,
+        "stopped": True,
+        "already_offline": False,
+        # Prova de liberação: RSS do grupo antes menos o que restou.
+        "rss_freed_kb": max(0, rss_antes - depois.rss_kb),
+        "model_unloaded": modelo_descarregado,
+        "model_reason": motivo_modelo,
+        "termination": encerramento,
+        "state": depois.as_dict(),
+    }
+
+
+def operation_file(agent: str) -> Path:
+    return GROUPS_FILE.parent / 'lifecycle' / f'{agent}.json'
+
+
+def read_operation(agent: str) -> dict:
+    try:
+        data = json.loads(operation_file(agent).read_text())
+        if not isinstance(data, dict) or data.get('phase') not in {'STARTING', 'STOPPING', 'completed', 'ERROR'}:
+            raise ValueError('invalid operation')
+        return data
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, TypeError):
+        return {'phase': 'ERROR', 'reason': 'operation_unreadable'}
+
+
+def operation_active(operation: dict) -> bool:
+    return bool(operation.get('running', True) and operation.get('boot_id') == _boot_id()
+        and operation.get('owner_starttime')
+        and process_starttime(operation.get('owner_pid', 0)) == operation['owner_starttime'])
+
+
+@contextmanager
+def lifecycle_operation(agent: str, session: str | None, phase: str, db=None):
+    """A persisted intent precedes physical work; restart cannot erase STOPPING.
+
+    Publication is an event write, never another healthcheck loop. The sole
+    healthcheck reconciles interrupted operations against physical evidence.
+    """
+    operation = {'phase': phase, 'desired': 'OFFLINE' if phase == 'STOPPING' else 'ONLINE',
+        'boot_id': _boot_id(), 'owner_pid': os.getpid(),
+        'owner_starttime': process_starttime(os.getpid()), 'running': True, 'updated_at': agent_snapshot.now()}
+    try:
+        agent_snapshot.atomic_json(operation_file(agent), operation)
+        agent_snapshot.publish([agent_snapshot.AgentSnapshot(agent=agent,
+            runtime_state=phase, activity_state='IDLE', checked_at=agent_snapshot.now(),
+            persistent=session is not None)])
+    except OSError as error:
+        raise LifecycleError('state_not_durable', 'Operação abortada: estado não persistido') from error
+    outcome = {}
+    try:
+        yield outcome
+        values = outcome['state']
+        state = AgentState(**{field.name: values[field.name] for field in fields(AgentState) if field.name in values})
+        row = agent_snapshot.from_physical(agent, state)
+        complete = row.runtime_state.value == operation['desired']
+        operation['running'] = False
+        if not complete:
+            row.runtime_state = agent_snapshot.RuntimeState(phase)
+            row.activity_state = agent_snapshot.ActivityState.IDLE
+            row.reason = None
+        operation['phase'] = 'completed' if complete else phase
+        operation['reason'] = row.reason
+    except Exception as error:
+        operation['phase'] = 'ERROR'
+        operation['reason'] = getattr(error, 'code', type(error).__name__)
+        agent_snapshot.atomic_json(operation_file(agent), operation)
+        agent_snapshot.publish([agent_snapshot.AgentSnapshot(agent=agent,
+            runtime_state='ERROR', activity_state='IDLE', checked_at=agent_snapshot.now(),
+            reason=operation['reason'], persistent=session is not None)])
+        raise
+    else:
+        operation['updated_at'] = agent_snapshot.now()
+        agent_snapshot.atomic_json(operation_file(agent), operation)
+        row.checked_at = agent_snapshot.now()
+        agent_snapshot.publish([row])

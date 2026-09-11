@@ -1,0 +1,57 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { RuntimeControls } from './RuntimeControls'
+
+const { setAgentConnection } = vi.hoisted(() => ({ setAgentConnection: vi.fn() }))
+vi.mock('@/services/handoff.service', () => ({ setAgentConnection }))
+
+beforeEach(() => vi.clearAllMocks())
+
+describe('RuntimeControls', () => {
+  it('separa WAITING_INPUT de BUSY e mostra STOPPING até confirmação física', () => {
+    const { rerender } = render(<RuntimeControls agent="codex" runtimeState="ONLINE" activityState="WAITING_INPUT" />)
+    expect(screen.getByText('WAITING_INPUT')).toBeInTheDocument()
+    expect(screen.queryByText('BUSY')).not.toBeInTheDocument()
+    rerender(<RuntimeControls agent="codex" runtimeState="STOPPING" activityState="IDLE" />)
+    expect(screen.getByText('STOPPING')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Conectar' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Desconectar' })).toBeDisabled()
+  })
+
+  it('delegação idempotente não assume ONLINE ao clicar ou terminar a requisição', async () => {
+    let finish!: () => void
+    setAgentConnection.mockReturnValue(new Promise<void>(resolve => { finish = resolve }))
+    render(<RuntimeControls agent="codex" runtimeState="OFFLINE" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Conectar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Conectar' }))
+    expect(setAgentConnection).toHaveBeenCalledTimes(1)
+    expect(setAgentConnection).toHaveBeenCalledWith('codex', true)
+    expect(screen.queryByText('ONLINE')).not.toBeInTheDocument()
+    await act(async () => finish())
+    expect(screen.getByText('OFFLINE')).toBeInTheDocument()
+  })
+
+  it('desconecta pelo lifecycle e expõe falha como ERROR', async () => {
+    setAgentConnection.mockRejectedValue(new Error('runtime inconsistente'))
+    render(<RuntimeControls agent="codex" runtimeState="ONLINE" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Desconectar' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('runtime inconsistente'))
+    expect(setAgentConnection).toHaveBeenCalledWith('codex', false)
+    expect(screen.getByText('ERROR')).toBeInTheDocument()
+  })
+
+  it('parada forçada refletida pelo snapshot muda ONLINE para OFFLINE', () => {
+    const { rerender } = render(<RuntimeControls agent="codex" runtimeState="ONLINE" activityState="BUSY" />)
+    expect(screen.getByText('ONLINE')).toBeInTheDocument()
+    rerender(<RuntimeControls agent="codex" runtimeState="OFFLINE" activityState="IDLE" />)
+    expect(screen.getByText('OFFLINE')).toBeInTheDocument()
+    expect(screen.queryByText('ONLINE')).not.toBeInTheDocument()
+  })
+
+  it('cadastro sem snapshot não implica disponibilidade e GPU não oferece controle local', () => {
+    render(<RuntimeControls agent="gpu-runpod" persistent={false} />)
+    expect(screen.getByText('ERROR')).toBeInTheDocument()
+    expect(screen.getByText('Sob demanda')).toBeInTheDocument()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+})

@@ -227,9 +227,8 @@ def list_runtimes() -> list[dict]:
 # --------------------------------------------------------------------------
 # Health check
 #
-# A UI nunca fala com o Ollama: quem sonda é o backend, com timeout curto, e
-# devolve só o estado. Endpoint GPU fora do ar é resposta normal da sonda, não
-# exceção — nada no WorkDev pode quebrar porque uma GPU está desligada.
+# Sondas pontuais para autorização de despacho, sem cache operacional.
+# A UI lê exclusivamente status.json, consolidado pelo healthcheck central.
 # --------------------------------------------------------------------------
 
 HEALTH_TIMEOUT_SECONDS = 2.0
@@ -275,7 +274,6 @@ class RuntimeHealth:
         }
 
 
-_health_cache: dict[str, tuple[float, RuntimeHealth]] = {}
 
 
 def _now_iso() -> str:
@@ -399,19 +397,8 @@ async def check_runtime_cached(
     *,
     refresh: bool = False,
 ) -> RuntimeHealth:
-    cached = _health_cache.get(runtime.id)
-
-    if (
-        not refresh
-        and cached
-        and time.monotonic() - cached[0] < HEALTH_CACHE_TTL_SECONDS
-    ):
-        return cached[1]
-
-    health = await check_runtime(runtime)
-    _health_cache[runtime.id] = (time.monotonic(), health)
-
-    return health
+    # Compatibility name for dispatch callers: no operational cache in API RAM.
+    return await check_runtime(runtime)
 
 
 async def check_all(*, refresh: bool = False) -> dict[str, RuntimeHealth]:
@@ -459,4 +446,4 @@ def check_runtime_blocking(
 
 
 def reset_health_cache() -> None:
-    _health_cache.clear()
+    pass  # Compatibility: runtime health is no longer cached.

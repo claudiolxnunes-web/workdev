@@ -144,7 +144,7 @@ describe("AgentsPage", () => {
     expect(screen.queryByText(/^terminal:/)).not.toBeInTheDocument()
   })
 
-  it("painel do runtime não promete controle que não tem", async () => {
+  it("painel do runtime oferece lifecycle sem confundir com despacho", async () => {
     getAgentRuntimes.mockResolvedValue([runtime()])
     render(<AgentsPage />)
 
@@ -157,6 +157,7 @@ describe("AgentsPage", () => {
     // O painel tem que dizer onde a eleição realmente acontece.
     expect(painel).toHaveTextContent("AI Hub")
     // E não pode ganhar botão sem a fatia 2: despacho não parte daqui.
-    expect(painel.querySelector("button")).toBeNull()
+    expect(painel).toHaveTextContent("Conectar")
+    expect(painel).toHaveTextContent("Desconectar")
   })
 })
