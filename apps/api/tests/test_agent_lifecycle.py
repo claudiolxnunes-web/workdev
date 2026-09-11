@@ -1367,3 +1367,88 @@ class TestRegistroDegradado:
         agent_lifecycle.forget_group("kimi", 1)
 
         assert agent_lifecycle.GROUPS_FILE.read_text() == "{corrompido"
+
+
+class TestRecuperacaoNaoApaga:
+    """Achado P1 da 5ª revisão: recuperar não pode apagar o desconhecido.
+
+    `remember_group` gravava mesmo com o registro ilegível. Como
+    `_ler_registro` devolve dicionário VAZIO nesse caso, a escrita substituía
+    o arquivo pelo único grupo conhecido naquele instante — apagando as
+    identidades de outros agentes — e o arquivo voltava a ser JSON válido,
+    fazendo a chamada seguinte responder "durável" e esconder a degradação.
+    """
+
+    def test_nao_reescreve_registro_ilegivel(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "t"
+        )
+        agent_lifecycle.GROUPS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        agent_lifecycle.GROUPS_FILE.write_text("{corrompido")
+
+        duravel = agent_lifecycle.remember_group("codex", 12345)
+
+        assert duravel is False
+        assert agent_lifecycle.GROUPS_FILE.read_text() == "{corrompido", (
+            "o arquivo ilegível precisa ser preservado, não sobrescrito"
+        )
+
+    def test_chamada_seguinte_nao_mascara_a_degradacao(self, monkeypatch):
+        """A segunda chamada não pode virar True por ter consertado o arquivo."""
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "t"
+        )
+        agent_lifecycle.GROUPS_FILE.write_text("{corrompido")
+
+        primeira = agent_lifecycle.remember_group("codex", 12345)
+        segunda = agent_lifecycle.remember_group("codex", 12345)
+
+        assert primeira is False
+        assert segunda is False, (
+            "a degradação não pode desaparecer só porque tentamos de novo"
+        )
+
+    def test_identidade_de_outro_agente_sobrevive(self, monkeypatch):
+        """O cenário completo: corrupção não pode sumir com o grupo alheio."""
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: None
+        )
+
+        agent_lifecycle.remember_group("kimi", 98765)
+        conteudo_bom = agent_lifecycle.GROUPS_FILE.read_text()
+
+        agent_lifecycle.GROUPS_FILE.write_text("{corrompido")
+        agent_lifecycle.remember_group("codex", 12345)
+
+        assert agent_lifecycle.GROUPS_FILE.read_text() == "{corrompido"
+        assert "98765" in conteudo_bom
+
+    def test_restart_com_arquivo_preservado_nao_perde_o_grupo(
+        self, monkeypatch
+    ):
+        """corrupção -> remember de outro agente -> restart -> leitura."""
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: None
+        )
+        agent_lifecycle.remember_group("kimi", 98765)
+        bom = agent_lifecycle.GROUPS_FILE.read_text()
+
+        agent_lifecycle.GROUPS_FILE.write_text("{corrompido")
+        agent_lifecycle.remember_group("codex", 12345)
+
+        # O arquivo bom nunca foi destruído; processo novo o relê.
+        agent_lifecycle.GROUPS_FILE.write_text(bom)
+        agent_lifecycle._memory_groups.clear()
+        agent_lifecycle.reset_registry_status()
+
+        assert agent_lifecycle.recall_groups("kimi") == [98765], (
+            "o grupo do kimi precisa ter sobrevivido à corrupção"
+        )
+
+    def test_sem_corrupcao_continua_gravando(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_lifecycle, "process_starttime", lambda pid: "t"
+        )
+
+        assert agent_lifecycle.remember_group("kimi", 4242) is True
+        assert agent_lifecycle.recall_groups("kimi") == [4242]

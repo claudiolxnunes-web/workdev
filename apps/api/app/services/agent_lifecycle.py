@@ -261,14 +261,26 @@ def remember_group(agent: str, pgid: int | None) -> bool:
             registros.append({"pgid": pgid, "starttime": assinatura})
 
         dados, integro = _ler_registro()
+
+        if not integro:
+            # NÃO reescrever por cima de um registro ilegível. `_ler_registro`
+            # devolve um dicionário VAZIO nesse caso, então gravar aqui
+            # substituiria o arquivo pelo único grupo que conhecemos agora,
+            # apagando silenciosamente as identidades de outros agentes e
+            # grupos — e, pior, o arquivo voltaria a ser JSON válido, fazendo
+            # a chamada seguinte responder "durável" e mascarar a degradação.
+            #
+            # Recuperação não pode apagar o que não se conseguiu ler. O grupo
+            # fica no fallback em memória e o retorno diz a verdade: não é
+            # durável. É a mesma regra que `forget_group` já seguia.
+            return False
+
         persistidos = dados["agents"].setdefault(agent, [])
 
         if not any(item.get("pgid") == pgid for item in persistidos):
             persistidos.append({"pgid": pgid, "starttime": assinatura})
 
-        gravou = _gravar_registro(dados)
-
-        return gravou and integro
+        return _gravar_registro(dados)
 
 
 def _validos(registros: list[dict]) -> list[int]:
