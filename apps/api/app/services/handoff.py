@@ -207,22 +207,30 @@ def _lista_de_texto(valor):
 
 
 
+ACTIVE_PLAN_STATUSES = frozenset({'draft', 'needs_revision', 'approved'})
+PLANNING_TASK_STATUSES = frozenset({'todo', 'doing', 'blocked'})
+
+
+def active_plan_for_task(db: Session, backlog_id):
+    return db.query(ExecutionPlan).filter(
+        ExecutionPlan.backlog_id == backlog_id,
+        ExecutionPlan.status.in_(ACTIVE_PLAN_STATUSES),
+    ).first()
+
+
 def create_plan(
     db: Session,
     data: dict[str, Any],
 ) -> ExecutionPlan:
     task = db.query(BacklogItem).filter(
         BacklogItem.id == data["backlog_id"]
-    ).first()
+    ).with_for_update().first()
 
     if not task:
         raise HandoffError("Task do backlog não encontrada")
 
     # Check for duplicate active/approved plan
-    active_plan = db.query(ExecutionPlan).filter(
-        ExecutionPlan.backlog_id == task.id,
-        ExecutionPlan.status.in_({"draft", "needs_revision", "approved"})
-    ).first()
+    active_plan = active_plan_for_task(db, task.id)
     if active_plan:
         raise HandoffError(
             f"Já existe um plano ativo ou aprovado para esta tarefa (status: {active_plan.status})"

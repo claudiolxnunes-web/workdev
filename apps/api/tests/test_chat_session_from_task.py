@@ -24,6 +24,7 @@ def _task(**overrides):
         priority="medium",
         sprint=None,
         type="feature",
+        status="todo",
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -64,7 +65,7 @@ class TaskContextTest(unittest.TestCase):
 class CreateSessionFromTaskTest(unittest.TestCase):
     def test_cria_sessao_plan_com_projeto_e_contexto_system(self):
         task_query = Mock()
-        task_query.filter.return_value.first.return_value = _task()
+        task_query.filter.return_value.with_for_update.return_value.first.return_value = _task()
         project_query = Mock()
         project_query.filter.return_value.first.return_value = _project()
         active_plan_query = Mock()
@@ -102,7 +103,7 @@ class CreateSessionFromTaskTest(unittest.TestCase):
 
     def test_reutiliza_sessao_existente_da_mesma_task(self):
         task_query = Mock()
-        task_query.filter.return_value.first.return_value = _task()
+        task_query.filter.return_value.with_for_update.return_value.first.return_value = _task()
         project_query = Mock()
         project_query.filter.return_value.first.return_value = _project()
         active_plan_query = Mock()
@@ -131,7 +132,7 @@ class CreateSessionFromTaskTest(unittest.TestCase):
 
     def test_rejeita_sessao_se_plano_ativo_existente(self):
         task_query = Mock()
-        task_query.filter.return_value.first.return_value = _task()
+        task_query.filter.return_value.with_for_update.return_value.first.return_value = _task()
         project_query = Mock()
         project_query.filter.return_value.first.return_value = _project()
         active_plan = SimpleNamespace(id=uuid4(), status="approved", version=1)
@@ -145,7 +146,7 @@ class CreateSessionFromTaskTest(unittest.TestCase):
                 SessionFromTask(task_id=TASK_ID), db
             )
 
-        self.assertEqual(error.exception.status_code, 400)
+        self.assertEqual(error.exception.status_code, 409)
         self.assertEqual(error.exception.detail["code"], "active_plan_exists")
         db.add.assert_not_called()
         db.commit.assert_not_called()
@@ -153,7 +154,7 @@ class CreateSessionFromTaskTest(unittest.TestCase):
 
     def test_task_inexistente_retorna_404_sem_escrita(self):
         db = Mock()
-        db.query.return_value.filter.return_value.first.return_value = None
+        db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = None
 
         with self.assertRaises(HTTPException) as error:
             chat_sessions.criar_sessao_da_task(

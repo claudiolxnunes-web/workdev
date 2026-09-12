@@ -299,9 +299,10 @@ async function read<T>(responsePromise: Promise<Response>): Promise<T> {
   return body as T
 }
 
-export async function getPlans(status?: PlanStatus): Promise<ExecutionPlan[]> {
+export async function getPlans(status?: PlanStatus, backlogId?: string): Promise<ExecutionPlan[]> {
   const query = new URLSearchParams({ limit: "100" })
   if (status) query.set("status", status)
+  if (backlogId) query.set('backlog_id', backlogId)
   return read(fetch(`/api/handoffs/plans?${query}`, { headers }))
 }
 

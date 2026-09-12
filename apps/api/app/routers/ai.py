@@ -385,7 +385,7 @@ TOOLS = [
 
 
 def executar_tool(nome: str, args: dict, db: Session,
-                  nivel: str = autoridade.NIVEL_PADRAO) -> str:
+                  nivel: str = autoridade.NIVEL_PADRAO, *, backlog_id=None) -> str:
     """Executa uma tool, respeitando a autoridade da conversa.
 
     Camada 2 do gate. `nivel` entra como argumento e nenhuma tool o recebe —
@@ -399,6 +399,11 @@ def executar_tool(nome: str, args: dict, db: Session,
              "autoridade_necessaria": erro.exigido, "executado": False},
             ensure_ascii=False,
         )
+    if backlog_id is not None and nome in {'previsualizar_plano_execucao', 'criar_plano_execucao'}:
+        if args.get('task_id') and str(args['task_id']) != str(backlog_id):
+            return json.dumps({'erro': 'O plano deve pertencer à task de origem desta conversa.',
+                'code': 'backlog_context_mismatch', 'executado': False}, ensure_ascii=False)
+        args = {**args, 'task_id': str(backlog_id)}
     return _executar_tool_sem_gate(nome, args, db)
 
 
@@ -710,8 +715,12 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
 
         task = None
         if args.get("task_id"):
+            try:
+                task_uuid = uuid.UUID(str(args["task_id"]))
+            except ValueError:
+                return json.dumps({"erro": "task_id inválido", "executado": False})
             task = db.query(BacklogItem).filter(
-                BacklogItem.id == args["task_id"]
+                BacklogItem.id == task_uuid
             ).first()
         elif args.get("titulo_task"):
             query = db.query(BacklogItem).filter(
@@ -857,7 +866,7 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
                    system: str | None = None,
                    nivel: str = autoridade.NIVEL_PADRAO,
                    max_output_tokens: int = 16000,
-                   reasoning_effort: str | None = None) -> ProviderResult:
+                   reasoning_effort: str | None = None, backlog_id=None) -> ProviderResult:
     client = get_anthropic()
     # Camada 1 do gate: o modelo só recebe o catálogo do seu nível.
     tools = autoridade.tools_para(nivel, TOOLS)
@@ -892,7 +901,7 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
         for block in resp.content:
             if block.type == "tool_use":
                 try:
-                    out = executar_tool(block.name, block.input, db, nivel)
+                    out = executar_tool(block.name, block.input, db, nivel, backlog_id=backlog_id)
                 except Exception as e:
                     db.rollback()
                     out = json.dumps({"erro": f"argumentos invalidos: "
@@ -926,7 +935,7 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
                 provider: str = "openai", system: str | None = None,
                 nivel: str = autoridade.NIVEL_PADRAO,
                 max_output_tokens: int = 4096,
-                reasoning_effort: str | None = None) -> ProviderResult:
+                reasoning_effort: str | None = None, backlog_id=None) -> ProviderResult:
     client = get_openai(provider)
     msgs = [{"role": "system", "content": system or SYSTEM}] + messages
     tools = tools_openai(nivel)
@@ -951,7 +960,7 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
         for tc in msg.tool_calls:
             args = json.loads(tc.function.arguments or "{}")
             try:
-                out = executar_tool(tc.function.name, args, db, nivel)
+                out = executar_tool(tc.function.name, args, db, nivel, backlog_id=backlog_id)
             except Exception as e:
                 db.rollback()
                 out = json.dumps({"erro": f"argumentos invalidos: "
@@ -1185,8 +1194,18 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     # chat do workspace sempre manda), o vínculo é gravado aqui — assim uma
     # conversa iniciada no workspace já volta com o projeto certo depois.
     slug_efetivo = req.project_slug
+    backlog_id = getattr(session, 'task_id', None) if session is not None else None
+    if not isinstance(backlog_id, (str, uuid.UUID)):
+        backlog_id = None
     if session is not None:
-        if req.project_slug:
+        if backlog_id is not None:
+            projeto = db.query(Project).filter(Project.id == session.project_id).first()
+            if projeto is None:
+                raise HTTPException(409, 'Projeto da task não encontrado')
+            if req.project_slug and req.project_slug != projeto.slug:
+                raise HTTPException(409, 'O projeto da conversa deve corresponder à task de origem')
+            slug_efetivo = projeto.slug
+        elif req.project_slug:
             projeto = db.query(Project).filter(
                 Project.slug == req.project_slug).first()
             if projeto is not None and session.project_id != projeto.id:
@@ -1285,11 +1304,13 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
                 messages, db, selected_model, provider, system=system,
                 nivel=nivel, max_output_tokens=max_output,
                 reasoning_effort=effort,
+                **({'backlog_id': backlog_id} if backlog_id is not None else {}),
             )
         else:
             raw_result = chat_anthropic(
                 messages, db, selected_model, system=system, nivel=nivel,
                 max_output_tokens=max_output, reasoning_effort=effort,
+                **({'backlog_id': backlog_id} if backlog_id is not None else {}),
             )
         result = _provider_result(raw_result)
         reply = result.text
@@ -1341,6 +1362,7 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     # `project_slug` é eco do contexto realmente aplicado, não do que veio no
     # pedido: quando o cliente omite e a sessão já tem projeto, os dois diferem.
     return {"reply": reply, "provider": provider, "model": selected_model,
+            "backlog_id": str(backlog_id) if backlog_id is not None else None,
             "reasoning_effort": effort,
             "selection_reason": "modelo solicitado pelo cliente ou configuração atual",
             "cost_category": policy.category,

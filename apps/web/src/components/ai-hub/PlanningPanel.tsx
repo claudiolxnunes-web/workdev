@@ -187,7 +187,7 @@ function RecommendationCard({
   )
 }
 
-export function PlanningPanel({ onClose }: { onClose: () => void }) {
+export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; backlogId?: string | null }) {
   const [plans, setPlans] = useState<ExecutionPlan[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -225,10 +225,14 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
   }
 
   const load = useCallback(async () => {
-    try { setPlans(await getPlans(filter === "discarded" ? "discarded" : undefined)); setError("") }
+    try {
+      const status = filter === 'discarded' ? 'discarded' : undefined
+      setPlans(await (backlogId ? getPlans(status, backlogId) : getPlans(status)))
+      setError('')
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Erro ao carregar planos") }
     finally { setLoading(false) }
-  }, [filter])
+  }, [filter, backlogId])
 
   useEffect(() => {
     // load() é reaproveitado por 3 gatilhos (mount, evento realtime, timer)

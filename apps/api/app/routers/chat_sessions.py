@@ -11,6 +11,7 @@ from app.models.project import Project
 from app.models.subtask import BacklogSubtask
 from app.schemas.chat import SessionFromTask, SessionUpdate
 from app.services import autoridade, chat_audit
+from app.services.handoff import active_plan_for_task, PLANNING_TASK_STATUSES
 
 router = APIRouter()
 
@@ -32,6 +33,7 @@ def sessao_out(sessao: ChatSession, projeto: Project | None = None) -> dict:
         "project_slug": projeto.slug if projeto else None,
         "project_name": projeto.name if projeto else None,
         "authority": autoridade.normalizar(sessao.authority),
+        "backlog_id": str(sessao.task_id) if getattr(sessao, 'task_id', None) else None,
         "created_at": str(sessao.created_at),
         "updated_at": str(sessao.updated_at),
     }
@@ -49,7 +51,11 @@ def _projetos_das_sessoes(db: Session, sessoes: list[ChatSession]) -> dict:
 
 
 def _get_sessao(db: Session, session_id: str) -> ChatSession:
-    sessao = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    try:
+        session_uuid = UUID(str(session_id))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada")
+    sessao = db.query(ChatSession).filter(ChatSession.id == session_uuid).first()
     if not sessao:
         raise HTTPException(status_code=404, detail="Sessão não encontrada")
     return sessao
@@ -100,13 +106,33 @@ def _task_context(
     return "\n".join(lines)
 
 
+def planning_eligibility(db: Session, task) -> dict:
+    if task.status not in PLANNING_TASK_STATUSES:
+        return {'eligible': False, 'code': 'task_not_eligible',
+            'message': 'Somente tarefas abertas podem ser enviadas ao AI Hub.'}
+    active = active_plan_for_task(db, task.id)
+    if active:
+        return {'eligible': False, 'code': 'active_plan_exists',
+            'message': f'Já existe um plano {active.status} para esta tarefa (versão {active.version}).',
+            'plan_id': str(active.id), 'plan_status': active.status}
+    return {'eligible': True, 'code': None, 'message': None}
+
+
+@router.get('/chat/sessions/from-task/{task_id}/eligibility')
+def task_planning_eligibility(task_id: UUID, db: Session = Depends(get_db)):
+    task = db.query(BacklogItem).filter(BacklogItem.id == task_id).first()
+    if not task:
+        raise HTTPException(404, 'Task não encontrada')
+    return {'backlog_id': str(task.id), **planning_eligibility(db, task)}
+
+
 @router.post("/chat/sessions/from-task", status_code=201)
 def criar_sessao_da_task(
     payload: SessionFromTask, db: Session = Depends(get_db)
 ):
     task = db.query(BacklogItem).filter(
         BacklogItem.id == payload.task_id
-    ).first()
+    ).with_for_update().first()
     if not task:
         raise HTTPException(status_code=404, detail="Task não encontrada")
 
@@ -114,22 +140,9 @@ def criar_sessao_da_task(
     if not project:
         raise HTTPException(status_code=409, detail="Projeto da task não encontrado")
 
-    # Check if there is already an active or approved plan for this task
-    from app.models.handoff import ExecutionPlan
-    active_plan = db.query(ExecutionPlan).filter(
-        ExecutionPlan.backlog_id == task.id,
-        ExecutionPlan.status.in_({"draft", "needs_revision", "approved"})
-    ).first()
-    if active_plan:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "active_plan_exists",
-                "message": f"Já existe um plano {active_plan.status} para esta tarefa (versão {active_plan.version}).",
-                "plan_id": str(active_plan.id),
-                "plan_status": active_plan.status,
-            }
-        )
+    eligibility = planning_eligibility(db, task)
+    if not eligibility['eligible']:
+        raise HTTPException(status_code=409, detail=eligibility)
 
     existing_session = db.query(ChatSession).filter(ChatSession.task_id == task.id).first()
     if existing_session:
@@ -137,6 +150,7 @@ def criar_sessao_da_task(
             **sessao_out(existing_session, project),
             "task_id": str(task.id),
             "task_title": task.title,
+            "backlog_id": str(task.id),
         }
 
 
@@ -172,6 +186,7 @@ def criar_sessao_da_task(
         **sessao_out(session, project),
         "task_id": str(task.id),
         "task_title": task.title,
+        "backlog_id": str(task.id),
     }
 
 
@@ -243,6 +258,8 @@ def atualizar_contexto(
     )
 
     if "project_id" in dados:
+        if getattr(sessao, 'task_id', None) and dados['project_id'] != sessao.project_id:
+            raise HTTPException(409, 'Conversa vinculada a uma task: abra outra conversa para trocar de projeto.')
         anterior = projeto.slug if projeto else None
         if dados["project_id"] is not None:
             projeto = (

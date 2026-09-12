@@ -86,6 +86,20 @@ export interface TaskPlanningSession {
   task_id: string;
   task_title: string;
   project_slug: string;
+  backlog_id: string;
+}
+
+export interface TaskPlanningEligibility {
+  backlog_id: string;
+  eligible: boolean;
+  message: string | null;
+  code: string | null;
+}
+
+export async function getTaskPlanningEligibility(taskId: string): Promise<TaskPlanningEligibility> {
+  const response = await fetch(`/api/chat/sessions/from-task/${encodeURIComponent(taskId)}/eligibility`, { headers });
+  if (!response.ok) throw new Error('Não foi possível verificar o planejamento desta task.');
+  return response.json();
 }
 
 export async function createTaskPlanningSession(
@@ -93,7 +107,7 @@ export async function createTaskPlanningSession(
 ): Promise<TaskPlanningSession> {
   const response = await fetch("/api/chat/sessions/from-task", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ task_id: taskId }),
   });
   if (!response.ok) {

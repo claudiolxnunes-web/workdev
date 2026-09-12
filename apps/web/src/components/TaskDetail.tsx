@@ -3,9 +3,10 @@ import { useNavigate } from "react-router-dom";
 import {
   createTaskPlanningSession,
   getSubtasks,
+  getTaskPlanningEligibility,
   updateSubtask,
 } from "../services/backlog.service";
-import type { BacklogItem, Subtask } from "../services/backlog.service";
+import type { BacklogItem, Subtask, TaskPlanningEligibility } from "../services/backlog.service";
 
 interface Props {
   item: BacklogItem | null;
@@ -13,13 +14,18 @@ interface Props {
   onAdvance: (item: BacklogItem) => void;
 }
 
-export default function TaskDetail({ item, onClose, onAdvance }: Props) {
+export default function TaskDetail(props: Props) {
+  return props.item ? <TaskDetailContent key={props.item.id} {...props} item={props.item} /> : null;
+}
+
+function TaskDetailContent({ item, onClose, onAdvance }: Props & { item: BacklogItem }) {
   const navigate = useNavigate();
   const [subs, setSubs] = useState<Subtask[]>([]);
   const [loading, setLoading] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [planningError, setPlanningError] = useState("");
   const planningRef = useRef(false);
+  const [eligibility, setEligibility] = useState<TaskPlanningEligibility | null>(null);
 
   useEffect(() => {
     if (item) {
@@ -30,6 +36,16 @@ export default function TaskDetail({ item, onClose, onAdvance }: Props) {
         .finally(() => setLoading(false));
     }
   }, [item]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (["todo", "doing", "blocked"].includes(item.status)) {
+      getTaskPlanningEligibility(item.id)
+        .then(value => { if (!cancelled) setEligibility(value) })
+        .catch(error => { if (!cancelled) setPlanningError(error.message) });
+    }
+    return () => { cancelled = true };
+  }, [item.id, item.status]);
 
   if (!item) return null;
 
@@ -82,13 +98,14 @@ export default function TaskDetail({ item, onClose, onAdvance }: Props) {
           )}
         </div>
 
-        <button
+        {["todo", "doing", "blocked"].includes(item.status) && eligibility?.eligible && <button
           onClick={planInAIHub}
           disabled={planning}
           className="mb-4 w-full rounded-lg bg-violet-600 px-4 py-2.5 font-medium transition-colors hover:bg-violet-700 disabled:cursor-wait disabled:opacity-60"
         >
           {planning ? "Enviando ao AI Hub…" : "Enviar ao AI Hub"}
-        </button>
+        </button>}
+        {eligibility && !eligibility.eligible && <p className="mb-4 text-sm text-slate-400">{eligibility.message}</p>}
         {planningError && (
           <p role="alert" className="mb-4 text-sm text-red-400">{planningError}</p>
         )}

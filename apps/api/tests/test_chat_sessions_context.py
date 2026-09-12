@@ -19,7 +19,7 @@ UUID_VALIDO = UUID("11111111-1111-1111-1111-111111111111")
 
 def _sessao(**kwargs):
     padroes = dict(
-        id="sess-1", title="Conversa", project_id=None, authority="plan",
+        id="11111111-1111-1111-1111-111111111112", title="Conversa", project_id=None, authority="plan",
         created_at="2026-08-16 22:00:00", updated_at="2026-08-16 22:10:00",
     )
     padroes.update(kwargs)
@@ -50,7 +50,7 @@ class SessaoOutTest(unittest.TestCase):
     def test_forma_da_sessao_e_estavel(self):
         """Listar e abrir precisam devolver as mesmas chaves."""
         esperadas = {"id", "title", "project_id", "project_slug",
-                     "project_name", "authority", "created_at", "updated_at"}
+                     "project_name", "authority", "created_at", "updated_at", "backlog_id"}
 
         self.assertEqual(set(cs.sessao_out(_sessao())), esperadas)
 
@@ -80,7 +80,7 @@ class AtualizarContextoTest(unittest.TestCase):
         db = self._db_com(sessao, projeto)
         payload = SessionUpdate.model_validate({"project_id": str(UUID_VALIDO)})
 
-        saida = cs.atualizar_contexto("sess-1", payload, db)
+        saida = cs.atualizar_contexto("11111111-1111-1111-1111-111111111112", payload, db)
 
         self.assertEqual(sessao.project_id, UUID_VALIDO)
         self.assertEqual(saida["project_slug"], "feed-bpf")
@@ -92,7 +92,7 @@ class AtualizarContextoTest(unittest.TestCase):
         db = self._db_com(sessao, _projeto())
 
         payload = SessionUpdate.model_validate({"project_id": None})
-        saida = cs.atualizar_contexto("sess-1", payload, db)
+        saida = cs.atualizar_contexto("11111111-1111-1111-1111-111111111112", payload, db)
 
         self.assertIsNone(sessao.project_id)
         self.assertIsNone(saida["project_slug"])
@@ -104,7 +104,7 @@ class AtualizarContextoTest(unittest.TestCase):
             {"project_id": "11111111-1111-1111-1111-111111111111"})
 
         with self.assertRaises(HTTPException) as erro:
-            cs.atualizar_contexto("sess-1", payload, db)
+            cs.atualizar_contexto("11111111-1111-1111-1111-111111111112", payload, db)
 
         self.assertEqual(erro.exception.status_code, 422)
         db.commit.assert_not_called()
@@ -125,7 +125,7 @@ class AtualizarContextoTest(unittest.TestCase):
         db.query.return_value.filter.return_value.first.return_value = _sessao()
 
         with self.assertRaises(HTTPException) as erro:
-            cs.atualizar_contexto("sess-1", SessionUpdate(), db)
+            cs.atualizar_contexto("11111111-1111-1111-1111-111111111112", SessionUpdate(), db)
 
         self.assertEqual(erro.exception.status_code, 422)
         db.commit.assert_not_called()

@@ -20,7 +20,7 @@ from app.services import autoridade as aut
 
 
 def _sessao(authority="observe", **kwargs):
-    padroes = dict(id="sess-1", title="Conversa", project_id=None,
+    padroes = dict(id="11111111-1111-1111-1111-111111111112", title="Conversa", project_id=None,
                    authority=authority,
                    created_at="2026-08-17 00:00:00",
                    updated_at="2026-08-17 00:00:00")
@@ -47,7 +47,7 @@ def _chamar(payload_authority, sessao):
     capturado = _Capturado()
     req = ChatRequest(
         messages=[{"role": "user", "content": "cria uma task"}],
-        session_id="sess-1",
+        session_id="11111111-1111-1111-1111-111111111112",
         authority=payload_authority,
         provider="anthropic",
         model="claude-haiku-4-5",
@@ -152,7 +152,7 @@ class SomentePatchAlteraTest(unittest.TestCase):
         db.query.return_value.filter.return_value.first.return_value = sessao
         with patch.object(cs.chat_audit, "registrar_troca_autoridade") as reg:
             saida = cs.atualizar_contexto(
-                "sess-1", SessionUpdate.model_validate({"authority": "plan"}), db
+                "11111111-1111-1111-1111-111111111112", SessionUpdate.model_validate({"authority": "plan"}), db
             )
 
         self.assertEqual(sessao.authority, "plan")

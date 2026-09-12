@@ -78,6 +78,7 @@ export default function AIHub() {
   const [loading, setLoading] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [showPlans, setShowPlans] = useState(false);
+  const [backlogId, setBacklogId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const autostartedRef = useRef(false);
@@ -117,6 +118,7 @@ export default function AIHub() {
       // e esse vem do backend.
       setDividers([]);
       setProjectSlug(data.project_slug ?? null);
+      setBacklogId(data.backlog_id ?? null);
       setAuthority(data.authority ?? AUTORIDADE_PADRAO);
       setSessionId(id);
       localStorage.setItem("workdev_chat_session", id);
@@ -164,6 +166,7 @@ export default function AIHub() {
     setMessages([]);
     setDividers([]);
     setSessionId(null);
+    setBacklogId(null);
     setAuthority(AUTORIDADE_PADRAO);
     localStorage.removeItem("workdev_chat_session");
     // O projeto ativo permanece: quem está trabalhando no Feed_BPF e abre uma
@@ -327,7 +330,7 @@ export default function AIHub() {
           <ProjectSelector
             value={projectSlug}
             onChange={trocarProjeto}
-            disabled={loading}
+            disabled={loading || !!backlogId}
           />
           <AuthoritySelector
             value={authority}
@@ -403,7 +406,7 @@ export default function AIHub() {
           </button>
         </div>
       </div>
-      {showPlans && <PlanningPanel onClose={() => setShowPlans(false)} />}
+      {showPlans && <PlanningPanel key={backlogId ?? 'all'} backlogId={backlogId} onClose={() => setShowPlans(false)} />}
     </div>
   );
 }

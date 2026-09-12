@@ -49,5 +49,6 @@ class SessionOut(BaseModel):
     project_slug: str | None = None
     project_name: str | None = None
     authority: str
+    backlog_id: str | None = None
     created_at: str
     updated_at: str

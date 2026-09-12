@@ -145,6 +145,11 @@ describe("PlanningPanel", () => {
     getAgentRuntimes.mockResolvedValue([])
   })
 
+  it("filtra os planos pela task vinculada à conversa", async () => {
+    render(<MemoryRouter><PlanningPanel backlogId="task-origin" onClose={vi.fn()} /></MemoryRouter>)
+    await waitFor(() => expect(getPlans).toHaveBeenCalledWith(undefined, "task-origin"))
+  })
+
   it("edita título e objetivo apenas no plano draft", async () => {
     renderPanel()
     fireEvent.click(await screen.findByRole("button", { name: "Editar" }))

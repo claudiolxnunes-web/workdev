@@ -6,11 +6,13 @@ import TaskDetail from "./TaskDetail";
 import {
   createTaskPlanningSession,
   getSubtasks,
+  getTaskPlanningEligibility,
 } from "../services/backlog.service";
 
 vi.mock("../services/backlog.service", () => ({
   createTaskPlanningSession: vi.fn(),
   getSubtasks: vi.fn(),
+  getTaskPlanningEligibility: vi.fn(),
   updateSubtask: vi.fn(),
 }));
 
@@ -26,10 +28,13 @@ const item = {
 
 describe("TaskDetail: planejamento no AI Hub", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getTaskPlanningEligibility).mockResolvedValue({ backlog_id: item.id, eligible: true, code: null, message: null });
     vi.mocked(getSubtasks).mockResolvedValue([]);
     vi.mocked(createTaskPlanningSession).mockResolvedValue({
       id: "33333333-3333-3333-3333-333333333333",
       task_id: item.id,
+      backlog_id: item.id,
       task_title: item.title,
       project_slug: "workdev-core",
     });
@@ -55,7 +60,7 @@ describe("TaskDetail: planejamento no AI Hub", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Enviar ao AI Hub" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Enviar ao AI Hub" }));
     fireEvent.click(screen.getByRole("button", { name: "Enviando ao AI Hub…" }));
 
     await waitFor(() => {
@@ -76,11 +81,32 @@ describe("TaskDetail: planejamento no AI Hub", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Enviar ao AI Hub" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Enviar ao AI Hub" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Não foi possível enviar a task ao AI Hub.",
     );
     expect(screen.getByText(item.title)).toBeInTheDocument();
+  });
+
+  it.each(['done', 'cancelled'])('não oferece planejamento para status %s', async (status) => {
+    render(<MemoryRouter><TaskDetail item={{ ...item, status }} onClose={vi.fn()} onAdvance={vi.fn()} /></MemoryRouter>);
+    expect(screen.queryByRole('button', { name: 'Enviar ao AI Hub' })).not.toBeInTheDocument();
+    expect(getTaskPlanningEligibility).not.toHaveBeenCalled();
+    expect(createTaskPlanningSession).not.toHaveBeenCalled();
+  });
+
+  it('não oferece novo envio quando já existe plano ativo', async () => {
+    vi.mocked(getTaskPlanningEligibility).mockResolvedValueOnce({ backlog_id: item.id, eligible: false, code: 'active_plan_exists', message: 'Já existe um plano aprovado.' });
+    render(<MemoryRouter><TaskDetail item={item} onClose={vi.fn()} onAdvance={vi.fn()} /></MemoryRouter>);
+    await screen.findByText('Já existe um plano aprovado.');
+    expect(screen.queryByRole('button', { name: 'Enviar ao AI Hub' })).not.toBeInTheDocument();
+  });
+
+  it('mostra conflito de duplicidade criado depois da checagem inicial', async () => {
+    vi.mocked(createTaskPlanningSession).mockRejectedValueOnce(new Error('Já existe um plano draft.'));
+    render(<MemoryRouter><TaskDetail item={item} onClose={vi.fn()} onAdvance={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Enviar ao AI Hub' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Já existe um plano draft.');
   });
 });

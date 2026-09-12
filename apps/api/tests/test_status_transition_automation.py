@@ -68,7 +68,8 @@ class StatusTransitionAutomationTest(unittest.TestCase):
         # Mock query return values:
         # First query: finds task
         # Second query: finds active_plan
-        db.query.return_value.filter.return_value.first.side_effect = [task, active_plan]
+        db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = task
+        db.query.return_value.filter.return_value.first.return_value = active_plan
 
         with self.assertRaisesRegex(HandoffError, "Já existe um plano ativo ou aprovado"):
             create_plan(db, {"backlog_id": backlog_id})
