@@ -157,6 +157,53 @@ class TerminalSessionManager:
             raise TerminalSessionError('Write limited to 4096 bytes')
         return self._request(item, 'write', text=text)['written']
 
+    def resize(self, run_id, rows, cols):
+        item = self.health(run_id)
+        if item.state != 'RUNNING':
+            raise TerminalSessionError(f'Terminal is {item.state}')
+        try:
+            rows, cols = int(rows), int(cols)
+        except (TypeError, ValueError):
+            raise TerminalSessionError('Invalid terminal size')
+        return self._request(item, 'resize', rows=rows, cols=cols)
+
+    def attach(self, run_id):
+        """Open a streaming connection to the live PTY.
+
+        Returns a non-blocking Unix socket owned by the caller. The worker
+        sends a JSON ack line with the retained output buffer (base64), then
+        one JSON line per PTY chunk. Closing the socket detaches only — the
+        PTY itself keeps running.
+        """
+        item = self.health(run_id)
+        if item.state != 'RUNNING':
+            raise TerminalSessionError(f'Terminal is {item.state}')
+        path = self.root / f'{item.id}.sock'
+        if str(path) != item.socket_path:
+            raise TerminalSessionError('Terminal directory differs from persisted session')
+        conn = socket.socket(socket.AF_UNIX)
+        try:
+            conn.settimeout(5)
+            conn.connect(str(path))
+            conn.sendall(json.dumps(dict(id=str(item.id), op='attach')).encode() + b'\n')
+            ack = bytearray()
+            while b'\n' not in ack and len(ack) < 524288:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                ack.extend(chunk)
+            line, _, rest = bytes(ack).partition(b'\n')
+            response = json.loads(line)
+            if response.get('error'):
+                raise TerminalSessionError(response['error'])
+            if response.get('id') != str(item.id):
+                raise TerminalSessionError('Session identity mismatch')
+            conn.setblocking(False)
+            return conn, response, rest
+        except Exception:
+            conn.close()
+            raise
+
     def close(self, run_id):
         item = self.health(run_id)
         if item.state == 'CLOSED':

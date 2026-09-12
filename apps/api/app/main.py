@@ -15,6 +15,7 @@ from app.routers.engineering import router as engineering_router
 from app.routers.deployments import router as deployments_router
 from app.routers.auth import router as auth_router
 from app.routers.terminal import router as terminal_router
+from app.routers.run_terminal import router as run_terminal_router
 from app.routers.monitoring import router as monitoring_router
 from app.routers.repository import router as repository_router
 from app.routers.database import router as database_router
@@ -76,6 +77,7 @@ app.include_router(settings_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(busca_web_router, prefix="/api")
 app.include_router(terminal_router)
+app.include_router(run_terminal_router)
 app.include_router(metrics_router, prefix="/api")
 
 
