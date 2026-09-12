@@ -11,6 +11,7 @@ from app.models.adr import ADR
 from app.models.backlog import BacklogItem
 from app.models.decision import Decision
 from app.services.feedback_classifier import classify_review_feedback
+from app.services.training_feedback_export import export_validated_training_feedback
 from app.models.handoff import (
     AgentRun,
     AgentRunEvent,
@@ -1014,6 +1015,24 @@ def record_review(
         )
 
     db.refresh(review)
+
+    # O banco é a fonte canônica. O dataset JSONL é derivado:
+    # falha de exportação nunca pode invalidar uma revisão já persistida.
+    if verdict == "approved" and gate_passed is True:
+        try:
+            export_validated_training_feedback(db)
+        except Exception as error:
+            add_run_event(
+                db,
+                run,
+                "training_feedback.export_failed",
+                f"Falha ao atualizar dataset de treino: {type(error).__name__}",
+                {
+                    "review_id": str(review.id),
+                    "error_type": type(error).__name__,
+                },
+            )
+            db.commit()
 
     return run, review
 
