@@ -18,6 +18,7 @@ from app.auth import websocket_is_authenticated
 from app.database import SessionLocal
 from app.models.handoff import AgentRun
 from app.services import agent_lifecycle, agent_snapshot, agent_runtimes
+from app.services.agent_activity import approval_lines
 from app.services.terminal_transcript import clean_terminal_text, read_transcript
 
 
@@ -316,10 +317,8 @@ def start_agent_runtime(
             model,
         )
 
-    started = _start_standby_session(
-        agent,
-        session,
-    )
+    started = (_start_standby_session(agent, session) if run_id else
+        agent_lifecycle.start(agent, session, STANDBY_COMMANDS[agent])['started'])
 
     deadline = time.monotonic() + timeout_seconds
 
@@ -373,10 +372,11 @@ def finalize_auto_runtime(agent: str, run_id) -> dict:
     auto_session = _auto_session(agent, run_id)
     stopped = _stop_standby_session(auto_session)
     standby_session = _standby_session(agent)
-    standby_started = _start_standby_session(agent, standby_session)
+    restoration = agent_lifecycle.try_recover(agent, standby_session, STANDBY_COMMANDS[agent])
+    standby_started = bool(restoration and restoration['started'])
     process = _current_process(standby_session)
-    if not process or process in _SHELL_PROCESSES:
-        raise RuntimeError(f"{agent}: não retornou ao standby")
+    # A deliberate disconnect or concurrent lifecycle operation takes precedence.
+    # Readiness and eventual errors are published by the central healthcheck.
     return {
         "session": auto_session,
         "stopped": stopped,
@@ -516,33 +516,16 @@ async def agent_lifecycle_state(agent: str):
 
 @router.post("/api/agents/{agent}/session")
 async def start_agent_session(agent: str):
-    session = _standby_session(agent)
-    try:
-        started = await asyncio.to_thread(_start_standby_session, agent, session)
-    except (RuntimeError, subprocess.TimeoutExpired) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    return {"agent": agent, "running": True, "started": started}
+    _standby_session(agent)
+    result = await start_agent_lifecycle(agent)
+    return {'agent': agent, 'running': result['state']['agent_process_running'], 'started': result['started']}
 
 
 @router.delete("/api/agents/{agent}/session")
 async def stop_agent_session(agent: str, confirm: bool = Query(default=False)):
-    session = _standby_session(agent)
-    if not confirm:
-        raise HTTPException(
-            status_code=409,
-            detail="Encerramento recusado: use confirm=true após verificar tarefas ativas",
-        )
-    active = await asyncio.to_thread(_load_run_states)
-    if active.get(agent) in {"queued", "running", "blocked", "review"}:
-        raise HTTPException(
-            status_code=409,
-            detail="Encerramento recusado: o agente possui execução ativa",
-        )
-    try:
-        stopped = await asyncio.to_thread(_stop_standby_session, session)
-    except (RuntimeError, subprocess.TimeoutExpired) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    return {"agent": agent, "running": False, "stopped": stopped}
+    _standby_session(agent)
+    result = await stop_agent_lifecycle(agent, confirm=confirm)
+    return {'agent': agent, 'running': not result['state']['offline'], 'stopped': result['stopped']}
 
 
 # Heurística, não parsing exato por CLI: cada agente (Claude/Codex/Kimi/Qwen)
@@ -550,21 +533,6 @@ async def stop_agent_session(agent: str, confirm: bool = Query(default=False)):
 # forma segura de descobrir os formatos exatos sem interromper uma sessão
 # real. Checa só as últimas linhas não vazias para reduzir falso positivo
 # vindo de texto de saída antigo que já rolou pra fora da tela.
-_APPROVAL_PATTERNS = [
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in [
-        r"\(y/n\)", r"\[y/n\]", r"\by/n\b",
-        r"do you want to proceed", r"do you approve",
-        r"allow (?:this )?(?:execution|action|command|tool)",
-        r"approve\?", r"proceed\?", r"confirm\?",
-        r"allow once", r"allow for this session",
-        r"permission required", r"requires? (?:your )?approval",
-        r"would you like to (?:run|execute|proceed)",
-        r"deseja continuar", r"aprovar\s*\?", r"confirmar\s*\?",
-        r"❯\s*1\.\s*(yes|sim)", r"press enter to continue",
-    ]
-]
-
 _USER_PROMPT_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in [
@@ -580,32 +548,13 @@ _ERROR_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in [r"fatal error", r"unhandled exception", r"process exited", r"encerrou com código [1-9]"]
 ]
-_RESUMED_PATTERN = re.compile(
-    r"(?:aplicando|continuando|executing|running command|conclu[ií]do|completed|finished)",
-    re.IGNORECASE,
-)
-
-
 def _approval_state(session: str) -> tuple[bool, str | None]:
     try:
         tail = _capture_history(session, 60)
     except RuntimeError:
         return False, None
-    non_empty = [line for line in tail.splitlines() if line.strip()]
-    recent_lines = non_empty[-20:]
-    recent = "\n".join(recent_lines)
-    matches = [
-        index
-        for index, line in enumerate(recent_lines)
-        if any(pattern.search(line) for pattern in _APPROVAL_PATTERNS)
-    ]
-    if not matches:
-        return False, None
-    last_match = matches[-1]
-    if _RESUMED_PATTERN.search("\n".join(recent_lines[last_match + 1:])):
-        return False, None
-    prompt = clean_terminal_text("\n".join(recent_lines[max(0, last_match - 2):]))
-    return True, prompt or None
+    lines = approval_lines(tail)
+    return bool(lines), clean_terminal_text('\n'.join(lines)) or None
 
 
 def _awaiting_approval(session: str) -> bool:

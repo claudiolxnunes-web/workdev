@@ -46,3 +46,26 @@ Os reinícios são de processos FastAPI isolados usando ASGI/TestClient; não ho
 Implementação preparada na branch `task/72d5846f-agent-runtime-state`. O gate formal será vinculado ao commit e seu resultado registrado nos eventos da execução. Não houve push, deploy ou instalação de units nesta execução. Os fontes do serviço usam o Python do venv; o timer existente foi ajustado de cinco minutos para cinco segundos (AccuracySec=1s). A instalação/ativação desse timer e a atualização coordenada do coletor/API/UI devem integrar a implantação revisada. Manter o timer antigo com o novo contrato produziria ERROR por expiração de 45 segundos; snapshots v1 também são tratados como ERROR até a primeira coleta v2.
 
 A conclusão e o veredito pertencem ao revisor independente Claude.
+
+## Correções da revisão independente fe9e5e0e
+
+A primeira revisão de Claude rejeitou duas regressões. A autorrecuperação agora consulta `desired` sob o mesmo lock do lifecycle: `ONLINE` concluído permite novas recuperações, enquanto `OFFLINE` explícito impede recuperação. O lock da recuperação é não bloqueante; a coleta não fica na fila atrás de start/stop da API.
+
+`finalize_auto_runtime` usa a recuperação do lifecycle e respeita a desconexão explícita. As rotas legadas POST/DELETE `/session` delegam aos mesmos endpoints de lifecycle de Conectar/Desconectar, atualizando a intenção durável.
+
+A detecção de aprovação foi centralizada em `agent_activity.py`, preservando os padrões anteriores, 20 linhas não vazias e o guarda de retomada. O status não transporta texto de comandos: o aviso da UI orienta o usuário a conferir as opções no terminal, sem painel de prompt duplicado. Apenas Claude/Codex fora de uma sessão AUTO são classificados como persistentes; os outros agentes são sob demanda. GPU sem configuração continua identificada como `unconfigured` no contrato de catálogo.
+
+O healthcheck volta a sair com código 1 quando um always-on termina OFFLINE/ERROR. Os novos testes estão em `test_agent_review_regressions.py`, incluindo recuperações sucessivas, desconexão seguida de finalização AUTO e reconexão pela rota legada, lock ocupado, padrões de aprovação, retomada, exit code e persistência.
+
+## Procedimento de ativação para o operador após revisão
+
+Não executar estes passos como parte do BUILD. O broker de deploy não instala units. A promoção deve incluir o coletor, suas units e API/UI compatíveis:
+
+1. Confirmar a revisão do commit e preparar a implantação assinada conforme `CLAUDE.md`.
+2. Instalar como operador/root os fontes revisados `scripts/workdev-agents-health.service` e `scripts/workdev-agents-health.timer` nos arquivos correspondentes de `/etc/systemd/system/`. O serviço usa o venv da API e continua sendo o único coletor periódico.
+3. Executar `systemctl daemon-reload`, reiniciar **somente** `workdev-agents-health.timer` e executar uma coleta com `systemctl start workdev-agents-health.service`. Não reiniciar `workdev-agents.service`.
+4. Conferir a unit/timer instalados com `systemctl cat`, o resultado da coleta com `systemctl status` e o `status.json` v2 com timestamps novos. A cadência deve ser 5s, não os 5min anteriores.
+5. Promover API/UI pelo fluxo `prepare` → `approve` → `deploy.sh <proof_id>`, usando o mesmo build revisado, e verificar o endpoint de status na release promovida.
+6. Se houver rollback, restaurar coletor/timer e release como um conjunto compatível. Não deixar a API v2 com o timer de 5min.
+
+Esses passos não foram executados neste BUILD.

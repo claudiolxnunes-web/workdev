@@ -13,6 +13,13 @@ import tempfile
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
+PERSISTENT_AGENTS = frozenset({'claude', 'codex'})
+
+
+def is_persistent(agent: str, session: str | None) -> bool:
+    return agent in PERSISTENT_AGENTS and bool(session) and not session.startswith('auto-')
+
+
 class RuntimeState(str, Enum):
     OFFLINE = 'OFFLINE'
     STARTING = 'STARTING'
@@ -49,10 +56,10 @@ def state_file() -> Path:
 
 
 @contextmanager
-def file_lock(path: Path):
+def file_lock(path: Path, *, blocking: bool = True):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a') as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         try:
             yield
         finally:
@@ -168,5 +175,5 @@ def from_physical(agent: str, state, *, activity='IDLE', reason=None, checked_at
     return AgentSnapshot(agent=agent, runtime_state=runtime,
         activity_state=activity if runtime == 'ONLINE' else 'IDLE',
         checked_at=checked_at or now(), reason=reason,
-        persistent=state.session is not None, process=state.current_process or '',
+        persistent=is_persistent(agent, state.session), process=state.current_process or '',
         active_run_id=(state.active_work or {}).get('run_id'), lifecycle=state.as_dict())

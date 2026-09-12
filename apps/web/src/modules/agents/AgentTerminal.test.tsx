@@ -73,9 +73,9 @@ describe("AgentTerminal", () => {
   })
 
   it("makes approval unmistakable and removes ambiguous numeric shortcuts", () => {
-    render(<AgentTerminal agent="claude" awaitingApproval operationalStatus="awaiting_approval" approvalPrompt="Allow execution?\n1. Yes\n2. No" />)
+    render(<AgentTerminal agent="claude" awaitingApproval operationalStatus="awaiting_approval" />)
     expect(screen.getAllByText("AGUARDANDO APROVAÇÃO").length).toBeGreaterThan(0)
-    expect(screen.getByRole("alert")).toHaveTextContent("Allow execution?")
+    expect(screen.getByRole("alert")).toHaveTextContent("Confira as opções no terminal")
     expect(screen.queryByRole("button", { name: "1" })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "2" })).not.toBeInTheDocument()
   })

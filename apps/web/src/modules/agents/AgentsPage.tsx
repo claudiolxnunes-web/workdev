@@ -36,7 +36,7 @@ const RUNTIME_POLL_MS = 10000
 
 type HealthStatus = "idle" | "busy" | "blocked" | "offline" | "degraded"
 type AgentHealth = { runtime_state?: RuntimeState; activity_state?: ActivityState; persistent?: boolean; health: HealthStatus; health_reason?: string | null; checked_at?: string | null }
-type AgentOperation = { status: OperationalStatus; approvalPrompt?: string | null }
+type AgentOperation = { status: OperationalStatus }
 
 const OPERATION_LABEL: Record<OperationalStatus, string> = {
   standby: "STANDBY", executing: "EXECUTANDO", awaiting_approval: "AGUARDANDO APROVAÇÃO",
@@ -107,7 +107,6 @@ export default function AgentsPage() {
           nextHealth[name] = { ...item, runtime_state: item.runtime_state ?? "ERROR", activity_state: item.activity_state ?? "IDLE" }
           nextOperations[name] = {
             status: item.operational_status as OperationalStatus,
-            approvalPrompt: typeof item.approval_prompt === "string" ? item.approval_prompt : null,
           }
         }
         setAwaitingApproval(next)
@@ -254,7 +253,6 @@ export default function AgentsPage() {
               agent={agent}
               awaitingApproval={Boolean(awaitingApproval[agent])}
               operationalStatus={operations[agent]?.status}
-              approvalPrompt={operations[agent]?.approvalPrompt}
             />
           )}
         </div>

@@ -24,6 +24,7 @@ ALERT_ENV = Path(os.environ.get("AGENTS_ALERT_ENV", "/opt/scripts/alerta.env"))
 LOG_TAG = "agents-healthcheck"
 sys.path.insert(0, str(WORKDEV_DIR / 'apps/api'))
 from app.services import agent_snapshot, agent_lifecycle, agent_runtimes
+from app.services.agent_activity import approval_lines
 
 
 AGENTS = {
@@ -34,16 +35,13 @@ AGENTS = {
     "qwen": ("qwen", [str(WORKDEV_DIR / "scripts/start_qwen_agent.sh")]),
     "gemini": ("gemini", [str(WORKDEV_DIR / "scripts/start_gemini_agent.sh")]),
 }
-ALWAYS_ON_AGENTS = frozenset({"claude", "codex"})
+ALWAYS_ON_AGENTS = agent_snapshot.PERSISTENT_AGENTS
 
 SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
 BLOCKED_PATTERNS = (
     (re.compile(r"\b401\b|auth(?:entication)?[_ ]error|missing authentication", re.I), "authentication"),
     (re.compile(r"\b429\b|insufficient balance|recharge your account|billing", re.I), "billing"),
     (re.compile(r"api key.*(?:missing|invalid)|(?:missing|invalid).*api key", re.I), "api_key"),
-)
-WAITING_PATTERNS = (
-    re.compile(r'allow (?:execution|once|this)|do you (?:want|wish) to (?:proceed|allow)|would you like to proceed|approve this|waiting for (?:input|approval)|aguardando (?:aprovação|entrada)|yes, (?:proceed|allow)', re.I),
 )
 BUSY_PATTERNS = (
     re.compile(r"working\s*\(|esc to interrupt|ctrl\+c to cancel|press esc to interrupt", re.I),
@@ -77,7 +75,7 @@ def classify(agent: str, session: str, process: str, output: str, checked_at: st
     for pattern, reason in BLOCKED_PATTERNS:
         if pattern.search(recent):
             return AgentHealth(agent, session, "blocked", process, reason, checked_at)
-    if any(pattern.search('\n'.join(output.splitlines()[-8:])) for pattern in WAITING_PATTERNS):
+    if approval_lines(output):
         return AgentHealth(agent, session, "waiting_input", process, None, checked_at)
     if any(pattern.search(recent) for pattern in BUSY_PATTERNS):
         return AgentHealth(agent, session, "busy", process, None, checked_at)
@@ -89,11 +87,12 @@ def collect_agent(agent: str, session: str | None, db, allow_restart=False):
     operation = agent_lifecycle.read_operation(agent)
     try:
         state = agent_lifecycle.read_state(agent, session, db=db)
-        if (allow_restart and state.offline and not state.session_exists
-                and not operation):
-            agent_lifecycle.start(agent, session, AGENTS[agent][1])
-            state = agent_lifecycle.read_state(agent, session, db=db)
-            checked_at = agent_snapshot.now()
+        if allow_restart and state.offline and not state.session_exists:
+            recovery = agent_lifecycle.try_recover(agent, session, AGENTS[agent][1])
+            if recovery is not None:
+                state = agent_lifecycle.read_state(agent, session, db=db)
+                checked_at = agent_snapshot.now()
+            operation = agent_lifecycle.read_operation(agent)
         activity, reason = 'IDLE', None
         if session and state.agent_process_running:
             health = classify(agent, session, state.current_process,
@@ -129,7 +128,7 @@ def collect_agent(agent: str, session: str | None, db, allow_restart=False):
     except Exception as error:
         return agent_snapshot.AgentSnapshot(agent=agent, runtime_state='ERROR',
             activity_state='IDLE', checked_at=checked_at,
-            reason=type(error).__name__, persistent=session is not None)
+            reason=type(error).__name__, persistent=agent_snapshot.is_persistent(agent, session))
 
 
 def collect_snapshot(db, allow_restart=False):
@@ -199,6 +198,10 @@ def notify_transitions(previous, health) -> None:
             send_alert(f"[agents-healthcheck] {item.agent}: recuperado, ONLINE.")
 
 
+def health_exit_code(health) -> int:
+    return int(any(row.agent in ALWAYS_ON_AGENTS and row.runtime_state.value in {'OFFLINE', 'ERROR'} for row in health))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true", help="executa uma única verificação")
@@ -215,7 +218,7 @@ def main() -> int:
     notify_transitions(previous, health)
     for item in health:
         print(f"{item.agent}: {item.runtime_state.value}/{item.activity_state.value}")
-    return 0
+    return health_exit_code(health)
 
 
 if __name__ == "__main__":

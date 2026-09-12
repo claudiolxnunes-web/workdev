@@ -20,9 +20,9 @@ const OPERATION_STYLE: Record<OperationalStatus, string> = {
 }
 
 export function AgentTerminal({
-  agent, awaitingApproval = false, operationalStatus = "standby", approvalPrompt,
+  agent, awaitingApproval = false, operationalStatus = "standby",
 }: {
-  agent: AgentName; awaitingApproval?: boolean; operationalStatus?: OperationalStatus; approvalPrompt?: string | null
+  agent: AgentName; awaitingApproval?: boolean; operationalStatus?: OperationalStatus
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
@@ -317,8 +317,7 @@ export function AgentTerminal({
       {awaitingApproval && (
         <div role="alert" className="shrink-0 border-y border-amber-500 bg-amber-400 px-3 py-3 text-sm text-slate-950 shadow-lg shadow-amber-500/20">
           <p className="text-base font-black">⚠ AGUARDANDO APROVAÇÃO</p>
-          <p className="mt-1 text-xs font-medium">Confira as opções abaixo e responda pelo campo de mensagem. Atalhos numéricos foram removidos para evitar aprovação permanente acidental.</p>
-          {approvalPrompt && <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded bg-slate-950/90 p-2 font-mono text-xs text-amber-100">{approvalPrompt}</pre>}
+          <p className="mt-1 text-xs font-medium">Confira as opções no terminal abaixo e responda pelo campo de mensagem. Atalhos numéricos foram removidos para evitar aprovação permanente acidental.</p>
         </div>
       )}
       <div ref={containerRef} className="agent-terminal min-h-0 min-w-0 max-w-full flex-1 overflow-hidden p-2 sm:p-3" />

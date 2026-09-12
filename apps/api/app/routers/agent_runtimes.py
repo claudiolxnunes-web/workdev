@@ -48,10 +48,11 @@ def list_agent_runtimes(refresh: bool = False):
         physical = row.get('lifecycle') or {}
         payload = agent_runtimes.describe(runtime)
         payload.update(row)
-        payload.update(status='online' if row['runtime_state'] == 'ONLINE' else 'offline',
-            status_label=row['runtime_state'], reason=row['reason'],
+        configured = payload['configured'] and bool(payload['model'])
+        payload.update(status=('unconfigured' if not configured else 'online' if row['runtime_state'] == 'ONLINE' else 'offline'),
+            status_label=row['runtime_state'] if configured else 'Não configurado', reason=row['reason'],
             busy=row['activity_state'] == 'BUSY',
-            dispatchable=row['runtime_state'] == 'ONLINE', latency_ms=None,
+            dispatchable=configured and row['runtime_state'] == 'ONLINE', latency_ms=None,
             models=[physical['model']] if physical.get('model_loaded') and physical.get('model') else [])
         runtimes.append(payload)
     return {'runtimes': runtimes, 'updated_at': snapshot['updated_at']}

@@ -101,8 +101,8 @@ def ensure_local_scope(agent: str) -> None:
 # primeiro acabara de criar. Idempotência sem serialização é só sorte.
 # --------------------------------------------------------------------------
 
-def agent_lock(agent: str):
-    return agent_snapshot.file_lock(GROUPS_FILE.parent / 'lifecycle' / f'{agent}.lock')
+def agent_lock(agent: str, *, blocking: bool = True):
+    return agent_snapshot.file_lock(GROUPS_FILE.parent / 'lifecycle' / f'{agent}.lock', blocking=blocking)
 
 
 # --------------------------------------------------------------------------
@@ -1169,7 +1169,7 @@ def lifecycle_operation(agent: str, session: str | None, phase: str, db=None):
         agent_snapshot.atomic_json(operation_file(agent), operation)
         agent_snapshot.publish([agent_snapshot.AgentSnapshot(agent=agent,
             runtime_state=phase, activity_state='IDLE', checked_at=agent_snapshot.now(),
-            persistent=session is not None)])
+            persistent=agent_snapshot.is_persistent(agent, session))])
     except OSError as error:
         raise LifecycleError('state_not_durable', 'Operação abortada: estado não persistido') from error
     outcome = {}
@@ -1192,10 +1192,38 @@ def lifecycle_operation(agent: str, session: str | None, phase: str, db=None):
         agent_snapshot.atomic_json(operation_file(agent), operation)
         agent_snapshot.publish([agent_snapshot.AgentSnapshot(agent=agent,
             runtime_state='ERROR', activity_state='IDLE', checked_at=agent_snapshot.now(),
-            reason=operation['reason'], persistent=session is not None)])
+            reason=operation['reason'], persistent=agent_snapshot.is_persistent(agent, session))])
         raise
     else:
         operation['updated_at'] = agent_snapshot.now()
         agent_snapshot.atomic_json(operation_file(agent), operation)
         row.checked_at = agent_snapshot.now()
         agent_snapshot.publish([row])
+
+
+def try_recover(agent: str, session: str, launcher: list[str]) -> dict | None:
+    """Restore desired ONLINE without queuing behind a start/stop operation.
+
+    Recheck intent under the same process lock as explicit connect/disconnect.
+    An old completed ONLINE operation must not disable future recoveries.
+    """
+    ensure_local_scope(agent)
+    try:
+        with agent_lock(agent, blocking=False):
+            operation = read_operation(agent)
+            if operation.get('desired') == 'OFFLINE' or operation.get('reason') == 'operation_unreadable':
+                return None
+            if operation.get('phase') in {'STARTING', 'STOPPING'}:
+                if operation_active(operation):
+                    return None
+                if not operation.get('running', True):
+                    from datetime import datetime, timezone
+                    age = (datetime.now(timezone.utc) - datetime.fromisoformat(operation['updated_at'])).total_seconds()
+                    if age < 60:
+                        return None
+            with lifecycle_operation(agent, session, 'STARTING') as outcome:
+                result = start.__wrapped__(agent, session, launcher)
+                outcome['state'] = result['state']
+                return result
+    except BlockingIOError:
+        return None

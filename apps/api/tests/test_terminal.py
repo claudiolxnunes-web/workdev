@@ -13,6 +13,7 @@ from fastapi import HTTPException
 
 from app.routers.terminal import (
     ALLOWED_SESSIONS,
+    STANDBY_COMMANDS,
     AgentSendRequest,
     _agent_status,
     _approval_state,
@@ -232,14 +233,14 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
         self.assertTrue(result)
 
     @patch("app.routers.terminal._current_process", return_value="codex")
-    @patch("app.routers.terminal._start_standby_session", return_value=False)
+    @patch("app.routers.terminal.agent_lifecycle.try_recover", return_value={"started": False})
     @patch("app.routers.terminal._stop_standby_session", return_value=True)
     def test_finalize_auto_stops_only_run_and_confirms_standby(
         self, stop_session, start_standby, _current_process,
     ):
         result = finalize_auto_runtime("codex", "run-1")
         stop_session.assert_called_once_with("auto-codex-run-1")
-        start_standby.assert_called_once_with("codex", "codex")
+        start_standby.assert_called_once_with("codex", "codex", STANDBY_COMMANDS["codex"])
         self.assertEqual(result["standby_process"], "codex")
 
 
@@ -318,26 +319,26 @@ class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
         declarado = inspect.signature(stop_agent_session).parameters["confirm"]
         self.assertFalse(declarado.default.default)
 
-    @patch("app.routers.terminal._start_standby_session", return_value=True)
-    async def test_start_endpoint_reconnects_standby_agent(self, start):
-        result = await start_agent_session("qwen")
-        start.assert_called_once_with("qwen", "qwen")
-        self.assertEqual(result, {"agent": "qwen", "running": True, "started": True})
+    @patch('app.routers.terminal.start_agent_lifecycle')
+    async def test_start_endpoint_reconnects_through_lifecycle(self, start):
+        start.return_value = {'started': True, 'state': {'agent_process_running': True}}
+        result = await start_agent_session('qwen')
+        start.assert_awaited_once_with('qwen')
+        self.assertEqual(result, {'agent': 'qwen', 'running': True, 'started': True})
 
-    @patch("app.routers.terminal._load_run_states", return_value={})
-    @patch("app.routers.terminal._stop_standby_session", return_value=True)
-    async def test_confirmed_stop_without_active_run_is_allowed(self, stop, _runs):
-        result = await stop_agent_session("kimi", confirm=True)
-        stop.assert_called_once_with("kimi")
-        self.assertEqual(result, {"agent": "kimi", "running": False, "stopped": True})
+    @patch('app.routers.terminal.stop_agent_lifecycle')
+    async def test_confirmed_stop_uses_lifecycle(self, stop):
+        stop.return_value = {'stopped': True, 'state': {'offline': True}}
+        result = await stop_agent_session('kimi', confirm=True)
+        stop.assert_awaited_once_with('kimi', confirm=True)
+        self.assertEqual(result, {'agent': 'kimi', 'running': False, 'stopped': True})
 
-    @patch("app.routers.terminal._load_run_states", return_value={"gemini": "running"})
-    @patch("app.routers.terminal._stop_standby_session")
-    async def test_active_run_cannot_be_stopped(self, stop, _runs):
+    @patch('app.routers.terminal.stop_agent_lifecycle')
+    async def test_busy_lifecycle_error_is_preserved(self, stop):
+        stop.side_effect = HTTPException(status_code=409, detail='agent_busy')
         with self.assertRaises(HTTPException) as ctx:
-            await stop_agent_session("gemini", confirm=True)
+            await stop_agent_session('gemini', confirm=True)
         self.assertEqual(ctx.exception.status_code, 409)
-        stop.assert_not_called()
 
 
 class AwaitingApprovalTest(unittest.TestCase):
