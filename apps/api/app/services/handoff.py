@@ -929,7 +929,25 @@ def record_review(
         verdict=verdict,
         feedback=feedback,
         gate_passed=gate_passed,
-        payload={"status_before": run.status},
+        payload={
+            "feedback_schema_version": 1,
+            "status_before": run.status,
+            "rag_eligible": True,
+            # Só um caso positivamente validado entra automaticamente como
+            # candidato a treino. Rejeição precisa primeiro de correção
+            # validada; não treinamos o modelo com a própria resposta errada.
+            "training_candidate": bool(
+                verdict == "approved" and gate_passed is True
+            ),
+            "needs_correction": verdict == "rejected",
+            "executor_model": getattr(run, "model", None),
+            "reasoning_effort": getattr(run, "reasoning_effort", None),
+            "complexity": getattr(run, "complexity", None),
+            "complexity_score": getattr(run, "complexity_score", None),
+            "routing_mode": getattr(run, "routing_mode", None),
+            "result_present": bool(run.result),
+            "result_chars": len(run.result or ""),
+        },
     )
 
     db.add(review)
@@ -947,6 +965,15 @@ def record_review(
             "reviewer_agent": reviewer,
             "executor_agent": run.agent,
             "gate_passed": gate_passed,
+            "feedback_schema_version": 1,
+            "rag_eligible": True,
+            "training_candidate": bool(
+                verdict == "approved" and gate_passed is True
+            ),
+            "needs_correction": verdict == "rejected",
+            "executor_model": getattr(run, "model", None),
+            "complexity": getattr(run, "complexity", None),
+            "complexity_score": getattr(run, "complexity_score", None),
         },
     )
 
