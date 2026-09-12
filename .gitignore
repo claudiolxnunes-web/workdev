@@ -27,3 +27,11 @@ supabase/.temp/
 
 /.workdev/
 /.workdev-recovery/
+
+# Pesos, caches e ambientes locais de treinamento (inventário em docs/builds)
+/models/
+/training/models/
+/training/**/.venv/
+/training/**/.cache/
+/training/**/output/
+/training/feedback/*.jsonl

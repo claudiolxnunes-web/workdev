@@ -1,0 +1,210 @@
+{
+  "note": "Inventário local; existência não comprova treino, registro Ollama ou modelo carregado. Caches e ambientes ocultos omitidos.",
+  "artifacts": [
+    {
+      "path": "models/workdev-local-fast/workdev-local-fast-v2-Q4_K_M.gguf",
+      "bytes": 2708803968,
+      "sha256": "d5bb7410859ec91fee1205e0c59a7f6a26df6cfdb7b2376139a883cb2f9c3053"
+    },
+    {
+      "path": "models/workdev-local-fast/qwen38-workdev-v2.tar.gz",
+      "bytes": 124218862
+    },
+    {
+      "path": "models/workdev-local-fast/v2-adapter/tokenizer.json",
+      "bytes": 19989325
+    },
+    {
+      "path": "models/workdev-local-fast/v2-adapter/chat_template.jinja",
+      "bytes": 7756
+    },
+    {
+      "path": "models/workdev-local-fast/v2-adapter/tokenizer_config.json",
+      "bytes": 1124
+    },
+    {
+      "path": "models/workdev-local-fast/v2-adapter/adapter_config.json",
+      "bytes": 1272
+    },
+    {
+      "path": "models/workdev-local-fast/v2-adapter/adapter_model.safetensors",
+      "bytes": 129927008
+    },
+    {
+      "path": "models/workdev-local-fast/v2-adapter/README.md",
+      "bytes": 5260
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/vocab.json",
+      "bytes": 6722759
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/model.safetensors",
+      "bytes": 9319821272
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/training_args.bin",
+      "bytes": 5777
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/tokenizer.json",
+      "bytes": 12807982
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/video_preprocessor_config.json",
+      "bytes": 385
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/config.json",
+      "bytes": 2772
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/chat_template.jinja",
+      "bytes": 7756
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/tokenizer_config.json",
+      "bytes": 16710
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/preprocessor_config.json",
+      "bytes": 390
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/merges.txt",
+      "bytes": 3353259
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/generation_config.json",
+      "bytes": 164
+    },
+    {
+      "path": "models/Qwen3.8-4B-Distill/README.md",
+      "bytes": 5660
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/vocab.json",
+      "bytes": 6722759
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/model.safetensors",
+      "bytes": 9319821272
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/training_args.bin",
+      "bytes": 5777
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/tokenizer.json",
+      "bytes": 12807982
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/video_preprocessor_config.json",
+      "bytes": 385
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/config.json",
+      "bytes": 2772
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/chat_template.jinja",
+      "bytes": 7756
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/tokenizer_config.json",
+      "bytes": 16710
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/preprocessor_config.json",
+      "bytes": 390
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/merges.txt",
+      "bytes": 3353259
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/generation_config.json",
+      "bytes": 164
+    },
+    {
+      "path": "training/models/Qwen3.8-4B-Distill/README.md",
+      "bytes": 5660
+    },
+    {
+      "path": "training/qwen38-smoke/train_smoke.py",
+      "bytes": 1955
+    },
+    {
+      "path": "training/qwen38-smoke/data/train.jsonl",
+      "bytes": 1031
+    },
+    {
+      "path": "training/qwen38-smoke/output/adapter/tokenizer.json",
+      "bytes": 19989325
+    },
+    {
+      "path": "training/qwen38-smoke/output/adapter/chat_template.jinja",
+      "bytes": 7756
+    },
+    {
+      "path": "training/qwen38-smoke/output/adapter/tokenizer_config.json",
+      "bytes": 1124
+    },
+    {
+      "path": "training/qwen38-smoke/output/adapter/adapter_config.json",
+      "bytes": 1129
+    },
+    {
+      "path": "training/qwen38-smoke/output/adapter/adapter_model.safetensors",
+      "bytes": 3154152
+    },
+    {
+      "path": "training/qwen38-smoke/output/adapter/README.md",
+      "bytes": 5248
+    },
+    {
+      "path": "training/qwen38-smoke/output/checkpoint-1/trainer_state.json",
+      "bytes": 942
+    },
+    {
+      "path": "training/qwen38-smoke/output/checkpoint-1/rng_state.pth",
+      "bytes": 14455
+    },
+    {
+      "path": "training/qwen38-smoke/output/checkpoint-1/training_args.bin",
+      "bytes": 5201
+    },
+    {
+      "path": "training/qwen38-smoke/output/checkpoint-1/adapter_config.json",
+      "bytes": 1129
+    },
+    {
+      "path": "training/qwen38-smoke/output/checkpoint-1/adapter_model.safetensors",
+      "bytes": 3154152
+    },
+    {
+      "path": "training/qwen38-smoke/output/checkpoint-1/README.md",
+      "bytes": 5248
+    },
+    {
+      "path": "training/qwen38-smoke/output/checkpoint-1/scheduler.pt",
+      "bytes": 1465
+    },
+    {
+      "path": "training/qwen38-smoke/output/checkpoint-1/optimizer.pt",
+      "bytes": 6344203
+    },
+    {
+      "path": "training/workdev-v1/data/benchmark.jsonl",
+      "bytes": 4161
+    },
+    {
+      "path": "training/workdev-v1/data/train.jsonl",
+      "bytes": 8659
+    },
+    {
+      "path": "training/feedback/validated-training.jsonl",
+      "bytes": 0
+    }
+  ]
+}
