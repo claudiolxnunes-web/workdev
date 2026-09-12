@@ -39,6 +39,8 @@ def _active_runs_by_agent(db: Session) -> dict[str, str]:
 
 @router.get("")
 def list_agent_runtimes(refresh: bool = False):
+    # Compatibility for older clients: refresh rereads the consolidated file.
+    # Physical probes belong exclusively to the central collector.
     from app.services.agent_snapshot import read_snapshot
     snapshot = read_snapshot([runtime.id for runtime in agent_runtimes.RUNTIMES])
     rows = {row['agent']: row for row in snapshot['agents']}
@@ -55,4 +57,5 @@ def list_agent_runtimes(refresh: bool = False):
             dispatchable=configured and row['runtime_state'] == 'ONLINE', latency_ms=None,
             models=[physical['model']] if physical.get('model_loaded') and physical.get('model') else [])
         runtimes.append(payload)
-    return {'runtimes': runtimes, 'updated_at': snapshot['updated_at']}
+    return {'runtimes': runtimes, 'updated_at': snapshot['updated_at'],
+        'source': 'status.json', 'probe_requested': False}

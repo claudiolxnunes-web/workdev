@@ -62,10 +62,26 @@ O healthcheck volta a sair com código 1 quando um always-on termina OFFLINE/ERR
 Não executar estes passos como parte do BUILD. O broker de deploy não instala units. A promoção deve incluir o coletor, suas units e API/UI compatíveis:
 
 1. Confirmar a revisão do commit e preparar a implantação assinada conforme `CLAUDE.md`.
-2. Instalar como operador/root os fontes revisados `scripts/workdev-agents-health.service` e `scripts/workdev-agents-health.timer` nos arquivos correspondentes de `/etc/systemd/system/`. O serviço usa o venv da API e continua sendo o único coletor periódico.
-3. Executar `systemctl daemon-reload`, reiniciar **somente** `workdev-agents-health.timer` e executar uma coleta com `systemctl start workdev-agents-health.service`. Não reiniciar `workdev-agents.service`.
-4. Conferir a unit/timer instalados com `systemctl cat`, o resultado da coleta com `systemctl status` e o `status.json` v2 com timestamps novos. A cadência deve ser 5s, não os 5min anteriores.
-5. Promover API/UI pelo fluxo `prepare` → `approve` → `deploy.sh <proof_id>`, usando o mesmo build revisado, e verificar o endpoint de status na release promovida.
-6. Se houver rollback, restaurar coletor/timer e release como um conjunto compatível. Não deixar a API v2 com o timer de 5min.
+2. Pausar somente o timer de healthcheck e aguardar a coleta corrente terminar. Não parar `workdev-agents.service` nem suas sessões tmux.
+3. Promover API/UI pelo fluxo `prepare` → `approve` → `deploy.sh <proof_id>`, usando o build revisado. A release contém também o coletor; o script resolve sua raiz imutável e importa os módulos dessa mesma release.
+4. Instalar como operador/root os fontes revisados `scripts/workdev-agents-health.service` e `scripts/workdev-agents-health.timer` em `/etc/systemd/system/`. O ExecStart aponta para `/opt/workdev-runtime/current/scripts/agents_healthcheck.py`, nunca para o checkout mutável.
+5. Executar `systemctl daemon-reload`, iniciar somente o timer de healthcheck e uma coleta. Conferir units e snapshot v2 novo. A próxima coleta ocorre 5s após a anterior encerrar; TimeoutStartSec=35s. Durante a transição, snapshot ausente/antigo aparece como ERROR até a primeira coleta válida.
+6. Verificar o endpoint de status da release promovida. Em rollback, restaurar timer/unit e release como conjunto compatível; nunca deixar o leitor v2 com cadência de 5min.
 
 Esses passos não foram executados neste BUILD.
+
+
+## Correções da segunda revisão (9de78221)
+
+- [1, 7] Falhas de lifecycle encerram `running` e atualizam o timestamp. A informação de falha é exibida por 60s, depois o coletor reconcilia a evidência física. Registro ilegível e inconsistência física continuam ERROR.
+- [2] Uma intenção OFFLINE concluída impede autorrecuperação, mas não invalida um início manual posterior observado fisicamente. STARTING/STOPPING em voo continuam tendo precedência.
+- [3] O coletor consolida `run_status` no arquivo. `blocked`, `review` e `completed` voltam aos badges sem transformar atividade humana em BUSY nem consultar banco na leitura REST/WebSocket. Foram removidos o parâmetro ignorado e a consulta/classe de badge antigos da API.
+- [4] Sondas paralelas pertencem ao único coletor, sem novo loop. São três consultas de contexto por coleta, sem sessão SQLAlchemy compartilhada entre threads. Agentes saudáveis são publicados assim que respondem. Após orçamento de 25s, sondas pendentes recebem `collection_timeout`; o serviço tem limite físico de 35s. Chamadas subjacentes também possuem timeouts. O timer usa OnUnitInactiveSec=5s (não há fila de ativações do mesmo serviço).
+- [5] Ledger durável de notificações exige estabilidade por 10s, intervalo mínimo de 300s por agente e no máximo uma mensagem por coleta. ERROR/OFFLINE são uma classe de falha para evitar alternância de alertas. A chamada Telegram tem timeout de 2s.
+- [6] Texto do terminal é evidência de atividade, nunca prova de falha física. Motivo de bloqueio textual fica em `activity_reason`; números 401/429 e a palavra billing isolados não classificam falha de runtime.
+- [8, 9] A falha de ação usa o snapshot vigente quando a requisição rejeita. Abortar o polling ao perder foco preserva o último estado e a aprovação pendente.
+- [10] Finalização AUTO volta a lançar erro se uma restauração efetivamente tentada deixou a CLI sem processo pronto. Desconexão deliberada ou lock ocupado continuam respeitados.
+- [11] Cliente deixou de enviar refresh=true. Compatibilidade REST informa `source=status.json` e `probe_requested=false`: atualizar relê o arquivo; forçar outra sonda violaria o plano aprovado.
+- [12] Serviço, coletor e imports usam a mesma release promovida. O procedimento de ativação acima foi atualizado, sem executar deploy ou instalar units.
+
+Validação operacional: SIGKILL/tmux, reinício de processos FastAPI e concorrência são exercitados com agentes descartáveis e arquivos isolados. A UI é exercitada em componentes. Isso não equivale a uma prova de campo no navegador contra produção, nem a reiniciar a API de produção. O gate vinculado ao novo SHA será registrado na execução; aprovação independente continua necessária.

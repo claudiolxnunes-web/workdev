@@ -16,7 +16,6 @@ from pydantic import BaseModel
 
 from app.auth import websocket_is_authenticated
 from app.database import SessionLocal
-from app.models.handoff import AgentRun
 from app.services import agent_lifecycle, agent_snapshot, agent_runtimes
 from app.services.agent_activity import approval_lines
 from app.services.terminal_transcript import clean_terminal_text, read_transcript
@@ -375,6 +374,8 @@ def finalize_auto_runtime(agent: str, run_id) -> dict:
     restoration = agent_lifecycle.try_recover(agent, standby_session, STANDBY_COMMANDS[agent])
     standby_started = bool(restoration and restoration['started'])
     process = _current_process(standby_session)
+    if restoration is not None and (not process or process in _SHELL_PROCESSES):
+        raise RuntimeError(f"{agent}: não retornou ao standby")
     # A deliberate disconnect or concurrent lifecycle operation takes precedence.
     # Readiness and eventual errors are published by the central healthcheck.
     return {
@@ -533,21 +534,6 @@ async def stop_agent_session(agent: str, confirm: bool = Query(default=False)):
 # forma segura de descobrir os formatos exatos sem interromper uma sessão
 # real. Checa só as últimas linhas não vazias para reduzir falso positivo
 # vindo de texto de saída antigo que já rolou pra fora da tela.
-_USER_PROMPT_PATTERNS = [
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in [
-        r"type your message", r"what can i (?:do|help)",
-        r"(?:^|\n)\s*[>❯›]\s*$", r"enter your (?:prompt|message)",
-    ]
-]
-_COMPLETED_PATTERNS = [
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in [r"build concluído", r"task completed", r"completed successfully", r"concluído com sucesso"]
-]
-_ERROR_PATTERNS = [
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in [r"fatal error", r"unhandled exception", r"process exited", r"encerrou com código [1-9]"]
-]
 def _approval_state(session: str) -> tuple[bool, str | None]:
     try:
         tail = _capture_history(session, 60)
@@ -561,60 +547,11 @@ def _awaiting_approval(session: str) -> bool:
     return _approval_state(session)[0]
 
 
-def _load_run_states() -> dict[str, str]:
-    db = SessionLocal()
-    try:
-        rows = (
-            db.query(AgentRun)
-            .filter(AgentRun.status.in_(("queued", "running", "blocked", "review")))
-            .order_by(AgentRun.created_at.desc())
-            .all()
-        )
-        states: dict[str, str] = {}
-        for row in rows:
-            states.setdefault(row.agent, row.status)
-        return states
-    except Exception:
-        return {}
-    finally:
-        db.close()
-
-
-def _operational_status(
-    session: str,
-    running: bool,
-    health_status: str,
-    awaiting_approval: bool,
-    run_status: str | None,
-) -> str:
-    if awaiting_approval:
-        return "awaiting_approval"
-    if health_status == "blocked" or run_status == "blocked":
-        return "blocked"
-    if not running or health_status in {"offline", "degraded"}:
-        return "error"
-    if run_status == "review":
-        return "awaiting_user"
-    if run_status == "running" or health_status == "busy":
-        return "executing"
-    try:
-        recent = _capture_history(session, 40)
-    except RuntimeError:
-        return "error"
-    if any(pattern.search(recent) for pattern in _ERROR_PATTERNS):
-        return "error"
-    if any(pattern.search(recent) for pattern in _COMPLETED_PATTERNS):
-        return "completed"
-    if any(pattern.search(recent) for pattern in _USER_PROMPT_PATTERNS):
-        return "awaiting_user"
-    return "standby"
-
-
 def _load_supervisor_health() -> dict[str, dict]:
     return {row['agent']: row for row in agent_snapshot.read_snapshot(ALLOWED_SESSIONS, _HEALTH_STATE_FILE)['agents']}
 
 
-async def _agent_status(agent: str, session: str, supervisor=None, run_status=None) -> dict:
+async def _agent_status(agent: str, session: str) -> dict:
     return agent_snapshot.read_snapshot([agent], _HEALTH_STATE_FILE)['agents'][0]
 
 
@@ -648,8 +585,7 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         master_fd, slave_fd = pty.openpty()
         rows, cols = _requested_terminal_size(websocket)
         _resize(master_fd, rows, cols)
-        run_states = await asyncio.to_thread(_load_run_states)
-        initial_status = await _agent_status(agent, session, run_status=run_states.get(agent))
+        initial_status = await _agent_status(agent, session)
         await websocket.send_text(json.dumps({"type": "status", **initial_status}))
         try:
             history = await asyncio.to_thread(_capture_history, session, 5000)

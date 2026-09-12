@@ -40,7 +40,7 @@ def test_concurrent_http_reads_identical_without_probes(snapshot_file, monkeypat
     def forbidden(*args, **kwargs):
         raise AssertionError('status attempted a live probe')
     monkeypatch.setattr(terminal, '_current_process', forbidden)
-    monkeypatch.setattr(terminal, '_load_run_states', forbidden)
+    monkeypatch.setattr(terminal, 'SessionLocal', forbidden)
     with client() as api, ThreadPoolExecutor(max_workers=12) as pool:
         results = list(pool.map(lambda _: api.get('/api/agents/status').json(), range(48)))
     assert all(result == results[0] for result in results)

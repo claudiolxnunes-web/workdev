@@ -349,9 +349,9 @@ export async function sendToBuild(
   }))
 }
 
-export async function getAgentRuntimes(refresh = false): Promise<AgentRuntime[]> {
+export async function getAgentRuntimes(): Promise<AgentRuntime[]> {
   const body = await read<{ runtimes: AgentRuntime[] }>(
-    fetch(`/api/agent-runtimes${refresh ? "?refresh=true" : ""}`, { headers }),
+    fetch('/api/agent-runtimes', { headers }),
   )
   return body.runtimes ?? []
 }

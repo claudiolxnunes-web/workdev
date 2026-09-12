@@ -51,6 +51,19 @@ describe('RuntimeControls', () => {
     expect(screen.queryByText('ONLINE')).not.toBeInTheDocument()
   })
 
+  it('mostra falha recebida após o snapshot avançar durante um stop lento', async () => {
+    let reject!: (error: Error) => void
+    setAgentConnection.mockReturnValue(new Promise((_resolve, fail) => { reject = fail }))
+    const { rerender } = render(<RuntimeControls agent="codex" runtimeState="ONLINE" checkedAt="first" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Desconectar' }))
+    rerender(<RuntimeControls agent="codex" runtimeState="ONLINE" checkedAt="during-stop" />)
+    await act(async () => reject(new Error('identity_not_durable')))
+    expect(screen.getByRole('alert')).toHaveTextContent('identity_not_durable')
+    expect(screen.getByText('ERROR')).toBeInTheDocument()
+    rerender(<RuntimeControls agent="codex" runtimeState="ONLINE" checkedAt="after-failure" />)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('cadastro sem snapshot não implica disponibilidade e GPU não oferece controle local', () => {
     render(<RuntimeControls agent="gpu-runpod" persistent={false} />)
     expect(screen.getByText('ERROR')).toBeInTheDocument()

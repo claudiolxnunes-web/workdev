@@ -1189,6 +1189,8 @@ def lifecycle_operation(agent: str, session: str | None, phase: str, db=None):
     except Exception as error:
         operation['phase'] = 'ERROR'
         operation['reason'] = getattr(error, 'code', type(error).__name__)
+        operation['running'] = False
+        operation['updated_at'] = agent_snapshot.now()
         agent_snapshot.atomic_json(operation_file(agent), operation)
         agent_snapshot.publish([agent_snapshot.AgentSnapshot(agent=agent,
             runtime_state='ERROR', activity_state='IDLE', checked_at=agent_snapshot.now(),

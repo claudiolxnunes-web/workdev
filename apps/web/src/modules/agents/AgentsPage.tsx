@@ -112,8 +112,8 @@ export default function AgentsPage() {
         setAwaitingApproval(next)
         setHealth(nextHealth)
         setOperations(nextOperations)
-      } catch {
-        if (!cancelled) {
+      } catch (error) {
+        if (!cancelled && !controller?.signal.aborted && !(error instanceof Error && error.name === 'AbortError')) {
           setHealth(Object.fromEntries(AGENTS.map(item => [item.id, { health: 'degraded', runtime_state: 'ERROR', activity_state: 'IDLE', health_reason: 'Snapshot indisponível' }])))
           setAwaitingApproval({})
           setOperations({})

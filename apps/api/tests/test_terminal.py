@@ -23,7 +23,6 @@ from app.routers.terminal import (
     _release,
     _read_pty,
     _load_supervisor_health,
-    _operational_status,
     _requested_terminal_size,
     _send_output,
     _send_text,
@@ -401,24 +400,6 @@ class AgentStatusTest(unittest.IsolatedAsyncioTestCase):
         read.return_value = {'agents': []}
         self.assertEqual(agents_status(), {'agents': []})
         self.assertIn('local-code', read.call_args.args[0])
-
-
-class OperationalStatusTest(unittest.TestCase):
-    def test_approval_has_highest_priority(self):
-        self.assertEqual(
-            _operational_status("codex", True, "busy", True, "running"),
-            "awaiting_approval",
-        )
-
-    def test_active_run_is_executing(self):
-        self.assertEqual(_operational_status("gemini", True, "idle", False, "running"), "executing")
-
-    def test_blocked_run_is_blocked(self):
-        self.assertEqual(_operational_status("qwen", True, "idle", False, "blocked"), "blocked")
-
-    @patch("app.routers.terminal._capture_history", return_value="Type your message\n> ")
-    def test_ready_prompt_is_awaiting_user(self, _capture):
-        self.assertEqual(_operational_status("kimi", True, "idle", False, None), "awaiting_user")
 
 
 class SupervisorHealthStateTest(unittest.TestCase):

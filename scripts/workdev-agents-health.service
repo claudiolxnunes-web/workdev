@@ -9,5 +9,6 @@ Group=workdev
 Environment=HOME=/home/workdev
 Environment=WORKDEV_ENV_FILE=/etc/workdev/workdev-api.env
 Environment=AGENTS_ALERT_ENV=/etc/workdev/agents-alert.env
-WorkingDirectory=/opt/workdev
-ExecStart=/opt/workdev/apps/api/venv/bin/python /opt/workdev/scripts/agents_healthcheck.py --once
+WorkingDirectory=/opt/workdev-runtime/current
+ExecStart=/opt/workdev/apps/api/venv/bin/python /opt/workdev-runtime/current/scripts/agents_healthcheck.py --once
+TimeoutStartSec=35s

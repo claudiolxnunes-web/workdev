@@ -3,7 +3,7 @@ Description=Verifica a saúde dos agentes WorkDev a cada 5 segundos
 
 [Timer]
 OnBootSec=10s
-OnUnitActiveSec=5s
+OnUnitInactiveSec=5s
 AccuracySec=1s
 Persistent=true
 

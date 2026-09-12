@@ -90,6 +90,18 @@ describe("AgentsPage", () => {
     expect(screen.getByText("terminal:awaiting_approval")).toBeInTheDocument()
   })
 
+  it("cancelar fetch ao perder foco preserva o estado e a aprovação pendente", async () => {
+    render(<AgentsPage />)
+    await screen.findByText('APROVAR')
+    fetchMock.mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')))
+    }))
+    fireEvent(window, new Event('agent-runtime-refresh'))
+    await act(async () => { fireEvent(window, new Event('blur')) })
+    expect(screen.getByText('APROVAR')).toBeInTheDocument()
+    expect(screen.getByText('terminal:awaiting_approval')).toBeInTheDocument()
+  })
+
   it("lista runtimes Ollama junto dos agentes de CLI", async () => {
     getAgentRuntimes.mockResolvedValue([
       runtime(),

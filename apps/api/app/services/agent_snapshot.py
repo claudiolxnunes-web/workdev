@@ -44,6 +44,8 @@ class AgentSnapshot(BaseModel):
     persistent: bool = True
     process: str = ''
     active_run_id: str | None = None
+    run_status: str | None = None
+    activity_reason: str | None = None
     lifecycle: dict | None = None
 
 
@@ -118,7 +120,10 @@ def public_row(row: AgentSnapshot) -> dict:
         approval_prompt=None, recovered=False,
         operational_status=(
             'awaiting_user' if online and activity == ActivityState.WAITING_INPUT else
+            'blocked' if row.run_status == 'blocked' or row.activity_reason else
             'executing' if online and activity == ActivityState.BUSY else
+            'awaiting_user' if row.run_status == 'review' else
+            'completed' if row.run_status == 'completed' else
             'standby' if online else 'error'
         ),
     )
