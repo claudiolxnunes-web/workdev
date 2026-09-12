@@ -111,7 +111,7 @@ def public_row(row: AgentSnapshot) -> dict:
     data = row.model_dump(mode='json')
     online = row.runtime_state == RuntimeState.ONLINE
     activity = row.activity_state
-    health = ('busy' if activity == ActivityState.BUSY else 'idle') if online else (
+    health = ('busy' if activity == ActivityState.BUSY else 'blocked' if activity == ActivityState.WAITING_INPUT else 'idle') if online else (
         'offline' if row.runtime_state == RuntimeState.OFFLINE else 'degraded')
     data.update(
         running=online, checked=row.runtime_state != RuntimeState.ERROR,
@@ -124,7 +124,7 @@ def public_row(row: AgentSnapshot) -> dict:
             'executing' if online and activity == ActivityState.BUSY else
             'awaiting_user' if row.run_status == 'review' else
             'completed' if row.run_status == 'completed' else
-            'standby' if online else 'error'
+            'standby' if row.runtime_state == RuntimeState.OFFLINE or online else 'error'
         ),
     )
     return data

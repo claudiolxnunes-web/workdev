@@ -51,32 +51,37 @@ describe("AgentsPage", () => {
   })
 
 
-  it("pausa fora de foco e oculta, respeita 5s e limpa ao desmontar", async () => {
+  it("continua polling sem foco, pausa oculta, respeita 5s e limpa ao desmontar", async () => {
     vi.useFakeTimers()
     const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false)
     const view = render(<AgentsPage />)
     try {
       await act(async () => { await vi.advanceTimersByTimeAsync(0) })
       expect(fetchMock).toHaveBeenCalledTimes(1)
+
       await act(async () => { await vi.advanceTimersByTimeAsync(4999) })
       expect(fetchMock).toHaveBeenCalledTimes(1)
+
       await act(async () => { await vi.advanceTimersByTimeAsync(1) })
       expect(fetchMock).toHaveBeenCalledTimes(2)
+
       fireEvent(window, new Event("blur"))
       await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
-      expect(fetchMock).toHaveBeenCalledTimes(2)
-      fireEvent(window, new Event("focus"))
+      expect(fetchMock).toHaveBeenCalledTimes(6)
+
       hidden.mockReturnValue(true)
       fireEvent(document, new Event("visibilitychange"))
       await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
-      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(fetchMock).toHaveBeenCalledTimes(6)
+
       hidden.mockReturnValue(false)
       fireEvent(document, new Event("visibilitychange"))
       await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(fetchMock).toHaveBeenCalledTimes(7)
+
       view.unmount()
       await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
-      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(fetchMock).toHaveBeenCalledTimes(7)
     } finally {
       view.unmount()
       vi.useRealTimers()

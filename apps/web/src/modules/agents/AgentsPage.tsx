@@ -24,8 +24,8 @@ const FILTER_LABEL: Record<AgentFilter, string> = {
 
 const RUNTIME_DOT: Record<string, string> = {
   online: "bg-emerald-400",
-  degraded: "bg-amber-400",
-  offline: "bg-red-500",
+  degraded: "bg-red-500",
+  offline: "bg-slate-500",
   unconfigured: "bg-slate-500",
 }
 
@@ -53,17 +53,17 @@ const OPERATION_STYLE: Record<OperationalStatus, string> = {
 const HEALTH_STYLE: Record<HealthStatus, string> = {
   idle: "bg-emerald-400",
   busy: "bg-sky-400",
-  degraded: "bg-amber-400",
-  blocked: "bg-orange-500",
-  offline: "bg-red-500",
+  degraded: "bg-red-500",
+  blocked: "bg-amber-400",
+  offline: "bg-slate-500",
 }
 
 const HEALTH_LABEL: Record<HealthStatus, string> = {
   idle: "Saudável e aguardando",
   busy: "Executando",
-  degraded: "Operando com fallback",
-  blocked: "Bloqueado",
-  offline: "Offline",
+  degraded: "Erro de runtime ou snapshot",
+  blocked: "Atenção / bloqueado",
+  offline: "Desligado",
 }
 
 type MobilePanel = "terminal" | "queue"
@@ -79,11 +79,10 @@ export default function AgentsPage() {
 
   useEffect(() => {
     let cancelled = false
-    let focused = document.hasFocus()
     let inFlight = false
     let timer: number | undefined
     let controller: AbortController | undefined
-    const active = () => !cancelled && focused && !document.hidden
+    const active = () => !cancelled && !document.hidden
     function schedule() {
       window.clearTimeout(timer)
       if (active()) timer = window.setTimeout(poll, STATUS_POLL_MS)
@@ -126,11 +125,7 @@ export default function AgentsPage() {
       if (active()) schedule()
       else controller?.abort()
     }
-    function focus() { focused = true; visibilityChanged() }
-    function blur() { focused = false; visibilityChanged() }
     document.addEventListener("visibilitychange", visibilityChanged)
-    window.addEventListener("focus", focus)
-    window.addEventListener("blur", blur)
     const refresh = () => { void poll() }
     window.addEventListener("agent-runtime-refresh", refresh)
     void poll()
@@ -140,8 +135,6 @@ export default function AgentsPage() {
       window.clearTimeout(timer)
       controller?.abort()
       document.removeEventListener("visibilitychange", visibilityChanged)
-      window.removeEventListener("focus", focus)
-      window.removeEventListener("blur", blur)
     }
   }, [])
 

@@ -46,6 +46,8 @@ def test_concurrent_http_reads_identical_without_probes(snapshot_file, monkeypat
     assert all(result == results[0] for result in results)
     codex = next(row for row in results[0]['agents'] if row['agent'] == 'codex')
     assert (codex['runtime_state'], codex['activity_state']) == ('ONLINE', 'WAITING_INPUT')
+    assert codex['health'] == 'blocked'
+    assert codex['awaiting_approval'] is True
     publish(snapshot_file, runtime='STOPPING')
     with client() as api:
         row = next(row for row in api.get('/api/agents/status').json()['agents'] if row['agent'] == 'codex')
