@@ -502,3 +502,18 @@ Regras:
 - não concluir que o token possui escrita olhando apenas as permissões do usuário/repositório;
 - se o agente não estiver executando como `root`, preparar o commit e pedir ao operador/root para realizar o push;
 - nunca imprimir chaves, tokens ou outros segredos nos logs ou na conversa.
+
+## Deploy — regra canônica obrigatória
+
+Antes de qualquer ação relacionada a deploy, ler obrigatoriamente:
+
+`/opt/workdev/docs/DEPLOY_CANONICO.md`
+
+O fluxo oficial é:
+
+`prepare → approve --actor Claudio → deploy.sh <proof_id> → post_deploy_gate.py`
+
+Não improvisar, não redescobrir o procedimento e não executar `deploy.sh` sem `proof_id`.
+
+A fonte canônica e atualizável é `docs/DEPLOY_CANONICO.md`.
+
