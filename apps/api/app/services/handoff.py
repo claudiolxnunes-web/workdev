@@ -11,6 +11,7 @@ from app.models.adr import ADR
 from app.models.backlog import BacklogItem
 from app.models.decision import Decision
 from app.services.feedback_classifier import classify_review_feedback
+from app.services.feedback_knowledge import persist_review_knowledge
 from app.services.training_feedback_export import export_validated_training_feedback
 from app.models.handoff import (
     AgentRun,
@@ -1015,6 +1016,24 @@ def record_review(
         )
 
     db.refresh(review)
+
+    # Feedback elegível vira lição pesquisável pelo RAG.
+    # Falha nessa derivação não pode invalidar a revisão canônica.
+    try:
+        persist_review_knowledge(db, run, review)
+        db.commit()
+    except Exception as error:
+        add_run_event(
+            db,
+            run,
+            "feedback_knowledge.persist_failed",
+            f"Falha ao persistir feedback no RAG: {type(error).__name__}",
+            {
+                "review_id": str(review.id),
+                "error_type": type(error).__name__,
+            },
+        )
+        db.commit()
 
     # O banco é a fonte canônica. O dataset JSONL é derivado:
     # falha de exportação nunca pode invalidar uma revisão já persistida.
