@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.adr import ADR
 from app.models.backlog import BacklogItem
 from app.models.decision import Decision
+from app.services.feedback_classifier import classify_review_feedback
 from app.models.handoff import (
     AgentRun,
     AgentRunEvent,
@@ -919,6 +920,12 @@ def record_review(
                 "revisor não substitui testes, lint e build."
             )
 
+    classification = classify_review_feedback(
+        verdict=verdict,
+        feedback=feedback,
+        gate_passed=gate_passed,
+    )
+
     attempt = (run.review_attempts or 0) + 1
 
     review = AgentRunReview(
@@ -940,6 +947,9 @@ def record_review(
                 verdict == "approved" and gate_passed is True
             ),
             "needs_correction": verdict == "rejected",
+            "feedback_category": classification.category,
+            "feedback_confidence": classification.confidence,
+            "feedback_reason": classification.reason,
             "executor_model": getattr(run, "model", None),
             "reasoning_effort": getattr(run, "reasoning_effort", None),
             "complexity": getattr(run, "complexity", None),
@@ -971,6 +981,9 @@ def record_review(
                 verdict == "approved" and gate_passed is True
             ),
             "needs_correction": verdict == "rejected",
+            "feedback_category": classification.category,
+            "feedback_confidence": classification.confidence,
+            "feedback_reason": classification.reason,
             "executor_model": getattr(run, "model", None),
             "complexity": getattr(run, "complexity", None),
             "complexity_score": getattr(run, "complexity_score", None),
