@@ -32,4 +32,7 @@ __all__ = [
     "Project",
     "RFC",
     "BacklogSubtask",
+    "TerminalSession",
 ]
+
+from app.models.terminal_session import TerminalSession

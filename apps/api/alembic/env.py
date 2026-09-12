@@ -24,6 +24,8 @@ from app.models.chat import ChatSession, ChatMessage  # noqa
 from app.models.handoff import ExecutionPlan, AgentRun, AgentRunEvent  # noqa
 from app.models.ai_routing import AIModelCatalog, AIBudget, AICallLog  # noqa
 
+from app.models.terminal_session import TerminalSession  # noqa
+
 target_metadata = Base.metadata
 
 

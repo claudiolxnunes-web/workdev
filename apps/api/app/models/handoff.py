@@ -4,6 +4,7 @@ from sqlalchemy import (
 )
 
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import relationship
 
 from app.database import Base
 
@@ -71,6 +72,7 @@ class ExecutionPlan(Base):
 
 
 class AgentRun(Base):
+    terminal_session = relationship('TerminalSession', back_populates='run', uselist=False, passive_deletes='all')
     __tablename__ = "agent_runs"
 
     id = Column(
