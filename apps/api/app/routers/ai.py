@@ -4,6 +4,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, SecretStr
@@ -102,6 +103,36 @@ FOCO_PROJETO = (
     "Responda focado neste projeto, a menos que o usuário peça algo sobre outro."
 )
 
+AIHUB_PLAN_PROMPT_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "docs"
+    / "agents"
+    / "AIHUB_PLAN_SYSTEM_PROMPT.md"
+)
+
+
+def load_plan_system_prompt() -> str:
+    try:
+        prompt = AIHUB_PLAN_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    except OSError as erro:
+        raise RuntimeError(
+            f"Politica canonica PLAN indisponivel: {AIHUB_PLAN_PROMPT_PATH}"
+        ) from erro
+
+    if not prompt:
+        raise RuntimeError(
+            f"Politica canonica PLAN vazia: {AIHUB_PLAN_PROMPT_PATH}"
+        )
+    return prompt
+
+
+def _with_plan_policy(partes: list[str], nivel: str | None) -> list[str]:
+    if autoridade.normalizar(nivel) == autoridade.PLAN:
+        plan_prompt = load_plan_system_prompt()
+        if plan_prompt:
+            partes.append(plan_prompt)
+    return partes
+
 
 def get_db():
     db = SessionLocal()
@@ -125,11 +156,14 @@ def build_system(db: Session, project_slug: str | None = None,
     try:
         contexto = context_engine.build_chat_context(db, project_slug)
     except Exception as erro:  # noqa: BLE001 — contexto é melhoria, não requisito
-        return (
-            f"{SYSTEM}\n\n{modo}\n\n"
-            f"[contexto indisponível: {type(erro).__name__}. "
-            f"Use as ferramentas para consultar o estado atual.]"
-        )
+        return "\n\n".join(_with_plan_policy([
+            SYSTEM,
+            modo,
+            (
+                f"[contexto indisponível: {type(erro).__name__}. "
+                f"Use as ferramentas para consultar o estado atual.]"
+            ),
+        ], nivel))
 
     if contexto is None:
         contexto = context_engine.montar_contexto_global(db)
@@ -137,12 +171,17 @@ def build_system(db: Session, project_slug: str | None = None,
             f"\n\n[o projeto '{project_slug}' não existe no WorkDev; "
             f"contexto global abaixo]"
         )
-        return (
-            f"{SYSTEM}\n\n{modo}{aviso}\n\n"
-            f"{context_engine.renderizar_contexto(contexto)}"
-        )
+        return "\n\n".join(_with_plan_policy([
+            SYSTEM,
+            f"{modo}{aviso}",
+            context_engine.renderizar_contexto(contexto),
+        ], nivel))
 
-    partes = [SYSTEM, modo, context_engine.renderizar_contexto(contexto)]
+    partes = _with_plan_policy(
+        [SYSTEM, modo, context_engine.renderizar_contexto(contexto)],
+        nivel,
+    )
+
     if contexto.get("escopo") == context_engine.ESCOPO_PROJETO:
         partes.append(FOCO_PROJETO)
     return "\n\n".join(partes)

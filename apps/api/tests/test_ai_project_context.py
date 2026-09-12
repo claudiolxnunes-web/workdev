@@ -5,6 +5,7 @@ desconhecido); a montagem em si passou para o Context Engine na E1.2.
 `build_system` é o caminho novo: sempre devolve um system, com contexto global
 quando não há projeto ativo.
 """
+from pathlib import Path
 
 import unittest
 from unittest.mock import Mock, patch
@@ -109,6 +110,70 @@ class BuildSystemTest(unittest.TestCase):
 
         self.assertIn("contexto indisponível", system)
         self.assertIn("assistente do WorkDev", system)
+
+    def test_plan_inclui_politica_canonica(self):
+        db = Mock()
+        politica = ai.load_plan_system_prompt()
+
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL):
+            system = ai.build_system(db, nivel="plan")
+
+        self.assertTrue(politica)
+        self.assertIn(politica, system)
+
+    def test_politica_plan_nao_vaza_para_outros_niveis(self):
+        db = Mock()
+        politica = ai.load_plan_system_prompt()
+
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL):
+            for nivel in ("observe", "execute", "admin"):
+                with self.subTest(nivel=nivel):
+                    system = ai.build_system(db, nivel=nivel)
+                    self.assertNotIn(politica, system)
+
+    def test_plan_mantem_politica_com_slug_inexistente(self):
+        db = Mock()
+        politica = ai.load_plan_system_prompt()
+
+        with patch.object(ce, "build_chat_context", return_value=None), \
+             patch.object(ce, "montar_contexto_global", return_value=CONTEXTO_GLOBAL):
+            system = ai.build_system(db, "nao-existe", nivel="plan")
+
+        self.assertIn(politica, system)
+        self.assertIn("não existe no WorkDev", system)
+
+    def test_plan_mantem_politica_quando_contexto_falha(self):
+        db = Mock()
+        politica = ai.load_plan_system_prompt()
+
+        with patch.object(
+            ce,
+            "build_chat_context",
+            side_effect=RuntimeError("banco fora"),
+        ):
+            system = ai.build_system(db, nivel="plan")
+
+        self.assertIn(politica, system)
+        self.assertIn("contexto indisponível", system)
+
+    def test_plan_falha_se_politica_canonica_estiver_indisponivel(self):
+        db = Mock()
+        caminho_inexistente = Path("/tmp/workdev-plan-prompt-inexistente.md")
+
+        with patch.object(
+            ai,
+            "AIHUB_PLAN_PROMPT_PATH",
+            caminho_inexistente,
+        ), patch.object(
+            ce,
+            "build_chat_context",
+            return_value=CONTEXTO_GLOBAL,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Politica canonica PLAN indisponivel",
+            ):
+                ai.build_system(db, nivel="plan")
 
     def test_system_base_nao_tem_mais_slugs_fixos(self):
         """Os slugs vêm do banco desde a E1.2; a lista fixa mentia (6 de 19)."""
