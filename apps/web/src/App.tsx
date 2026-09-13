@@ -15,6 +15,7 @@ import Backlog from "./pages/Backlog"
 const EngineeringPage = lazy(() =>
   import('./modules/engineering').then((m) => ({ default: m.EngineeringPage }))
 )
+const RunTerminalPage = lazy(() => import("./modules/agents/RunTerminalPage"))
 const AIHub = lazy(() => import("./pages/AIHub"))
 const AgentsPage = lazy(() =>
   import("./modules/agents").then((module) => ({ default: module.AgentsPage }))
@@ -158,6 +159,7 @@ function App() {
         {/* Main Content */}
         <main className="min-w-0 max-w-full flex-1 overflow-x-hidden p-3 sm:p-5 md:p-8">
           <Routes>
+              <Route path="/runs/:runId/terminal" element={<RunTerminalPage />} />
             <Route path="/" element={<Dashboard />} />
             <Route path="/dashboard/executive" element={<ExecutiveDashboard />} />
             <Route path="/projects" element={<Projects />} />

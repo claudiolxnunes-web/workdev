@@ -143,6 +143,17 @@ class TerminalSessionManager:
         self.db.commit()
         return item
 
+    def snapshot(self, run_id):
+        """Read existing session and retained bytes; never create a process."""
+        item = self.health(run_id)
+        worker = None
+        if item.state == 'RUNNING':
+            try:
+                worker = self._request(item, 'health')
+            except (OSError, ValueError, TerminalSessionError):
+                item = self.health(run_id)
+        return item, worker
+
     def reattach(self, run_id):
         item = self.health(run_id)
         if item.state != 'RUNNING':

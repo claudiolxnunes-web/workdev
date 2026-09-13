@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Column, MetaData, Table, create_engine, event
+from sqlalchemy import Column, MetaData, Table, String, create_engine, event
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import sessionmaker
 
@@ -23,12 +23,13 @@ from app.services.terminal_sessions import TerminalSessionManager, TerminalSessi
 def api_terminal(tmp_path, monkeypatch):
     from sqlalchemy.orm import registry
     mapping = registry()
-    table = Table('agent_runs', mapping.metadata, Column('id', UUID(as_uuid=True), primary_key=True))
+    table = Table('agent_runs', mapping.metadata, Column('id', UUID(as_uuid=True), primary_key=True), Column('status', String, default='running'))
 
     class Run:
         pass
     mapping.map_imperatively(Run, table)
     monkeypatch.setattr(service, 'AgentRun', Run)
+    monkeypatch.setattr(run_terminal, 'AgentRun', Run)
     metadata = MetaData()
     table.to_metadata(metadata)
     TerminalSession.__table__.to_metadata(metadata)
@@ -163,3 +164,79 @@ def test_terminal_survives_api_side_disconnect(api_terminal):
     with factory() as db:
         item = TerminalSessionManager(db).health(run_id)
         assert item.state == 'RUNNING'
+
+
+def test_status_and_reconnect_do_not_require_chat_tables(api_terminal):
+    import base64
+    from sqlalchemy import text
+    client, run_id, factory, _ = api_terminal
+    client.post(f'/api/runs/{run_id}/terminal')
+    with factory() as db:
+        # Simulate removing an independent chat lifecycle; no terminal FK points there.
+        db.execute(text('CREATE TABLE chat_sessions (id integer PRIMARY KEY)'))
+        db.execute(text('CREATE TABLE chat_messages (id integer PRIMARY KEY)'))
+        db.execute(text('DROP TABLE chat_messages'))
+        db.execute(text('DROP TABLE chat_sessions'))
+        db.commit()
+    with client.websocket_connect(f'/ws/runs/{run_id}/terminal?existing=1') as ws:
+        marker = f'RETAINED_{uuid4().hex[:8]}'
+        send_input(ws, f'printf "{marker}\\n"\n')
+        read_until(ws, marker)
+    response = client.post(f'/api/runs/{run_id}/terminal/reconnect')
+    assert response.status_code == 200
+    state = response.json()
+    assert state['run'] == {'id': str(run_id), 'status': 'running'}
+    assert state['process']['alive'] and state['pty']['available']
+    assert marker.encode() in base64.b64decode(state['buffer']['data'])
+    assert state['websocket_url'].endswith('?existing=1')
+
+
+def test_missing_recovery_never_creates_session(api_terminal, monkeypatch):
+    client, run_id, factory, _ = api_terminal
+    def forbidden(*args):
+        pytest.fail('Recovery must not call create')
+    monkeypatch.setattr(TerminalSessionManager, 'create', forbidden)
+    assert client.post(f'/api/runs/{run_id}/terminal/reconnect').status_code == 404
+    with pytest.raises(Exception) as denied:
+        with client.websocket_connect(f'/ws/runs/{run_id}/terminal?existing=1'):
+            pass
+    assert getattr(denied.value, 'code', None) == 1008
+    with factory() as db:
+        assert db.query(TerminalSession).count() == 0
+
+
+def test_multiple_clients_recover_same_process(api_terminal, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    client, run_id, factory, _ = api_terminal
+    original = client.post(f'/api/runs/{run_id}/terminal').json()
+    def forbidden(*args):
+        pytest.fail('Recovery must not call create')
+    monkeypatch.setattr(TerminalSessionManager, 'create', forbidden)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        states = list(pool.map(lambda _: client.post(f'/api/runs/{run_id}/terminal/reconnect').json(), range(8)))
+    assert all(s['pid'] == original['pid'] and s['id'] == original['id'] for s in states)
+    with client.websocket_connect(f'/ws/runs/{run_id}/terminal?existing=1') as one:
+        with client.websocket_connect(f'/ws/runs/{run_id}/terminal?existing=1') as two:
+            marker = f'MULTI_{uuid4().hex[:8]}'
+            send_input(one, f'printf "{marker}\\n"\n')
+            assert marker.encode() in read_until(one, marker)
+            assert marker.encode() in read_until(two, marker)
+    with factory() as db:
+        assert db.query(TerminalSession).count() == 1
+        assert TerminalSessionManager(db).health(run_id).pid == original['pid']
+
+
+def test_ended_process_is_not_resurrected(api_terminal, monkeypatch):
+    client, run_id, factory, _ = api_terminal
+    original = client.post(f'/api/runs/{run_id}/terminal').json()
+    client.delete(f'/api/runs/{run_id}/terminal')
+    monkeypatch.setattr(TerminalSessionManager, 'create', lambda *args: pytest.fail('No resurrection'))
+    result = client.post(f'/api/runs/{run_id}/terminal/reconnect')
+    assert result.status_code == 409 and result.json()['detail']['state'] == 'CLOSED'
+    assert not result.json()['detail']['pty']['available']
+    with pytest.raises(Exception) as denied:
+        with client.websocket_connect(f'/ws/runs/{run_id}/terminal?existing=1'):
+            pass
+    assert getattr(denied.value, 'code', None) == 1008
+    with factory() as db:
+        assert db.query(TerminalSession).one().pid == original['pid']

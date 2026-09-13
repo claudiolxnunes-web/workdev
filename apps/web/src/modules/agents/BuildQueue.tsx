@@ -6,7 +6,7 @@ import {
   type AgentContext, type AgentName, type AgentRun, type DispatchJob,
   type RunStatus,
 } from "@/services/handoff.service"
-import { RunTerminal } from "./RunTerminal"
+import { useNavigate } from "react-router-dom"
 
 const statusLabel: Record<RunStatus, string> = {
   queued: "Aguardando", running: "Executando", blocked: "Bloqueado",
@@ -32,7 +32,7 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
   const [error, setError] = useState("")
   const [copied, setCopied] = useState(false)
   const [job, setJob] = useState<DispatchJob | null>(null)
-  const [terminalOpen, setTerminalOpen] = useState(false)
+  const navigate = useNavigate()
   // Separado de `error` de propósito: loadRuns() limpa `error` a cada 12s, e
   // o aviso de despacho já ativo carrega informação acionável (qual job está
   // vivo) que não pode sumir sozinha antes de o operador ler.
@@ -70,7 +70,7 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
     // O job pertence à run selecionada. Sem zerar aqui, o painel da run B
     // mostrava o despacho da run A — o `run_id` do job existe justamente para
     // essa fronteira não depender de disciplina de quem lê.
-    startTransition(() => { setJob(null); setDispatchNotice(""); setTerminalOpen(false) })
+    startTransition(() => { setJob(null); setDispatchNotice("") })
     if (selectedId) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadContext(selectedId)
@@ -210,7 +210,7 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
           <button onClick={() => void copyPrompt()} className="w-full rounded-lg bg-sky-600 px-3 py-2 font-medium hover:bg-sky-500">{copied ? "Contexto copiado" : "Copiar contexto para o Agent"}</button>
           <button
             type="button"
-            onClick={() => setTerminalOpen(true)}
+            onClick={() => selectedId && navigate(`/runs/${selectedId}/terminal`)}
             className="w-full rounded-lg bg-slate-800 px-3 py-2 font-medium text-sky-300 hover:bg-slate-700"
             title="Abre o terminal interativo desta execução (WebSocket + PTY)"
           >
@@ -316,15 +316,7 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
           {context.events.length > 0 && <details><summary className="cursor-pointer text-xs text-slate-400">Histórico ({context.events.length})</summary><div className="mt-2 space-y-1">{context.events.slice().reverse().map((event) => <p key={event.id} className="text-[11px] text-slate-500"><span className="text-slate-300">{event.type}</span>{event.message ? ` · ${event.message}` : ""}</p>)}</div></details>}
         </div>}
       </div>
-      {terminalOpen && selected && (
-        <div className="fixed inset-0 z-30 flex flex-col bg-slate-950/90 p-2 sm:p-6" role="dialog" aria-label="Terminal da execução">
-          <RunTerminal
-            runId={selected.id}
-            title={selected.task_title}
-            onClose={() => setTerminalOpen(false)}
-          />
-        </div>
-      )}
+
     </section>
   )
 }

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { MemoryRouter } from "react-router-dom"
 
 import { BuildQueue } from "./BuildQueue"
 import { HandoffApiError, type AgentRun } from "@/services/handoff.service"
@@ -43,7 +44,7 @@ describe("BuildQueue — despacho para runtime Ollama", () => {
 
   it("oferece o despacho para runtime Ollama e diz o que ele NÃO faz", async () => {
     getRuns.mockResolvedValue([run()])
-    render(<BuildQueue agent="local-code" />)
+    render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
 
     const botao = await screen.findByRole("button", { name: "Despachar para o runtime" })
     expect(botao).toBeEnabled()
@@ -54,7 +55,7 @@ describe("BuildQueue — despacho para runtime Ollama", () => {
 
   it("não oferece despacho para agente de CLI", async () => {
     getRuns.mockResolvedValue([run({ id: "run-2", agent: "claude" })])
-    render(<BuildQueue agent="claude" />)
+    render(<MemoryRouter><BuildQueue agent="claude" /></MemoryRouter>)
 
     await screen.findByText("Formulário Knowledge")
     expect(screen.queryByRole("button", { name: /Despachar/ })).not.toBeInTheDocument()
@@ -62,7 +63,7 @@ describe("BuildQueue — despacho para runtime Ollama", () => {
 
   it("com despacho em curso o botão não convida a duplicar", async () => {
     getRuns.mockResolvedValue([run({ dispatch_state: "dispatching", dispatch_attempts: 1 })])
-    render(<BuildQueue agent="local-code" />)
+    render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
 
     const botao = await screen.findByRole("button", { name: "Despacho em curso…" })
     expect(botao).toBeDisabled()
@@ -83,7 +84,7 @@ describe("BuildQueue — despacho para runtime Ollama", () => {
       },
       409,
     ))
-    render(<BuildQueue agent="local-code" />)
+    render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
 
     fireEvent.click(await screen.findByRole("button", { name: "Despachar para o runtime" }))
 

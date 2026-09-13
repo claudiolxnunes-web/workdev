@@ -144,7 +144,8 @@ def main():
                             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
                             response = {'rows': rows, 'cols': cols}
                     elif req.get('op') == 'health':
-                        response = {**state, 'output': output.decode(errors='replace')}
+                        response = {**state, 'output': output.decode(errors='replace'),
+                                    'output_base64': base64.b64encode(bytes(output)).decode()}
                     elif req.get('op') == 'attach':
                         # Long-lived stream: ack carries the retained buffer,
                         # then every PTY chunk is pushed as a JSON line.

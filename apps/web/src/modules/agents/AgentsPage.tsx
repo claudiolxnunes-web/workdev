@@ -69,6 +69,7 @@ const HEALTH_LABEL: Record<HealthStatus, string> = {
 type MobilePanel = "terminal" | "queue"
 
 export default function AgentsPage() {
+  const lastTerminalRun = localStorage.getItem("workdev_last_terminal_run")
   const [agent, setAgent] = useState<AgentName>("claude")
   const [awaitingApproval, setAwaitingApproval] = useState<Partial<Record<AgentName, boolean>>>({})
   const [health, setHealth] = useState<Partial<Record<AgentName, AgentHealth>>>({})
@@ -175,6 +176,7 @@ export default function AgentsPage() {
 
   return (
     <div className="flex min-h-[620px] min-w-0 max-w-full flex-col gap-3 overflow-hidden md:h-[calc(100dvh-9rem)] md:min-h-[420px]">
+      {lastTerminalRun && <a className="text-sm text-sky-400" href={`/runs/${encodeURIComponent(lastTerminalRun)}/terminal`}>Retomar último terminal</a>}
       <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div><h2 className="text-xl font-semibold sm:text-2xl">Agents</h2><p className="hidden text-sm text-slate-400 sm:block">Terminal seguro conectado às sessões tmux da VPS.</p></div>
         <div className="flex gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1" role="group" aria-label="Filtrar agentes">

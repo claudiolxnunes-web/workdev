@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 
-type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error"
+type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error" | "closed" | "missing"
 
 /** Terminal interativo da execução (run_id): xterm.js ↔ WebSocket ↔ PTY
  *  persistente. Fechar a aba/overlay não mata o processo — reconectar é um
@@ -14,6 +14,7 @@ export function RunTerminal({ runId, title, onClose }: {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
+  const reconnectRef = useRef<() => void>(() => {})
   const [status, setStatus] = useState<ConnectionStatus>("connecting")
   const [closeReason, setCloseReason] = useState("")
   const [copyFeedback, setCopyFeedback] = useState("")
@@ -22,6 +23,7 @@ export function RunTerminal({ runId, title, onClose }: {
     const container = containerRef.current
     if (!container) return
     let disposed = false
+    let connectionVersion = 0
     let reconnectAttempt = 0
     let reconnectTimer: number | undefined
     let resizeTimer: number | undefined
@@ -54,19 +56,51 @@ export function RunTerminal({ runId, title, onClose }: {
     const observer = new ResizeObserver(scheduleFit)
     observer.observe(container)
 
-    function connect() {
+    function retry() {
+      const delay = Math.min(1000 * (2 ** reconnectAttempt), 10000)
+      reconnectAttempt += 1
+      reconnectTimer = window.setTimeout(() => void connect(), delay)
+    }
+    async function connect() {
       if (disposed) return
       window.clearTimeout(reconnectTimer)
+      const version = ++connectionVersion
+      const previous = socketRef.current
+      socketRef.current = null
+      previous?.close()
       setStatus("connecting")
+      setCloseReason("")
+      let websocketUrl: string
+      try {
+        const response = await fetch(`/api/runs/${runId}/terminal/reconnect`, { method: "POST" })
+        const payload = await response.json()
+        if (disposed || version !== connectionVersion) return
+        if (!response.ok) {
+          const state = payload.detail?.state
+          if (response.status === 404) {
+            setStatus("missing"); setCloseReason("Nenhum terminal existente para esta execução.")
+          } else if (state === "CLOSED") {
+            setStatus("closed"); setCloseReason("O processo foi encerrado.")
+          } else {
+            setStatus("error"); setCloseReason("Terminal indisponível. Tentando recuperar a conexão…")
+            if (response.status !== 401 && response.status !== 403) retry()
+          }
+          return
+        }
+        websocketUrl = payload.websocket_url
+      } catch {
+        if (disposed || version !== connectionVersion) return
+        setStatus("error"); setCloseReason("Conexão indisponível. Tentando novamente…"); retry(); return
+      }
       try { fitAddon.fit() } catch { /* layout ainda não disponível */ }
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-      const size = new URLSearchParams({ cols: String(terminal.cols), rows: String(terminal.rows) })
-      const socket = new WebSocket(`${protocol}//${window.location.host}/ws/runs/${runId}/terminal?${size}`)
+      const socket = new WebSocket(`${protocol}//${window.location.host}${websocketUrl}`)
       socketRef.current = socket
       socket.binaryType = "arraybuffer"
       socket.onopen = () => {
         if (socket !== socketRef.current || disposed) return
         reconnectAttempt = 0
+        terminal.reset() // The server replays a full retained snapshot on every attach.
         setStatus("connected")
         window.setTimeout(fit, 0)
       }
@@ -76,31 +110,29 @@ export function RunTerminal({ runId, title, onClose }: {
           terminal.write(new Uint8Array(event.data))
           return
         }
-        // Mensagens de controle (status) não têm efeito visual por ora.
+        try {
+          const control = JSON.parse(event.data)
+          if (control.type === "status" && control.state !== "RUNNING") {
+            setStatus(control.state === "CLOSED" ? "closed" : "error")
+          }
+        } catch { /* Ignore unknown control messages. */ }
       }
       socket.onclose = (event) => {
         if (socket !== socketRef.current || disposed) return
         socketRef.current = null
-        if (event.code === 1008 && event.reason.includes("autenticado")) {
-          window.location.reload()
-          return
-        }
-        if (event.code === 1008) {
-          // Recusa lógica (run inexistente, terminal encerrado): não re tentar.
-          setStatus("error")
-          setCloseReason(event.reason || "Conexão recusada")
-          return
-        }
-        setStatus(event.wasClean ? "disconnected" : "error")
-        const delay = Math.min(1000 * (2 ** reconnectAttempt), 10000)
-        reconnectAttempt += 1
-        reconnectTimer = window.setTimeout(connect, delay)
+        setStatus("disconnected")
+        setCloseReason(event.reason)
+        // Resolve backend state again: a ended process must never be recreated.
+        retry()
       }
       socket.onerror = () => {
         if (socket === socketRef.current && !disposed) setStatus("error")
       }
     }
-    connect()
+    reconnectRef.current = () => { void connect() }
+    void connect()
+    const online = () => { void connect() }
+    window.addEventListener("online", online)
 
     const input = terminal.onData((data) => {
       const socket = socketRef.current
@@ -115,6 +147,8 @@ export function RunTerminal({ runId, title, onClose }: {
     })
     return () => {
       disposed = true
+      reconnectRef.current = () => {}
+      window.removeEventListener("online", online)
       window.clearTimeout(reconnectTimer)
       window.clearTimeout(resizeTimer)
       input.dispose(); observer.disconnect(); socketRef.current?.close(); terminal.dispose()
@@ -139,7 +173,7 @@ export function RunTerminal({ runId, title, onClose }: {
   }
 
   function reconnect() {
-    socketRef.current?.close(1000, "Reconexão solicitada")
+    reconnectRef.current()
   }
 
   return (
@@ -147,7 +181,7 @@ export function RunTerminal({ runId, title, onClose }: {
       <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-slate-800 px-3 py-1 text-sm sm:px-4">
         <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${status === "connected" ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-red-400"}`} />
         <span className="truncate">
-          {status === "connecting" ? "Conectando…" : status === "connected" ? "Conectado" : "Desconectado"}
+          {status === "connecting" ? "Conectando…" : status === "connected" ? "Conectado" : status === "closed" ? "Encerrado" : status === "missing" ? "Sem terminal" : "Indisponível"}
         </span>
         {title && <span className="truncate text-xs text-slate-500">• {title}</span>}
         {copyFeedback && <span className="text-xs text-emerald-400">{copyFeedback}</span>}
@@ -156,6 +190,12 @@ export function RunTerminal({ runId, title, onClose }: {
           <button type="button" onClick={() => void copyScreen()} className="min-h-8 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Copia tudo que está visível no terminal">
             Copiar tela
           </button>
+          {status === "missing" && <button type="button" onClick={() => {
+            void fetch(`/api/runs/${runId}/terminal`, { method: "POST" }).then(response => {
+              if (response.ok) reconnect()
+              else setCloseReason("Não foi possível criar o terminal desta execução.")
+            }).catch(() => setCloseReason("Conexão indisponível."))
+          }} className="min-h-8 rounded px-2 py-1 text-xs text-sky-400">Criar terminal</button>}
           <button type="button" onClick={reconnect} className="min-h-8 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Refazer a conexão sem encerrar o processo">
             Reconectar
           </button>

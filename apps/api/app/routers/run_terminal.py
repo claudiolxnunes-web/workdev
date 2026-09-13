@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, st
 
 from app.auth import websocket_is_authenticated
 from app.database import SessionLocal
+from app.models.handoff import AgentRun
 from app.services.terminal_sessions import TerminalSessionManager, TerminalSessionError
 
 
@@ -43,7 +44,21 @@ def _create(run_id: str):
 def _health(run_id: str):
     with SessionLocal() as db:
         manager = TerminalSessionManager(db)
-        return _session_payload(manager.health(run_id))
+        item, worker = manager.snapshot(run_id)
+        run = db.get(AgentRun, UUID(run_id))
+        buffer = (worker or {}).get('output_base64', '')
+        # Compatibility with an already-running Task 5 worker.
+        if worker and 'output_base64' not in worker:
+            buffer = base64.b64encode(worker.get('output', '').encode()).decode()
+        return {
+            **_session_payload(item),
+            'run': {'id': str(run.id), 'status': run.status},
+            'process': {'pid': item.pid, 'supervisor_pid': item.supervisor_pid,
+                        'identity': item.process_identity, 'alive': worker is not None and item.state == 'RUNNING'},
+            'pty': {'path': item.pty_path, 'available': worker is not None and item.state == 'RUNNING'},
+            'buffer': {'data': buffer, 'encoding': 'base64', 'limit_bytes': 65536,
+                       'available': worker is not None, 'retention': 'worker_lifetime'},
+        }
 
 
 def _close(run_id: str):
@@ -94,6 +109,15 @@ async def run_terminal_state(run_id: str):
         raise HTTPException(status_code=404, detail=str(error)) from error
 
 
+@router.post("/api/runs/{run_id}/terminal/reconnect")
+async def reconnect_run_terminal(run_id: str):
+    """Resolve an existing terminal. The WS recreates only the client bridge."""
+    snapshot = await run_terminal_state(run_id)
+    if snapshot['state'] != 'RUNNING' or not snapshot['pty']['available']:
+        raise HTTPException(409, detail=snapshot)
+    return {**snapshot, 'websocket_url': f'/ws/runs/{run_id}/terminal?existing=1'}
+
+
 @router.delete("/api/runs/{run_id}/terminal")
 async def close_run_terminal(run_id: str):
     """Encerra de vez o PTY da execução (mata o processo e descendentes)."""
@@ -113,28 +137,29 @@ async def _stream_output(websocket: WebSocket, conn, pending: bytes) -> None:
     """Empurra cada chunk do PTY para o browser até o worker fechar."""
     loop = asyncio.get_running_loop()
     buffer = bytearray(pending)
-    while True:
-        try:
-            chunk = await loop.sock_recv(conn, 65536)
-        except OSError:
-            return
-        if not chunk:
-            return
-        buffer.extend(chunk)
-        while b"\n" in buffer:
-            line, _, rest = bytes(buffer).partition(b"\n")
-            buffer = bytearray(rest)
-            try:
-                event = json.loads(line)
-                data = base64.b64decode(event.get("output", ""))
-            except (ValueError, TypeError):
-                continue
-            if data:
+    try:
+        while True:
+            # An attach ack can arrive together with complete stream events.
+            while b"\n" in buffer:
+                line, _, rest = bytes(buffer).partition(b"\n")
+                buffer = bytearray(rest)
                 try:
+                    event = json.loads(line)
+                    data = base64.b64decode(event.get("output", ""))
+                except (ValueError, TypeError):
+                    continue
+                if data:
                     await websocket.send_bytes(data)
-                except Exception:
-                    # Browser saiu no meio do stream; o PTY continua vivo.
-                    return
+            chunk = await loop.sock_recv(conn, 65536)
+            if not chunk:
+                return
+            buffer.extend(chunk)
+    except (OSError, WebSocketDisconnect, RuntimeError):
+        return
+    finally:
+        # Worker EOF must reach the browser, otherwise a dead PTY looks connected.
+        with suppress(Exception):
+            await websocket.close(code=1000, reason="Terminal stream ended")
 
 
 @router.websocket("/ws/runs/{run_id}/terminal")
@@ -148,15 +173,18 @@ async def run_terminal_ws(websocket: WebSocket, run_id: str):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Execução inválida")
         return
     try:
-        # Idempotente: cria o PTY na primeira conexão, reanexa nas seguintes.
-        await asyncio.to_thread(_create, run_id)
+        # Recovery is explicitly attach-only; retain Task 5's legacy first-open contract.
+        if websocket.query_params.get('existing') == '1':
+            await asyncio.to_thread(_health, run_id)
+        else:
+            await asyncio.to_thread(_create, run_id)
     except TerminalSessionError as error:
         reason = "Execução não encontrada" if "Run not found" in str(error) else str(error)[:110]
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=reason)
         return
     try:
         conn, ack, pending = await asyncio.to_thread(_attach, run_id)
-    except TerminalSessionError as error:
+    except (TerminalSessionError, OSError, ValueError) as error:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=str(error)[:110])
         return
 
