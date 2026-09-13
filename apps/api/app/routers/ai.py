@@ -20,7 +20,7 @@ from app.models.adr import ADR
 from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.ai_routing import AICallLog
-from app.services import autoridade, context_engine
+from app.services import autoridade, context_engine, rag_search
 from app.services import ai_cost_guard
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
@@ -307,6 +307,24 @@ TOOLS = [
                 "termo": {"type": "string"},
                 "categoria": {"type": "string", "enum": ["decisao", "licao", "solucao", "referencia"]},
             },
+        },
+    },
+    {
+        "name": "buscar_rag",
+        "description": "Busca semantica somente-leitura no indice RAG do WorkDev. Retorna evidencias indexadas com fonte_id, titulo, metadados, trecho e score. Use para localizar contexto tecnico, ADRs, decisoes, knowledge e backlog relacionados semanticamente.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "termo": {
+                    "type": "string",
+                    "description": "consulta em linguagem natural para busca semantica"
+                },
+                "limite": {
+                    "type": "integer",
+                    "description": "numero de resultados; padrao 8, maximo 20"
+                },
+            },
+            "required": ["termo"],
         },
     },
     {
@@ -632,6 +650,28 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
         return json.dumps(
             [{"titulo": r.title, "categoria": r.category, "tags": r.tags,
               "conteudo": r.content[:500]} for r in rs],
+            ensure_ascii=False,
+        )
+
+    if nome == "buscar_rag":
+        try:
+            resultados = rag_search.search(
+                args["termo"],
+                limit=args.get("limite", rag_search.DEFAULT_LIMIT),
+            )
+        except ValueError as erro:
+            return json.dumps(
+                {"erro": str(erro)},
+                ensure_ascii=False,
+            )
+        except rag_search.RagSearchUnavailable as erro:
+            return json.dumps(
+                {"erro": str(erro)},
+                ensure_ascii=False,
+            )
+
+        return json.dumps(
+            resultados,
             ensure_ascii=False,
         )
 
