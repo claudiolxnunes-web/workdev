@@ -45,7 +45,7 @@ BLOCKED_PATTERNS = (
     (re.compile(r"api key.*(?:missing|invalid)|(?:missing|invalid).*api key", re.I), "api_key"),
 )
 BUSY_PATTERNS = (
-    re.compile(r"working\s*\(|esc to interrupt|ctrl\+c to cancel|press esc to interrupt", re.I),
+    re.compile(r"working\s*\(|thinking\.{0,3}\s*\(|esc to interrupt|esc to cancel|ctrl\+c to cancel|press esc to interrupt", re.I),
 )
 
 

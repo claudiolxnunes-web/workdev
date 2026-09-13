@@ -36,6 +36,10 @@ class AgentHealthClassificationTest(unittest.TestCase):
         result = self.classify("kimi-code", "Working (12s • esc to interrupt)")
         self.assertEqual(result.status, "busy")
 
+    def test_gemini_thinking_is_busy(self):
+        result = self.classify("node", "Thinking... (esc to cancel, 5m 40s)")
+        self.assertEqual(result.status, "busy")
+
     def test_prompt_ready_agent_is_idle(self):
         result = self.classify("kimi-code", "Kimi Code\n> ")
         self.assertEqual(result.status, "idle")
