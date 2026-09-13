@@ -4,8 +4,10 @@ import { RunTerminal } from './RunTerminal'
 
 const terminal = vi.hoisted(() => ({
   reset: vi.fn(), write: vi.fn(), loadAddon: vi.fn(), open: vi.fn(), dispose: vi.fn(),
-  onData: vi.fn(() => ({ dispose: vi.fn() })), attachCustomKeyEventHandler: vi.fn(), cols: 80, rows: 24,
+  onData: vi.fn<(cb: (data: string) => void) => { dispose: () => void }>(),
+  attachCustomKeyEventHandler: vi.fn(), cols: 80, rows: 24,
 }))
+terminal.onData.mockReturnValue({ dispose: () => {} })
 vi.mock('@xterm/xterm', () => ({ Terminal: class { constructor() { return terminal } } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
 class Socket {
@@ -59,4 +61,43 @@ it('represents a closed terminal without starting another process', async () => 
   expect(await screen.findByText('Encerrado')).toBeInTheDocument()
   expect(Socket.instances).toHaveLength(0)
   expect(screen.queryByRole('button', {name: 'Criar terminal'})).not.toBeInTheDocument()
+})
+
+function statusMessage(instance: Socket, role: string) {
+  act(() => instance.onmessage?.({data: JSON.stringify({type: 'status', state: 'RUNNING', role})}))
+}
+
+it('represents observer role, blocks local input and offers takeover', async () => {
+  render(<RunTerminal runId="run-1" />)
+  await waitFor(() => expect(Socket.instances).toHaveLength(1))
+  act(() => Socket.instances[0].onopen?.())
+  statusMessage(Socket.instances[0], 'observer')
+  expect(await screen.findByText('Observador')).toBeInTheDocument()
+  const onData = terminal.onData.mock.calls[0][0] as (data: string) => void
+  onData('pwd\n')
+  expect(Socket.instances[0].send).not.toHaveBeenCalled()
+})
+
+it('assumir controle reabre o socket pedindo writer com takeover', async () => {
+  render(<RunTerminal runId="run-1" />)
+  await waitFor(() => expect(Socket.instances).toHaveLength(1))
+  act(() => Socket.instances[0].onopen?.())
+  statusMessage(Socket.instances[0], 'observer')
+  fireEvent.click(await screen.findByRole('button', {name: 'Assumir controle'}))
+  await waitFor(() => expect(Socket.instances).toHaveLength(2))
+  expect(Socket.instances[1].url).toContain('role=writer')
+  expect(Socket.instances[1].url).toContain('takeover=1')
+  expect(fetchMock).toHaveBeenLastCalledWith('/api/runs/run-1/terminal/reconnect', {method: 'POST'})
+})
+
+it('writer envia input normalmente e exibe Conectado', async () => {
+  render(<RunTerminal runId="run-1" />)
+  await waitFor(() => expect(Socket.instances).toHaveLength(1))
+  act(() => Socket.instances[0].onopen?.())
+  statusMessage(Socket.instances[0], 'writer')
+  expect(await screen.findByText('Conectado')).toBeInTheDocument()
+  expect(screen.queryByRole('button', {name: 'Assumir controle'})).not.toBeInTheDocument()
+  const onData = terminal.onData.mock.calls[0][0] as (data: string) => void
+  onData('ls\n')
+  expect(Socket.instances[0].send).toHaveBeenCalledWith(JSON.stringify({type: 'input', data: 'ls\n'}))
 })

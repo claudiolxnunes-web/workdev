@@ -5,6 +5,7 @@ its PTY; recreating this manager does not recreate the terminal. Call health to
 reconcile an exited worker with its durable result. No background health loop.
 """
 import json
+import logging
 import os
 from pathlib import Path
 import select
@@ -19,6 +20,9 @@ from uuid import UUID, uuid4
 from app.models.handoff import AgentRun
 from app.models.terminal_session import TerminalSession
 from app.services.terminal_worker import identity
+
+
+logger = logging.getLogger('workdev.terminal')
 
 
 class TerminalSessionError(RuntimeError):
@@ -71,7 +75,14 @@ class TerminalSessionManager:
         existing = self.db.query(TerminalSession).filter_by(run_id=run_id).first()
         if existing:
             self.db.commit()
-            return self.health(run_id)
+            item = self.health(run_id)
+            # Indisponibilidade de supervisor (ERROR) não é prova de morte: preserva
+            # o vínculo e a identidade. Só CLOSED confirmado pelo resultado final
+            # do worker libera a criação de uma nova sessão.
+            if item.state != 'CLOSED':
+                return item
+            self.db.delete(item)
+            self.db.commit()
         if len(os.fsencode(str(self.root / ('0' * 36 + '.sock')))) >= 108:
             self.db.rollback()
             raise TerminalSessionError('Terminal socket path exceeds Linux limit')
@@ -87,7 +98,9 @@ class TerminalSessionManager:
             worker = subprocess.Popen([sys.executable, str(Path(__file__).with_name('terminal_worker.py'))],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, start_new_session=True, close_fds=True, env=env)
-            worker.stdin.write(json.dumps(dict(id=str(item.id), socket_path=item.socket_path, cwd=cwd, argv=argv)) + '\n')
+            idle = float(os.getenv('WORKDEV_TERMINAL_IDLE_TIMEOUT_SECONDS', '3600') or 0)
+            worker.stdin.write(json.dumps(dict(id=str(item.id), socket_path=item.socket_path, cwd=cwd,
+                                               argv=argv, idle_timeout=idle)) + '\n')
             worker.stdin.close()
             if not select.select([worker.stdout], [], [], 5)[0]:
                 raise TerminalSessionError('PTY startup timed out')
@@ -97,6 +110,7 @@ class TerminalSessionManager:
             threading.Thread(target=worker.wait, daemon=True).start()
             self._apply(item, state)
             self.db.commit()
+            logger.info('terminal session created run=%s session=%s pid=%s', run_id, item.id, item.pid)
             return item
         except Exception as exc:
             if worker is not None:
@@ -128,6 +142,7 @@ class TerminalSessionManager:
 
     def health(self, run_id):
         item = self._session(run_id)
+        previous = item.state
         try:
             state = self._request(item, 'health')
             self._apply(item, state)
@@ -140,6 +155,9 @@ class TerminalSessionManager:
                 self._apply(item, json.loads(result.read_text()))
             elif item.state not in {'CLOSED', 'STOPPING'}:
                 item.state, item.error = 'ERROR', f'Terminal unavailable: {type(exc).__name__}'
+        if previous != item.state and item.state in {'CLOSED', 'ERROR'}:
+            logger.info('terminal session ended run=%s session=%s state=%s exit_code=%s',
+                        run_id, item.id, item.state, item.exit_code)
         self.db.commit()
         return item
 
@@ -223,6 +241,7 @@ class TerminalSessionManager:
         self.db.commit()
         try:
             self._request(item, 'close')
+            logger.info('terminal close requested run=%s session=%s', run_id, item.id)
         except (OSError, ValueError) as exc:
             item.state, item.error = 'ERROR', 'Supervisor unavailable; refusing to signal an unverified PID'
             self.db.commit()

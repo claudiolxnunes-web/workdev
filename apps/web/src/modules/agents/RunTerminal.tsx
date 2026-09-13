@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error" | "closed" | "missing"
+type Role = "writer" | "observer" | "unknown"
 
 /** Terminal interativo da execução (run_id): xterm.js ↔ WebSocket ↔ PTY
  *  persistente. Fechar a aba/overlay não mata o processo — reconectar é um
@@ -14,8 +15,11 @@ export function RunTerminal({ runId, title, onClose }: {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
-  const reconnectRef = useRef<() => void>(() => {})
+  const reconnectRef = useRef<(takeOver?: boolean) => void>(() => {})
   const [status, setStatus] = useState<ConnectionStatus>("connecting")
+  // Só quem detém a escrita pode mandar input/resize; observer fica em leitura.
+  const roleRef = useRef<Role>("unknown")
+  const [role, setRole] = useState<Role>("unknown")
   const [closeReason, setCloseReason] = useState("")
   const [copyFeedback, setCopyFeedback] = useState("")
 
@@ -44,7 +48,8 @@ export function RunTerminal({ runId, title, onClose }: {
       try {
         fitAddon.fit()
         const socket = socketRef.current
-        if (socket?.readyState === WebSocket.OPEN) {
+        // Resize também é escrita: observer apenas ajusta o layout local.
+        if (roleRef.current !== "observer" && socket?.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }))
         }
       } catch { /* layout ainda não disponível */ }
@@ -61,7 +66,7 @@ export function RunTerminal({ runId, title, onClose }: {
       reconnectAttempt += 1
       reconnectTimer = window.setTimeout(() => void connect(), delay)
     }
-    async function connect() {
+    async function connect(takeOver = false) {
       if (disposed) return
       window.clearTimeout(reconnectTimer)
       const version = ++connectionVersion
@@ -87,7 +92,7 @@ export function RunTerminal({ runId, title, onClose }: {
           }
           return
         }
-        websocketUrl = payload.websocket_url
+        websocketUrl = payload.websocket_url + (takeOver ? "&role=writer&takeover=1" : "")
       } catch {
         if (disposed || version !== connectionVersion) return
         setStatus("error"); setCloseReason("Conexão indisponível. Tentando novamente…"); retry(); return
@@ -112,8 +117,12 @@ export function RunTerminal({ runId, title, onClose }: {
         }
         try {
           const control = JSON.parse(event.data)
-          if (control.type === "status" && control.state !== "RUNNING") {
-            setStatus(control.state === "CLOSED" ? "closed" : "error")
+          if (control.type === "status") {
+            roleRef.current = control.role === "observer" ? "observer" : "writer"
+            setRole(roleRef.current)
+            if (control.state !== "RUNNING") {
+              setStatus(control.state === "CLOSED" ? "closed" : "error")
+            }
           }
         } catch { /* Ignore unknown control messages. */ }
       }
@@ -129,12 +138,14 @@ export function RunTerminal({ runId, title, onClose }: {
         if (socket === socketRef.current && !disposed) setStatus("error")
       }
     }
-    reconnectRef.current = () => { void connect() }
+    reconnectRef.current = (takeOver?: boolean) => { void connect(takeOver) }
     void connect()
     const online = () => { void connect() }
     window.addEventListener("online", online)
 
     const input = terminal.onData((data) => {
+      // Observer não envia teclas na UI; backend também ignora input de observer.
+      if (roleRef.current === "observer") return
       const socket = socketRef.current
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }))
     })
@@ -172,8 +183,8 @@ export function RunTerminal({ runId, title, onClose }: {
     } catch { setCopyFeedback("Falha ao copiar") }
   }
 
-  function reconnect() {
-    reconnectRef.current()
+  function reconnect(takeOver?: boolean) {
+    reconnectRef.current(takeOver)
   }
 
   return (
@@ -181,7 +192,7 @@ export function RunTerminal({ runId, title, onClose }: {
       <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-slate-800 px-3 py-1 text-sm sm:px-4">
         <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${status === "connected" ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-red-400"}`} />
         <span className="truncate">
-          {status === "connecting" ? "Conectando…" : status === "connected" ? "Conectado" : status === "closed" ? "Encerrado" : status === "missing" ? "Sem terminal" : "Indisponível"}
+          {status === "connecting" ? "Conectando…" : status === "connected" ? (role === "observer" ? "Observador" : "Conectado") : status === "closed" ? "Encerrado" : status === "missing" ? "Sem terminal" : "Indisponível"}
         </span>
         {title && <span className="truncate text-xs text-slate-500">• {title}</span>}
         {copyFeedback && <span className="text-xs text-emerald-400">{copyFeedback}</span>}
@@ -190,13 +201,16 @@ export function RunTerminal({ runId, title, onClose }: {
           <button type="button" onClick={() => void copyScreen()} className="min-h-8 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Copia tudo que está visível no terminal">
             Copiar tela
           </button>
+          {status === "connected" && role === "observer" && <button type="button" onClick={() => reconnect(true)} className="min-h-8 rounded px-2 py-1 text-xs text-amber-300 hover:bg-slate-800" title="Assume a escrita deste terminal (fecha o writer atual)">
+            Assumir controle
+          </button>}
           {status === "missing" && <button type="button" onClick={() => {
             void fetch(`/api/runs/${runId}/terminal`, { method: "POST" }).then(response => {
               if (response.ok) reconnect()
               else setCloseReason("Não foi possível criar o terminal desta execução.")
             }).catch(() => setCloseReason("Conexão indisponível."))
           }} className="min-h-8 rounded px-2 py-1 text-xs text-sky-400">Criar terminal</button>}
-          <button type="button" onClick={reconnect} className="min-h-8 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Refazer a conexão sem encerrar o processo">
+          <button type="button" onClick={() => reconnect()} className="min-h-8 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Refazer a conexão sem encerrar o processo">
             Reconectar
           </button>
           {onClose && (

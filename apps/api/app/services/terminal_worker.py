@@ -30,6 +30,9 @@ def identity(pid):
 def main():
     config = json.loads(sys.stdin.readline())
     path = Path(config['socket_path'])
+    # Idle reaper: >0 means "no output/write/attach within N seconds -> stop".
+    idle_timeout = float(config.get('idle_timeout') or 0)
+    last_activity = time.monotonic()
     os.umask(0o077)
     # Reap orphaned descendants as well as the direct PTY child.
     if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
@@ -89,12 +92,17 @@ def main():
             if child:
                 exit_status = os.waitstatus_to_exitcode(status)
                 break
+            # Health reads do not renew activity; idle still expires on poll-only sessions.
+            if idle_timeout > 0 and time.monotonic() - last_activity > idle_timeout:
+                stopping = True
+                break
             for key, _events in selector.select(.1):
                 if key.fileobj == master:
                     try:
                         chunk = os.read(master, 65536)
                         output.extend(chunk)
                         del output[:-65536]
+                        last_activity = time.monotonic()
                         event = json.dumps({'output': base64.b64encode(chunk).decode()}).encode() + b'\n'
                         for client in attached[:]:
                             try:
@@ -134,6 +142,7 @@ def main():
                     elif req.get('op') == 'write':
                         data = req.get('text', '').encode()
                         response = {'written': os.write(master, data)}
+                        last_activity = time.monotonic()
                     elif req.get('op') == 'resize':
                         try:
                             rows = max(5, min(int(req.get('rows')), 300))
@@ -143,10 +152,12 @@ def main():
                         else:
                             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
                             response = {'rows': rows, 'cols': cols}
+                        last_activity = time.monotonic()
                     elif req.get('op') == 'health':
                         response = {**state, 'output': output.decode(errors='replace'),
                                     'output_base64': base64.b64encode(bytes(output)).decode()}
                     elif req.get('op') == 'attach':
+                        last_activity = time.monotonic()
                         # Long-lived stream: ack carries the retained buffer,
                         # then every PTY chunk is pushed as a JSON line.
                         conn.sendall(json.dumps({

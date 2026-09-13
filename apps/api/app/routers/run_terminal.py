@@ -7,6 +7,8 @@ Fechar o navegador nunca encerra o PTY: reconexão é apenas um novo attach.
 import asyncio
 import base64
 import json
+import logging
+import threading
 from contextlib import suppress
 from uuid import UUID
 
@@ -18,7 +20,53 @@ from app.models.handoff import AgentRun
 from app.services.terminal_sessions import TerminalSessionManager, TerminalSessionError
 
 
+logger = logging.getLogger('workdev.terminal')
 router = APIRouter(tags=["run-terminal"])
+
+# Writer/observer registry: produção roda um único processo uvicorn; o mapa em
+# memória é autoridade suficiente e libera sempre em finally.
+MAX_WS_CLIENTS_PER_RUN = 32
+_clients_lock = threading.Lock()
+_clients: dict[str, dict] = {}  # run_id -> {'writer': WebSocket|None, 'total': int}
+
+
+def _claim(run_id: str, websocket: WebSocket, requested: str | None, takeover: bool):
+    """Resolve o papel e registra o cliente. Retorna (role, motivo, writer_expulso)."""
+    with _clients_lock:
+        entry = _clients.setdefault(run_id, {'writer': None, 'total': 0})
+        if entry['total'] >= MAX_WS_CLIENTS_PER_RUN:
+            return None, 'Limite de clientes por execução atingido', None
+        occupied = entry['writer'] is not None
+        if requested == 'observer' or (requested is None and occupied):
+            entry['total'] += 1
+            logger.info('terminal observer attached run=%s', run_id)
+            return 'observer', None, None
+        kicked = None
+        if occupied:
+            if not takeover:
+                return None, 'Escrita em uso por outro cliente (use takeover=1)', None
+            kicked = entry['writer'] if entry['writer'] is not websocket else None
+            if kicked is not None:
+                logger.info('terminal writer takeover run=%s', run_id)
+        entry['writer'] = websocket
+        entry['total'] += 1
+        logger.info('terminal writer claimed run=%s', run_id)
+        return 'writer', None, kicked
+
+
+def _release(run_id: str, websocket: WebSocket):
+    with _clients_lock:
+        entry = _clients.get(run_id)
+        if entry is None:
+            return
+        was_writer = entry['writer'] is websocket
+        if was_writer:
+            entry['writer'] = None
+        entry['total'] -= 1
+        if entry['total'] <= 0:
+            del _clients[run_id]
+    if was_writer:
+        logger.info('terminal writer released run=%s', run_id)
 
 
 def _session_payload(item) -> dict:
@@ -168,10 +216,16 @@ async def run_terminal_ws(websocket: WebSocket, run_id: str):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Não autenticado")
         return
     try:
-        UUID(run_id)
+        # Canonical form: UUID aliases (case, sem hífens) não podem abrir slots paralelos.
+        run_id = str(UUID(run_id))
     except ValueError:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Execução inválida")
         return
+    requested = websocket.query_params.get('role')
+    if requested not in (None, 'writer', 'observer'):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Papel inválido")
+        return
+    takeover = websocket.query_params.get('takeover') == '1'
     try:
         # Recovery is explicitly attach-only; retain Task 5's legacy first-open contract.
         if websocket.query_params.get('existing') == '1':
@@ -182,20 +236,42 @@ async def run_terminal_ws(websocket: WebSocket, run_id: str):
         reason = "Execução não encontrada" if "Run not found" in str(error) else str(error)[:110]
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=reason)
         return
-    try:
-        conn, ack, pending = await asyncio.to_thread(_attach, run_id)
-    except (TerminalSessionError, OSError, ValueError) as error:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=str(error)[:110])
+    role, rejection, kicked = _claim(run_id, websocket, requested, takeover)
+    if role is None:
+        logger.warning('terminal ws rejected run=%s reason=%s', run_id, rejection)
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=rejection[:110])
         return
 
     output_task: asyncio.Task | None = None
+    conn = None
     try:
+        if kicked is not None:
+            with suppress(Exception):
+                await kicked.close(code=1000, reason='Escrita assumida por outro cliente')
+        # Cancelamento do handler não pode cancelar a thread de attach
+        # (shield), senão o socket tardio se perderia sem close.
+        consumed = False
+        attach_task = asyncio.ensure_future(asyncio.to_thread(_attach, run_id))
+        try:
+            conn, ack, pending = await asyncio.shield(attach_task)
+            consumed = True
+        except asyncio.CancelledError as cancel:
+            def _close_orphan(done):
+                if consumed or done.cancelled():
+                    return
+                with suppress(Exception):
+                    done.result()[0].close()
+            attach_task.add_done_callback(_close_orphan)
+            raise cancel
+        except (TerminalSessionError, OSError, ValueError) as error:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=str(error)[:110])
+            return
         await websocket.accept()
         snapshot = base64.b64decode(ack.get("output", ""))
         if snapshot:
             await websocket.send_bytes(snapshot)
         await websocket.send_text(json.dumps({
-            "type": "status", "state": ack.get("state"), "pid": ack.get("pid"),
+            "type": "status", "state": ack.get("state"), "pid": ack.get("pid"), "role": role,
         }))
         output_task = asyncio.create_task(_stream_output(websocket, conn, pending))
 
@@ -204,7 +280,7 @@ async def run_terminal_ws(websocket: WebSocket, run_id: str):
             if message.get("type") == "websocket.disconnect":
                 break
             text = message.get("text")
-            if not text:
+            if not text or role != 'writer':
                 continue
             try:
                 payload = json.loads(text)
@@ -224,10 +300,13 @@ async def run_terminal_ws(websocket: WebSocket, run_id: str):
     except WebSocketDisconnect:
         pass
     finally:
+        # Liberação garantida em normal, abrupto, erro e cancelamento.
+        _release(run_id, websocket)
         if output_task:
             output_task.cancel()
             with suppress(asyncio.CancelledError, Exception):
                 await output_task
         # Só o attach morre aqui — o PTY/worker sobrevive para reconexão.
-        with suppress(OSError):
-            conn.close()
+        if conn is not None:
+            with suppress(OSError):
+                conn.close()

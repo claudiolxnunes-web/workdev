@@ -240,3 +240,221 @@ def test_ended_process_is_not_resurrected(api_terminal, monkeypatch):
     assert getattr(denied.value, 'code', None) == 1008
     with factory() as db:
         assert db.query(TerminalSession).one().pid == original['pid']
+
+
+def status_of(ws):
+    for _ in range(10):
+        message = ws.receive()
+        if message.get('text'):
+            return json.loads(message['text'])
+    raise AssertionError('status frame not received')
+
+
+def test_second_writer_rejected_and_role_released_on_exit(api_terminal):
+    """Fase 2: um writer exclusivo; liberação garantida no disconnect."""
+    client, run_id, _, _ = api_terminal
+    with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=writer'):
+        with pytest.raises(Exception) as denied:
+            with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=writer'):
+                pass
+        assert getattr(denied.value, 'code', None) == 1008
+    with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=writer') as ws:
+        assert status_of(ws)['role'] == 'writer'
+
+
+def test_invalid_role_is_rejected(api_terminal):
+    client, run_id, _, _ = api_terminal
+    with pytest.raises(Exception) as denied:
+        with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=bogus'):
+            pass
+    assert getattr(denied.value, 'code', None) == 1008
+
+
+def test_client_limit_is_enforced(api_terminal, monkeypatch):
+    """Fase 2: limite de clientes concorrentes por execução."""
+    monkeypatch.setattr(run_terminal, 'MAX_WS_CLIENTS_PER_RUN', 2)
+    client, run_id, _, _ = api_terminal
+    with client.websocket_connect(f'/ws/runs/{run_id}/terminal'):
+        with client.websocket_connect(f'/ws/runs/{run_id}/terminal'):
+            with pytest.raises(Exception) as denied:
+                with client.websocket_connect(f'/ws/runs/{run_id}/terminal'):
+                    pass
+            assert getattr(denied.value, 'code', None) == 1008
+
+
+def test_observer_receives_output_but_input_is_ignored(api_terminal):
+    """Fase 3: observer acompanha em tempo real e não consegue escrever."""
+    client, run_id, _, _ = api_terminal
+    with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=writer') as writer:
+        with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=observer') as observer:
+            assert status_of(writer)['role'] == 'writer'
+            assert status_of(observer)['role'] == 'observer'
+            forbidden = f'FORBIDDEN_{uuid4().hex[:8]}'
+            send_input(observer, f'printf "{forbidden}\\n"\n')
+            allowed = f'ALLOWED_{uuid4().hex[:8]}'
+            send_input(writer, f'printf "{allowed}\\n"\n')
+            received = read_until(observer, allowed)
+            assert allowed.encode() in received
+            assert forbidden.encode() not in received
+
+
+def test_takeover_transfers_writing_without_dropping_observers(api_terminal):
+    """Fase 3: assumir controle não afeta quem só observa."""
+    client, run_id, _, _ = api_terminal
+    with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=writer'):
+        with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=observer') as observer:
+            with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=writer&takeover=1') as new_writer:
+                assert status_of(new_writer)['role'] == 'writer'
+                marker = f'TAKEOVER_{uuid4().hex[:8]}'
+                send_input(new_writer, f'printf "{marker}\\n"\n')
+                assert marker.encode() in read_until(observer, marker)
+
+
+def test_recreate_after_close_gets_fresh_session(api_terminal):
+    client, run_id, _, _ = api_terminal
+    first = client.post(f'/api/runs/{run_id}/terminal').json()
+    client.delete(f'/api/runs/{run_id}/terminal')
+    second = client.post(f'/api/runs/{run_id}/terminal').json()
+    assert second['state'] == 'RUNNING' and second['id'] != first['id']
+
+
+def test_idle_reaper_closes_session_and_allows_a_new_one(api_terminal, monkeypatch):
+    """Fase 4: inatividade acima do timeout encerra PTY; recriação fica liberada."""
+    monkeypatch.setenv('WORKDEV_TERMINAL_IDLE_TIMEOUT_SECONDS', '0.3')
+    client, run_id, _, _ = api_terminal
+    first = client.post(f'/api/runs/{run_id}/terminal').json()
+    deadline = time.monotonic() + 10
+    state = {}
+    while time.monotonic() < deadline:
+        state = client.get(f'/api/runs/{run_id}/terminal').json()
+        if state['state'] == 'CLOSED':
+            break
+        time.sleep(.1)
+    assert state['state'] == 'CLOSED' and not state['pty']['available']
+    second = client.post(f'/api/runs/{run_id}/terminal').json()
+    assert second['state'] == 'RUNNING' and second['id'] != first['id']
+
+
+def test_terminal_logs_never_contain_raw_stdin_or_stdout(api_terminal, caplog):
+    """Fase 5: eventos de ciclo de vida chegam; payloads de terminal, nunca."""
+    import logging
+    client, run_id, _, _ = api_terminal
+    marker = f'SECRET_STDIN_{uuid4().hex[:10]}'
+    with caplog.at_level(logging.INFO, logger='workdev.terminal'):
+        with client.websocket_connect(f'/ws/runs/{run_id}/terminal') as writer:
+            send_input(writer, f'echo "{marker}"\n')
+            read_until(writer, marker)
+        client.delete(f'/api/runs/{run_id}/terminal')
+    assert marker not in caplog.text
+    assert 'writer claimed' in caplog.text
+    assert 'session created' in caplog.text
+
+
+def test_uuid_aliases_cannot_bypass_writer_exclusivity(api_terminal):
+    """Regressão revisor: alias de UUID (case/sem hífen) não abre slot paralelo."""
+    client, run_id, _, _ = api_terminal
+    upper = str(run_id).upper()
+    bare = str(run_id).replace('-', '')
+    with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=writer'):
+        for alias in (upper, bare):
+            with pytest.raises(Exception) as denied:
+                with client.websocket_connect(f'/ws/runs/{alias}/terminal?role=writer'):
+                    pass
+            assert getattr(denied.value, 'code', None) == 1008
+
+
+def test_takeover_via_uuid_alias_kicks_previous_writer(api_terminal):
+    """Takeover por alias fecha o writer antigo e assume o mesmo slot canônico."""
+    client, run_id, _, _ = api_terminal
+    alias = str(run_id).upper()
+    with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=writer'):
+        with client.websocket_connect(f'/ws/runs/{alias}/terminal?role=writer&takeover=1') as writer:
+            assert status_of(writer)['role'] == 'writer'
+            marker = f'ALIAS_{uuid4().hex[:8]}'
+            send_input(writer, f'printf "{marker}\\n"\n')
+            assert marker.encode() in read_until(writer, marker)
+
+
+def test_transient_supervisor_error_never_unbinds_session(api_terminal, monkeypatch):
+    """Regressão revisor: timeout temporário no health não apaga vínculo nem cria outro PTY."""
+    client, run_id, factory, _ = api_terminal
+    original = client.post(f'/api/runs/{run_id}/terminal').json()
+    original_request = TerminalSessionManager._request
+    def flaky(self, item, op, **kwargs):
+        if op == 'health':
+            raise OSError('temporary supervisor timeout')
+        return original_request(self, item, op, **kwargs)
+    monkeypatch.setattr(TerminalSessionManager, '_request', flaky)
+    degraded = client.post(f'/api/runs/{run_id}/terminal').json()
+    assert degraded['state'] == 'ERROR' and degraded['id'] == original['id']
+    TerminalSessionManager._request = original_request  # supervisor recuperado
+    with factory() as db:
+        assert db.query(TerminalSession).count() == 1
+    recovered = client.post(f'/api/runs/{run_id}/terminal').json()
+    assert recovered['state'] == 'RUNNING' and recovered['id'] == original['id']
+
+
+def test_confirmed_close_still_allows_recreation(api_terminal):
+    """CLOSED confirmado pelo resultado do worker libera a criação de nova sessão."""
+    client, run_id, factory, _ = api_terminal
+    first = client.post(f'/api/runs/{run_id}/terminal').json()
+    client.delete(f'/api/runs/{run_id}/terminal')
+    with factory() as db:
+        assert db.query(TerminalSession).count() == 1
+    second = client.post(f'/api/runs/{run_id}/terminal').json()
+    assert second['state'] == 'RUNNING' and second['id'] != first['id']
+
+
+def test_cancelled_attach_closes_orphan_socket_and_releases_writer(api_terminal, monkeypatch):
+    """Regressão revisor: cancelamento fecha socket tardio e libera o slot de writer."""
+    import asyncio
+    import threading
+    client, run_id, _, _ = api_terminal
+    client.post(f'/api/runs/{run_id}/terminal')
+    entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+    class Connection:
+        closed = False
+        def close(self):
+            self.closed = True
+    connection = Connection()
+    original_attach = run_terminal._attach
+    def attach(_run_id):
+        entered.set()
+        release.wait(5)
+        returned.set()
+        return connection, {}, b''
+    monkeypatch.setattr(run_terminal, '_attach', attach)
+
+    class FakeWS:
+        query_params = {'role': 'writer'}
+        cookies = {COOKIE_NAME: create_session_token()}
+        async def close(self, code=1000, reason=''):
+            pass
+        async def accept(self):
+            pass
+        async def send_bytes(self, _):
+            pass
+        async def send_text(self, _):
+            pass
+        async def receive(self):
+            await asyncio.sleep(3600)
+
+    async def drive():
+        task = asyncio.create_task(run_terminal.run_terminal_ws(FakeWS(), str(run_id)))
+        while not entered.is_set():
+            await asyncio.sleep(.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release.set()
+        while not returned.is_set():
+            await asyncio.sleep(.01)
+        await asyncio.sleep(.05)
+
+    asyncio.run(drive())
+    run_terminal._attach = original_attach  # tentativa seguinte usa attach real
+    assert connection.closed, 'socket tardio do attach deve ser fechado explicitamente'
+    assert run_terminal._clients.get(str(run_id)) in (None, {'writer': None, 'total': 0})
+    # Slot livre: um writer explícito entra na tentativa seguinte.
+    with client.websocket_connect(f'/ws/runs/{run_id}/terminal?role=writer') as writer:
+        assert status_of(writer)['role'] == 'writer'
