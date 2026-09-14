@@ -55,6 +55,11 @@ def test_always_on_recovers_after_each_crash_but_respects_disconnect(fake_proces
 
 
 def test_finalize_auto_keeps_explicit_disconnect_and_legacy_connect_updates_intent(fake_processes, monkeypatch):
+    # This regression fakes processes; audit persistence is exercised by the
+    # Workspace HTTP/E2E tests against an isolated database.
+    audit_events = []
+    monkeypatch.setattr('app.services.agent_workspace.audit',
+                        lambda action, **payload: audit_events.append((action, payload)))
     lifecycle.stop('codex', 'codex')
     monkeypatch.setattr(terminal, '_stop_standby_session', lambda *_args: True)
     finalized = terminal.finalize_auto_runtime('codex', 'run-test')
@@ -68,6 +73,10 @@ def test_finalize_auto_keeps_explicit_disconnect_and_legacy_connect_updates_inte
     disconnected = asyncio.run(terminal.stop_agent_session('codex', confirm=True))
     assert not disconnected['running']
     assert lifecycle.read_operation('codex')['desired'] == 'OFFLINE'
+    assert [(action, payload.get('result', 'requested')) for action, payload in audit_events] == [
+        ('start_agent', 'requested'), ('start_agent', 'succeeded'),
+        ('stop_agent', 'requested'), ('stop_agent', 'succeeded'),
+    ]
 
 
 def test_collector_never_waits_behind_lifecycle_lock(fake_processes):
