@@ -368,11 +368,12 @@ def _run_auto_agent(
     agent: str,
     model: str | None,
     prompt: str,
+    allow_manual: bool = False,
 ) -> None:
     db = SessionLocal()
     try:
         run = _get_run(db, run_id)
-        if run.routing_mode != "auto" or run.status != "queued":
+        if (run.routing_mode != "auto" and not allow_manual) or run.status != "queued":
             return
 
         run, event = update_run(
@@ -1024,6 +1025,19 @@ def get_agent_context(
         ) from error
 
 
+@router.post('/runs/{run_id}/start', status_code=202)
+def start_workspace_run(run_id: UUID, background: BackgroundTasks, db: Session = Depends(get_db)):
+    from app.services.agent_workspace import audit
+    from app.routers.terminal import STANDBY_COMMANDS
+    run = _get_run(db, run_id)
+    if run.status != 'queued' or run.agent not in STANDBY_COMMANDS:
+        raise HTTPException(409, 'Somente Run CLI aguardando pode iniciar sessão isolada')
+    context = build_context(db, run)
+    audit('start_run', agent=run.agent, run_id=run.id)
+    background.add_task(_run_auto_agent, run.id, run.agent, run.model, context['prompt'], True)
+    return {'run_id': str(run.id), 'status': run.status, 'accepted': True}
+
+
 @router.patch("/runs/{run_id}")
 def update_agent_run(
     run_id: UUID,
@@ -1034,6 +1048,18 @@ def update_agent_run(
     current = _get_run(db, run_id)
     data = payload.model_dump(exclude_unset=True)
     requested_status = data.get("status")
+
+    if requested_status == 'cancelled':
+        from app.services.agent_workspace import stop_run
+        from app.services.agent_lifecycle import LifecycleError
+        from app.services.terminal_sessions import TerminalSessionError
+        try:
+            stopped = stop_run(db, current)
+            _sync_run(background, db, stopped)
+            return _run_out(db, stopped)
+        except (HandoffError, LifecycleError, TerminalSessionError) as error:
+            raise HTTPException(409, detail={'code': getattr(error, 'code', 'stop_failed'),
+                                              'message': str(error)}) from error
 
     # BUG FIX: Capturar previous_status ANTES de update_run modificar o objeto
     # Após update_run, current.status já foi alterado, então a comparação

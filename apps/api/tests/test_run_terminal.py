@@ -21,6 +21,9 @@ from app.services.terminal_sessions import TerminalSessionManager, TerminalSessi
 
 @pytest.fixture
 def api_terminal(tmp_path, monkeypatch):
+    # Audit persistence has its own HTTP integration fixture.
+    monkeypatch.setattr('app.services.agent_workspace.audit', lambda *args, **kwargs: None)
+    monkeypatch.setattr('app.services.agent_lifecycle.GROUPS_FILE', tmp_path / 'groups.json')
     from sqlalchemy.orm import registry
     mapping = registry()
     table = Table('agent_runs', mapping.metadata, Column('id', UUID(as_uuid=True), primary_key=True), Column('status', String, default='running'))

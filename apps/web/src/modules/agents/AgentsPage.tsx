@@ -31,11 +31,12 @@ const RUNTIME_DOT: Record<string, string> = {
 
 const configuredStatusPollMs = Number(import.meta.env.VITE_AGENTS_STATUS_POLL_MS)
 const STATUS_POLL_MS = Number.isFinite(configuredStatusPollMs)
-  ? Math.max(5000, configuredStatusPollMs) : 5000
+  ? Math.min(10000, Math.max(5000, configuredStatusPollMs)) : 5000
 const RUNTIME_POLL_MS = 10000
 
 type HealthStatus = "idle" | "busy" | "blocked" | "offline" | "degraded"
 type AgentHealth = { runtime_state?: RuntimeState; activity_state?: ActivityState; persistent?: boolean; health: HealthStatus; health_reason?: string | null; checked_at?: string | null }
+type WorkspaceRun = { id: string; agent: AgentName; backlog_id: string; task_title: string; status: string }
 type AgentOperation = { status: OperationalStatus }
 
 const OPERATION_LABEL: Record<OperationalStatus, string> = {
@@ -76,6 +77,10 @@ export default function AgentsPage() {
   const [operations, setOperations] = useState<Partial<Record<AgentName, AgentOperation>>>({})
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("terminal")
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
+  const [workspaceRuns, setWorkspaceRuns] = useState<WorkspaceRun[]>([])
+  const [stopPending, setStopPending] = useState<string | null>(null)
+  const [actionError, setActionError] = useState('')
+  const [terminalOpen, setTerminalOpen] = useState(true)
   const [filter, setFilter] = useState<AgentFilter>("todos")
 
   useEffect(() => {
@@ -93,7 +98,7 @@ export default function AgentsPage() {
       inFlight = true
       controller = new AbortController()
       try {
-        const response = await fetch("/api/agents/status", { signal: controller.signal })
+        const response = await fetch("/api/agents/status?workspace=true", { signal: controller.signal })
         if (!response.ok) throw new Error("Snapshot indisponível")
         const data = await response.json()
         if (cancelled) return
@@ -109,12 +114,14 @@ export default function AgentsPage() {
             status: item.operational_status as OperationalStatus,
           }
         }
+        setWorkspaceRuns(data.agents.flatMap((row: { runs?: WorkspaceRun[] }) => row.runs ?? []))
         setAwaitingApproval(next)
         setHealth(nextHealth)
         setOperations(nextOperations)
       } catch (error) {
         if (!cancelled && !controller?.signal.aborted && !(error instanceof Error && error.name === 'AbortError')) {
           setHealth(Object.fromEntries(AGENTS.map(item => [item.id, { health: 'degraded', runtime_state: 'ERROR', activity_state: 'IDLE', health_reason: 'Snapshot indisponível' }])))
+          setWorkspaceRuns([])
           setAwaitingApproval({})
           setOperations({})
         }
@@ -174,11 +181,28 @@ export default function AgentsPage() {
     return runtimes
   }, [filter, runtimes])
 
+  async function stopWorkspaceRun(run: WorkspaceRun) {
+    if (!window.confirm(`Parar a Run ${run.id} de ${run.task_title}?`)) return
+    setStopPending(run.id); setActionError('')
+    try {
+      const response = await fetch(`/api/handoffs/runs/${run.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'cancelled' }),
+      })
+      if (!response.ok) {
+        const body = await response.json()
+        throw new Error(body.detail?.message || 'Não foi possível confirmar a parada da Run')
+      }
+      setWorkspaceRuns(rows => rows.filter(row => row.id !== run.id))
+      window.dispatchEvent(new Event('agent-runtime-refresh'))
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Falha na parada') }
+    finally { setStopPending(null) }
+  }
+
   return (
     <div className="flex min-h-[620px] min-w-0 max-w-full flex-col gap-3 overflow-hidden md:h-[calc(100dvh-9rem)] md:min-h-[420px]">
       {lastTerminalRun && <a className="text-sm text-sky-400" href={`/runs/${encodeURIComponent(lastTerminalRun)}/terminal`}>Retomar último terminal</a>}
-      <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-        <div><h2 className="text-xl font-semibold sm:text-2xl">Agents</h2><p className="hidden text-sm text-slate-400 sm:block">Terminal seguro conectado às sessões tmux da VPS.</p></div>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <div className="min-w-64 shrink-0"><h2 className="text-xl font-semibold sm:text-2xl">Agent Workspace</h2><p className="hidden text-sm text-slate-400 sm:block">Agentes, execuções e terminais com estado real do runtime.</p></div>
         <div className="flex gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1" role="group" aria-label="Filtrar agentes">
           {(["todos", "online", "runtimes"] as AgentFilter[]).map((item) => (
             <button key={item} type="button" aria-pressed={filter === item} onClick={() => setFilter(item)}
@@ -187,7 +211,7 @@ export default function AgentsPage() {
             </button>
           ))}
         </div>
-        <div className="flex max-w-full overflow-x-auto rounded-lg border border-slate-700 bg-slate-900 p-1" role="tablist">
+        <div className="flex w-full max-w-full overflow-x-auto rounded-lg border border-slate-700 bg-slate-900 p-1" role="tablist">
           {visibleRuntimes.map((item) => (
             <button key={item.id} role="tab" aria-selected={agent === item.id} onClick={() => setAgent(item.id)}
               className={`relative min-h-10 shrink-0 rounded-md px-3 text-sm font-medium sm:px-4 ${agent === item.id ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
@@ -215,6 +239,23 @@ export default function AgentsPage() {
           ))}
         </div>
       </div>
+      <section aria-label="Runs ativas" className="flex max-h-36 flex-wrap gap-2 overflow-auto">
+        {workspaceRuns.filter(run => run.agent === agent).map(run => <div key={run.id} className="rounded border border-slate-700 p-2"><a
+          href={`/runs/${encodeURIComponent(run.id)}/terminal`}
+          className="rounded border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">
+          <strong>{run.task_title}</strong> · {run.status}
+          <span className="block text-xs text-slate-400">{run.agent} · Run {run.id}</span>
+          <span className="text-sky-400">Abrir terminal da Run</span>
+        </a>
+          {['queued', 'running', 'blocked'].includes(run.status) && <button
+            disabled={stopPending !== null} onClick={() => void stopWorkspaceRun(run)}
+            className="ml-2 rounded bg-red-950 px-2 py-1 text-sm">{stopPending === run.id ? 'Parando…' : 'Parar Run'}</button>}
+        </div>)}
+        {!workspaceRuns.some(run => run.agent === agent) && <span className="text-xs text-slate-400">Nenhuma Run ativa disponível neste snapshot.</span>}
+      </section>
+      {actionError && <p role="alert" className="text-red-300">{actionError}</p>}
+      {!selectedRuntime && <button className="self-start rounded border border-slate-700 px-3 py-1 text-sm"
+        onClick={() => setTerminalOpen(open => !open)}>{terminalOpen ? 'Fechar terminal do agente' : 'Abrir terminal do agente'}</button>}
       {!selectedRuntime && <RuntimeControls key={agent} agent={agent} runtimeState={health[agent]?.runtime_state} activityState={health[agent]?.activity_state} persistent={health[agent]?.persistent} checkedAt={health[agent]?.checked_at} />}
       {!selectedRuntime && health[agent] && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-300">
@@ -242,14 +283,14 @@ export default function AgentsPage() {
             // Runtime Ollama não tem sessão tmux: no lugar do terminal vai o
             // painel de estado operacional do endpoint.
             <RuntimePanel runtime={selectedRuntime} />
-          ) : (
+          ) : terminalOpen ? (
             <AgentTerminal
               key={agent}
               agent={agent}
               awaitingApproval={Boolean(awaitingApproval[agent])}
               operationalStatus={operations[agent]?.status}
             />
-          )}
+          ) : <p className="text-sm text-slate-400">Terminal desconectado. O agente continua em execução.</p>}
         </div>
       </div>
     </div>

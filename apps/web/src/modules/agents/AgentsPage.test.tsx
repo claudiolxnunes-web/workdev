@@ -178,3 +178,23 @@ describe("AgentsPage", () => {
     expect(painel).toHaveTextContent("Desconectar")
   })
 })
+
+it('Workspace associa links às Runs e fechar terminal só desmonta o cliente', async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ agents: [
+    { agent: 'claude', runtime_state: 'ONLINE', activity_state: 'BUSY', health: 'busy',
+      runs: [{ id: 'run-claude', agent: 'claude', backlog_id: 'task-a', task_title: 'Task A', status: 'running' }] },
+    { agent: 'kimi', runtime_state: 'OFFLINE', activity_state: 'IDLE', health: 'offline',
+      runs: [{ id: 'run-kimi', agent: 'kimi', backlog_id: 'task-b', task_title: 'Task B', status: 'blocked' }] },
+  ] }) })
+  vi.stubGlobal('fetch', fetchMock)
+  getAgentRuntimes.mockResolvedValue([])
+  render(<AgentsPage />)
+  const link = await screen.findByRole('link', { name: /Task A/ })
+  expect(link).toHaveAttribute('href', '/runs/run-claude/terminal')
+  expect(screen.queryByRole('link', { name: /Task B/ })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Fechar terminal do agente' }))
+  expect(screen.queryByText(/terminal:/)).not.toBeInTheDocument()
+  expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true)
+  fireEvent.click(screen.getByRole('tab', { name: 'Kimi Code' }))
+  expect(await screen.findByRole('link', { name: /Task B/ })).toHaveAttribute('href', '/runs/run-kimi/terminal')
+})

@@ -83,10 +83,41 @@ def _session_payload(item) -> dict:
     }
 
 
-def _create(run_id: str):
+def _create_unlocked(run_id: str):
     with SessionLocal() as db:
         manager = TerminalSessionManager(db)
-        return _session_payload(manager.create(run_id))
+        run = db.get(AgentRun, UUID(run_id))
+        if run and getattr(run, 'status', None) in {'cancelled', 'completed', 'failed'}:
+            raise TerminalSessionError('Execução encerrada; novo terminal recusado')
+        agent = getattr(run, 'agent', None)
+        argv = None
+        binding = None
+        if agent:
+            from app.services import agent_lifecycle
+            binding = agent_lifecycle.run_binding(agent, run_id)
+            if binding:
+                if binding.get('stopped') or agent_lifecycle.process_starttime(binding['pid']) != binding['starttime']:
+                    raise TerminalSessionError('Run process is no longer available')
+                if not binding.get('session'):
+                    raise TerminalSessionError('Run headless não possui terminal interativo')
+                argv = ['tmux', 'attach-session', '-t', f"={binding['session']}"]
+                try:
+                    existing = manager._session(run_id)
+                except TerminalSessionError:
+                    existing = None
+                if existing and str(existing.id) != binding.get('terminal_session_id'):
+                    raise TerminalSessionError('Terminal auxiliar anterior não corresponde ao executor; encerre-o antes de abrir o terminal da Run')
+        item = manager.create(run_id, argv=argv)
+        if binding:
+            binding['terminal_session_id'] = str(item.id)
+            agent_lifecycle._save_run_binding(run_id, binding)
+        return _session_payload(item)
+
+
+def _create(run_id: str):
+    from app.services.agent_lifecycle import run_lock
+    with run_lock(run_id):
+        return _create_unlocked(run_id)
 
 
 def _health(run_id: str):
@@ -94,12 +125,22 @@ def _health(run_id: str):
         manager = TerminalSessionManager(db)
         item, worker = manager.snapshot(run_id)
         run = db.get(AgentRun, UUID(run_id))
+        terminal_kind = 'auxiliary'
+        agent = getattr(run, 'agent', None)
+        if agent:
+            from app.services.agent_lifecycle import run_binding
+            binding = run_binding(agent, run_id)
+            if binding:
+                if binding.get('terminal_session_id') != str(item.id):
+                    raise TerminalSessionError('Terminal não corresponde ao executor desta Run')
+                terminal_kind = 'executor'
         buffer = (worker or {}).get('output_base64', '')
         # Compatibility with an already-running Task 5 worker.
         if worker and 'output_base64' not in worker:
             buffer = base64.b64encode(worker.get('output', '').encode()).decode()
         return {
             **_session_payload(item),
+            'terminal_kind': terminal_kind,
             'run': {'id': str(run.id), 'status': run.status},
             'process': {'pid': item.pid, 'supervisor_pid': item.supervisor_pid,
                         'identity': item.process_identity, 'alive': worker is not None and item.state == 'RUNNING'},
@@ -113,6 +154,13 @@ def _close(run_id: str):
     with SessionLocal() as db:
         manager = TerminalSessionManager(db)
         return _session_payload(manager.close(run_id))
+
+
+def _audit_reconnect(run_id):
+    from app.services.agent_workspace import audit
+    with SessionLocal() as db:
+        run = db.get(AgentRun, UUID(run_id))
+        audit('reconnect', agent=getattr(run, 'agent', 'unknown'), run_id=UUID(run_id), result='succeeded')
 
 
 def _write(run_id: str, text: str) -> None:
@@ -154,7 +202,8 @@ async def run_terminal_state(run_id: str):
     try:
         return await asyncio.to_thread(_health, run_id)
     except TerminalSessionError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        code = 404 if 'no terminal session' in str(error) or 'Run not found' in str(error) else 409
+        raise HTTPException(status_code=code, detail=str(error)) from error
 
 
 @router.post("/api/runs/{run_id}/terminal/reconnect")
@@ -163,6 +212,7 @@ async def reconnect_run_terminal(run_id: str):
     snapshot = await run_terminal_state(run_id)
     if snapshot['state'] != 'RUNNING' or not snapshot['pty']['available']:
         raise HTTPException(409, detail=snapshot)
+    await asyncio.to_thread(_audit_reconnect, run_id)
     return {**snapshot, 'websocket_url': f'/ws/runs/{run_id}/terminal?existing=1'}
 
 

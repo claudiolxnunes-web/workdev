@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useState } from "react"
+import { startTransition, useCallback, useEffect, useRef, useState } from "react"
 import {
   getRunContext, getRuns, subscribeToHandoffs, transferRun, updateRun,
   updateRunSubtask, agentLabels, dispatchRun, getDispatchJob, HandoffApiError,
@@ -24,6 +24,8 @@ const agentLabel = agentLabels
 const DESPACHO_EM_CURSO = ["queued", "dispatching"]
 
 export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName; mobileExpanded?: boolean }) {
+  const requestGeneration = useRef(0)
+  const runsInFlight = useRef(false)
   const [runs, setRuns] = useState<AgentRun[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [context, setContext] = useState<AgentContext | null>(null)
@@ -39,38 +41,52 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
   const [dispatchNotice, setDispatchNotice] = useState("")
 
   const loadRuns = useCallback(async () => {
+    if (runsInFlight.current) return
+    runsInFlight.current = true
+    const generation = requestGeneration.current
     try {
       const rows = await getRuns(agent)
+      if (generation !== requestGeneration.current) return
       setRuns(rows)
       setSelectedId((current) => current && rows.some((run) => run.id === current)
         ? current : rows.find((run) => !["completed", "failed", "cancelled"].includes(run.status))?.id || rows[0]?.id || null)
       setError("")
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Erro na fila") }
-    finally { setLoading(false) }
+    } catch (cause) { if (generation === requestGeneration.current) setError(cause instanceof Error ? cause.message : "Erro na fila") }
+    finally { if (generation === requestGeneration.current) { runsInFlight.current = false; setLoading(false) } }
   }, [agent])
 
+  const contextGeneration = useRef(0)
   const loadContext = useCallback(async (id: string) => {
-    try { setContext(await getRunContext(id)); setError("") }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Erro no contexto") }
+    const generation = ++contextGeneration.current
+    try {
+      const response = await getRunContext(id)
+      if (generation !== contextGeneration.current) return
+      setContext(response); setError("")
+    }
+    catch (cause) { if (generation === contextGeneration.current) setError(cause instanceof Error ? cause.message : "Erro no contexto") }
   }, [])
 
   useEffect(() => {
-    startTransition(() => { setSelectedId(null); setContext(null); setLoading(true) })
+    requestGeneration.current += 1
+    contextGeneration.current += 1
+    runsInFlight.current = false
+    startTransition(() => { setRuns([]); setSelectedId(null); setContext(null); setLoading(true) })
     // loadRuns() é reaproveitado por 3 gatilhos (mount, evento realtime,
     // timer) — inline duplicaria a busca 3x; disable com escopo é mais
     // seguro que reestruturar um fluxo com subscription+interval.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadRuns()
     const unsubscribe = subscribeToHandoffs(() => void loadRuns())
-    const timer = window.setInterval(() => void loadRuns(), 12000)
-    return () => { unsubscribe(); window.clearInterval(timer) }
+    const timer = window.setInterval(() => void loadRuns(), 10000)
+    return () => { requestGeneration.current += 1; unsubscribe(); window.clearInterval(timer) }
   }, [loadRuns])
 
   useEffect(() => {
     // O job pertence à run selecionada. Sem zerar aqui, o painel da run B
     // mostrava o despacho da run A — o `run_id` do job existe justamente para
     // essa fronteira não depender de disciplina de quem lê.
-    startTransition(() => { setJob(null); setDispatchNotice("") })
+    contextGeneration.current += 1
+    startTransition(() => { setContext(null); setJob(null); setDispatchNotice("") })
     if (selectedId) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadContext(selectedId)
@@ -100,7 +116,7 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
     if (["blocked", "review", "completed", "failed", "cancelled"].includes(status)) {
       message = window.prompt(
         status === "blocked" ? "Qual é o bloqueio?"
-          : status === "cancelled" ? "Motivo do cancelamento:"
+          : status === "cancelled" ? "Parar o processo desta Run? Informe o motivo:"
           : status === "completed" ? "Resumo do resultado:" : "Resumo:",
       ) || undefined
       if (!message) return
@@ -112,7 +128,10 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
       if (status === "completed") { fields.result = message || "Build concluído"; fields.summary = message || "Build concluído" }
       if (["blocked", "failed"].includes(status) && message) fields.error = message
       if (["review", "cancelled"].includes(status) && message) fields.summary = message
-      await updateRun(selectedId, fields)
+      if (status === 'running' && selected?.status === 'queued' && !RUNTIME_AGENTS.some(name => name === selected.agent)) {
+        const response = await fetch(`/api/handoffs/runs/${selectedId}/start`, { method: 'POST' })
+        if (!response.ok) throw new Error('Não foi possível iniciar a Run isolada')
+      } else await updateRun(selectedId, fields)
       await Promise.all([loadRuns(), loadContext(selectedId)])
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao atualizar") }
     finally { setBusy(false) }
@@ -223,7 +242,7 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
             {selected.status === "running" && <button disabled={busy} onClick={() => void move("review")} className="rounded bg-violet-700 px-2 py-1 text-xs">Enviar à revisão</button>}
             {["running", "review"].includes(selected.status) && <button disabled={busy} onClick={() => void move("completed")} className="rounded bg-emerald-700 px-2 py-1 text-xs">Concluir</button>}
             {["queued", "running", "blocked"].includes(selected.status) && <button disabled={busy} onClick={() => void transfer()} className="rounded bg-amber-700 px-2 py-1 text-xs" title="Cancela esta execução e cria uma nova para outro agente">Transferir</button>}
-            {["queued", "running", "blocked"].includes(selected.status) && <button disabled={busy} onClick={() => void move("cancelled")} className="rounded bg-slate-700 px-2 py-1 text-xs">Cancelar</button>}
+            {["queued", "running", "blocked"].includes(selected.status) && <button disabled={busy} onClick={() => void move("cancelled")} className="rounded bg-slate-700 px-2 py-1 text-xs">Parar Run</button>}
           </div>
           {RUNTIME_AGENTS.includes(selected.agent as typeof RUNTIME_AGENTS[number])
             && ["queued", "running"].includes(selected.status) && (

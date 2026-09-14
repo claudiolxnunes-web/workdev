@@ -20,6 +20,7 @@ export function RunTerminal({ runId, title, onClose }: {
   // Só quem detém a escrita pode mandar input/resize; observer fica em leitura.
   const roleRef = useRef<Role>("unknown")
   const [role, setRole] = useState<Role>("unknown")
+  const [terminalKind, setTerminalKind] = useState<string>('')
   const [closeReason, setCloseReason] = useState("")
   const [copyFeedback, setCopyFeedback] = useState("")
 
@@ -87,11 +88,12 @@ export function RunTerminal({ runId, title, onClose }: {
           } else if (state === "CLOSED") {
             setStatus("closed"); setCloseReason("O processo foi encerrado.")
           } else {
-            setStatus("error"); setCloseReason("Terminal indisponível. Tentando recuperar a conexão…")
-            if (response.status !== 401 && response.status !== 403) retry()
+            setStatus("error"); setCloseReason(typeof payload.detail === "string" ? payload.detail : "Terminal indisponível. Tentando recuperar a conexão…")
+            if (![401, 403, 409].includes(response.status)) retry()
           }
           return
         }
+        setTerminalKind(payload.terminal_kind ?? '')
         websocketUrl = payload.websocket_url + (takeOver ? "&role=writer&takeover=1" : "")
       } catch {
         if (disposed || version !== connectionVersion) return
@@ -194,6 +196,7 @@ export function RunTerminal({ runId, title, onClose }: {
         <span className="truncate">
           {status === "connecting" ? "Conectando…" : status === "connected" ? (role === "observer" ? "Observador" : "Conectado") : status === "closed" ? "Encerrado" : status === "missing" ? "Sem terminal" : "Indisponível"}
         </span>
+        {terminalKind === "auxiliary" && <span className="text-xs text-amber-300">Terminal auxiliar · sem vínculo com o processo executor</span>}
         {title && <span className="truncate text-xs text-slate-500">• {title}</span>}
         {copyFeedback && <span className="text-xs text-emerald-400">{copyFeedback}</span>}
         {closeReason && <span className="text-xs text-red-300">{closeReason}</span>}

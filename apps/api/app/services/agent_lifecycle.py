@@ -1229,3 +1229,131 @@ def try_recover(agent: str, session: str, launcher: list[str]) -> dict | None:
                 return result
     except BlockingIOError:
         return None
+
+
+# Run bindings extend the existing durable registry; they are identities, not a
+# second operational state machine. Legacy runs are never inferred from agent name.
+def run_lock(run_id):
+    from uuid import UUID
+    return agent_snapshot.file_lock(GROUPS_FILE.parent / 'lifecycle' / f'run-{UUID(str(run_id))}.lock')
+
+
+def run_binding(agent, run_id):
+    from uuid import UUID
+    with groups_lock():
+        data, valid = _ler_registro()
+        if not valid or not isinstance(data.get('runs', {}), dict):
+            raise LifecycleError('identity_unknown', 'Registro de identidade indisponível')
+        row = data.get('runs', {}).get(str(UUID(str(run_id))))
+        if row and row.get('agent') != agent:
+            raise LifecycleError('identity_mismatch', 'Run pertence a outro agente')
+        return row
+
+
+def _save_run_binding(run_id, row):
+    from uuid import UUID
+    with groups_lock():
+        data, valid = _ler_registro()
+        if not valid:
+            raise LifecycleError('identity_unknown', 'Registro de identidade indisponível')
+        data.setdefault('runs', {})[str(UUID(str(run_id)))] = row
+        if not _gravar_registro(data):
+            raise LifecycleError('identity_not_durable', 'Não foi possível persistir identidade da Run')
+
+
+def _session_groups(sid):
+    """Linux session and still-related descendants, including setsid children."""
+    result = _run(['ps', '-eo', 'pid=,ppid=,pgid=,sid=,stat='], 5)
+    if result.returncode:
+        raise LifecycleError('process_probe_failed', 'Não foi possível verificar processos')
+    rows = []
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 5 and not fields[4].startswith('Z'):
+            rows.append(tuple(int(value) for value in fields[:4]))
+    owned = {pid for pid, ppid, pgid, session in rows if session == sid}
+    while True:
+        descendants = {pid for pid, ppid, pgid, session in rows if ppid in owned}
+        if descendants <= owned:
+            break
+        owned.update(descendants)
+    return {pgid for pid, ppid, pgid, session in rows if pid in owned}
+
+
+def bind_run(agent, run_id, session):
+    """Called by the launcher before delivering work, with run/agent locks held."""
+    from uuid import UUID
+    key = str(UUID(str(run_id)))
+    if session != f'auto-{agent}-{key}':
+        raise LifecycleError('unisolated_session', 'Run exige sessão exclusiva')
+    old = run_binding(agent, key)
+    if old:
+        if old.get('stopped'):
+            raise LifecycleError('run_stopped', 'Run encerrada não pode ser reiniciada implicitamente')
+        if old['session'] != session or process_starttime(old['pid']) != old['starttime']:
+            raise LifecycleError('identity_mismatch', 'Processo da Run foi substituído')
+        return old
+    pid = pane_pid(session)
+    stamp = process_starttime(pid) if pid else None
+    if not pid or not stamp or Path(f'/proc/{pid}').stat().st_uid != os.getuid():
+        raise LifecycleError('identity_unknown', 'Processo da Run não verificável pelo usuário operacional')
+    sid = os.getsid(pid)
+    if sid != pid:
+        raise LifecycleError('unisolated_session', 'Processo não possui sessão Linux exclusiva')
+    row = dict(agent=agent, session=session, pid=pid, sid=sid, starttime=stamp,
+               stopped=False, groups=[dict(pgid=pg, starttime=process_starttime(pg)) for pg in _session_groups(sid)])
+    _save_run_binding(key, row)
+    return row
+
+
+def stop_run_process(agent, run_id):
+    """Stop only a durably bound Run, without standby restoration or model unload.
+
+    Caller serializes on run_lock. Agent lock also excludes agent lifecycle and
+    launch. Tombstone survives an API/DB failure, making retries idempotent.
+    """
+    with agent_lock(agent):
+        row = run_binding(agent, run_id)
+        if not row:
+            raise LifecycleError('run_unbound', 'Run legada sem vínculo físico comprovado; parada recusada')
+        if row.get('stopped'):
+            return {'stopped': True, 'already_stopped': True, 'session': row['session']}
+        current = process_starttime(row['pid'])
+        if current is not None and current != row['starttime']:
+            raise LifecycleError('identity_mismatch', 'PID da Run foi reutilizado; nenhum sinal enviado')
+        exists = bool(row['session']) and session_exists(row['session'])
+        if exists and pane_pid(row['session']) != row['pid']:
+            raise LifecycleError('identity_mismatch', 'Sessão da Run foi substituída; nenhum sinal enviado')
+        # Save all current job-control groups BEFORE losing the tmux pane.
+        known = {g['pgid']: g for g in row['groups']}
+        for pgid in _session_groups(row['sid']):
+            known.setdefault(pgid, dict(pgid=pgid, starttime=process_starttime(pgid)))
+        for g in known.values():
+            stamp = process_starttime(g['pgid'])
+            if stamp is not None and stamp != g['starttime']:
+                raise LifecycleError('identity_mismatch', 'Grupo de processos reutilizado')
+        row['groups'] = list(known.values())
+        _save_run_binding(run_id, row)
+        if exists:
+            result = _run(['tmux', 'kill-session', '-t', f"={row['session']}"], 5)
+            if result.returncode and session_exists(row['session']):
+                raise LifecycleError('stop_failed', 'Não foi possível encerrar a sessão da Run')
+        for pgid in known:
+            if group_pids(pgid):
+                result = terminate_group(pgid)
+                if result['survivors']:
+                    raise LifecycleError('stop_incomplete', 'Run ainda possui processos sobreviventes')
+        if (row['session'] and session_exists(row['session'])) or _session_groups(row['sid']):
+            raise LifecycleError('stop_incomplete', 'Parada física ainda não concluída')
+        row['stopped'] = True
+        _save_run_binding(run_id, row)
+        return {'stopped': True, 'already_stopped': False, 'session': row['session']}
+
+
+def bind_run_process(agent, run_id, pid):
+    """Headless launcher identity; no invented tmux session or terminal."""
+    stamp = process_starttime(pid)
+    if not stamp or os.getsid(pid) != pid or Path(f'/proc/{pid}').stat().st_uid != os.getuid():
+        raise LifecycleError('identity_unknown', 'Processo headless sem isolamento comprovado')
+    _save_run_binding(run_id, dict(agent=agent, session=None, pid=pid, sid=pid,
+        starttime=stamp, stopped=False, groups=[dict(pgid=pid, starttime=stamp)]))

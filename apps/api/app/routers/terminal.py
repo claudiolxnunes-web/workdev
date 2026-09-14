@@ -211,6 +211,7 @@ def _start_gemini_headless_runtime(
     agent: str,
     prompt: str,
     model: str | None = None,
+    run_id=None,
 ) -> dict:
     session = _standby_session(agent)
 
@@ -221,13 +222,24 @@ def _start_gemini_headless_runtime(
         prompt,
     ]
 
-    result = subprocess.run(
-        command,
-        cwd="/opt/workdev",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    if run_id is None:
+        result = subprocess.run(command, cwd="/opt/workdev", capture_output=True, text=True, check=False)
+    else:
+        # Keep existing synchronous completion semantics, but release lifecycle
+        # locks before waiting so Stop Run can interrupt a long model request.
+        with agent_lifecycle.run_lock(run_id), agent_lifecycle.agent_lock(agent):
+            if agent_lifecycle.run_binding(agent, run_id):
+                raise RuntimeError('Run já possui execução; não reenviar prompt')
+            process = subprocess.Popen(command, cwd='/opt/workdev', stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True, start_new_session=True)
+            try:
+                agent_lifecycle.bind_run_process(agent, run_id, process.pid)
+            except Exception:
+                process.terminate()
+                process.wait(timeout=5)
+                raise
+        stdout, stderr = process.communicate()
+        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
     if result.returncode != 0:
         raise RuntimeError(
@@ -300,7 +312,7 @@ def _auto_session(agent: str, run_id) -> str:
     _standby_session(agent)
     return f"auto-{agent}-{run_id}"
 
-def start_agent_runtime(
+def _start_agent_runtime(
     agent: str,
     prompt: str,
     timeout_seconds: float = 15.0,
@@ -318,6 +330,9 @@ def start_agent_runtime(
 
     started = (_start_standby_session(agent, session) if run_id else
         agent_lifecycle.start(agent, session, STANDBY_COMMANDS[agent])['started'])
+
+    if run_id is not None:
+        agent_lifecycle.bind_run(agent, run_id, session)
 
     deadline = time.monotonic() + timeout_seconds
 
@@ -356,6 +371,22 @@ def start_agent_runtime(
     )
 
 
+def start_agent_runtime(agent, prompt, timeout_seconds=15.0, model=None, run_id=None):
+    if agent == 'gemini' and run_id is not None:
+        return _start_gemini_headless_runtime(agent, prompt, model, run_id)
+    if run_id is None:
+        return _start_agent_runtime(agent, prompt, timeout_seconds, model, run_id)
+    with agent_lifecycle.run_lock(run_id), agent_lifecycle.agent_lock(agent):
+        binding = agent_lifecycle.run_binding(agent, run_id)
+        if binding:
+            if binding.get('stopped'):
+                raise RuntimeError('Run encerrada; relançamento implícito recusado')
+            if agent_lifecycle.process_starttime(binding['pid']) != binding['starttime']:
+                raise RuntimeError('Identidade da Run indisponível; relançamento recusado')
+            return {'agent': agent, 'session': binding['session'], 'started': False}
+        return _start_agent_runtime(agent, prompt, timeout_seconds, model, run_id)
+
+
 def stop_agent_runtime(agent: str, run_id) -> bool:
     session = _auto_session(agent, run_id)
     return _stop_standby_session(session)
@@ -366,7 +397,7 @@ def auto_runtime_running(agent: str, run_id) -> bool:
     return bool(process and process not in _SHELL_PROCESSES)
 
 
-def finalize_auto_runtime(agent: str, run_id) -> dict:
+def _finalize_auto_runtime(agent: str, run_id) -> dict:
     """Encerra só a sessão AUTO e confirma que o agente está em standby."""
     auto_session = _auto_session(agent, run_id)
     stopped = _stop_standby_session(auto_session)
@@ -386,6 +417,22 @@ def finalize_auto_runtime(agent: str, run_id) -> dict:
         "standby_process": process,
     }
 
+def finalize_auto_runtime(agent: str, run_id) -> dict:
+    from uuid import UUID
+    try:
+        UUID(str(run_id))
+    except ValueError:
+        return _finalize_auto_runtime(agent, run_id)  # legacy internal callers
+    with agent_lifecycle.run_lock(run_id):
+        binding = agent_lifecycle.run_binding(agent, run_id)
+        if binding and binding.get('stopped'):
+            # Explicit Stop Run owns the outcome. Never restore standby here.
+            return {'stopped': True, 'standby_started': False}
+        if binding:
+            agent_lifecycle.stop_run_process(agent, run_id)
+        return _finalize_auto_runtime(agent, run_id)
+
+
 def _lifecycle_session(agent: str) -> str:
     """Sessão do agente para o ciclo de vida.
 
@@ -401,7 +448,27 @@ def _lifecycle_session(agent: str) -> str:
     return _standby_session(agent)
 
 
+def audited_lifecycle(action):
+    from functools import wraps
+    def decorate(function):
+        @wraps(function)
+        async def invoke(agent, *args, **kwargs):
+            from app.services.agent_workspace import audit
+            await asyncio.to_thread(audit, action, agent=agent)
+            try:
+                result = await function(agent, *args, **kwargs)
+                await asyncio.to_thread(audit, action, agent=agent, result='succeeded')
+                return result
+            except Exception as error:
+                await asyncio.to_thread(audit, action, agent=agent, result='failed',
+                                        code=getattr(error, 'code', type(error).__name__))
+                raise
+        return invoke
+    return decorate
+
+
 @router.post("/api/agents/{agent}/start")
+@audited_lifecycle('start_agent')
 async def start_agent_lifecycle(agent: str):
     """Liga o agente. Idempotente: se já está rodando, não recria a sessão.
 
@@ -435,6 +502,7 @@ async def start_agent_lifecycle(agent: str):
 
 
 @router.post("/api/agents/{agent}/stop")
+@audited_lifecycle("stop_agent")
 async def stop_agent_lifecycle(
     agent: str,
     confirm: bool = Query(default=False),
@@ -502,6 +570,20 @@ async def stop_agent_lifecycle(
     return resultado
 
 
+@router.get('/api/agents/{agent}/events')
+def agent_workspace_events(agent: str, limit: int = Query(default=50, ge=1, le=200)):
+    from app.models.handoff import AgentRunEvent
+    if agent not in ALLOWED_SESSIONS and not agent_runtimes.is_ollama_agent(agent):
+        raise HTTPException(404, 'Agente inválido')
+    with SessionLocal() as db:
+        rows = db.query(AgentRunEvent).filter(
+            AgentRunEvent.event_type.like('workspace.%'),
+            AgentRunEvent.payload['agent'].as_string() == agent,
+        ).order_by(AgentRunEvent.created_at.desc(), AgentRunEvent.id.desc()).limit(limit).all()
+        return [{'id': str(row.id), 'run_id': str(row.run_id) if row.run_id else None,
+                 'event_type': row.event_type, 'created_at': row.created_at, 'payload': row.payload} for row in rows]
+
+
 @router.get("/api/agents/{agent}/lifecycle")
 async def agent_lifecycle_state(agent: str):
     """Estado lido do sistema — sessão, process group, modelo e RSS."""
@@ -560,8 +642,13 @@ def agent_runtime_snapshot() -> dict[str, dict]:
 
 
 @router.get("/api/agents/status")
-def agents_status():
-    return agent_snapshot.read_snapshot([*ALLOWED_SESSIONS, *sorted(agent_runtimes.OLLAMA_AGENT_IDS)], _HEALTH_STATE_FILE)
+def agents_status(workspace: bool = False):
+    snapshot = agent_snapshot.read_snapshot([*ALLOWED_SESSIONS, *sorted(agent_runtimes.OLLAMA_AGENT_IDS)], _HEALTH_STATE_FILE)
+    if workspace:
+        from app.services.agent_workspace import enrich
+        with SessionLocal() as db:
+            return enrich(snapshot, db)
+    return snapshot
 
 
 @router.websocket("/ws/agents/{agent}")

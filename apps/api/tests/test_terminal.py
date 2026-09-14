@@ -221,7 +221,13 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
     @patch("app.routers.terminal._current_process", return_value="codex")
     @patch("app.routers.terminal._start_standby_session", return_value=True)
     def test_auto_runtime_uses_run_scoped_session(self, start_session, current_process, send_text):
-        result = start_agent_runtime("codex", "prompt", timeout_seconds=1, run_id="run-1")
+        from contextlib import nullcontext
+        with patch('app.routers.terminal.agent_lifecycle.run_lock', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.agent_lock', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.run_binding', return_value=None), \
+             patch('app.routers.terminal.agent_lifecycle.bind_run') as bind:
+            result = start_agent_runtime("codex", "prompt", timeout_seconds=1, run_id="run-1")
+            bind.assert_called_once_with('codex', 'run-1', 'auto-codex-run-1')
         start_session.assert_called_once_with("codex", "auto-codex-run-1")
         send_text.assert_called_once_with("auto-codex-run-1", "prompt")
         self.assertEqual(result["session"], "auto-codex-run-1")
@@ -311,8 +317,9 @@ class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
         # `Query(default=False)` chegaria como objeto (truthy) e passaria pelo
         # guard. Por isso o confirm vai explícito, e o default declarado é
         # conferido à parte: é ele a garantia de "exige confirmação".
-        with self.assertRaises(HTTPException) as ctx:
+        with patch('app.services.agent_workspace.audit') as audit, self.assertRaises(HTTPException) as ctx:
             await stop_agent_session("codex", confirm=False)
+        self.assertEqual(audit.call_args.kwargs['result'], 'failed')
         self.assertEqual(ctx.exception.status_code, 409)
 
         declarado = inspect.signature(stop_agent_session).parameters["confirm"]

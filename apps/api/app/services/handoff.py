@@ -581,6 +581,9 @@ def update_run(
     run: AgentRun,
     data: dict[str, Any],
 ) -> tuple[AgentRun, AgentRunEvent | None]:
+    # Serialize validation with other writers; a stop in flight must not be
+    # overwritten by a transition validated against an old ORM object.
+    db.refresh(run, with_for_update={'key_share': True})
     next_status = data.pop("status", None)
     message = data.pop("message", None)
 
