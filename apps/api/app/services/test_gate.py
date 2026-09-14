@@ -480,14 +480,16 @@ def execute_gate(
     )
 
     try:
-        # Executar checks
-        checks = [
-            _check_guardrails(paths),  # Obrigatório (não-root/artefatos)
-            _check_pytest(paths),      # Obrigatório
-            _check_vitest(paths),      # Opcional
-            _check_lint(paths),        # Opcional
-            _check_build(paths),       # Opcional
-        ]
+        # Não executar código do projeto sob identidade operacional recusada.
+        guardrail = _check_guardrails(paths)
+        checks = [guardrail]
+        if guardrail.passed:
+            checks.extend([
+                _check_pytest(paths),
+                _check_vitest(paths),
+                _check_lint(paths),
+                _check_build(paths),
+            ])
 
         evidence.checks = checks
 

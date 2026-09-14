@@ -33,7 +33,7 @@ def lifecycle_api(tmp_path, monkeypatch):
         Column('id', UUID(as_uuid=True), primary_key=True), Column('agent', String),
         Column('backlog_id', UUID(as_uuid=True)), Column('plan_id', UUID(as_uuid=True)),
         Column('status', String), Column('reviewer_agent', String),
-        Column('model', String), Column('complexity', String),
+        Column('model', String), Column('complexity', String), Column('commit_sha', String),
         Column('routing_mode', String), Column('summary', String),
         Column('result', String), Column('error', String),
         Column('started_at', DateTime), Column('finished_at', DateTime),

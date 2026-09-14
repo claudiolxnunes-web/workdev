@@ -112,7 +112,7 @@ def decide(task_risk: str, agent_trust: str, gate_result: str, sensitive: list[s
     if gate_result != 'pass':
         return PolicyDecision('BLOCKED_OPERATIONAL', 'none', task_risk, agent_trust,
                               gate_result, sensitive, f'Gate indisponível ({gate_result})')
-    if task_risk == 'low' and agent_trust == 'trusted':
+    if task_risk == 'low' and agent_trust == 'trusted' and not sensitive:
         return PolicyDecision('NO_REVIEW_COMPLETE', 'none', 'low', 'trusted', 'pass',
                               sensitive, 'Risco baixo, executor confiável e gates PASS')
     if sensitive:
@@ -122,6 +122,9 @@ def decide(task_risk: str, agent_trust: str, gate_result: str, sensitive: list[s
         tier = 'strong'
         reason = 'Risco alto ou executor supervisionado exige revisão forte'
     candidates = [reviewer for reviewer in config['tier_reviewers'].get(tier, []) if reviewer != executor]
+    if not candidates:
+        return PolicyDecision('BLOCKED_OPERATIONAL', tier, task_risk, agent_trust,
+                              'pass', sensitive, 'Nenhum revisor independente elegível para o tier')
     return PolicyDecision('REVISAR', tier, task_risk, agent_trust, 'pass', sensitive,
                           reason, candidates)
 

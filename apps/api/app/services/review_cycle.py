@@ -4,6 +4,7 @@ Gates executam ANTES — este módulo só lê a evidência persistida
 (get_gate_evidence_for_run). Classificação de risco usa o diff real da run.
 Nada aqui executa LLM: a decisão é determinística e auditável.
 """
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,13 +20,15 @@ _TOKEN_BYTES_PER_TOKEN = 4
 
 
 def collect_diff_stats(run: AgentRun, root: Path = REPO_ROOT) -> tuple[list[str], str] | None:
-    """Diff vinculado ao SHA/branch da Run (o mesmo que o gate validou).
+    """Diff vinculado ao SHA imutável da Run — o mesmo que o gate validou.
 
-    Ausência de evidência NUNCA reduz risco: qualquer falha (git indisponível,
-    timeout, repositório) retorna None e o chamador sobe o risco em vez de
-    concluir automaticamente.
+    Sem commit_sha persistido não há evidência: branch móvel não comparada ao
+    gate e HEAD compartilhado nunca servem de fallback. Coleta parcial (arquivos
+    ok, conteúdo falho) também é indisponibilidade, não "diff vazio".
     """
-    target = getattr(run, 'commit_sha', None) or getattr(run, 'branch', None) or 'HEAD'
+    target = getattr(run, 'commit_sha', None)
+    if not target or not re.fullmatch(r'[0-9a-fA-F]{40}', target):
+        return None
     base = 'origin/develop'
     try:
         files = subprocess.run(
@@ -33,8 +36,9 @@ def collect_diff_stats(run: AgentRun, root: Path = REPO_ROOT) -> tuple[list[str]
             cwd=root, capture_output=True, text=True, timeout=30, check=False,
         )
         if files.returncode != 0:
+            base = 'develop'
             files = subprocess.run(
-                ['git', 'diff', '--name-only', f'develop...{target}'],
+                ['git', 'diff', '--name-only', f'{base}...{target}'],
                 cwd=root, capture_output=True, text=True, timeout=30, check=False,
             )
         if files.returncode != 0:
@@ -43,8 +47,10 @@ def collect_diff_stats(run: AgentRun, root: Path = REPO_ROOT) -> tuple[list[str]
             ['git', 'diff', f'{base}...{target}'],
             cwd=root, capture_output=True, text=True, timeout=60, check=False,
         )
+        if text.returncode != 0:
+            return None
         names = [line.strip() for line in files.stdout.splitlines() if line.strip()]
-        return names, text.stdout if text.returncode == 0 else ''
+        return names, text.stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -60,18 +66,20 @@ class _DiffView:
 
 
 def evaluate_for_run(run: AgentRun, gate_result: str,
-                     config: dict | None = None) -> tuple[PolicyDecision, _DiffView]:
+                     config: dict | None = None, *, gate_sha: str | None = None) -> tuple[PolicyDecision, _DiffView]:
     """Decisão determinística da run: risco (diff) + trust (config) + gate."""
     config = config or load_config()
+    if gate_result != 'pass':
+        return decide('high', trust_of(run, config), gate_result, config=config), _DiffView([], '')
+    if gate_sha is not None:
+        revision = getattr(run, 'commit_sha', None)
+        if (not re.fullmatch(r'[0-9a-fA-F]{40}', gate_sha)
+                or (revision and revision != gate_sha)):
+            return decide('high', trust_of(run, config), 'revision_mismatch', config=config), _DiffView([], '')
+        run.commit_sha = gate_sha
     stats = collect_diff_stats(run)
     if stats is None:
-        # Falha de evidência: nunca completa sem revisor; sobe para revisão forte.
-        decision = decide(
-            'high', trust_of(run, config), gate_result,
-            sensitive=['evidence_unavailable'],
-            complexity=getattr(run, 'complexity', None),
-            executor=run.agent, config=config,
-        )
+        decision = decide('high', trust_of(run, config), 'diff_unavailable', config=config)
         return decision, _DiffView([], '')
     files, diff_text = stats
     assessment = classify_risk(files, diff_text, getattr(run, 'complexity', None), config)

@@ -1137,8 +1137,13 @@ def update_agent_run(
         from app.services.test_gate import get_gate_evidence_for_run
         evidence = get_gate_evidence_for_run(db, run)
         gate_result = 'pass' if evidence and evidence.passed else 'fail'
-        decision, diff = evaluate_for_run(run, gate_result)
+        decision, diff = evaluate_for_run(run, gate_result, gate_sha=evidence.git_commit_sha if evidence else None)
         persist_decision(db, run, decision, len(diff.files), diff.text.count('\n'))
+        if decision.decision == 'BLOCKED_OPERATIONAL':
+            run, event = update_run(db, run, {
+                'status': 'blocked', 'error': decision.justification,
+                'message': decision.justification,
+            })
         if decision.decision == 'REVISAR' and decision.reviewer_candidates:
             # Tier decidido pela política tem autoridade sobre o revisor atribuído:
             # um econômico nunca fica com uma revisão forte (nem vice-versa).
