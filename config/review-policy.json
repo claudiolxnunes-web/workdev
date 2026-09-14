@@ -1,0 +1,9 @@
+{
+  "trusted_agents": ["codex", "claude", "kimi", "qwen"],
+  "tier_reviewers": {
+    "economic": ["qwen"],
+    "strong": ["codex", "claude", "kimi"]
+  },
+  "volume_medium_lines": 200,
+  "volume_high_lines": 500
+}
