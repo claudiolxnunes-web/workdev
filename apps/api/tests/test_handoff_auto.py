@@ -333,6 +333,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
             return current, SimpleNamespace(id=f"event-{data['status']}")
 
         with (
+            patch("app.services.review_scope.capture_start_base") as capture_base,
             patch(
                 "app.services.test_gate.execute_gate",
                 return_value=SimpleNamespace(
@@ -368,6 +369,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
         start_runtime.assert_called_once_with(
             "gemini", "prompt", model="gemini-2.5-flash", run_id="run-1",
         )
+        capture_base.assert_called_once_with(db, run)
         db.close.assert_called_once()
 
     @patch("app.routers.handoffs.finalize_auto_runtime", return_value={})
@@ -392,6 +394,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
             return current, SimpleNamespace(id=f"event-{data['status']}")
 
         with (
+            patch("app.services.review_scope.capture_start_base") as capture_base,
             patch("app.routers.handoffs._get_run", return_value=run),
             patch(
                 "app.routers.handoffs._task_project",
@@ -417,6 +420,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
             update_mock.call_args_list[-1].args[2]["error"],
             "runtime indisponível",
         )
+        capture_base.assert_called_once_with(db, run)
         db.close.assert_called_once()
 
     @patch("app.routers.handoffs._start_auto_monitor")
@@ -438,6 +442,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
             return current, SimpleNamespace(id=f"event-{data['status']}")
 
         with (
+            patch("app.services.review_scope.capture_start_base") as capture_base,
             patch("app.routers.handoffs._get_run", return_value=run),
             patch(
                 "app.routers.handoffs._task_project",
@@ -457,6 +462,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
         self.assertEqual(update_mock.call_args.args[2]["status"], "running")
         start_runtime.assert_called_once_with("codex", "prompt", model="gpt-5", run_id="run-1")
         start_monitor.assert_called_once_with("run-1", "codex")
+        capture_base.assert_called_once_with(db, run)
         db.close.assert_called_once()
 
     def test_auto_finalizes_runtime_before_persisting_completion(self):
