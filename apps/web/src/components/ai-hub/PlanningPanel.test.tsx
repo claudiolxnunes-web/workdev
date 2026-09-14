@@ -150,7 +150,7 @@ describe("PlanningPanel", () => {
     await waitFor(() => expect(getPlans).toHaveBeenCalledWith(undefined, "task-origin"))
   })
 
-  it("edita título e objetivo apenas no plano draft", async () => {
+  it("edita o conteúdo completo do plano draft", async () => {
     renderPanel()
     fireEvent.click(await screen.findByRole("button", { name: "Editar" }))
     fireEvent.change(screen.getByLabelText("Título"), { target: { value: "Plano corrigido" } })
@@ -158,7 +158,44 @@ describe("PlanningPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Salvar" }))
 
     await waitFor(() => expect(updatePlan).toHaveBeenCalledWith("plan-1", {
-      title: "Plano corrigido", objective: "Objetivo corrigido",
+      title: "Plano corrigido",
+      objective: "Objetivo corrigido",
+      scope: "",
+      constraints: [],
+      acceptance_criteria: ["Aceite"],
+      validation_steps: ["Validar"],
+      implementation_notes: "",
+    }))
+  })
+
+  it("permite edição completa quando o plano está em needs_revision", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "needs_revision" }])
+
+    renderPanel()
+
+    const edit = await screen.findByRole("button", { name: "Editar" })
+    fireEvent.click(edit)
+
+    expect(screen.getByDisplayValue("Plano original")).toBeInTheDocument()
+    expect(screen.getByDisplayValue("Objetivo original")).toBeInTheDocument()
+
+    fireEvent.change(screen.getByDisplayValue("Plano original"), {
+      target: { value: "Plano revisado" },
+    })
+    fireEvent.change(screen.getByDisplayValue("Objetivo original"), {
+      target: { value: "Objetivo revisado" },
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Salvar" }))
+
+    await waitFor(() => expect(updatePlan).toHaveBeenCalledWith("plan-1", {
+      title: "Plano revisado",
+      objective: "Objetivo revisado",
+      scope: "",
+      constraints: [],
+      acceptance_criteria: ["Aceite"],
+      validation_steps: ["Validar"],
+      implementation_notes: "",
     }))
   })
 

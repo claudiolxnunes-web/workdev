@@ -412,6 +412,24 @@ TOOLS = [
         },
     },
     {
+        "name": "atualizar_plano_execucao",
+        "description": "Atualiza parcialmente um plano oficial existente enquanto estiver em draft ou needs_revision. Permite editar todo o conteúdo do plano sem descartar e recriar.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plan_id": {"type": "string", "description": "UUID do plano oficial"},
+                "titulo": {"type": "string"},
+                "objetivo": {"type": "string"},
+                "escopo": {"type": "string"},
+                "restricoes": {"type": "array", "items": {"type": "string"}},
+                "criterios_aceite": {"type": "array", "items": {"type": "string"}},
+                "validacoes": {"type": "array", "items": {"type": "string"}},
+                "notas_implementacao": {"type": "string"},
+            },
+            "required": ["plan_id"],
+        },
+    },
+    {
         "name": "listar_planos_execucao",
         "description": "Lista planos de execução, opcionalmente filtrados por status ou task.",
         "input_schema": {
@@ -461,6 +479,29 @@ def executar_tool(nome: str, args: dict, db: Session,
             return json.dumps({'erro': 'O plano deve pertencer à task de origem desta conversa.',
                 'code': 'backlog_context_mismatch', 'executado': False}, ensure_ascii=False)
         args = {**args, 'task_id': str(backlog_id)}
+
+    if backlog_id is not None and nome == 'atualizar_plano_execucao':
+        try:
+            plan_uuid = uuid.UUID(str(args.get('plan_id', '')))
+        except ValueError:
+            return json.dumps(
+                {'erro': 'plan_id inválido', 'executado': False},
+                ensure_ascii=False,
+            )
+        plan = db.query(ExecutionPlan).filter(
+            ExecutionPlan.id == plan_uuid
+        ).first()
+        if not plan:
+            return json.dumps(
+                {'erro': 'plano não encontrado', 'executado': False},
+                ensure_ascii=False,
+            )
+        if str(plan.backlog_id) != str(backlog_id):
+            return json.dumps({
+                'erro': 'O plano não pertence à task de origem desta conversa.',
+                'code': 'backlog_context_mismatch',
+                'executado': False,
+            }, ensure_ascii=False)
     return _executar_tool_sem_gate(nome, args, db)
 
 
@@ -868,6 +909,75 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
             "ok": True, "plano_id": str(plan.id), "versao": plan.version,
             "status": plan.status, "task_id": str(task.id), "task": task.title,
             "proximo_passo": "Revisar e aprovar no painel Planos do AI Hub",
+        }, ensure_ascii=False)
+
+    if nome == "atualizar_plano_execucao":
+        try:
+            plan_uuid = uuid.UUID(str(args.get("plan_id", "")))
+        except ValueError:
+            return json.dumps(
+                {"erro": "plan_id inválido", "executado": False},
+                ensure_ascii=False,
+            )
+
+        plan = db.query(ExecutionPlan).filter(
+            ExecutionPlan.id == plan_uuid
+        ).first()
+        if not plan:
+            return json.dumps(
+                {"erro": "plano não encontrado", "executado": False},
+                ensure_ascii=False,
+            )
+
+        dados = {}
+        mapping = {
+            "titulo": "title",
+            "objetivo": "objective",
+            "escopo": "scope",
+            "restricoes": "constraints",
+            "criterios_aceite": "acceptance_criteria",
+            "validacoes": "validation_steps",
+            "notas_implementacao": "implementation_notes",
+        }
+        for origem, destino in mapping.items():
+            if origem in args:
+                dados[destino] = args[origem]
+
+        if not dados:
+            return json.dumps(
+                {"erro": "nenhuma alteração informada", "executado": False},
+                ensure_ascii=False,
+            )
+
+        try:
+            plan = update_plan(db, plan, dados)
+        except HandoffError as error:
+            return json.dumps(
+                {"erro": str(error), "executado": False},
+                ensure_ascii=False,
+            )
+
+        task = db.query(BacklogItem).filter(
+            BacklogItem.id == plan.backlog_id
+        ).first()
+
+        if task:
+            graph_sync.sync_safely(
+                "sync_plan",
+                str(plan.id),
+                str(task.project_id),
+                str(task.id),
+            )
+
+        return json.dumps({
+            "ok": True,
+            "executado": True,
+            "plano_id": str(plan.id),
+            "versao": plan.version,
+            "status": plan.status,
+            "task_id": str(plan.backlog_id),
+            "task": task.title if task else None,
+            "alteracoes": list(dados.keys()),
         }, ensure_ascii=False)
 
     if nome == "listar_planos_execucao":

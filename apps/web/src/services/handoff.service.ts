@@ -308,7 +308,16 @@ export async function getPlans(status?: PlanStatus, backlogId?: string): Promise
 
 export async function updatePlan(
   id: string,
-  data: { title?: string; objective?: string; status?: "discarded" },
+  data: {
+    title?: string
+    objective?: string
+    scope?: string
+    constraints?: string[]
+    acceptance_criteria?: string[]
+    validation_steps?: string[]
+    implementation_notes?: string
+    status?: "discarded"
+  },
 ): Promise<ExecutionPlan> {
   return read(fetch(`/api/plans/${id}`, {
     method: "PATCH", headers, body: JSON.stringify(data),

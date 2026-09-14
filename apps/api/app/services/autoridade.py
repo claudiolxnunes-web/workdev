@@ -64,6 +64,7 @@ NIVEL_POR_TOOL: dict[str, str] = {
     "atualizar_subtask": PLAN,
     "registrar_conhecimento": PLAN,
     "criar_plano_execucao": PLAN,
+    "atualizar_plano_execucao": PLAN,
     "criar_adr": PLAN,
 }
 

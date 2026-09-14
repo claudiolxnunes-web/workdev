@@ -197,6 +197,11 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
   const [editing, setEditing] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState("")
   const [editObjective, setEditObjective] = useState("")
+  const [editScope, setEditScope] = useState("")
+  const [editConstraints, setEditConstraints] = useState("")
+  const [editAcceptanceCriteria, setEditAcceptanceCriteria] = useState("")
+  const [editValidationSteps, setEditValidationSteps] = useState("")
+  const [editImplementationNotes, setEditImplementationNotes] = useState("")
   const [discardTarget, setDiscardTarget] = useState<ExecutionPlan | null>(null)
   const [premiumTarget, setPremiumTarget] = useState<{
     plan: ExecutionPlan
@@ -337,16 +342,43 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
   }
 
   function beginEdit(plan: ExecutionPlan) {
-    setEditing(plan.id); setEditTitle(plan.title); setEditObjective(plan.objective)
-    setError(""); setMessage("")
+    setEditing(plan.id)
+    setEditTitle(plan.title)
+    setEditObjective(plan.objective)
+    setEditScope(plan.scope ?? "")
+    setEditConstraints((plan.constraints ?? []).join("\n"))
+    setEditAcceptanceCriteria((plan.acceptance_criteria ?? []).join("\n"))
+    setEditValidationSteps((plan.validation_steps ?? []).join("\n"))
+    setEditImplementationNotes(plan.implementation_notes ?? "")
+    setError("")
+    setMessage("")
+  }
+
+  function editLines(value: string): string[] {
+    return value
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean)
   }
 
   async function saveEdit(plan: ExecutionPlan) {
     setBusy(plan.id); setError(""); setMessage("")
     try {
-      await updatePlan(plan.id, { title: editTitle.trim(), objective: editObjective.trim() })
-      setEditing(null); setMessage(`Plano v${plan.version} atualizado.`); await load()
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao editar plano") }
+      await updatePlan(plan.id, {
+        title: editTitle.trim(),
+        objective: editObjective.trim(),
+        scope: editScope.trim(),
+        constraints: editLines(editConstraints),
+        acceptance_criteria: editLines(editAcceptanceCriteria),
+        validation_steps: editLines(editValidationSteps),
+        implementation_notes: editImplementationNotes.trim(),
+      })
+      setEditing(null)
+      setMessage(`Plano v${plan.version} atualizado.`)
+      await load()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Falha ao editar plano")
+    }
     finally { setBusy(null) }
   }
 
@@ -389,15 +421,84 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                 <span className={`rounded-full px-2 py-1 text-xs ${statusColor[plan.status]}`}>{statusLabel[plan.status]}</span>
               </div>
               {editing === plan.id ? (
-                <div className="mb-3 space-y-3">
-                  <label className="block text-sm text-slate-300">Título
-                    <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white" />
+                <div className="mb-4 space-y-4 rounded-xl border border-slate-700 bg-slate-950/60 p-4">
+                  <label className="block text-sm text-slate-300">
+                    Título
+                    <input
+                      value={editTitle}
+                      onChange={(event) => setEditTitle(event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
                   </label>
-                  <label className="block text-sm text-slate-300">Objetivo
-                    <textarea value={editObjective} onChange={(event) => setEditObjective(event.target.value)} rows={4} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white" />
+
+                  <label className="block text-sm text-slate-300">
+                    Objetivo
+                    <textarea
+                      value={editObjective}
+                      onChange={(event) => setEditObjective(event.target.value)}
+                      rows={4}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Escopo
+                    <textarea
+                      value={editScope}
+                      onChange={(event) => setEditScope(event.target.value)}
+                      rows={5}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Restrições
+                    <span className="ml-2 text-xs text-slate-500">uma por linha</span>
+                    <textarea
+                      value={editConstraints}
+                      onChange={(event) => setEditConstraints(event.target.value)}
+                      rows={5}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Critérios de aceite
+                    <span className="ml-2 text-xs text-slate-500">um por linha</span>
+                    <textarea
+                      value={editAcceptanceCriteria}
+                      onChange={(event) => setEditAcceptanceCriteria(event.target.value)}
+                      rows={7}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Validações
+                    <span className="ml-2 text-xs text-slate-500">uma por linha</span>
+                    <textarea
+                      value={editValidationSteps}
+                      onChange={(event) => setEditValidationSteps(event.target.value)}
+                      rows={7}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Notas de implementação
+                    <textarea
+                      value={editImplementationNotes}
+                      onChange={(event) => setEditImplementationNotes(event.target.value)}
+                      rows={6}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
                   </label>
                 </div>
-              ) : <p className="mb-3 text-sm text-slate-300">{plan.objective}</p>}
+              ) : (
+                <p className="mb-3 whitespace-pre-wrap text-sm text-slate-300">
+                  {plan.objective}
+                </p>
+              )}
               {recommendations[recommendationKey(plan)] && (
                 <RecommendationCard
                   recommendation={recommendations[recommendationKey(plan)]}
@@ -415,8 +516,8 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                 </div>
               </details>
               <div className="flex flex-wrap gap-2">
-                {plan.status === "draft" && editing !== plan.id && <button disabled={busy === plan.id} onClick={() => beginEdit(plan)} className="rounded-lg bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-50">Editar</button>}
-                {plan.status === "draft" && editing === plan.id && <>
+                {["draft", "needs_revision"].includes(plan.status) && editing !== plan.id && <button disabled={busy === plan.id} onClick={() => beginEdit(plan)} className="rounded-lg bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-50">Editar</button>}
+                {["draft", "needs_revision"].includes(plan.status) && editing === plan.id && <>
                   <button disabled={busy === plan.id || editTitle.trim().length < 3 || editObjective.trim().length < 3} onClick={() => void saveEdit(plan)} className="rounded-lg bg-sky-600 px-3 py-2 text-sm hover:bg-sky-500 disabled:opacity-50">Salvar</button>
                   <button disabled={busy === plan.id} onClick={() => setEditing(null)} className="rounded-lg bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-50">Cancelar edição</button>
                 </>}

@@ -277,14 +277,6 @@ def update_plan(
 
     next_status = data.pop("status", None)
 
-    if (
-        {"title", "objective"} & data.keys()
-        and plan.status != "draft"
-    ):
-        raise HandoffError(
-            "Título e objetivo só podem ser alterados em planos Draft"
-        )
-
     if next_status:
         if next_status != "discarded" or plan.status != "draft":
             raise HandoffError(

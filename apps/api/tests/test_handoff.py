@@ -128,11 +128,29 @@ class HandoffContractTest(unittest.TestCase):
         with self.assertRaisesRegex(HandoffError, "Somente planos"):
             update_plan(db, plan, {"status": "discarded"})
 
-    def test_needs_revision_plan_cannot_change_title_or_objective(self):
+    def test_needs_revision_plan_can_change_title_and_objective(self):
         db = Mock()
-        plan = SimpleNamespace(status="needs_revision")
-        with self.assertRaisesRegex(HandoffError, "Título e objetivo"):
-            update_plan(db, plan, {"title": "Título bloqueado"})
+        plan = SimpleNamespace(
+            status="needs_revision",
+            title="Título anterior",
+            objective="Objetivo anterior",
+            updated_at=None,
+        )
+
+        updated = update_plan(
+            db,
+            plan,
+            {
+                "title": "Título revisado",
+                "objective": "Objetivo revisado",
+            },
+        )
+
+        self.assertIs(updated, plan)
+        self.assertEqual(plan.title, "Título revisado")
+        self.assertEqual(plan.objective, "Objetivo revisado")
+        db.commit.assert_called_once()
+        db.refresh.assert_called_once_with(plan)
 
 
 if __name__ == "__main__":
