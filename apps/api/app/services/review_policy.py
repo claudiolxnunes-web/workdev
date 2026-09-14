@@ -13,6 +13,13 @@ from pathlib import Path
 RISK_LEVELS = ('low', 'medium', 'high')
 TRUST_LEVELS = ('trusted', 'supervised')
 TIER_LEVELS = ('none', 'economic', 'strong')
+ESCALATE_PREFIX = 'ESCALATE:'
+
+def changed_lines(diff_text: str) -> int:
+    return sum(line.startswith(('+', '-')) and not line.startswith(('+++', '---'))
+               for line in diff_text.splitlines())
+
+
 DECISIONS = ('NO_REVIEW_COMPLETE', 'REVISAR', 'NO_REVIEW_GATE_FAIL', 'BLOCKED_OPERATIONAL')
 
 _CONFIG_PATH = Path(__file__).resolve().parents[4] / 'config' / 'review-policy.json'
@@ -68,7 +75,7 @@ def classify_risk(files: list[str], diff_text: str, complexity: str | None = Non
     for label, rule in SENSITIVE_DIFF_KEYWORDS.items():
         if rule.search(diff_text):
             sensitive.add(label)
-    lines = diff_text.count('\n')
+    lines = changed_lines(diff_text)
     reasons = []
     if sensitive:
         reasons.append(f'escopo sensível: {", ".join(sensitive)}')
@@ -118,9 +125,12 @@ def decide(task_risk: str, agent_trust: str, gate_result: str, sensitive: list[s
     if sensitive:
         tier = 'strong' if complexity in ('high', 'critical') else 'economic'
         reason = 'Escopo sensível; tier proporcional à complexidade'
+    elif task_risk == 'medium' and agent_trust == 'trusted':
+        tier = 'economic'
+        reason = 'Risco médio e executor confiável: revisão econômica independente'
     else:
         tier = 'strong'
-        reason = 'Risco alto ou executor supervisionado exige revisão forte'
+        reason = f'Risco {task_risk}, confiança {agent_trust}: revisão forte independente'
     candidates = [reviewer for reviewer in config['tier_reviewers'].get(tier, []) if reviewer != executor]
     if not candidates:
         return PolicyDecision('BLOCKED_OPERATIONAL', tier, task_risk, agent_trust,

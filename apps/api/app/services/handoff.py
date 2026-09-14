@@ -1056,6 +1056,8 @@ def record_review(
             )
             db.commit()
 
+    from app.services.review_policy import ESCALATE_PREFIX
+
     # Fecha ciclo com métricas; ESCALATE do econômico troca para revisor forte.
     from app.models.review_cycle import ReviewCycle
     from app.services.review_cycle import close_cycle_with_verdict
@@ -1065,7 +1067,7 @@ def record_review(
              .order_by(ReviewCycle.attempt.desc()).first())
     escalate = (
         verdict == "rejected" and bool(feedback) and cycle is not None
-        and cycle.tier == "economic" and feedback.upper().startswith("ESCALATE")
+        and cycle.tier == "economic" and feedback.upper().startswith(ESCALATE_PREFIX)
     )
     close_cycle_with_verdict(db, run, reviewer, verdict, escalated=bool(escalate))
     if escalate:

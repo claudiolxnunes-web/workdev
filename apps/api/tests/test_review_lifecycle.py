@@ -15,7 +15,7 @@ from sqlalchemy.orm import registry, sessionmaker
 from app.auth import COOKIE_NAME, create_session_token
 from app.main import app
 from app.routers import handoffs
-from app.services import handoff, review_cycle, review_package, test_gate
+from app.services import handoff, review_cycle, review_package, review_scope, test_gate
 
 
 @pytest.fixture
@@ -96,7 +96,7 @@ def lifecycle_api(tmp_path, monkeypatch):
     monkeypatch.setattr(handoffs, '_sync_run', lambda *args: None)
     monkeypatch.setattr(handoffs, '_run_out', lambda db, row: {'id': str(row.id), 'agent': row.agent, 'status': row.status, 'reviewer_agent': row.reviewer_agent})
     monkeypatch.setattr(handoffs, 'SessionLocal', factory)
-    for module in (review_cycle, review_package, handoffs, handoff):
+    for module in (review_cycle, review_package, review_scope, handoffs, handoff):
         for attr, cls in [('AgentRun', Run), ('AgentRunEvent', Event), ('ReviewCycle', Cycle), ('AgentRunReview', Review),
                           ('BacklogItem', Task), ('ExecutionPlan', Plan)]:
             if hasattr(module, attr):

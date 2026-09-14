@@ -29,22 +29,22 @@ def collect_diff_stats(run: AgentRun, root: Path = REPO_ROOT) -> tuple[list[str]
     target = getattr(run, 'commit_sha', None)
     if not target or not re.fullmatch(r'[0-9a-fA-F]{40}', target):
         return None
-    base = 'origin/develop'
+    base = getattr(run, 'review_base_sha', None)
+    if not base or not re.fullmatch(r'[0-9a-f]{40}', base):
+        return None
     try:
+        ancestry = subprocess.run(['git', 'merge-base', '--is-ancestor', base, target],
+                                  cwd=root, capture_output=True, text=True, timeout=30, check=False)
+        if ancestry.returncode != 0:
+            return None
         files = subprocess.run(
-            ['git', 'diff', '--name-only', f'{base}...{target}'],
+            ['git', 'diff', '--no-renames', '--name-only', base, target],
             cwd=root, capture_output=True, text=True, timeout=30, check=False,
         )
         if files.returncode != 0:
-            base = 'develop'
-            files = subprocess.run(
-                ['git', 'diff', '--name-only', f'{base}...{target}'],
-                cwd=root, capture_output=True, text=True, timeout=30, check=False,
-            )
-        if files.returncode != 0:
             return None
         text = subprocess.run(
-            ['git', 'diff', f'{base}...{target}'],
+            ['git', 'diff', '--no-renames', '--unified=0', base, target],
             cwd=root, capture_output=True, text=True, timeout=60, check=False,
         )
         if text.returncode != 0:
@@ -107,6 +107,13 @@ def persist_decision(db: Session, run: AgentRun, decision: PolicyDecision,
         tokens_estimate=context_bytes // _TOKEN_BYTES_PER_TOKEN,
     )
     db.add(cycle)
+    db.flush()
+    from app.services.review_package import build_package, package_bytes
+    cycle.context_bytes = package_bytes(build_package(db, run))
+    cycle.tokens_estimate = cycle.context_bytes // _TOKEN_BYTES_PER_TOKEN
+    if decision.decision != 'REVISAR':
+        cycle.closed_at = datetime.now(timezone.utc)
+        cycle.duration_ms = 0
     event = AgentRunEvent(
         run_id=run.id, event_type='build.review_decision',
         message=decision.justification,
@@ -116,6 +123,8 @@ def persist_decision(db: Session, run: AgentRun, decision: PolicyDecision,
             'gate_result': decision.gate_result, 'sensitive': decision.sensitive,
             'diff_files': diff_files, 'diff_lines': diff_lines,
             'reviewer_candidates': decision.reviewer_candidates,
+            'base_sha': getattr(run, 'review_base_sha', None),
+            'commit_sha': getattr(run, 'commit_sha', None),
         },
     )
     db.add(event)

@@ -1,3 +1,4 @@
+from app.services.review_policy import changed_lines
 from typing import Any
 from uuid import UUID
 import os
@@ -376,6 +377,8 @@ def _run_auto_agent(
         if (run.routing_mode != "auto" and not allow_manual) or run.status != "queued":
             return
 
+        from app.services.review_scope import capture_start_base
+        capture_start_base(db, run)
         run, event = update_run(
             db,
             run,
@@ -1048,6 +1051,9 @@ def update_agent_run(
     current = _get_run(db, run_id)
     data = payload.model_dump(exclude_unset=True)
     requested_status = data.get("status")
+    if current.status == 'queued' and requested_status == 'running' and not current.started_at:
+        from app.services.review_scope import capture_start_base
+        capture_start_base(db, current)
 
     if requested_status == 'cancelled':
         from app.services.agent_workspace import stop_run
@@ -1125,7 +1131,7 @@ def update_agent_run(
         elif requested_status == "review":
             from app.services.review_cycle import evaluate_for_run, persist_decision
             decision, diff = evaluate_for_run(current, 'fail')
-            persist_decision(db, current, decision, len(diff.files), diff.text.count('\n'))
+            persist_decision(db, current, decision, len(diff.files), changed_lines(diff.text))
         raise HTTPException(
             409,
             str(error),
@@ -1137,8 +1143,15 @@ def update_agent_run(
         from app.services.test_gate import get_gate_evidence_for_run
         evidence = get_gate_evidence_for_run(db, run)
         gate_result = 'pass' if evidence and evidence.passed else 'fail'
+        from app.services.review_scope import load_base
+        run.review_base_sha = load_base(db, run.id)
         decision, diff = evaluate_for_run(run, gate_result, gate_sha=evidence.git_commit_sha if evidence else None)
-        persist_decision(db, run, decision, len(diff.files), diff.text.count('\n'))
+        persist_decision(db, run, decision, len(diff.files), changed_lines(diff.text))
+        if decision.decision == 'NO_REVIEW_GATE_FAIL':
+            run, event = update_run(db, run, {
+                'status': 'running', 'error': decision.justification,
+                'message': decision.justification,
+            })
         if decision.decision == 'BLOCKED_OPERATIONAL':
             run, event = update_run(db, run, {
                 'status': 'blocked', 'error': decision.justification,

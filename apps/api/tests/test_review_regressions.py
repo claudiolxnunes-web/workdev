@@ -19,7 +19,7 @@ def test_diff_must_use_run_commit(monkeypatch):
         return SimpleNamespace(returncode=0, stdout='')
     monkeypatch.setattr(review_cycle.subprocess, 'run', capture)
     sha = '98140b08605e99253b8798f32fe6040fada98c12'
-    review_cycle.collect_diff_stats(SimpleNamespace(commit_sha=sha, branch='task/e45f5f46-review-policy'))
+    review_cycle.collect_diff_stats(SimpleNamespace(commit_sha=sha, review_base_sha='b' * 40, branch='task/e45f5f46-review-policy'))
     assert any(sha in arg for command in commands for arg in command), commands
 
 
@@ -49,7 +49,7 @@ def test_partial_diff_failure_must_not_autocomplete(monkeypatch):
             return SimpleNamespace(returncode=0, stdout='app/services/worker.py\n')
         return SimpleNamespace(returncode=128, stdout='')
     monkeypatch.setattr(review_cycle.subprocess, 'run', partial)
-    decision, _ = review_cycle.evaluate_for_run(SimpleNamespace(agent='kimi', complexity=None, commit_sha='a'*40), 'pass')
+    decision, _ = review_cycle.evaluate_for_run(SimpleNamespace(agent='kimi', complexity=None, commit_sha='a'*40, review_base_sha='b'*40), 'pass')
     assert decision.decision != 'NO_REVIEW_COMPLETE'
 
 
@@ -115,17 +115,15 @@ def test_partial_collection_blocks_http_transition(lifecycle_api, monkeypatch):
         assert db.get(Run, run_id).status == 'blocked'
 
 
-def test_git_fallback_uses_same_base_for_content(monkeypatch):
+def test_git_collection_uses_same_immutable_base(monkeypatch):
     commands = []
     def capture(args, **kwargs):
         commands.append(args)
-        if any('origin/develop' in arg for arg in args):
-            return SimpleNamespace(returncode=128, stdout='')
         return SimpleNamespace(returncode=0, stdout='app/services/worker.py\n' if '--name-only' in args else '+Lock()\n')
     monkeypatch.setattr(review_cycle.subprocess, 'run', capture)
-    stats = review_cycle.collect_diff_stats(SimpleNamespace(commit_sha='a' * 40))
+    stats = review_cycle.collect_diff_stats(SimpleNamespace(commit_sha='a' * 40, review_base_sha='b' * 40))
     assert stats == (['app/services/worker.py'], '+Lock()\n')
-    assert commands[-1][-1] == 'develop...' + 'a' * 40
+    assert commands[-1][-2:] == ['b' * 40, 'a' * 40]
 
 
 def test_sensitive_low_never_skips_review():
