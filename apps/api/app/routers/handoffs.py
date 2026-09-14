@@ -1139,6 +1139,15 @@ def update_agent_run(
         gate_result = 'pass' if evidence and evidence.passed else 'fail'
         decision, diff = evaluate_for_run(run, gate_result)
         persist_decision(db, run, decision, len(diff.files), diff.text.count('\n'))
+        if decision.decision == 'REVISAR' and decision.reviewer_candidates:
+            # Tier decidido pela política tem autoridade sobre o revisor atribuído:
+            # um econômico nunca fica com uma revisão forte (nem vice-versa).
+            if run.reviewer_agent not in decision.reviewer_candidates:
+                from app.services.handoff import swap_reviewer
+                swap_reviewer(
+                    db, run, decision.reviewer_candidates[0],
+                    f'Roteamento por política: tier {decision.tier}',
+                )
         if decision.decision == 'NO_REVIEW_COMPLETE':
             run, event = update_run(
                 db, run,

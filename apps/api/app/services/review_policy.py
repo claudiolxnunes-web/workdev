@@ -15,7 +15,7 @@ TRUST_LEVELS = ('trusted', 'supervised')
 TIER_LEVELS = ('none', 'economic', 'strong')
 DECISIONS = ('NO_REVIEW_COMPLETE', 'REVISAR', 'NO_REVIEW_GATE_FAIL', 'BLOCKED_OPERATIONAL')
 
-_CONFIG_PATH = Path(__file__).resolve().parents[3] / 'config' / 'review-policy.json'
+_CONFIG_PATH = Path(__file__).resolve().parents[4] / 'config' / 'review-policy.json'
 _DEFAULT_CONFIG = {
     'trusted_agents': ['codex', 'claude', 'kimi', 'qwen'],
     'tier_reviewers': {

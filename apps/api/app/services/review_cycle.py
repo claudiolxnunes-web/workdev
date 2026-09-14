@@ -18,29 +18,35 @@ REPO_ROOT = Path('/opt/workdev')
 _TOKEN_BYTES_PER_TOKEN = 4
 
 
-def collect_diff_stats(run: AgentRun, root: Path = REPO_ROOT) -> tuple[list[str], str]:
-    """Diff real da branch da run contra a base do projeto. Falha retorna vazio —
-    risco sobe por volume zero? Não: volume vazio rebaixa; escopo sensível vem
-    de paths persistidos no PLAN quando diff indisponível."""
+def collect_diff_stats(run: AgentRun, root: Path = REPO_ROOT) -> tuple[list[str], str] | None:
+    """Diff vinculado ao SHA/branch da Run (o mesmo que o gate validou).
+
+    Ausência de evidência NUNCA reduz risco: qualquer falha (git indisponível,
+    timeout, repositório) retorna None e o chamador sobe o risco em vez de
+    concluir automaticamente.
+    """
+    target = getattr(run, 'commit_sha', None) or getattr(run, 'branch', None) or 'HEAD'
     base = 'origin/develop'
     try:
         files = subprocess.run(
-            ['git', 'diff', '--name-only', f'{base}...HEAD'],
+            ['git', 'diff', '--name-only', f'{base}...{target}'],
             cwd=root, capture_output=True, text=True, timeout=30, check=False,
         )
         if files.returncode != 0:
             files = subprocess.run(
-                ['git', 'diff', '--name-only', 'develop...HEAD'],
+                ['git', 'diff', '--name-only', f'develop...{target}'],
                 cwd=root, capture_output=True, text=True, timeout=30, check=False,
             )
+        if files.returncode != 0:
+            return None
         text = subprocess.run(
-            ['git', 'diff', f'{base}...HEAD'],
+            ['git', 'diff', f'{base}...{target}'],
             cwd=root, capture_output=True, text=True, timeout=60, check=False,
         )
         names = [line.strip() for line in files.stdout.splitlines() if line.strip()]
         return names, text.stdout if text.returncode == 0 else ''
     except (OSError, subprocess.TimeoutExpired):
-        return [], ''
+        return None
 
 
 def trust_of(run: AgentRun, config: dict) -> str:
@@ -57,7 +63,17 @@ def evaluate_for_run(run: AgentRun, gate_result: str,
                      config: dict | None = None) -> tuple[PolicyDecision, _DiffView]:
     """Decisão determinística da run: risco (diff) + trust (config) + gate."""
     config = config or load_config()
-    files, diff_text = collect_diff_stats(run)
+    stats = collect_diff_stats(run)
+    if stats is None:
+        # Falha de evidência: nunca completa sem revisor; sobe para revisão forte.
+        decision = decide(
+            'high', trust_of(run, config), gate_result,
+            sensitive=['evidence_unavailable'],
+            complexity=getattr(run, 'complexity', None),
+            executor=run.agent, config=config,
+        )
+        return decision, _DiffView([], '')
+    files, diff_text = stats
     assessment = classify_risk(files, diff_text, getattr(run, 'complexity', None), config)
     decision = decide(
         assessment.risk, trust_of(run, config), gate_result,
