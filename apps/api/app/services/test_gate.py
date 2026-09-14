@@ -104,6 +104,32 @@ class GatePaths:
 DEFAULT_PATHS = GatePaths()
 
 
+def _check_guardrails(paths=None):
+    """Operação não-root e sem artefatos root-owned em diretórios de build/cache."""
+    import os
+    paths = paths or DEFAULT_PATHS
+    if os.geteuid() == 0:
+        return CheckResult(name='guardrails', passed=False, mandatory=True,
+                           reason='Gate executado como root; revisores/executores devem usar o usuário operacional')
+    watched = [paths.root / '.pytest_cache', paths.web_dir / 'dist']
+    for root in watched:
+        if not root.is_dir():
+            continue
+        has_root_artifact = False
+        for entry in root.rglob('*'):
+            try:
+                if entry.lstat().st_uid == 0:
+                    has_root_artifact = True
+                    break
+            except OSError:
+                pass
+        if has_root_artifact:
+            return CheckResult(name='guardrails', passed=False, mandatory=True,
+                               reason=f'Artefato root-owned detectado em {root}')
+    return CheckResult(name='guardrails', passed=True, mandatory=True,
+                       reason='Guardrails operacionais OK')
+
+
 @dataclass
 class CheckResult:
     """Resultado de um check individual."""
@@ -456,6 +482,7 @@ def execute_gate(
     try:
         # Executar checks
         checks = [
+            _check_guardrails(paths),  # Obrigatório (não-root/artefatos)
             _check_pytest(paths),      # Obrigatório
             _check_vitest(paths),      # Opcional
             _check_lint(paths),        # Opcional

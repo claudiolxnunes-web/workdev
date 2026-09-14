@@ -1056,6 +1056,32 @@ def record_review(
             )
             db.commit()
 
+    # Fecha ciclo com métricas; ESCALATE do econômico troca para revisor forte.
+    from app.models.review_cycle import ReviewCycle
+    from app.services.review_cycle import close_cycle_with_verdict
+    from app.services.review_policy import reviewer_tier_for_escalation
+    cycle = (db.query(ReviewCycle)
+             .filter(ReviewCycle.run_id == run.id)
+             .order_by(ReviewCycle.attempt.desc()).first())
+    escalate = (
+        verdict == "rejected" and bool(feedback) and cycle is not None
+        and cycle.tier == "economic" and feedback.upper().startswith("ESCALATE")
+    )
+    close_cycle_with_verdict(db, run, reviewer, verdict, escalated=bool(escalate))
+    if escalate:
+        decision = reviewer_tier_for_escalation(
+            cycle.tier, executor=run.agent if cycle else None,
+        )
+        candidates = [
+            agent for agent in (decision.reviewer_candidates if decision else [])
+            if agent != reviewer
+        ]
+        if candidates:
+            swap_reviewer(
+                db, run, candidates[0],
+                "Escalonamento: revisor econômico indicou incerteza",
+            )
+
     return run, review
 
 

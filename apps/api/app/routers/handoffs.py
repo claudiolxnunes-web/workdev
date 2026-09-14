@@ -1110,10 +1110,42 @@ def update_agent_run(
                 )
 
     except HandoffError as error:
+        # Fail operacional (guardrails) → blocked; fail de testes → executor.
+        from app.services.test_gate import get_gate_evidence_for_run
+        evidence = get_gate_evidence_for_run(db, current)
+        operational = evidence and 'guardrails' in (evidence.mandatory_failed or [])
+        if operational and requested_status == "review":
+            run, _ev = update_run(
+                db, current,
+                {"status": "blocked", "message": "Gate operacional (guardrails) reprovado"},
+            )
+            add_run_event(db, run, "build.operational_failure",
+                          "Guardrails reprovaram; execução fica blocked, nunca done")
+            db.commit()
+        elif requested_status == "review":
+            from app.services.review_cycle import evaluate_for_run, persist_decision
+            decision, diff = evaluate_for_run(current, 'fail')
+            persist_decision(db, current, decision, len(diff.files), diff.text.count('\n'))
         raise HTTPException(
             409,
             str(error),
         ) from error
+    # Política de revisão: gates JÁ executaram dentro de update_run; aqui só
+    # lemos a evidência persistida, classificamos risco e persistimos decisão.
+    if run.status == "review" and previous_status != "review":
+        from app.services.review_cycle import evaluate_for_run, persist_decision
+        from app.services.test_gate import get_gate_evidence_for_run
+        evidence = get_gate_evidence_for_run(db, run)
+        gate_result = 'pass' if evidence and evidence.passed else 'fail'
+        decision, diff = evaluate_for_run(run, gate_result)
+        persist_decision(db, run, decision, len(diff.files), diff.text.count('\n'))
+        if decision.decision == 'NO_REVIEW_COMPLETE':
+            run, event = update_run(
+                db, run,
+                {"status": "completed",
+                 "result": run.result or f"Concluído por gates + política ({decision.justification})",
+                 "message": "Sem revisor LLM: risco baixo, executor confiável, gates PASS"},
+            )
 
     _sync_run(
         background,
@@ -1126,6 +1158,20 @@ def update_agent_run(
         db,
         run,
     )
+
+
+@router.get("/runs/{run_id}/review-context")
+def get_review_context(
+    run_id: UUID,
+    expand: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Pacote mínimo para o revisor LLM. `expand=diff` é o único lazy admitido."""
+    from app.services.review_package import build_package, package_bytes
+    run = _get_run(db, run_id)
+    package = build_package(db, run, expand == 'diff')
+    package['context_bytes'] = package_bytes(package)
+    return package
 
 
 @router.post(
