@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { sendAiChatWithConfirmation } from "../services/ai.service";
+import { getOpenRouterModels, type CatalogModel, sendAiChatWithConfirmation } from "../services/ai.service";
 import { Trash2, FolderGit2 } from "lucide-react";
 import {
   MessageBubble,
@@ -28,8 +28,8 @@ interface Divider {
 }
 
 // Ordem de apresentação do AI Hub; não define prioridade de roteamento.
-// Fontes genéricas serão habilitadas pelos seletores dinâmicos das próximas fatias.
-export const MODELOS = [
+// Local será habilitado pelo inventário de runtimes da próxima fatia.
+const MODELOS = [
   { label: "Gemini", provider: "gemini", model: "gemini-3.5-flash", legacyLabel: "Gemini 3.5 Flash" },
   { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
   { label: "Claude Haiku", provider: "anthropic", model: "claude-haiku-4-5-20251001", legacyLabel: "Claude Haiku 4.5" },
@@ -37,14 +37,15 @@ export const MODELOS = [
   { label: "Local / Ollama", provider: "ollama", model: null },
 ];
 const MODELO_STORAGE_KEY = "workdev_ai_hub_modelo";
+const OPENROUTER_MODEL_STORAGE_KEY = "workdev_ai_hub_openrouter_model";
 const PROJETO_STORAGE_KEY = "workdev_ai_hub_projeto";
-export const DEFAULT_MODELO_LABEL = "Gemini";
+const DEFAULT_MODELO_LABEL = "Gemini";
 const AUTORIDADE_PADRAO: Authority = "plan";
 
 function loadStoredModelo() {
   try {
     const stored = localStorage.getItem(MODELO_STORAGE_KEY);
-    const found = stored && MODELOS.find((m) => m.model && (m.label === stored || m.legacyLabel === stored));
+    const found = stored && MODELOS.find((m) => (m.model || m.provider === "openrouter") && (m.label === stored || m.legacyLabel === stored));
     if (found) return found;
   } catch { /* localStorage indisponível (modo privado etc.) */ }
   return MODELOS.find((m) => m.label === DEFAULT_MODELO_LABEL) || MODELOS[0];
@@ -74,6 +75,15 @@ export default function AIHub() {
   const [authority, setAuthority] = useState<Authority>(AUTORIDADE_PADRAO);
   const [input, setInput] = useState("");
   const [modelo, setModelo] = useState(loadStoredModelo);
+  const [openRouterModels, setOpenRouterModels] = useState<CatalogModel[]>([]);
+  const [openRouterModel, setOpenRouterModel] = useState("");
+  const [catalogStatus, setCatalogStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [catalogReload, setCatalogReload] = useState(0);
+  const [pendingStart, setPendingStart] = useState<{ id: string; messages: Msg[]; slug: string | null } | null>(null);
+  const selectedModel = modelo.provider === "openrouter"
+    ? (catalogStatus === "ready" && openRouterModels.some(m => m.model === openRouterModel)
+      ? openRouterModel : null)
+    : modelo.model;
   const [loading, setLoading] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [showPlans, setShowPlans] = useState(false);
@@ -81,6 +91,30 @@ export default function AIHub() {
   const endRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const autostartedRef = useRef(false);
+
+  useEffect(() => {
+    if (modelo.provider !== "openrouter") return;
+    let active = true;
+    getOpenRouterModels().then(models => {
+      if (!active) return;
+      setOpenRouterModels(models);
+      let stored = "";
+      try { stored = localStorage.getItem(OPENROUTER_MODEL_STORAGE_KEY) || ""; } catch { /* ignore */ }
+      setOpenRouterModel(models.some(m => m.model === stored) ? stored : "");
+      setCatalogStatus("ready");
+    }).catch(() => {
+      if (active) { setOpenRouterModels([]); setCatalogStatus("error"); }
+    });
+    return () => { active = false; };
+  }, [modelo.provider, catalogReload]);
+
+  useEffect(() => {
+    if (!pendingStart || !selectedModel || autostartedRef.current) return;
+    autostartedRef.current = true;
+    void startTaskConversation(pendingStart.id, pendingStart.messages, pendingStart.slug);
+    // O início aguarda uma escolha válida; a ref evita duplicação após re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingStart, selectedModel, modelo.provider]);
 
   useEffect(() => {
     const panel = messagesRef.current;
@@ -107,6 +141,7 @@ export default function AIHub() {
   }
 
   async function restoreSession(id: string, autostart = false) {
+    setPendingStart(null);
     try {
       const r = await fetch(`/api/chat/sessions/${id}`);
       if (!r.ok) { newChat(); return; }
@@ -122,8 +157,7 @@ export default function AIHub() {
       setSessionId(id);
       localStorage.setItem("workdev_chat_session", id);
       if (autostart && !autostartedRef.current) {
-        autostartedRef.current = true;
-        await startTaskConversation(id, data.messages, data.project_slug);
+        setPendingStart({ id, messages: data.messages, slug: data.project_slug ?? null });
       }
     } catch { /* silencioso */ }
   }
@@ -133,7 +167,7 @@ export default function AIHub() {
     currentMessages: Msg[],
     slug: string | null,
   ) {
-    if (!modelo.model) return;
+    if (!selectedModel) return;
     const prompt = "Confirme sua compreensão da task, identifique lacunas e formule uma PRÉVIA do plano para revisão humana. Durante toda a revisão use apenas a prévia: não crie plan_id, não gere nova versão e não materialize plano oficial. Corrija a mesma prévia quantas vezes o usuário pedir. Só após aprovação explícita da formulação final o plano oficial poderá ser criado em draft. Aprovar o plano não envia para Build nem escolhe agente; apenas recomende o agente/modelo mais econômico e adequado, e deixe a execução manual para o usuário.";
     const next: Msg[] = [...currentMessages, { role: "user", content: prompt }];
     setMessages(next);
@@ -143,7 +177,7 @@ export default function AIHub() {
           messages: next,
           session_id: id,
           provider: modelo.provider,
-          model: modelo.model,
+          model: selectedModel,
           project_slug: slug,
         });
       setMessages([
@@ -163,6 +197,7 @@ export default function AIHub() {
   }
 
   function newChat() {
+    setPendingStart(null);
     setMessages([]);
     setDividers([]);
     setSessionId(null);
@@ -234,7 +269,7 @@ export default function AIHub() {
 
   async function send() {
     const text = input.trim();
-    if (!text || loading || !modelo.model) return;
+    if (!text || loading || !selectedModel) return;
     const next: Msg[] = [...messages, { role: "user" as const, content: text }];
     setMessages(next);
     setInput("");
@@ -244,7 +279,7 @@ export default function AIHub() {
           messages: next,
           session_id: sessionId,
           provider: modelo.provider,
-          model: modelo.model,
+          model: selectedModel,
           project_slug: projectSlug,
         });
       if (data.authority === "observe" || data.authority === "plan") {
@@ -390,26 +425,48 @@ export default function AIHub() {
             value={modelo.label}
             onChange={(e) => {
               const next = MODELOS.find((m) => m.label === e.target.value) || MODELOS[0];
-              if (!next.model) return;
+              if (!next.model && next.provider !== "openrouter") return;
+              if (next.provider === "openrouter") setCatalogStatus("loading");
               setModelo(next);
               try { localStorage.setItem(MODELO_STORAGE_KEY, next.label); } catch { /* ignore */ }
             }}
             className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-3 text-sm text-slate-300 sm:max-w-64"
           >
             {MODELOS.map((m) => (
-              <option key={m.label} value={m.label} disabled={!m.model}>{m.label}</option>
+              <option key={m.label} value={m.label} disabled={!m.model && m.provider !== "openrouter"}>{m.label}</option>
             ))}
           </select>
+          {modelo.provider === "openrouter" && (
+            <select
+              aria-label="Modelo OpenRouter"
+              value={selectedModel || ""}
+              disabled={catalogStatus !== "ready" || openRouterModels.length === 0}
+              onChange={e => {
+                setOpenRouterModel(e.target.value);
+                try { localStorage.setItem(OPENROUTER_MODEL_STORAGE_KEY, e.target.value); } catch { /* ignore */ }
+              }}
+              className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-3 text-sm text-slate-300 sm:max-w-64"
+            >
+              <option value="">{catalogStatus === "loading" ? "Carregando modelos…" : "Selecione um modelo"}</option>
+              {openRouterModels.map(m => <option key={m.model} value={m.model}>{m.label}</option>)}
+            </select>
+          )}
           <button
             onClick={send}
-            disabled={loading || !modelo.model}
+            disabled={loading || !selectedModel}
             className="shrink-0 rounded-lg bg-blue-600 px-5 py-3 transition-colors hover:bg-blue-700 disabled:opacity-50"
           >
             Enviar
           </button>
         </div>
+        {modelo.provider === "openrouter" && catalogStatus === "error" && (
+          <p role="alert">Não foi possível carregar os modelos OpenRouter. <button onClick={() => { setCatalogStatus("loading"); setCatalogReload(n => n + 1); }}>Tentar novamente</button></p>
+        )}
+        {modelo.provider === "openrouter" && catalogStatus === "ready" && openRouterModels.length === 0 && (
+          <p role="status">Nenhum modelo OpenRouter ativo no catálogo.</p>
+        )}
         <p id="ai-source-availability" className="mt-2 text-xs text-slate-400">
-          OpenRouter e Local / Ollama: seleção de modelos ainda não disponível.
+          Local / Ollama: seleção de modelos ainda não disponível.
         </p>
       </div>
       {showPlans && <PlanningPanel key={backlogId ?? 'all'} backlogId={backlogId} onClose={() => setShowPlans(false)} />}

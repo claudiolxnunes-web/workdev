@@ -66,3 +66,15 @@ export async function sendAiChatWithConfirmation(
 
   return data
 }
+
+export interface CatalogModel {
+  provider: string;
+  model: string;
+  label: string;
+}
+
+export async function getOpenRouterModels(): Promise<CatalogModel[]> {
+  const response = await fetch("/api/ai/models?provider=openrouter", { headers, cache: "no-store" });
+  if (!response.ok) throw new Error("Não foi possível carregar os modelos OpenRouter");
+  return response.json();
+}

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from decimal import Decimal
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, SecretStr
 from sqlalchemy.orm import Session
@@ -19,7 +20,7 @@ from app.models.knowledge import KnowledgeEntry
 from app.models.adr import ADR
 from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
-from app.models.ai_routing import AICallLog
+from app.models.ai_routing import AICallLog, AIModelCatalog
 from app.services import autoridade, context_engine, rag_search
 from app.services import ai_cost_guard
 from app.services.engineering_graph import graph_sync
@@ -1216,6 +1217,23 @@ def _write_env_key(name: str, value: str | None) -> None:
         target.writelines(output)
     os.chmod(temporary, 0o600)
     os.replace(temporary, path)
+
+
+class CatalogModelOut(BaseModel):
+    provider: str
+    model: str
+    label: str
+
+
+@router.get("/ai/models", response_model=list[CatalogModelOut])
+def ai_models(provider: Literal["openrouter"] = "openrouter", db: Session = Depends(get_db)):
+    """Inventário ativo canônico; vínculo com agente não limita modelos do chat."""
+    rows = db.query(AIModelCatalog).filter(
+        AIModelCatalog.provider == provider,
+        AIModelCatalog.active.is_(True),
+    ).order_by(AIModelCatalog.display_name, AIModelCatalog.provider_model_id).all()
+    return [CatalogModelOut(provider=row.provider, model=row.provider_model_id,
+                            label=row.display_name) for row in rows]
 
 
 @router.get("/ai/providers")
