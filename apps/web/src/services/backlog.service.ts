@@ -30,6 +30,27 @@ export async function getBacklog(): Promise<BacklogItem[]> {
   return response.json();
 }
 
+export type BacklogEdit = Pick<BacklogItem, "title" | "description" | "priority" | "status">;
+
+export async function updateItem(id: string, changes: Partial<BacklogEdit>): Promise<BacklogItem> {
+  const response = await fetch(`${API_URL}/api/backlog/${encodeURIComponent(id)}`, {
+    method: "PATCH", headers, body: JSON.stringify(changes),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    const detail = data?.detail;
+    let message = `Erro ao salvar task (HTTP ${response.status})`;
+    if (typeof detail === "string") message = detail;
+    else if (typeof detail?.message === "string") message = detail.message;
+    else if (Array.isArray(detail)) {
+      const errors = detail.map(error => typeof error?.msg === "string" ? error.msg : "").filter(Boolean);
+      if (errors.length) message = errors.join("; ");
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
 export async function updateStatus(id: string, status: string) {
   const response = await fetch(
     `${API_URL}/api/backlog/${id}/status?status=${status}`,

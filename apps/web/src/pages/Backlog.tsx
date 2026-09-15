@@ -120,7 +120,7 @@ export default function Backlog() {
                     key={item.id}
                     onClick={() => setSelected(item)}
                     className="bg-slate-800 rounded-lg p-3 cursor-pointer hover:bg-slate-700 transition-colors"
-                    title="Clique para avançar o status"
+                    title="Clique para ver ou editar a task"
                   >
                     <div className="flex justify-between items-start gap-2">
                       <p>{item.title}</p>
@@ -152,7 +152,11 @@ export default function Backlog() {
           </div>
         ))}
       </div>
-      <TaskDetail item={selected} onClose={() => setSelected(null)} onAdvance={(i) => { advance(i); setSelected(null); }} />
+      <TaskDetail item={selected} onClose={() => setSelected(null)} onAdvance={(i) => { advance(i); setSelected(null); }} onUpdated={(updated) => {
+        setItems(prev => prev.map(item => item.id === updated.id ? updated : item));
+        setSelected(updated);
+        setMobileColumn(updated.status);
+      }} />
       <NewTaskModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}

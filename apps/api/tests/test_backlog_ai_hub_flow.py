@@ -10,10 +10,11 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import JSON, MetaData, create_engine, event, text
+from sqlalchemy import JSON, MetaData, create_engine, event, text, select, func
 from sqlalchemy.dialects.postgresql import JSONB, dialect
 from sqlalchemy.schema import DefaultClause
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.sql.elements import TextClause
 
 from app.models.project import Project
 from app.models.backlog import BacklogItem
@@ -21,7 +22,7 @@ from app.models.subtask import BacklogSubtask
 from app.models.chat import ChatSession, ChatMessage
 from app.models.handoff import ExecutionPlan, AgentRun, AgentRunEvent
 from app.models.deployment import DeploymentOutcome
-from app.routers import ai, chat_sessions, handoffs, deployments
+from app.routers import ai, backlog, chat_sessions, handoffs, deployments
 from app.services import handoff
 
 
@@ -44,7 +45,15 @@ def flow(tmp_path, monkeypatch):
                 value = value.replace('now()', 'CURRENT_TIMESTAMP').replace('::jsonb', '')
                 column.server_default = DefaultClause(text(value))
     metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    class SQLiteSession(Session):
+        def execute(self, statement, *args, **kwargs):
+            # PostgreSQL returns datetime for this raw SQL. SQLite needs its
+            # native clock plus SQLAlchemy's datetime result conversion.
+            if isinstance(statement, TextClause) and str(statement) == 'SELECT now()':
+                statement = select(func.now())
+            return super().execute(statement, *args, **kwargs)
+
+    factory = sessionmaker(bind=engine, class_=SQLiteSession, expire_on_commit=False)
     with factory() as db:
         project = Project(id=uuid4(), name='Test Project', slug='test', type='web', status='active')
         db.add(project); db.commit()
@@ -55,9 +64,9 @@ def flow(tmp_path, monkeypatch):
         with factory() as db:
             yield db
     app = FastAPI()
-    for router in (chat_sessions.router, handoffs.router, deployments.router):
+    for router in (backlog.router, chat_sessions.router, handoffs.router, deployments.router):
         app.include_router(router, prefix='/api')
-    for dependency in (chat_sessions.get_db, handoffs.get_db, deployments.get_db):
+    for dependency in (backlog.get_db, chat_sessions.get_db, handoffs.get_db, deployments.get_db):
         app.dependency_overrides[dependency] = db_override
     monkeypatch.setattr(handoffs, '_sync_plan', lambda *args: None)
     monkeypatch.setattr(ai.graph_sync, 'sync_safely', lambda *args: None)

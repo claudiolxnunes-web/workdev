@@ -104,7 +104,7 @@ export function BacklogTab() {
                     key={item.id}
                     onClick={() => setSelected(item)}
                     className="bg-slate-800 rounded-lg p-3 cursor-pointer hover:bg-slate-700 transition-colors"
-                    title="Clique para avançar o status"
+                    title="Clique para ver ou editar a task"
                   >
                     <div className="flex justify-between items-start gap-2">
                       <p className="text-sm">{item.title}</p>
@@ -135,6 +135,11 @@ export function BacklogTab() {
         ))}
       </div>
       <TaskDetail
+        onUpdated={(updated) => {
+          setItems(prev => prev.map(item => item.id === updated.id ? updated : item));
+          setSelected(updated);
+          setMobileColumn(updated.status);
+        }}
         item={selected}
         onClose={() => setSelected(null)}
         onAdvance={(i) => {
