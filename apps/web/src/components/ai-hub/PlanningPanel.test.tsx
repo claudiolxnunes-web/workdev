@@ -143,6 +143,38 @@ describe("PlanningPanel", () => {
     sendToBuild.mockResolvedValue({})
     getPlanRecommendation.mockResolvedValue(baseRecommendation)
     getAgentRuntimes.mockResolvedValue([])
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ ok: true, json: async () =>
+      url.includes("review-policy") ? { state: "recommended" } : { models: [{ provider: "anthropic", model: "review-model", agent: "claude", label: "Review Model", review_capable: true }], local_error: null },
+    })))
+  })
+
+  it("envia com padrão e recusa explícita de revisão recomendada", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    renderPanel()
+    const no = await screen.findByRole("button", { name: "Não" })
+    await waitFor(() => expect(no).toBeEnabled())
+    fireEvent.click(no)
+    enviar()
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null, undefined, false, undefined, true, false, undefined))
+  })
+
+  it("envia fonte e modelo escolhidos para o revisor", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    renderPanel()
+    fireEvent.click(await screen.findByRole("button", { name: "Sim" }))
+    await screen.findByRole("option", { name: "Anthropic / Claude" })
+    fireEvent.change(screen.getByLabelText("Fonte do revisor"), { target: { value: "anthropic" } })
+    fireEvent.change(screen.getByLabelText("Modelo do revisor"), { target: { value: "review-model" } })
+    enviar()
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, "claude", undefined, false, undefined, true, true, { provider: "anthropic", model: "review-model" }))
+  })
+
+  it("impede recusa quando a política exige revisão", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ state: "required", models: [], local_error: null }) })))
+    renderPanel()
+    await screen.findByText("Esta task exige revisão independente.")
+    expect(screen.getByRole("button", { name: "Não" })).toBeDisabled()
   })
 
   it("filtra os planos pela task vinculada à conversa", async () => {

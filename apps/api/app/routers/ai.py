@@ -22,7 +22,7 @@ from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.ai_routing import AICallLog, AIModelCatalog
 from app.services import autoridade, context_engine, rag_search
-from app.services import ai_cost_guard
+from app.services import ai_cost_guard, agent_runtimes
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
 
@@ -74,7 +74,16 @@ COMPAT_PROVIDERS = {
 }
 
 
-def get_openai(provider: str = "openai") -> OpenAI:
+def get_openai(provider: str = "openai", runtime_id: str | None = None) -> OpenAI:
+    if runtime_id is not None:
+        if provider != "ollama":
+            raise ValueError("Runtime local exige provider Ollama")
+        runtime = agent_runtimes.local_chat_runtime(runtime_id)
+        return OpenAI(base_url=f"{agent_runtimes.base_url(runtime)}/v1",
+                      api_key=agent_runtimes.api_key(runtime) or "ollama",
+                      timeout=float(os.getenv("WORKDEV_LOCAL_CHAT_TIMEOUT", "900")),
+                      max_retries=0)
+
     if provider not in _compat_clients:
         cfg = COMPAT_PROVIDERS[provider]
         kwargs = {"api_key": os.getenv(cfg["env_key"])}
@@ -211,6 +220,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     provider: str | None = None
     model: str | None = None
+    runtime_id: str | None = None
     session_id: str | None = None
     project_slug: str | None = None
     # NÃO AUTORITATIVO. Mantido só por compatibilidade com clientes que ainda
@@ -1125,44 +1135,70 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
                 provider: str = "openai", system: str | None = None,
                 nivel: str = autoridade.NIVEL_PADRAO,
                 max_output_tokens: int = 4096,
-                reasoning_effort: str | None = None, backlog_id=None) -> ProviderResult:
-    client = get_openai(provider)
-    msgs = [{"role": "system", "content": system or SYSTEM}] + messages
-    tools = tools_openai(nivel)
-    input_tokens = output_tokens = 0
-    for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
-        kwargs = dict(
-            model=model or COMPAT_PROVIDERS[provider]["default_model"],
-            max_tokens=max_output_tokens,
-            tools=tools,
-            messages=msgs,
-        )
-        if reasoning_effort and provider == "openai":
-            kwargs["reasoning_effort"] = reasoning_effort
-        resp = client.chat.completions.create(**kwargs)
-        usage = getattr(resp, "usage", None)
-        input_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
-        output_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
-        msg = resp.choices[0].message
-        if not msg.tool_calls:
-            return ProviderResult(msg.content or "", input_tokens, output_tokens)
-        msgs.append(msg)
-        for tc in msg.tool_calls:
-            args = json.loads(tc.function.arguments or "{}")
-            try:
-                out = executar_tool(tc.function.name, args, db, nivel, backlog_id=backlog_id)
-            except Exception as e:
-                db.rollback()
-                out = json.dumps({"erro": f"argumentos invalidos: "
-                                  f"{type(e).__name__} {e}"},
-                                 ensure_ascii=False)
-            msgs.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": out,
-            })
-    return ProviderResult("Não consegui concluir a operação (limite de passos).",
-                          input_tokens, output_tokens)
+                reasoning_effort: str | None = None, backlog_id=None,
+                runtime_id: str | None = None) -> ProviderResult:
+    context_limit = agent_runtimes.local_chat_context(runtime_id, model) if runtime_id else None
+    client = get_openai(provider, runtime_id) if runtime_id else get_openai(provider)
+    try:
+        msgs = [{"role": "system", "content": system or SYSTEM}] + messages
+        tools = tools_openai(nivel)
+        input_tokens = output_tokens = 0
+        for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
+            kwargs = dict(
+                model=model or COMPAT_PROVIDERS[provider]["default_model"],
+                tools=tools,
+                messages=msgs,
+            )
+            if provider == "openai":
+                kwargs["max_completion_tokens"] = max_output_tokens
+            else:
+                kwargs["max_tokens"] = max_output_tokens
+            if context_limit is not None:
+                # Margem conservadora em bytes UTF-8, incluindo tools, resultados e
+                # envelopes; nunca delegar truncamento silencioso ao servidor.
+                serialized = json.dumps({"messages": msgs, "tools": tools}, ensure_ascii=False,
+                                        default=lambda obj: obj.model_dump())
+                required = len(serialized.encode("utf-8")) + 256 + max_output_tokens
+                if required > context_limit:
+                    raise ai_cost_guard.CostGuardError(
+                        "local_context_limit",
+                        "O contexto configurado do modelo local é insuficiente para esta conversa e suas ferramentas. "
+                        "Configure um contexto maior no runtime ou selecione outro modelo.",
+                        {"context_limit": context_limit, "conservative_input_bound": required},
+                    )
+            if runtime_id:
+                kwargs["reasoning_effort"] = reasoning_effort or "none"
+                kwargs["temperature"] = 0
+            if reasoning_effort and provider == "openai":
+                kwargs["reasoning_effort"] = reasoning_effort
+            resp = client.chat.completions.create(**kwargs)
+            usage = getattr(resp, "usage", None)
+            input_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
+            output_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
+            msg = resp.choices[0].message
+            if not msg.tool_calls:
+                return ProviderResult(msg.content or "", input_tokens, output_tokens)
+            msgs.append(msg)
+            for tc in msg.tool_calls:
+                args = json.loads(tc.function.arguments or "{}")
+                try:
+                    out = executar_tool(tc.function.name, args, db, nivel, backlog_id=backlog_id)
+                except Exception as e:
+                    db.rollback()
+                    out = json.dumps({"erro": f"argumentos invalidos: "
+                                      f"{type(e).__name__} {e}"},
+                                     ensure_ascii=False)
+                msgs.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": out,
+                })
+        return ProviderResult("Não consegui concluir a operação (limite de passos).",
+                              input_tokens, output_tokens)
+    finally:
+        if runtime_id:
+            client.close()
+
 
 AI_PROVIDER_KEYS = {
     "anthropic": ("Claude (Anthropic)", "ANTHROPIC_API_KEY"),
@@ -1223,11 +1259,17 @@ class CatalogModelOut(BaseModel):
     provider: str
     model: str
     label: str
+    runtime_id: str | None = None
 
 
-@router.get("/ai/models", response_model=list[CatalogModelOut])
-def ai_models(provider: Literal["openrouter"] = "openrouter", db: Session = Depends(get_db)):
+@router.get("/ai/models", response_model=list[CatalogModelOut], response_model_exclude_none=True)
+def ai_models(provider: Literal["openrouter", "local"] = "openrouter", db: Session = Depends(get_db)):
     """Inventário ativo canônico; vínculo com agente não limita modelos do chat."""
+    if provider == "local":
+        try:
+            return agent_runtimes.local_chat_models()
+        except Exception:
+            raise HTTPException(503, "Não foi possível consultar o inventário local") from None
     rows = db.query(AIModelCatalog).filter(
         AIModelCatalog.provider == provider,
         AIModelCatalog.active.is_(True),
@@ -1358,6 +1400,18 @@ def _record_ai_call(db: Session, *, correlation: uuid.UUID, session,
 @router.post("/ai/chat")
 def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     provider = (req.provider or os.getenv("AI_PROVIDER", "anthropic")).lower()
+    if req.runtime_id is not None:
+        try:
+            if provider != "ollama" or not req.model:
+                raise ValueError("Selecione um modelo local válido")
+            agent_runtimes.local_chat_runtime(req.runtime_id)
+            available = agent_runtimes.local_chat_models()
+            if not any(row["runtime_id"] == req.runtime_id and row["model"] == req.model for row in available):
+                raise ValueError("O modelo selecionado não está disponível no runtime local")
+        except Exception:
+            return {"reply": "Modelo ou runtime local indisponível. Atualize a seleção e tente novamente.",
+                    "error": True, "error_code": "local_model_unavailable", "provider": provider,
+                    "model": req.model, "session_id": req.session_id}
     # Mensagens system do cliente nunca são autoritativas. Contexto especial
     # (como a ficha de uma task) é lido da sessão persistida mais abaixo.
     messages = [
@@ -1464,7 +1518,7 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
         correlation = ai_cost_guard.correlation_id(req.correlation_id)
         if isinstance(db, Session):
             ai_cost_guard.reject_duplicate(db, correlation)
-        max_output = ai_cost_guard.output_limit(req.max_output_tokens)
+        max_output = ai_cost_guard.output_limit(req.max_output_tokens if req.max_output_tokens is not None else (256 if req.runtime_id else None))
         server_estimate = ai_cost_guard.estimate_tokens(messages, system)
         # A estimativa do cliente é apenas um piso informativo; nunca pode
         # reduzir o valor calculado pelo servidor para contornar custo/limite.
@@ -1511,6 +1565,7 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
                 messages, db, selected_model, provider, system=system,
                 nivel=nivel, max_output_tokens=max_output,
                 reasoning_effort=effort,
+                **({'runtime_id': req.runtime_id} if req.runtime_id else {}),
                 **({'backlog_id': backlog_id} if backlog_id is not None else {}),
             )
         else:
@@ -1523,7 +1578,7 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
         reply = result.text
     except Exception as e:
         duration_ms = int((time.monotonic() - started) * 1000)
-        reply = f"Erro no provider {provider}: {type(e).__name__} - {e}"
+        reply = (str(e) if isinstance(e, (ai_cost_guard.CostGuardError, ValueError)) else "Falha ao consultar o runtime local.") if req.runtime_id else f"Erro no provider {provider}: {type(e).__name__} - {e}"
         try:
             _record_ai_call(
                 db, correlation=correlation, session=session,
@@ -1538,6 +1593,7 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
         except Exception:
             db.rollback()
         return {"reply": reply, "provider": provider, "error": True,
+                "error_code": getattr(e, "code", "local_runtime_error" if req.runtime_id else "provider_error"),
                 "model": selected_model, "reasoning_effort": effort,
                 "correlation_id": str(correlation),
                 "session_id": str(session.id) if session else None,

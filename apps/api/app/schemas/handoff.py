@@ -111,6 +111,9 @@ class PlanOut(PlanCreate):
 class BuildRequest(BaseModel):
     routing_mode: RoutingMode = "manual"
     premium_confirmed: bool = False
+    use_default_executor: bool = False
+    review_requested: bool | None = None
+    reviewer_selection: dict[str, str] | None = None
     agent: AgentName | None = None
     reviewer: AgentName | None = None
     model: str | None = Field(
@@ -126,23 +129,25 @@ class BuildRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_manual_agent(self):
-        if self.routing_mode == "manual" and self.agent is None:
+        if self.routing_mode == "manual" and self.agent is None and not self.use_default_executor:
             raise ValueError(
                 "agent é obrigatório quando routing_mode=manual"
             )
         if self.routing_mode == "auto" and (
-            self.agent is not None or self.model is not None
+            self.agent is not None or self.model is not None or self.use_default_executor
         ):
             raise ValueError(
                 "AUTO seleciona agente e modelo automaticamente"
             )
         # O executor nunca aprova o próprio trabalho: aprovar o PLAN e mandar
         # para o Build exige escolher executor E revisor, sempre distintos.
-        if self.reviewer is None:
+        if self.reviewer is None and self.review_requested is not False and self.reviewer_selection is None:
             raise ValueError(
                 "reviewer é obrigatório: escolha um revisor diferente do "
                 "executor antes de enviar ao Build"
             )
+        if self.review_requested is False and (self.reviewer is not None or self.reviewer_selection is not None):
+            raise ValueError("Recusa de revisão não aceita revisor selecionado")
         if self.agent is not None and self.reviewer == self.agent:
             raise ValueError(
                 "executor e revisor precisam ser agentes diferentes"

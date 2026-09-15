@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { getOpenRouterModels, type CatalogModel, sendAiChatWithConfirmation } from "../services/ai.service";
+import { getOpenRouterModels, getLocalModels, type CatalogModel, sendAiChatWithConfirmation } from "../services/ai.service";
 import { Trash2, FolderGit2 } from "lucide-react";
 import {
   MessageBubble,
@@ -28,7 +28,6 @@ interface Divider {
 }
 
 // Ordem de apresentação do AI Hub; não define prioridade de roteamento.
-// Local será habilitado pelo inventário de runtimes da próxima fatia.
 const MODELOS = [
   { label: "Gemini", provider: "gemini", model: "gemini-3.5-flash", legacyLabel: "Gemini 3.5 Flash" },
   { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
@@ -38,6 +37,8 @@ const MODELOS = [
 ];
 const MODELO_STORAGE_KEY = "workdev_ai_hub_modelo";
 const OPENROUTER_MODEL_STORAGE_KEY = "workdev_ai_hub_openrouter_model";
+const LOCAL_MODEL_STORAGE_KEY = "workdev_ai_hub_local_model";
+const modelKey = (m: CatalogModel) => m.runtime_id ? JSON.stringify([m.runtime_id, m.model]) : m.model;
 const PROJETO_STORAGE_KEY = "workdev_ai_hub_projeto";
 const DEFAULT_MODELO_LABEL = "Gemini";
 const AUTORIDADE_PADRAO: Authority = "plan";
@@ -45,7 +46,7 @@ const AUTORIDADE_PADRAO: Authority = "plan";
 function loadStoredModelo() {
   try {
     const stored = localStorage.getItem(MODELO_STORAGE_KEY);
-    const found = stored && MODELOS.find((m) => (m.model || m.provider === "openrouter") && (m.label === stored || m.legacyLabel === stored));
+    const found = stored && MODELOS.find((m) => (m.label === stored || m.legacyLabel === stored));
     if (found) return found;
   } catch { /* localStorage indisponível (modo privado etc.) */ }
   return MODELOS.find((m) => m.label === DEFAULT_MODELO_LABEL) || MODELOS[0];
@@ -75,15 +76,17 @@ export default function AIHub() {
   const [authority, setAuthority] = useState<Authority>(AUTORIDADE_PADRAO);
   const [input, setInput] = useState("");
   const [modelo, setModelo] = useState(loadStoredModelo);
-  const [openRouterModels, setOpenRouterModels] = useState<CatalogModel[]>([]);
-  const [openRouterModel, setOpenRouterModel] = useState("");
+  const [catalogModels, setCatalogModels] = useState<CatalogModel[]>([]);
+  const [catalogModel, setCatalogModel] = useState("");
   const [catalogStatus, setCatalogStatus] = useState<"loading" | "ready" | "error">("loading");
   const [catalogReload, setCatalogReload] = useState(0);
   const [pendingStart, setPendingStart] = useState<{ id: string; messages: Msg[]; slug: string | null } | null>(null);
-  const selectedModel = modelo.provider === "openrouter"
-    ? (catalogStatus === "ready" && openRouterModels.some(m => m.model === openRouterModel)
-      ? openRouterModel : null)
-    : modelo.model;
+  const dynamicSource = modelo.provider === "openrouter" || modelo.provider === "ollama";
+  const localSource = modelo.provider === "ollama";
+  const modelStorageKey = localSource ? LOCAL_MODEL_STORAGE_KEY : OPENROUTER_MODEL_STORAGE_KEY;
+  const selectedEntry = dynamicSource && catalogStatus === "ready"
+    ? catalogModels.find(m => modelKey(m) === catalogModel) : undefined;
+  const selectedModel = dynamicSource ? selectedEntry?.model : modelo.model;
   const [loading, setLoading] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [showPlans, setShowPlans] = useState(false);
@@ -93,20 +96,20 @@ export default function AIHub() {
   const autostartedRef = useRef(false);
 
   useEffect(() => {
-    if (modelo.provider !== "openrouter") return;
+    if (!dynamicSource) return;
     let active = true;
-    getOpenRouterModels().then(models => {
+    (localSource ? getLocalModels() : getOpenRouterModels()).then(models => {
       if (!active) return;
-      setOpenRouterModels(models);
+      setCatalogModels(models);
       let stored = "";
-      try { stored = localStorage.getItem(OPENROUTER_MODEL_STORAGE_KEY) || ""; } catch { /* ignore */ }
-      setOpenRouterModel(models.some(m => m.model === stored) ? stored : "");
+      try { stored = localStorage.getItem(modelStorageKey) || ""; } catch { /* ignore */ }
+      setCatalogModel(models.some(m => modelKey(m) === stored) ? stored : "");
       setCatalogStatus("ready");
     }).catch(() => {
-      if (active) { setOpenRouterModels([]); setCatalogStatus("error"); }
+      if (active) { setCatalogModels([]); setCatalogStatus("error"); }
     });
     return () => { active = false; };
-  }, [modelo.provider, catalogReload]);
+  }, [modelo.provider, dynamicSource, localSource, modelStorageKey, catalogReload]);
 
   useEffect(() => {
     if (!pendingStart || !selectedModel || autostartedRef.current) return;
@@ -178,6 +181,7 @@ export default function AIHub() {
           session_id: id,
           provider: modelo.provider,
           model: selectedModel,
+          ...(localSource ? { runtime_id: selectedEntry?.runtime_id } : {}),
           project_slug: slug,
         });
       setMessages([
@@ -280,6 +284,7 @@ export default function AIHub() {
           session_id: sessionId,
           provider: modelo.provider,
           model: selectedModel,
+          ...(localSource ? { runtime_id: selectedEntry?.runtime_id } : {}),
           project_slug: projectSlug,
         });
       if (data.authority === "observe" || data.authority === "plan") {
@@ -425,30 +430,31 @@ export default function AIHub() {
             value={modelo.label}
             onChange={(e) => {
               const next = MODELOS.find((m) => m.label === e.target.value) || MODELOS[0];
-              if (!next.model && next.provider !== "openrouter") return;
-              if (next.provider === "openrouter") setCatalogStatus("loading");
+              setCatalogStatus("loading");
+              setCatalogModel("");
+              setCatalogModels([]);
               setModelo(next);
               try { localStorage.setItem(MODELO_STORAGE_KEY, next.label); } catch { /* ignore */ }
             }}
             className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-3 text-sm text-slate-300 sm:max-w-64"
           >
             {MODELOS.map((m) => (
-              <option key={m.label} value={m.label} disabled={!m.model && m.provider !== "openrouter"}>{m.label}</option>
+              <option key={m.label} value={m.label}>{m.label}</option>
             ))}
           </select>
-          {modelo.provider === "openrouter" && (
+          {dynamicSource && (
             <select
-              aria-label="Modelo OpenRouter"
-              value={selectedModel || ""}
-              disabled={catalogStatus !== "ready" || openRouterModels.length === 0}
+              aria-label={localSource ? "Modelo local" : "Modelo OpenRouter"}
+              value={selectedEntry ? catalogModel : ""}
+              disabled={catalogStatus !== "ready" || catalogModels.length === 0}
               onChange={e => {
-                setOpenRouterModel(e.target.value);
-                try { localStorage.setItem(OPENROUTER_MODEL_STORAGE_KEY, e.target.value); } catch { /* ignore */ }
+                setCatalogModel(e.target.value);
+                try { localStorage.setItem(modelStorageKey, e.target.value); } catch { /* ignore */ }
               }}
               className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-3 text-sm text-slate-300 sm:max-w-64"
             >
               <option value="">{catalogStatus === "loading" ? "Carregando modelos…" : "Selecione um modelo"}</option>
-              {openRouterModels.map(m => <option key={m.model} value={m.model}>{m.label}</option>)}
+              {catalogModels.map(m => <option key={modelKey(m)} value={modelKey(m)}>{m.label}</option>)}
             </select>
           )}
           <button
@@ -459,14 +465,14 @@ export default function AIHub() {
             Enviar
           </button>
         </div>
-        {modelo.provider === "openrouter" && catalogStatus === "error" && (
-          <p role="alert">Não foi possível carregar os modelos OpenRouter. <button onClick={() => { setCatalogStatus("loading"); setCatalogReload(n => n + 1); }}>Tentar novamente</button></p>
+        {dynamicSource && catalogStatus === "error" && (
+          <p role="alert">Não foi possível carregar os modelos {localSource ? "locais" : "OpenRouter"}. <button onClick={() => { setCatalogStatus("loading"); setCatalogReload(n => n + 1); }}>Tentar novamente</button></p>
         )}
-        {modelo.provider === "openrouter" && catalogStatus === "ready" && openRouterModels.length === 0 && (
-          <p role="status">Nenhum modelo OpenRouter ativo no catálogo.</p>
+        {dynamicSource && catalogStatus === "ready" && catalogModels.length === 0 && (
+          <p role="status">{localSource ? "Nenhum modelo local disponível no runtime." : "Nenhum modelo OpenRouter ativo no catálogo."}</p>
         )}
         <p id="ai-source-availability" className="mt-2 text-xs text-slate-400">
-          Local / Ollama: seleção de modelos ainda não disponível.
+          Local / Ollama lista os modelos instalados no runtime local.
         </p>
       </div>
       {showPlans && <PlanningPanel key={backlogId ?? 'all'} backlogId={backlogId} onClose={() => setShowPlans(false)} />}

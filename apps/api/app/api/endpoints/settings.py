@@ -1,5 +1,8 @@
 # apps/api/app/api/endpoints/settings.py
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.orm import Session
+from app.routers.ai import get_db
+from app.services.agent_router import resolve_execution_selection, AgentRoutingError
 from typing import Dict, Any
 from ...services.config_service import config_service
 
@@ -22,7 +25,7 @@ async def get_settings():
         raise HTTPException(status_code=500, detail=f"Erro ao obter as configurações: {str(e)}")
 
 @router.put("", response_model=Dict[str, Any])
-async def update_settings(settings: Dict[str, Any]):
+async def update_settings(settings: Dict[str, Any], db: Session = Depends(get_db)):
     """
     Atualiza as configurações do usuário
     """
@@ -30,6 +33,17 @@ async def update_settings(settings: Dict[str, Any]):
         # Validação básica para impedir atualização de chaves sensíveis
         if _contains_sensitive_keys(settings):
             raise HTTPException(status_code=400, detail="Não é permitido atualizar chaves de configuração sensíveis")
+
+        if "agents" in settings:
+            agents = settings["agents"]
+            if not isinstance(agents, dict):
+                raise HTTPException(422, "Configuração de agentes inválida")
+            if agents.get("executor") is not None:
+                try:
+                    selection = resolve_execution_selection(db, agents["executor"])
+                except AgentRoutingError as exc:
+                    raise HTTPException(409, {"code": exc.code, "message": exc.message}) from exc
+                agents["executor"] = {key: selection[key] for key in ("provider", "model", "runtime_id") if key in selection}
         
         # Atualiza as configurações do usuário
         success = config_service.update_user_config(settings)

@@ -1,6 +1,8 @@
 # apps/api/app/services/config_service.py
 import json
 import os
+import fcntl
+import tempfile
 from typing import Dict, Any
 from pathlib import Path
 
@@ -8,7 +10,8 @@ class ConfigService:
     def __init__(self):
         self.project_root = Path(__file__).parent.parent.parent.parent.parent
         self.config_dir = self.project_root / "config"
-        self.user_config_path = self.config_dir / "user.json"
+        # Arquivo canônico compartilhado entre releases e workers.
+        self.user_config_path = Path(os.getenv("WORKDEV_USER_CONFIG_FILE", "/opt/workdev/config/user.json"))
         
         # Garante que o diretório de configurações existe
         self.config_dir.mkdir(exist_ok=True)
@@ -79,12 +82,14 @@ class ConfigService:
     
     def get_config(self) -> Dict[str, Any]:
         """Retorna a configuração combinada"""
+        self.user_config = self._load_user_config()
+        self.config = self._merge_configs([self.default_config, self.env_config, self.user_config])
         return self.config
     
     def get_setting(self, key_path: str) -> Any:
         """Obtém uma configuração específica usando caminho ponto (ex: 'app.name')"""
         keys = key_path.split('.')
-        value = self.config
+        value = self.get_config()
         
         for key in keys:
             if isinstance(value, dict) and key in value:
@@ -98,14 +103,22 @@ class ConfigService:
         """Atualiza as configurações do usuário com novos valores"""
         try:
             # Carrega novamente as configurações atuais do usuário
-            current_user_config = self._load_user_config()
-            
-            # Faz merge com as novas configurações
-            updated_config = self._deep_merge(current_user_config, new_config)
-            
-            # Salva no arquivo
-            with open(self.user_config_path, 'w', encoding='utf-8') as f:
-                json.dump(updated_config, f, indent=2, ensure_ascii=False)
+            with open(self.user_config_path.with_suffix(".lock"), "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                current_user_config = self._load_user_config()
+                updated_config = self._deep_merge(current_user_config, new_config)
+                temp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.user_config_path.parent,
+                                                     prefix=".user-", delete=False) as f:
+                        temp_path = Path(f.name)
+                        json.dump(updated_config, f, indent=2, ensure_ascii=False)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(temp_path, self.user_config_path)
+                finally:
+                    if temp_path and temp_path.exists():
+                        temp_path.unlink()
             
             # Atualiza a configuração interna
             self.user_config = updated_config

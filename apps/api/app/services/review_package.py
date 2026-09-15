@@ -7,7 +7,7 @@ import json
 from types import SimpleNamespace
 from sqlalchemy.orm import Session
 
-from app.models.handoff import AgentRun, ExecutionPlan
+from app.models.handoff import AgentRun, AgentRunEvent, ExecutionPlan
 from app.models.review_cycle import ReviewCycle
 from app.services.review_cycle import collect_diff_stats
 from app.services.review_scope import load_base, diff_summary
@@ -55,6 +55,13 @@ def build_package(db: Session, run: AgentRun, expand_diff: bool = False) -> dict
     }
     if expand_diff:
         package['diff'] = diff_text
+    configuration = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run.id,
+        AgentRunEvent.event_type == "build.reviewer_configuration").order_by(AgentRunEvent.created_at.desc()).first()
+    if configuration is not None and isinstance(configuration.payload, dict):
+        selection = configuration.payload
+        # Uma troca posterior por política ou pelo operador invalida a escolha anterior.
+        if selection.get("agent") == getattr(run, "reviewer_agent", None):
+            package["reviewer_configuration"] = selection
     return package
 
 

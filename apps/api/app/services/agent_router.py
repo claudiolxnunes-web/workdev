@@ -21,13 +21,6 @@ PROVIDER_TO_AGENT = {
 }
 
 
-MODEL_AGENT_OVERRIDES = {
-    "qwen/qwen3-coder": "qwen",
-    "moonshotai/kimi-k2.7-code": "kimi",
-    "moonshotai/kimi-k3": "kimi",
- }
-
-
 COMPLEXITY_MIN_CATEGORY = {
     "low": {"free", "economic", "premium"},
     "medium": {"free", "economic", "premium"},
@@ -134,16 +127,49 @@ class AgentRoutingError(RuntimeError):
 def _agent_for_model(
     row: AIModelCatalog,
 ) -> str | None:
-    override = MODEL_AGENT_OVERRIDES.get(
-        row.provider_model_id
-    )
-
-    if override:
-        return override
-
+    # Vínculo administrado no catálogo; nenhum nome de modelo escolhe um CLI.
+    bound = getattr(row, "agent_slug", None)
+    if isinstance(bound, str) and bound.strip():
+        return bound.strip()
     return PROVIDER_TO_AGENT.get(
         row.provider
     )
+
+
+def configured_execution_models(db: Session) -> list[dict]:
+    """Somente vínculos administrados e executáveis; catálogo de chat não é CLI."""
+    from app.services.handoff import CLI_AGENTS, AGENTS_WITH_REVIEW_CHANNEL
+    rows = db.query(AIModelCatalog).filter(AIModelCatalog.active.is_(True)).all()
+    result = []
+    for row in rows:
+        agent = getattr(row, "agent_slug", None)
+        if agent not in CLI_AGENTS:
+            continue
+        result.append({"provider": row.provider, "model": row.provider_model_id,
+                       "label": row.display_name, "agent": agent,
+                       "review_capable": agent in AGENTS_WITH_REVIEW_CHANNEL})
+    return sorted(result, key=lambda row: (row["provider"], row["label"]))
+
+
+def resolve_execution_selection(db: Session, selection: dict) -> dict:
+    """Valida novamente a escolha; um padrão obsoleto nunca vira fallback silencioso."""
+    from app.services.agent_runtimes import local_chat_models
+    if not isinstance(selection, dict):
+        raise AgentRoutingError("invalid_executor_selection", "Selecione fonte e modelo do executor")
+    provider, model = selection.get("provider"), selection.get("model")
+    if provider == "ollama":
+        try:
+            options = [{**row, "agent": row["runtime_id"], "review_capable": False}
+                       for row in local_chat_models()]
+        except Exception as exc:
+            raise AgentRoutingError("local_runtime_unavailable", "Inventário local indisponível") from exc
+    else:
+        options = configured_execution_models(db)
+    matches = [row for row in options if row["provider"] == provider and row["model"] == model
+               and (provider != "ollama" or row.get("runtime_id") == selection.get("runtime_id"))]
+    if len(matches) != 1:
+        raise AgentRoutingError("executor_model_unavailable", "Modelo indisponível ou sem vínculo de execução no catálogo")
+    return matches[0]
 
 
 def _price_index(

@@ -786,6 +786,20 @@ def execute_test_gate_for_run(db: Session, run: AgentRun) -> dict:
     }
 
 
+@router.get("/plans/{plan_id}/review-policy")
+def plan_review_policy(plan_id: UUID, agent: str | None = None, db: Session = Depends(get_db)):
+    from app.services.review_policy import classify_risk, load_config
+    plan = _get_plan(db, plan_id)
+    task, _project = _task_project(db, plan.backlog_id)
+    assessment = classify_task(task, plan, load_subtasks(db, plan.backlog_id))
+    risk = classify_risk([], "", assessment.level)
+    state = "required" if risk.sensitive else "recommended"
+    if not risk.sensitive and risk.risk == "low" and agent in load_config()["trusted_agents"]:
+        state = "not_required"
+    return {"state": state, "complexity": assessment.level,
+            "message": "A classificação final será reavaliada pelo backend com o diff e os gates da execução."}
+
+
 @router.post(
     "/plans/{plan_id}/build",
     status_code=201,
@@ -811,6 +825,41 @@ def send_to_build(
     routing_reason = (
         "Seleção manual pelo usuário"
     )
+
+    if payload.use_default_executor and agent is None:
+        from app.services.config_service import config_service
+        from app.services.agent_router import resolve_execution_selection
+        preference = config_service.get_setting("agents.executor")
+        if not preference:
+            raise HTTPException(409, {"code": "executor_default_missing", "message": "Configure o Executor padrão na aba Agentes ou escolha um executor para esta execução"})
+        try:
+            selected = resolve_execution_selection(db, preference)
+        except AgentRoutingError as exc:
+            raise HTTPException(409, {"code": exc.code, "message": exc.message}) from exc
+        agent, model = selected["agent"], selected["model"]
+        routing_reason = "Executor padrão da aba Agentes (fonte e modelo validados no envio)"
+
+    if payload.review_requested is not None and payload.routing_mode == "manual":
+        task, _project = _task_project(db, plan.backlog_id)
+        assessment = classify_task(task, plan, load_subtasks(db, plan.backlog_id))
+        complexity, complexity_score = assessment.level, assessment.score
+        from app.services.review_policy import classify_risk
+        risk = classify_risk([], "", complexity)
+        if payload.review_requested is False and risk.sensitive:
+            raise HTTPException(409, {"code": "review_required", "message": "A política canônica exige revisão independente para este escopo"})
+
+    reviewer_selection = None
+    if payload.reviewer_selection:
+        from app.services.agent_router import resolve_execution_selection
+        try:
+            reviewer_selection = resolve_execution_selection(db, payload.reviewer_selection)
+        except AgentRoutingError as exc:
+            raise HTTPException(409, {"code": exc.code, "message": exc.message}) from exc
+        if not reviewer_selection["review_capable"]:
+            raise HTTPException(409, {"code": "reviewer_has_no_review_channel", "message": "O runtime selecionado não possui canal de revisão"})
+        if payload.reviewer and payload.reviewer != reviewer_selection["agent"]:
+            raise HTTPException(409, "Fonte e modelo não pertencem ao revisor informado")
+        payload.reviewer = reviewer_selection["agent"]
 
     if payload.routing_mode == "manual" and model:
         # O usuário escolhe o modelo, mas só entre os permitidos do agente.
@@ -845,7 +894,7 @@ def send_to_build(
         # Endpoint indisponível não vira run pendurada: recusa antes de criar
         # qualquer estado. Os demais agentes seguem utilizáveis normalmente.
         try:
-            ensure_dispatchable_blocking(agent)
+            ensure_dispatchable_blocking(agent, **({"model": model} if model else {}))
         except OllamaDispatchError as error:
             raise HTTPException(
                 status_code=409,
@@ -921,6 +970,8 @@ def send_to_build(
             routing_reason=(
                 routing_reason
             ),
+            **({"review_requested": payload.review_requested} if payload.review_requested is not None else {}),
+            **({"reviewer_selection": reviewer_selection} if reviewer_selection else {}),
         )
     except HandoffError as error:
         raise HTTPException(
@@ -1146,6 +1197,11 @@ def update_agent_run(
         from app.services.review_scope import load_base
         run.review_base_sha = load_base(db, run.id)
         decision, diff = evaluate_for_run(run, gate_result, gate_sha=evidence.git_commit_sha if evidence else None)
+        from app.services.review_policy import with_user_preference
+        preference = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run.id,
+            AgentRunEvent.event_type == "build.review_preference").order_by(AgentRunEvent.created_at.desc()).first()
+        if preference is not None and isinstance(preference.payload, dict):
+            decision = with_user_preference(decision, preference.payload.get("requested"), run.reviewer_agent, run.agent)
         persist_decision(db, run, decision, len(diff.files), changed_lines(diff.text))
         if decision.decision == 'NO_REVIEW_GATE_FAIL':
             run, event = update_run(db, run, {
@@ -1171,7 +1227,7 @@ def update_agent_run(
                 db, run,
                 {"status": "completed",
                  "result": run.result or f"Concluído por gates + política ({decision.justification})",
-                 "message": "Sem revisor LLM: risco baixo, executor confiável, gates PASS"},
+                 "message": decision.justification},
             )
 
     _sync_run(
@@ -1404,7 +1460,7 @@ def dispatch_run_to_ollama(
     # Modelo e saúde resolvidos ANTES de abrir o job: erro de configuração
     # aparece no envio, não numa linha órfã em `queued` que ninguém consome.
     try:
-        runtime = ensure_dispatchable_blocking(run.agent)
+        runtime = ensure_dispatchable_blocking(run.agent, **({"model": run.model} if run.model else {}))
     except OllamaDispatchError as error:
         raise HTTPException(
             status_code=409,

@@ -447,3 +447,55 @@ def check_runtime_blocking(
 
 def reset_health_cache() -> None:
     pass  # Compatibility: runtime health is no longer cached.
+
+
+def local_chat_runtime(runtime_id: str) -> OllamaRuntime:
+    """Resolve apenas identidades locais configuradas, nunca uma URL do cliente."""
+    runtime = get_runtime(runtime_id)
+    if runtime is None or runtime.kind != KIND_LOCAL or not base_url(runtime):
+        raise ValueError("Runtime local inválido ou não configurado")
+    return runtime
+
+
+def local_chat_models() -> list[dict]:
+    """Inventário sob demanda; não publica estado nem cria loop de healthcheck."""
+    models = []
+    for runtime in RUNTIMES:
+        if runtime.kind != KIND_LOCAL or not base_url(runtime):
+            continue
+        with httpx.Client(timeout=HEALTH_TIMEOUT_SECONDS, trust_env=False) as client:
+            response = client.get(f"{base_url(runtime)}/api/tags", headers=auth_headers(runtime))
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+            raise ValueError("Inventário local inválido")
+        names = set()
+        for row in payload["models"]:
+            if not isinstance(row, dict) or row.get("remote_host") or row.get("remote_model"):
+                continue
+            name = row.get("name")
+            if isinstance(name, str) and name.strip() and name not in names:
+                names.add(name)
+                models.append({"provider": PROVIDER, "model": name, "label": name,
+                               "runtime_id": runtime.id})
+    return sorted(models, key=lambda row: (row["runtime_id"], row["model"]))
+
+
+def local_chat_context(runtime_id: str, model: str) -> int:
+    """Consulta capacidade real; não infere contexto configurado do tamanho máximo do GGUF."""
+    runtime = local_chat_runtime(runtime_id)
+    with httpx.Client(timeout=HEALTH_TIMEOUT_SECONDS, trust_env=False) as client:
+        response = client.post(f"{base_url(runtime)}/api/show", headers=auth_headers(runtime),
+                               json={"model": model})
+        response.raise_for_status()
+        data = response.json()
+    if not isinstance(data, dict) or "tools" not in data.get("capabilities", []):
+        raise ValueError("O modelo local não oferece suporte a ferramentas do AI Hub")
+    # Sem num_ctx explícito não há evidência da configuração efetiva do servidor.
+    for line in str(data.get("parameters", "")).splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == "num_ctx":
+            context = int(parts[1])
+            if context > 0:
+                return context
+    raise ValueError("Configure num_ctx no modelo local antes de usar o AI Hub")

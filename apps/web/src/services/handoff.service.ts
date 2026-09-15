@@ -338,10 +338,13 @@ export async function getPlanRecommendation(id: string): Promise<PlanRecommendat
  */
 export async function sendToBuild(
   id: string,
-  reviewer: AgentName,
+  reviewer: AgentName | null,
   agent?: AgentName,
   premiumConfirmed = false,
   model?: string,
+  useDefaultExecutor = false,
+  reviewRequested?: boolean,
+  reviewerSelection?: { provider: string; model: string },
 ): Promise<AgentRun> {
   if (agent && agent === reviewer) {
     throw new HandoffApiError(
@@ -350,12 +353,12 @@ export async function sendToBuild(
     )
   }
 
-  const body = agent
-    ? { routing_mode: "manual", agent, reviewer, ...(model ? { model } : {}) }
-    : { routing_mode: "auto", reviewer, premium_confirmed: premiumConfirmed }
+  const body = agent || useDefaultExecutor
+    ? { routing_mode: "manual", agent, reviewer, ...(useDefaultExecutor ? { use_default_executor: true } : {}), ...(model ? { model } : {}), ...(reviewRequested !== undefined ? { review_requested: reviewRequested } : {}) }
+    : { routing_mode: "auto", reviewer, premium_confirmed: premiumConfirmed, ...(reviewRequested !== undefined ? { review_requested: reviewRequested } : {}) }
 
   return read(fetch(`/api/handoffs/plans/${id}/build`, {
-    method: "POST", headers, body: JSON.stringify(body),
+    method: "POST", headers, body: JSON.stringify({ ...body, ...(reviewerSelection ? { reviewer_selection: reviewerSelection } : {}) }),
   }))
 }
 

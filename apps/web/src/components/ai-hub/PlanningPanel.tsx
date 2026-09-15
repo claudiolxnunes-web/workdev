@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
+import { getExecutionModels, type ExecutionModel } from "@/services/settings.service"
 import {
   agentLabels, approvePlan, getAgentRuntimes, getPlanRecommendation, getPlans,
   sendToBuild, subscribeToHandoffs, updatePlan, CLI_AGENTS, HandoffApiError,
@@ -30,7 +31,7 @@ function recommendationKey(plan: ExecutionPlan) {
   return `${plan.id}:${plan.updated_at}`
 }
 
-type RolePair = { executor?: AgentName; reviewer?: AgentName }
+type RolePair = { executor?: AgentName; reviewer?: AgentName; reviewerProvider?: string; reviewerModel?: string }
 type AgentChoice = { name: AgentName; label: string; disabled: boolean; hint: string }
 
 /**
@@ -102,7 +103,7 @@ function RoleSelect({
         onChange={(event) => onChange(event.target.value as AgentName)}
         className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100 disabled:opacity-50"
       >
-        <option value="">Selecione…</option>
+        <option value="">{titulo === "Executor" ? "Usar padrão da aba Agentes" : "Selecione…"}</option>
         {choices.map((choice) => (
           <option key={choice.name} value={choice.name} disabled={choice.disabled}>
             {choice.label}{choice.disabled && choice.hint ? ` — ${choice.hint}` : ""}
@@ -216,16 +217,27 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
   const [modelChoice, setModelChoice] = useState<Record<string, string>>({})
   // Executor e revisor escolhidos por plano. Sem os dois, não há envio.
   const [roles, setRoles] = useState<Record<string, RolePair>>({})
+  const [reviewChoice, setReviewChoice] = useState<Record<string, boolean>>({})
+  const [reviewState, setReviewState] = useState<Record<string, string>>({})
+  const [reviewModels, setReviewModels] = useState<ExecutionModel[]>([])
+  const [reviewModelsError, setReviewModelsError] = useState("")
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const requestedRecommendations = useRef<Set<string>>(new Set())
 
   const executores = executorChoices(runtimes)
   const revisores = reviewerChoices(runtimes)
 
+  useEffect(() => {
+    let active = true
+    getExecutionModels().then(data => { if (active) setReviewModels(data.models.filter(row => row.review_capable)) })
+      .catch(() => { if (active) setReviewModelsError("Catálogo de revisão indisponível. Tente reabrir o painel.") })
+    return () => { active = false }
+  }, [])
+
   function setRole(planId: string, field: keyof RolePair, agent: AgentName) {
     setRoles((current) => ({
       ...current,
-      [planId]: { ...current[planId], [field]: agent },
+      [planId]: { ...current[planId], [field]: agent, ...(field === "reviewer" ? { reviewerProvider: undefined, reviewerModel: undefined } : {}) },
     }))
   }
 
@@ -283,6 +295,10 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
           setRecommendations((current) => ({ ...current, [key]: recommendation }))
         })
         .catch(() => requestedRecommendations.current.delete(key))
+      void fetch(`/api/handoffs/plans/${plan.id}/review-policy`, { headers: { "X-API-Key": import.meta.env.VITE_API_KEY || "" } })
+        .then(async response => { if (!response.ok) throw new Error("policy"); return response.json() })
+        .then(data => setReviewState(current => ({ ...current, [plan.id]: data.state })))
+        .catch(() => setReviewState(current => ({ ...current, [plan.id]: "unavailable" })))
     }
   }, [plans])
 
@@ -309,19 +325,23 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
   }
 
   async function build(plan: ExecutionPlan, agent?: AgentName, premiumConfirmed = false) {
-    const reviewer = roles[plan.id]?.reviewer
-    if (!reviewer) {
+    const requested = reviewChoice[plan.id]
+    const reviewer = requested === false ? null : roles[plan.id]?.reviewer
+    const reviewerModel = requested !== false && roles[plan.id]?.reviewerModel
+      ? { provider: roles[plan.id].reviewerProvider!, model: roles[plan.id].reviewerModel! } : undefined
+    if (!reviewer && requested !== false) {
       setError("Escolha o revisor independente antes de enviar ao Build.")
       return
     }
     setBusy(plan.id); setError(""); setMessage("")
     try {
-      await sendToBuild(plan.id, reviewer, agent, premiumConfirmed, chosenModel(plan, agent))
+      if (agent && requested === undefined && !reviewerModel) await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, chosenModel(plan, agent))
+      else await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, chosenModel(plan, agent), !agent, requested, reviewerModel)
       setPremiumTarget(null)
       setMessage(
         agent
-          ? `Build enviado: ${agentLabel[agent]} executa, ${agentLabel[reviewer]} revisa.`
-          : `Build enviado em AUTO; ${agentLabel[reviewer]} revisa.`,
+          ? `Build enviado: ${agentLabel[agent]} executa${reviewer ? `, ${agentLabel[reviewer]} revisa` : "; escolha de revisão registrada"}.`
+          : "Build enviado com o executor padrão e a escolha de revisão registrada.",
       )
       await load()
     } catch (cause) {
@@ -532,6 +552,12 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                   <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">
                     Quem executa e quem revisa
                   </p>
+                  <p className="mb-2 text-xs text-slate-400">O executor padrão é configurado na aba Agentes. Uma escolha abaixo vale apenas para esta execução.</p>
+                  <p className="my-2 text-sm">{reviewState[plan.id] === "required" ? "Esta task exige revisão independente." : reviewState[plan.id] === "not_required" ? "Revisão independente não necessária inicialmente. Deseja configurar um revisor?" : "Esta task recomenda revisão. Deseja configurar um revisor?"}</p>
+                  <div className="mb-3 flex gap-2">
+                    <button type="button" aria-pressed={reviewChoice[plan.id] === true} onClick={() => setReviewChoice(current => ({ ...current, [plan.id]: true }))} className="rounded bg-slate-700 px-3 py-1">Sim</button>
+                    <button type="button" aria-pressed={reviewChoice[plan.id] === false} disabled={!reviewState[plan.id] || ["required", "unavailable"].includes(reviewState[plan.id])} onClick={() => setReviewChoice(current => ({ ...current, [plan.id]: false }))} className="rounded bg-slate-700 px-3 py-1 disabled:opacity-50">Não</button>
+                  </div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <RoleSelect
                       id={`executor-${plan.id}`}
@@ -541,14 +567,31 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                       disabled={busy === plan.id}
                       onChange={(agent) => setRole(plan.id, "executor", agent)}
                     />
-                    <RoleSelect
+                    {reviewChoice[plan.id] !== false && <div>
+                      <label className="block text-xs text-slate-400">Fonte do revisor
+                        <select aria-label="Fonte do revisor" value={roles[plan.id]?.reviewerProvider ?? ""} onChange={e => setRoles(current => ({ ...current, [plan.id]: { ...current[plan.id], reviewerProvider: e.target.value, reviewer: undefined, reviewerModel: undefined } }))} className="mt-1 block w-full rounded bg-slate-900 p-2">
+                          <option value="">Selecione…</option>
+                          {[...new Set(reviewModels.map(row => row.provider))].map(provider => <option key={provider} value={provider}>{({ openai: "OpenAI / Codex", anthropic: "Anthropic / Claude", openrouter: "OpenRouter", gemini: "Gemini" } as Record<string, string>)[provider] ?? provider}</option>)}
+                        </select>
+                      </label>
+                      <label className="mt-2 block text-xs text-slate-400">Modelo do revisor
+                        <select aria-label="Modelo do revisor" value={roles[plan.id]?.reviewerModel ?? ""} onChange={e => {
+                          const model = reviewModels.find(row => row.provider === roles[plan.id]?.reviewerProvider && row.model === e.target.value)
+                          setRoles(current => ({ ...current, [plan.id]: { ...current[plan.id], reviewerModel: model?.model, reviewer: model?.agent as AgentName | undefined } }))
+                        }} className="mt-1 block w-full rounded bg-slate-900 p-2">
+                          <option value="">Selecione…</option>
+                          {reviewModels.filter(row => row.provider === roles[plan.id]?.reviewerProvider).map(row => <option key={row.model} value={row.model} disabled={row.agent === roles[plan.id]?.executor}>{row.label}</option>)}
+                        </select>
+                      </label>
+                      {reviewModelsError && <p role="status" className="text-xs text-amber-300">{reviewModelsError}</p>}
+                      <details className="mt-2 text-xs"><summary>Escolha manual de agente</summary><RoleSelect
                       id={`revisor-${plan.id}`}
                       titulo="Revisor independente"
                       valor={roles[plan.id]?.reviewer}
                       choices={revisores}
                       disabled={busy === plan.id}
                       onChange={(agent) => setRole(plan.id, "reviewer", agent)}
-                    />
+                    /></details></div>}
                   </div>
                   {roles[plan.id]?.executor
                     && roles[plan.id]?.executor === roles[plan.id]?.reviewer && (
@@ -561,9 +604,8 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                     type="button"
                     disabled={
                       busy === plan.id
-                      || !roles[plan.id]?.executor
-                      || !roles[plan.id]?.reviewer
-                      || roles[plan.id]?.executor === roles[plan.id]?.reviewer
+                      || (reviewChoice[plan.id] !== false && !roles[plan.id]?.reviewer)
+                      || (reviewChoice[plan.id] !== false && Boolean(roles[plan.id]?.executor) && roles[plan.id]?.executor === roles[plan.id]?.reviewer)
                     }
                     onClick={() => void build(plan, roles[plan.id]?.executor)}
                     className="mt-3 rounded-lg bg-sky-600 px-3 py-2 text-sm hover:bg-sky-500 disabled:opacity-50"

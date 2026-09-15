@@ -152,6 +152,7 @@ CATALOG = [
     ),
     catalog_row(
         catalog_id="kimi-code",
+        agent_slug="kimi",
         display_name="Kimi K2.7 Code",
         provider="openrouter",
         provider_model_id="moonshotai/kimi-k2.7-code",
@@ -163,6 +164,7 @@ CATALOG = [
     ),
     catalog_row(
         catalog_id="qwen-coder",
+        agent_slug="qwen",
         display_name="Qwen3 Coder",
         provider="openrouter",
         provider_model_id="qwen/qwen3-coder",
@@ -456,6 +458,7 @@ class RecommendationAvailabilityTest(unittest.TestCase):
         rows = [
             catalog_row(
                 catalog_id="qwen-coder",
+                agent_slug="qwen",
                 display_name="Qwen3 Coder",
                 provider="openrouter",
                 provider_model_id="qwen/qwen3-coder",

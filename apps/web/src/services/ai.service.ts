@@ -71,10 +71,17 @@ export interface CatalogModel {
   provider: string;
   model: string;
   label: string;
+  runtime_id?: string;
 }
 
 export async function getOpenRouterModels(): Promise<CatalogModel[]> {
   const response = await fetch("/api/ai/models?provider=openrouter", { headers, cache: "no-store" });
   if (!response.ok) throw new Error("Não foi possível carregar os modelos OpenRouter");
+  return response.json();
+}
+
+export async function getLocalModels(): Promise<CatalogModel[]> {
+  const response = await fetch("/api/ai/models?provider=local", { headers, cache: "no-store" });
+  if (!response.ok) throw new Error("Não foi possível carregar os modelos locais");
   return response.json();
 }

@@ -136,6 +136,19 @@ class DispatchGuardTest(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "runtime_unavailable")
 
+    def test_explicit_installed_model_does_not_require_old_default(self):
+        health = _health("degraded", "modelo padrão ausente")
+        with (
+            patch("app.services.agent_runtimes.check_runtime_cached", new=AsyncMock(return_value=health)),
+            patch("app.services.agent_runtimes.check_runtime_blocking", return_value=health),
+        ):
+            self.assertEqual(asyncio.run(ensure_dispatchable("local-code", model="qwen2.5-coder:7b")).id, "local-code")
+            self.assertEqual(ensure_dispatchable_blocking("local-code", model="qwen2.5-coder:7b").id, "local-code")
+            with self.assertRaises(OllamaDispatchError):
+                ensure_dispatchable_blocking("local-code", model="removed-model")
+            with self.assertRaises(OllamaDispatchError):
+                ensure_dispatchable_blocking("local-code")
+
 
 class DispatchTest(unittest.TestCase):
     def setUp(self):

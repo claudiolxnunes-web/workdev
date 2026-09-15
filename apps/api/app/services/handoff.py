@@ -21,6 +21,7 @@ from app.models.handoff import (
 )
 from app.models.knowledge import KnowledgeEntry
 from app.models.project import Project
+from app.models.review_cycle import ReviewCycle
 from app.models.subtask import BacklogSubtask
 from app.services.agent_runtimes import OLLAMA_AGENT_IDS
 
@@ -485,6 +486,8 @@ def queue_build(
     complexity: str | None = None,
     complexity_score: int | None = None,
     routing_reason: str | None = None,
+    review_requested: bool | None = None,
+    reviewer_selection: dict | None = None,
 ) -> tuple[AgentRun, AgentRunEvent]:
     if plan.status != "approved":
         raise HandoffError(
@@ -498,7 +501,8 @@ def queue_build(
         complexity_score,
     )
 
-    reviewer = validate_review_pair(agent, reviewer)
+    if reviewer is not None or review_requested is not False:
+        reviewer = validate_review_pair(agent, reviewer)
 
     active = db.query(AgentRun).filter(
         AgentRun.backlog_id == plan.backlog_id,
@@ -553,6 +557,14 @@ def queue_build(
         routing_payload,
     )
 
+    if review_requested is not None:
+        add_run_event(db, run, "build.review_preference", "Revisão solicitada pelo usuário" if review_requested else "Revisão recomendada recusada pelo usuário",
+                      {"requested": review_requested, "actor": "user", "reviewer": reviewer,
+                       "mandatory_policy_preserved": True})
+    if reviewer_selection:
+        add_run_event(db, run, "build.reviewer_configuration", "Fonte e modelo escolhidos para a revisão",
+                      {key: reviewer_selection[key] for key in ("provider", "model", "agent")})
+
     task = db.query(BacklogItem).filter(
         BacklogItem.id == plan.backlog_id
     ).first()
@@ -603,6 +615,24 @@ def update_run(
                     f"Gate de testes reprovado: {gate_reason}. "
                     f"Task não pode ir para {next_status} sem testes aprovados."
                 )
+
+            if next_status == "completed" and isinstance(db, Session):
+                from app.services.test_gate import get_gate_evidence_for_run
+                evidence = get_gate_evidence_for_run(db, run)
+                current_sha = evidence.git_commit_sha if evidence else None
+                cycle = db.query(ReviewCycle).filter(ReviewCycle.run_id == run.id).order_by(ReviewCycle.attempt.desc()).first()
+                review = db.query(AgentRunReview).filter(AgentRunReview.run_id == run.id).order_by(AgentRunReview.attempt.desc()).first()
+                independent = bool(review and review.verdict == "approved" and review.gate_passed
+                                   and review.reviewer_agent != run.agent and review.executor_agent == run.agent
+                                   and current_sha and (review.payload or {}).get("commit_sha") == current_sha)
+                decision_event = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run.id,
+                    AgentRunEvent.event_type == "build.review_decision").order_by(AgentRunEvent.created_at.desc()).first()
+                waived = bool(cycle and cycle.decision == "NO_REVIEW_COMPLETE" and cycle.gate_result == "pass" and not cycle.sensitive
+                              and decision_event and current_sha
+                              and (decision_event.payload or {}).get("commit_sha") == current_sha
+                              and (decision_event.payload or {}).get("decision") == "NO_REVIEW_COMPLETE")
+                if not independent and not waived:
+                    raise HandoffError("Conclusão exige revisão independente aprovada ou dispensa pela política após os gates", "review_required")
 
         previous = run.status
         run.status = next_status
@@ -956,6 +986,7 @@ def record_review(
             "feedback_confidence": classification.confidence,
             "feedback_reason": classification.reason,
             "executor_model": getattr(run, "model", None),
+            "commit_sha": getattr(run, "commit_sha", None),
             "reasoning_effort": getattr(run, "reasoning_effort", None),
             "complexity": getattr(run, "complexity", None),
             "complexity_score": getattr(run, "complexity_score", None),

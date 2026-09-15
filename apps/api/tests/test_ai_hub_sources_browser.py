@@ -45,13 +45,13 @@ def test_ai_hub_sources_order_and_direct_selection(width):
                     "Gemini", "GPT-4o mini", "Claude Haiku", "OpenRouter", "Local / Ollama",
                 ])
                 expect(source.locator('option[value="OpenRouter"]')).to_be_enabled()
-                expect(source.locator('option[value="Local / Ollama"]')).to_be_disabled()
+                expect(source.locator('option[value="Local / Ollama"]')).to_be_enabled()
                 source.select_option(label="GPT-4o mini")
                 page.reload()
                 expect(source).to_have_value("GPT-4o mini")
                 source.select_option(label="Claude Haiku")
                 expect(source).to_have_value("Claude Haiku")
-                expect(page.get_by_text("Local / Ollama: seleção de modelos ainda não disponível.")).to_be_visible()
+                expect(page.get_by_text("Local / Ollama lista os modelos instalados no runtime local.")).to_be_visible()
                 page.route("**/api/ai/models?provider=openrouter", lambda route: route.fulfill(json=[
                     {"provider": "openrouter", "model": "vendor/new-runtime-model", "label": "New catalog model"},
                 ]))
@@ -63,6 +63,16 @@ def test_ai_hub_sources_order_and_direct_selection(width):
                 page.reload()
                 expect(source).to_have_value("OpenRouter")
                 expect(models).to_have_value("vendor/new-runtime-model")
+                page.route("**/api/ai/models?provider=local", lambda route: route.fulfill(json=[
+                    {"provider": "ollama", "model": "runtime-model:v1", "label": "Installed local model", "runtime_id": "local-code"},
+                ]))
+                source.select_option(label="Local / Ollama")
+                local_models = page.get_by_role("combobox", name="Modelo local")
+                expect(local_models.locator("option")).to_have_text(["Selecione um modelo", "Installed local model"])
+                local_models.select_option(label="Installed local model")
+                page.reload()
+                expect(source).to_have_value("Local / Ollama")
+                expect(local_models).to_have_value('["local-code","runtime-model:v1"]')
                 page.screenshot(path=f"/tmp/workdev-ai-hub-sources-{width}.png", full_page=True)
             finally:
                 browser.close()

@@ -148,3 +148,20 @@ def reviewer_tier_for_escalation(current_tier: str, executor: str | None = None,
     candidates = [r for r in config['tier_reviewers']['strong'] if r != executor]
     return PolicyDecision('REVISAR', 'strong', 'high', 'supervised', 'pass', [],
                           'Escalonamento por incerteza do revisor econômico', candidates)
+
+
+def with_user_preference(decision: PolicyDecision, requested: bool | None, reviewer: str | None,
+                         executor: str) -> PolicyDecision:
+    """Só revisão não sensível pode ser dispensada, sempre depois dos gates."""
+    from dataclasses import replace
+    if decision.gate_result != "pass" or decision.decision not in {"REVISAR", "NO_REVIEW_COMPLETE"}:
+        return decision
+    if decision.sensitive or requested is None:
+        return decision
+    if requested is False:
+        return replace(decision, decision="NO_REVIEW_COMPLETE", tier="none", reviewer_candidates=[],
+                       justification=decision.justification + "; revisão independente dispensada por escolha auditada do usuário")
+    if reviewer and reviewer != executor:
+        return replace(decision, decision="REVISAR", tier=decision.tier if decision.tier != "none" else "economic",
+                       reviewer_candidates=[reviewer], justification=decision.justification + "; revisão solicitada pelo usuário")
+    return replace(decision, decision="BLOCKED_OPERATIONAL", justification="Escolha de revisão exige revisor independente")

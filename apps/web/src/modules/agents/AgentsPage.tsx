@@ -4,6 +4,7 @@ import type { OperationalStatus } from "./AgentTerminal"
 import { BuildQueue } from "./BuildQueue"
 import { RuntimeControls } from "./RuntimeControls"
 import { RuntimePanel } from "./RuntimePanel"
+import { ExecutorDefaults } from "./ExecutorDefaults"
 import {
   getAgentRuntimes, type AgentName, type AgentRuntime, type RuntimeState, type ActivityState,
 } from "@/services/handoff.service"
@@ -200,6 +201,7 @@ export default function AgentsPage() {
 
   return (
     <div className="flex min-h-[620px] min-w-0 max-w-full flex-col gap-3 overflow-hidden md:h-[calc(100dvh-9rem)] md:min-h-[420px]">
+      <ExecutorDefaults />
       {lastTerminalRun && <a className="text-sm text-sky-400" href={`/runs/${encodeURIComponent(lastTerminalRun)}/terminal`}>Retomar último terminal</a>}
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
         <div className="min-w-64 shrink-0"><h2 className="text-xl font-semibold sm:text-2xl">Agent Workspace</h2><p className="hidden text-sm text-slate-400 sm:block">Agentes, execuções e terminais com estado real do runtime.</p></div>

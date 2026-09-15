@@ -1,13 +1,15 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AIHub from "./AIHub";
-import { getOpenRouterModels, sendAiChatWithConfirmation } from "@/services/ai.service";
+import { getOpenRouterModels, getLocalModels, sendAiChatWithConfirmation } from "@/services/ai.service";
 
-vi.mock("@/services/ai.service", () => ({ sendAiChatWithConfirmation: vi.fn(), getOpenRouterModels: vi.fn() }));
+vi.mock("@/services/ai.service", () => ({ sendAiChatWithConfirmation: vi.fn(), getOpenRouterModels: vi.fn(), getLocalModels: vi.fn() }));
 
 beforeEach(() => {
   vi.mocked(getOpenRouterModels).mockReset();
   vi.mocked(getOpenRouterModels).mockResolvedValue([]);
+  vi.mocked(getLocalModels).mockReset();
+  vi.mocked(getLocalModels).mockResolvedValue([]);
   localStorage.clear();
   window.history.replaceState({}, "", "/ai-hub");
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
@@ -23,7 +25,7 @@ describe("fontes do AI Hub", () => {
     ]);
     expect(source).toHaveValue("Gemini");
     expect(within(source).getByRole("option", { name: "OpenRouter" })).toBeEnabled();
-    expect(within(source).getByRole("option", { name: "Local / Ollama" })).toBeDisabled();
+    expect(within(source).getByRole("option", { name: "Local / Ollama" })).toBeEnabled();
     fireEvent.change(source, { target: { value: "OpenRouter" } });
     expect(source).toHaveValue("OpenRouter");
     expect(await screen.findByText("Nenhum modelo OpenRouter ativo no catálogo.")).toBeVisible();
@@ -118,6 +120,43 @@ describe("fontes do AI Hub", () => {
     })));
     render(<AIHub />);
     expect(await screen.findByText("Histórico Kimi preservado")).toBeVisible();
+    expect(sendAiChatWithConfirmation).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("modelos locais reais", () => {
+  it("envia modelo e runtime e mantém a escolha separada do OpenRouter", async () => {
+    vi.mocked(getLocalModels).mockResolvedValue([
+      { provider: "ollama", model: "model-from-runtime:latest", label: "Modelo instalado", runtime_id: "local-code" },
+    ]);
+    render(<AIHub />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Fonte de IA" }), { target: { value: "Local / Ollama" } });
+    await screen.findByRole("option", { name: "Modelo instalado" });
+    expect(screen.getByRole("button", { name: /^Enviar$/ })).toBeDisabled();
+    const key = JSON.stringify(["local-code", "model-from-runtime:latest"]);
+    fireEvent.change(screen.getByRole("combobox", { name: "Modelo local" }), { target: { value: key } });
+    fireEvent.change(screen.getByPlaceholderText("Pergunte ou peça algo ao WorkDev..."), { target: { value: "Olá" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Enviar$/ }));
+    await waitFor(() => expect(sendAiChatWithConfirmation).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "ollama", model: "model-from-runtime:latest", runtime_id: "local-code",
+    })));
+    expect(localStorage.getItem("workdev_ai_hub_local_model")).toBe(key);
+    expect(localStorage.getItem("workdev_ai_hub_openrouter_model")).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Fonte de IA" }), { target: { value: "OpenRouter" } });
+    expect(screen.getByRole("button", { name: /^Enviar$/ })).toBeDisabled();
+  });
+
+  it("descarta preferência de modelo removido e distingue runtime vazio de indisponível", async () => {
+    localStorage.setItem("workdev_ai_hub_modelo", "Local / Ollama");
+    localStorage.setItem("workdev_ai_hub_local_model", JSON.stringify(["local-code", "removed"]));
+    vi.mocked(getLocalModels).mockRejectedValueOnce(new Error("offline"));
+    render(<AIHub />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("modelos locais");
+    expect(screen.getByRole("button", { name: /^Enviar$/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+    expect(await screen.findByText("Nenhum modelo local disponível no runtime.")).toBeVisible();
+    expect(screen.getByRole("button", { name: /^Enviar$/ })).toBeDisabled();
     expect(sendAiChatWithConfirmation).not.toHaveBeenCalled();
   });
 });

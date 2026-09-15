@@ -69,7 +69,18 @@ def dispatch_timeout_seconds() -> float:
     return max(5.0, min(3600.0, value))
 
 
-async def ensure_dispatchable(runtime_id: str) -> OllamaRuntime:
+def _selected_model_available(health, model: str | None) -> bool:
+    if model is None:
+        return health.status in agent_runtimes.DISPATCHABLE_STATUSES
+    # O inventário pode estar degradado apenas pela ausência do antigo padrão.
+    # A escolha explícita é validada pelo modelo efetivamente instalado.
+    return health.status in {
+        agent_runtimes.STATUS_ONLINE, agent_runtimes.STATUS_DEGRADED,
+        agent_runtimes.STATUS_UNCONFIGURED,
+    } and model in health.models
+
+
+async def ensure_dispatchable(runtime_id: str, model: str | None = None) -> OllamaRuntime:
     """Recusa o despacho quando o endpoint não está utilizável agora."""
     runtime = agent_runtimes.get_runtime(runtime_id)
 
@@ -81,7 +92,7 @@ async def ensure_dispatchable(runtime_id: str) -> OllamaRuntime:
 
     health = await agent_runtimes.check_runtime_cached(runtime, refresh=True)
 
-    if health.status not in agent_runtimes.DISPATCHABLE_STATUSES:
+    if not _selected_model_available(health, model):
         raise OllamaDispatchError(
             "runtime_unavailable",
             (
@@ -98,7 +109,7 @@ async def ensure_dispatchable(runtime_id: str) -> OllamaRuntime:
     return runtime
 
 
-def ensure_dispatchable_blocking(runtime_id: str) -> OllamaRuntime:
+def ensure_dispatchable_blocking(runtime_id: str, model: str | None = None) -> OllamaRuntime:
     """Mesma checagem de `ensure_dispatchable`, para rotas síncronas."""
     runtime = agent_runtimes.get_runtime(runtime_id)
 
@@ -110,7 +121,7 @@ def ensure_dispatchable_blocking(runtime_id: str) -> OllamaRuntime:
 
     health = agent_runtimes.check_runtime_blocking(runtime)
 
-    if health.status not in agent_runtimes.DISPATCHABLE_STATUSES:
+    if not _selected_model_available(health, model):
         raise OllamaDispatchError(
             "runtime_unavailable",
             (
@@ -146,7 +157,7 @@ async def dispatch(
     minutos, todos perdidos, e o Ollama ainda cancelou a task ao ver o cliente
     sumir. Quem persiste o parcial é o chamador; aqui só entregamos o pedaço.
     """
-    runtime = await ensure_dispatchable(runtime_id)
+    runtime = await ensure_dispatchable(runtime_id, model=model)
 
     chosen_model = model or agent_runtimes.model_for(runtime)
 
