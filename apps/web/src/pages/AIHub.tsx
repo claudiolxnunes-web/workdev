@@ -27,25 +27,24 @@ interface Divider {
   label: string;
 }
 
+// Ordem de apresentação do AI Hub; não define prioridade de roteamento.
+// Fontes genéricas serão habilitadas pelos seletores dinâmicos das próximas fatias.
 export const MODELOS = [
-  { label: "Gemini 3.5 Flash", provider: "gemini", model: "gemini-3.5-flash" },
-  { label: "Kimi K2.7 Code", provider: "openrouter", model: "moonshotai/kimi-k2.7-code" },
-  { label: "GPT-OSS 120B (Ollama Cloud)", provider: "ollama", model: "gpt-oss:120b" },
-  { label: "Qwen3 Coder", provider: "openrouter", model: "qwen/qwen3-coder" },
-  { label: "GPT-5.6 Luna", provider: "openai", model: "gpt-5.6-luna" },
-  { label: "Claude Sonnet 5", provider: "anthropic", model: "claude-sonnet-5" },
-  { label: "Claude Haiku 4.5", provider: "anthropic", model: "claude-haiku-4-5-20251001" },
+  { label: "Gemini", provider: "gemini", model: "gemini-3.5-flash", legacyLabel: "Gemini 3.5 Flash" },
   { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
+  { label: "Claude Haiku", provider: "anthropic", model: "claude-haiku-4-5-20251001", legacyLabel: "Claude Haiku 4.5" },
+  { label: "OpenRouter", provider: "openrouter", model: null },
+  { label: "Local / Ollama", provider: "ollama", model: null },
 ];
 const MODELO_STORAGE_KEY = "workdev_ai_hub_modelo";
 const PROJETO_STORAGE_KEY = "workdev_ai_hub_projeto";
-export const DEFAULT_MODELO_LABEL = "Gemini 3.5 Flash";
+export const DEFAULT_MODELO_LABEL = "Gemini";
 const AUTORIDADE_PADRAO: Authority = "plan";
 
 function loadStoredModelo() {
   try {
     const stored = localStorage.getItem(MODELO_STORAGE_KEY);
-    const found = stored && MODELOS.find((m) => m.label === stored);
+    const found = stored && MODELOS.find((m) => m.model && (m.label === stored || m.legacyLabel === stored));
     if (found) return found;
   } catch { /* localStorage indisponível (modo privado etc.) */ }
   return MODELOS.find((m) => m.label === DEFAULT_MODELO_LABEL) || MODELOS[0];
@@ -134,6 +133,7 @@ export default function AIHub() {
     currentMessages: Msg[],
     slug: string | null,
   ) {
+    if (!modelo.model) return;
     const prompt = "Confirme sua compreensão da task, identifique lacunas e formule uma PRÉVIA do plano para revisão humana. Durante toda a revisão use apenas a prévia: não crie plan_id, não gere nova versão e não materialize plano oficial. Corrija a mesma prévia quantas vezes o usuário pedir. Só após aprovação explícita da formulação final o plano oficial poderá ser criado em draft. Aprovar o plano não envia para Build nem escolhe agente; apenas recomende o agente/modelo mais econômico e adequado, e deixe a execução manual para o usuário.";
     const next: Msg[] = [...currentMessages, { role: "user", content: prompt }];
     setMessages(next);
@@ -234,7 +234,7 @@ export default function AIHub() {
 
   async function send() {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || !modelo.model) return;
     const next: Msg[] = [...messages, { role: "user" as const, content: text }];
     setMessages(next);
     setInput("");
@@ -385,26 +385,32 @@ export default function AIHub() {
             onKeyDown={(e) => e.key === "Enter" && send()}
           />
           <select
+            aria-label="Fonte de IA"
+            aria-describedby="ai-source-availability"
             value={modelo.label}
             onChange={(e) => {
               const next = MODELOS.find((m) => m.label === e.target.value) || MODELOS[0];
+              if (!next.model) return;
               setModelo(next);
               try { localStorage.setItem(MODELO_STORAGE_KEY, next.label); } catch { /* ignore */ }
             }}
             className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-3 text-sm text-slate-300 sm:max-w-64"
           >
             {MODELOS.map((m) => (
-              <option key={m.label} value={m.label}>{m.label}</option>
+              <option key={m.label} value={m.label} disabled={!m.model}>{m.label}</option>
             ))}
           </select>
           <button
             onClick={send}
-            disabled={loading}
+            disabled={loading || !modelo.model}
             className="shrink-0 rounded-lg bg-blue-600 px-5 py-3 transition-colors hover:bg-blue-700 disabled:opacity-50"
           >
             Enviar
           </button>
         </div>
+        <p id="ai-source-availability" className="mt-2 text-xs text-slate-400">
+          OpenRouter e Local / Ollama: seleção de modelos ainda não disponível.
+        </p>
       </div>
       {showPlans && <PlanningPanel key={backlogId ?? 'all'} backlogId={backlogId} onClose={() => setShowPlans(false)} />}
     </div>
