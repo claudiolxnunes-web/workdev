@@ -1154,17 +1154,18 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
             else:
                 kwargs["max_tokens"] = max_output_tokens
             if context_limit is not None:
-                # Margem conservadora em bytes UTF-8, incluindo tools, resultados e
-                # envelopes; nunca delegar truncamento silencioso ao servidor.
+                # Estimativa conservadora em tokens, incluindo tools, resultados e
+                # envelopes; nunca comparar bytes diretamente com num_ctx em tokens.
                 serialized = json.dumps({"messages": msgs, "tools": tools}, ensure_ascii=False,
                                         default=lambda obj: obj.model_dump())
-                required = len(serialized.encode("utf-8")) + 256 + max_output_tokens
-                if required > context_limit:
+                estimated_input_tokens = max(1, (len(serialized) + 3) // 4)
+                required_tokens = estimated_input_tokens + 256 + max_output_tokens
+                if required_tokens > context_limit:
                     raise ai_cost_guard.CostGuardError(
                         "local_context_limit",
                         "O contexto configurado do modelo local é insuficiente para esta conversa e suas ferramentas. "
                         "Configure um contexto maior no runtime ou selecione outro modelo.",
-                        {"context_limit": context_limit, "conservative_input_bound": required},
+                        {"context_limit": context_limit, "estimated_input_tokens": estimated_input_tokens, "required_tokens": required_tokens},
                     )
             if runtime_id:
                 kwargs["reasoning_effort"] = reasoning_effort or "none"

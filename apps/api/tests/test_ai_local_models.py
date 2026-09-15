@@ -110,7 +110,7 @@ def test_context_guard_includes_tools_and_closes_client(monkeypatch):
     client = MagicMock()
     monkeypatch.setattr(ai, "get_openai", lambda *args: client)
     monkeypatch.setattr(runtimes, "local_chat_context", lambda *args: 2048)
-    monkeypatch.setattr(ai, "tools_openai", lambda level: [{"description": "x" * 3000}])
+    monkeypatch.setattr(ai, "tools_openai", lambda level: [{"description": "x" * 9000}])
     with pytest.raises(ai.ai_cost_guard.CostGuardError) as error:
         ai.chat_openai([], MagicMock(), "installed:v1", "ollama", system="short",
                        runtime_id="local-code", max_output_tokens=256)
