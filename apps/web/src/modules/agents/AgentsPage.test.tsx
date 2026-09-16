@@ -177,6 +177,33 @@ describe("AgentsPage", () => {
     expect(painel).toHaveTextContent("Conectar")
     expect(painel).toHaveTextContent("Desconectar")
   })
+
+  it("recolhe o terminal sem desmontar o cliente e persiste a escolha", async () => {
+    localStorage.removeItem("workdev_terminal_collapsed")
+    render(<AgentsPage />)
+    expect(await screen.findByText(/terminal:/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "▾ Recolher terminal" }))
+
+    // O ponto todo do recolher: o AgentTerminal segue montado, então o
+    // WebSocket não cai e a sessão continua recebendo saída escondida.
+    expect(screen.getByText(/terminal:/)).toBeInTheDocument()
+    expect(screen.getByText(/Terminal recolhido/)).toBeInTheDocument()
+    expect(localStorage.getItem("workdev_terminal_collapsed")).toBe("1")
+
+    fireEvent.click(screen.getByRole("button", { name: "▸ Expandir terminal" }))
+    expect(localStorage.getItem("workdev_terminal_collapsed")).toBe("0")
+    expect(screen.queryByText(/Terminal recolhido/)).not.toBeInTheDocument()
+  })
+
+  it("nao confunde recolher com desconectar: fechar desmonta, recolher nao", async () => {
+    localStorage.removeItem("workdev_terminal_collapsed")
+    render(<AgentsPage />)
+    expect(await screen.findByText(/terminal:/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Fechar terminal do agente" }))
+    expect(screen.queryByText(/terminal:/)).not.toBeInTheDocument()
+  })
 })
 
 it('Workspace associa links às Runs e fechar terminal só desmonta o cliente', async () => {

@@ -85,7 +85,21 @@ export default function AgentsPage() {
   const [stopPending, setStopPending] = useState<string | null>(null)
   const [actionError, setActionError] = useState('')
   const [terminalOpen, setTerminalOpen] = useState(true)
+  // Recolher é só visual: o AgentTerminal fica montado e o WebSocket vivo, então
+  // a sessão continua recebendo saída enquanto a área está escondida. Diferente de
+  // terminalOpen, que desconecta de fato.
+  const [terminalCollapsed, setTerminalCollapsed] = useState(
+    () => localStorage.getItem("workdev_terminal_collapsed") === "1",
+  )
   const [filter, setFilter] = useState<AgentFilter>("todos")
+
+  function toggleTerminalCollapsed() {
+    setTerminalCollapsed(collapsed => {
+      const proximo = !collapsed
+      localStorage.setItem("workdev_terminal_collapsed", proximo ? "1" : "0")
+      return proximo
+    })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -205,7 +219,7 @@ export default function AgentsPage() {
   }
 
   return (
-    <div className="flex min-h-[620px] min-w-0 max-w-full flex-col gap-2 overflow-hidden md:h-[calc(100dvh-9rem)] md:min-h-[420px]">
+    <div className="mx-auto flex w-full min-h-[620px] min-w-0 max-w-screen-2xl flex-col gap-2 overflow-hidden md:h-[calc(100dvh-9rem)] md:min-h-[420px]">
       <ExecutorDefaults />
       
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><div className="flex min-w-0 items-center gap-3">
@@ -296,6 +310,21 @@ export default function AgentsPage() {
         >
           {buildQueueOpen ? "Ocultar fila" : "Abrir fila"}
         </button>
+        {!selectedRuntime && (
+          <button
+            type="button"
+            onClick={toggleTerminalCollapsed}
+            aria-expanded={!terminalCollapsed}
+            className="rounded bg-slate-800 px-2 py-1 text-sky-300 hover:bg-slate-700"
+          >
+            {terminalCollapsed ? "▸ Expandir terminal" : "▾ Recolher terminal"}
+          </button>
+        )}
+        {terminalCollapsed && !selectedRuntime && (
+          <span className="shrink-0 text-slate-400">
+            Terminal recolhido — {agent} segue conectado
+          </span>
+        )}
         {buildQueueSummary ? (
           <>
             <span className="min-w-0 truncate font-medium text-slate-200">
@@ -323,7 +352,15 @@ export default function AgentsPage() {
         }>
           <BuildQueue agent={agent} mobileExpanded={mobilePanel === "queue"} onSummaryChange={setBuildQueueSummary} />
         </div>
-        <div className={mobilePanel === "terminal" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden md:flex md:min-h-0 md:min-w-0 md:flex-1 md:flex-col"}>
+        <div className={
+          // `hidden` mantém o componente montado (só display:none), então o
+          // ResizeObserver do AgentTerminal refaz o fit sozinho ao reexpandir.
+          terminalCollapsed
+            ? "hidden"
+            : mobilePanel === "terminal"
+              ? "flex min-h-0 min-w-0 flex-1 flex-col"
+              : "hidden md:flex md:min-h-0 md:min-w-0 md:flex-1 md:flex-col"
+        }>
           {selectedRuntime ? (
             // Runtime Ollama não tem sessão tmux: no lugar do terminal vai o
             // painel de estado operacional do endpoint.
