@@ -23,6 +23,20 @@ class KnowledgeCreateEndpointTest(unittest.TestCase):
         self.assertEqual(result.title, "Stack padrão")
         self.assertEqual(result.category, "decisao")
 
+    def test_aceita_operacoes_categoria_existente_em_producao(self):
+        db = Mock()
+        db.refresh.side_effect = lambda entry: setattr(entry, "id", "entry-2")
+        payload = KnowledgeCreate(
+            title="Reinício do workdev-api",
+            content="Sempre via systemctl, nunca uvicorn à mão",
+            category="operacoes",
+        )
+
+        result = criar_conhecimento(payload, BackgroundTasks(), db)
+
+        db.add.assert_called_once()
+        self.assertEqual(result.category, "operacoes")
+
     def test_rejeita_categoria_invalida(self):
         db = Mock()
         payload = KnowledgeCreate(

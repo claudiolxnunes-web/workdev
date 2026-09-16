@@ -9,7 +9,7 @@ from app.services.engineering_graph import graph_sync
 
 router = APIRouter()
 
-CATEGORIES = ("decisao", "licao", "solucao", "referencia")
+CATEGORIES = ("decisao", "licao", "solucao", "referencia", "operacoes")
 
 
 def get_db():
