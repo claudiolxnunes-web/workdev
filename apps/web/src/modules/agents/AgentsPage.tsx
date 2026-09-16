@@ -249,13 +249,18 @@ export default function AgentsPage() {
         </div>
       </div>
       <section aria-label="Runs ativas" className="flex max-h-20 flex-nowrap gap-2 overflow-x-auto overflow-y-hidden">
-        {workspaceRuns.filter(run => run.agent === agent).map(run => <div key={run.id} className="shrink-0 rounded border border-slate-700 px-2 py-1"><a
-          href={`/runs/${encodeURIComponent(run.id)}/terminal`}
-          className="block rounded px-2 py-1 text-xs hover:bg-slate-800">
+        {workspaceRuns.filter(run => run.agent === agent).map(run => <div key={run.id} className="shrink-0 rounded border border-slate-700 px-2 py-1"><button
+          type="button"
+          onClick={() => window.open(
+            `/runs/${encodeURIComponent(run.id)}/terminal?compact=1`,
+            `workdev-run-${run.id}`,
+            "width=920,height=680,resizable=yes,scrollbars=no"
+          )}
+          className="block rounded px-2 py-1 text-left text-xs hover:bg-slate-800">
           <strong>{run.task_title}</strong> · {run.status}
           <span className="block text-xs text-slate-400">{run.agent} · Run {run.id}</span>
-          <span className="text-sky-400">Abrir terminal da Run</span>
-        </a>
+          <span className="text-sky-400">Abrir terminal da execução</span>
+        </button>
           {['queued', 'running', 'blocked'].includes(run.status) && <button
             disabled={stopPending !== null} onClick={() => void stopWorkspaceRun(run)}
             className="ml-2 rounded bg-red-950 px-2 py-1 text-sm">{stopPending === run.id ? 'Parando…' : 'Parar Run'}</button>}

@@ -189,12 +189,29 @@ it('Workspace associa links às Runs e fechar terminal só desmonta o cliente', 
   vi.stubGlobal('fetch', fetchMock)
   getAgentRuntimes.mockResolvedValue([])
   render(<AgentsPage />)
-  const link = await screen.findByRole('link', { name: /Task A/ })
-  expect(link).toHaveAttribute('href', '/runs/run-claude/terminal')
-  expect(screen.queryByRole('link', { name: /Task B/ })).not.toBeInTheDocument()
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null)
+
+  const taskA = await screen.findByRole('button', { name: /Task A/ })
+  fireEvent.click(taskA)
+  expect(openSpy).toHaveBeenCalledWith(
+    '/runs/run-claude/terminal?compact=1',
+    'workdev-run-run-claude',
+    'width=920,height=680,resizable=yes,scrollbars=no',
+  )
+  expect(screen.queryByRole('button', { name: /Task B/ })).not.toBeInTheDocument()
+
   fireEvent.click(screen.getByRole('button', { name: 'Fechar terminal do agente' }))
   expect(screen.queryByText(/terminal:/)).not.toBeInTheDocument()
   expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true)
+
   fireEvent.click(screen.getByRole('tab', { name: 'Kimi Code' }))
-  expect(await screen.findByRole('link', { name: /Task B/ })).toHaveAttribute('href', '/runs/run-kimi/terminal')
+  const taskB = await screen.findByRole('button', { name: /Task B/ })
+  fireEvent.click(taskB)
+  expect(openSpy).toHaveBeenLastCalledWith(
+    '/runs/run-kimi/terminal?compact=1',
+    'workdev-run-run-kimi',
+    'width=920,height=680,resizable=yes,scrollbars=no',
+  )
+
+  openSpy.mockRestore()
 })
