@@ -61,9 +61,12 @@ RUNTIMES: tuple[OllamaRuntime, ...] = (
         base_url_env="WORKDEV_OLLAMA_LOCAL_URL",
         default_base_url="http://127.0.0.1:11434",
         model_env="WORKDEV_OLLAMA_LOCAL_MODEL",
-        # Modelo presente no Ollama da VPS1 em 2026-09-09. É só default: trocar
-        # o modelo é configuração, não muda a identidade `local-code`.
-        default_model="qwen2.5-coder:14b-instruct-q4_K_M",
+        # Modelo presente no Ollama da VPS1 em 2026-09-16, e o mesmo que o env
+        # aponta hoje. O default anterior (`qwen2.5-coder:14b-instruct-q4_K_M`)
+        # foi removido do host na limpeza de disco: sem env, o runtime cairia
+        # num modelo inexistente. É só default: trocar o modelo é configuração,
+        # não muda a identidade `local-code`.
+        default_model="workdev-local-fast:v2",
         api_key_env=None,
         notes=(
             "Roda na própria VPS do WorkDev. O modelo carregado pode mudar "
