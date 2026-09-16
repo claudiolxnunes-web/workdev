@@ -38,24 +38,24 @@ export function ExecutorDefaults() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao salvar") }
     finally { setBusy(false) }
   }
-  return <details onToggle={event => setOpened(event.currentTarget.open)} className="shrink-0 rounded-lg border border-slate-700 bg-slate-900 p-3">
-    <summary className="cursor-pointer text-sm font-medium">Executor padrão</summary>
-    <p className="my-2 text-xs text-slate-400">Usado ao enviar um plano sem escolha específica para a execução.</p>
-    <div className="flex flex-wrap gap-2">
+  return <details onToggle={event => setOpened(event.currentTarget.open)} className="shrink-0 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">
+    <summary className="cursor-pointer text-xs font-medium">Executor padrão</summary>
+    <p className="my-1 text-xs text-slate-400">Usado ao enviar um plano sem escolha específica para a execução.</p>
+    <div className="flex flex-wrap items-center gap-2">
       <label className="text-xs">Fonte do executor
-        <select aria-label="Fonte do executor" value={source} disabled={busy} onChange={e => { setSource(e.target.value); setSelected("") }} className="ml-2 rounded bg-slate-800 p-2">
+        <select aria-label="Fonte do executor" value={source} disabled={busy} onChange={e => { setSource(e.target.value); setSelected("") }} className="ml-2 rounded bg-slate-800 px-2 py-1">
           <option value="">Selecione…</option>
           {Object.entries(labels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
         </select>
       </label>
       <label className="text-xs">Modelo do executor
-        <select aria-label="Modelo do executor" value={choice ? selected : ""} disabled={busy || !source} onChange={e => setSelected(e.target.value)} className="ml-2 rounded bg-slate-800 p-2">
+        <select aria-label="Modelo do executor" value={choice ? selected : ""} disabled={busy || !source} onChange={e => setSelected(e.target.value)} className="ml-2 rounded bg-slate-800 px-2 py-1">
           <option value="">Selecione…</option>
           {models.filter(row => row.provider === source).map(row => <option key={keyOf(row)} value={keyOf(row)}>{row.label}</option>)}
         </select>
       </label>
-      <button disabled={busy || !choice} onClick={() => void save()} className="rounded bg-sky-600 px-3 py-2 text-xs disabled:opacity-50">Salvar executor padrão</button>
-      <button disabled={busy} onClick={() => void save(true)} className="rounded bg-slate-700 px-3 py-2 text-xs">Remover padrão</button>
+      <button disabled={busy || !choice} onClick={() => void save()} className="rounded bg-sky-600 px-2 py-1 text-xs disabled:opacity-50">Salvar executor padrão</button>
+      <button disabled={busy} onClick={() => void save(true)} className="rounded bg-slate-700 px-2 py-1 text-xs">Remover padrão</button>
     </div>
     {source && !busy && !models.some(row => row.provider === source) && <p className="mt-2 text-xs">Nenhum modelo disponível para execução nesta fonte. Confira os vínculos no catálogo e a disponibilidade local.</p>}
     {selected && !choice && !busy && <p className="mt-2 text-xs text-amber-300">O modelo salvo não está disponível. Atualize a escolha antes de enviar novas tasks.</p>}

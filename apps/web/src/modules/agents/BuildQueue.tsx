@@ -23,7 +23,22 @@ const agentLabel = agentLabels
  *  409, e oferecer o botão assim mesmo seria convidar ao erro. */
 const DESPACHO_EM_CURSO = ["queued", "dispatching"]
 
-export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName; mobileExpanded?: boolean }) {
+export type BuildQueueSummary = {
+  taskTitle: string
+  status: RunStatus
+  done: number
+  total: number
+}
+
+export function BuildQueue({
+  agent,
+  mobileExpanded = false,
+  onSummaryChange,
+}: {
+  agent: AgentName
+  mobileExpanded?: boolean
+  onSummaryChange?: (summary: BuildQueueSummary | null) => void
+}) {
   const requestGeneration = useRef(0)
   const runsInFlight = useRef(false)
   const [runs, setRuns] = useState<AgentRun[]>([])
@@ -205,6 +220,22 @@ export function BuildQueue({ agent, mobileExpanded = false }: { agent: AgentName
   }
 
   const selected = runs.find((run) => run.id === selectedId)
+
+  useEffect(() => {
+    if (!onSummaryChange) return
+    if (!selected) {
+      onSummaryChange(null)
+      return
+    }
+
+    const subtasks = context?.subtasks ?? []
+    onSummaryChange({
+      taskTitle: selected.task_title,
+      status: selected.status,
+      done: subtasks.filter(item => item.status === "done").length,
+      total: subtasks.length,
+    })
+  }, [selected, context, onSummaryChange])
   // O job só vale para a run a que pertence. A checagem é por `run_id` e não
   // por confiança no reset de estado.
   const jobDaRun = job && job.run_id === selected?.id ? job : null

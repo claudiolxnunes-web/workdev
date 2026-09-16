@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { AgentTerminal } from "./AgentTerminal"
 import type { OperationalStatus } from "./AgentTerminal"
-import { BuildQueue } from "./BuildQueue"
+import { BuildQueue, type BuildQueueSummary } from "./BuildQueue"
 import { RuntimeControls } from "./RuntimeControls"
 import { RuntimePanel } from "./RuntimePanel"
 import { ExecutorDefaults } from "./ExecutorDefaults"
@@ -73,10 +73,13 @@ type MobilePanel = "terminal" | "queue"
 export default function AgentsPage() {
   const lastTerminalRun = localStorage.getItem("workdev_last_terminal_run")
   const [agent, setAgent] = useState<AgentName>("claude")
+  const [selectedRuntimeId, setSelectedRuntimeId] = useState<string | null>(null)
   const [awaitingApproval, setAwaitingApproval] = useState<Partial<Record<AgentName, boolean>>>({})
   const [health, setHealth] = useState<Partial<Record<AgentName, AgentHealth>>>({})
   const [operations, setOperations] = useState<Partial<Record<AgentName, AgentOperation>>>({})
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("terminal")
+  const [buildQueueOpen, setBuildQueueOpen] = useState(false)
+  const [buildQueueSummary, setBuildQueueSummary] = useState<BuildQueueSummary | null>(null)
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const [workspaceRuns, setWorkspaceRuns] = useState<WorkspaceRun[]>([])
   const [stopPending, setStopPending] = useState<string | null>(null)
@@ -165,7 +168,9 @@ export default function AgentsPage() {
     return () => { cancelled = true; window.clearInterval(interval); window.removeEventListener('agent-runtime-refresh', poll) }
   }, [])
 
-  const selectedRuntime = runtimes.find((runtime) => runtime.id === agent)
+  const selectedRuntime = selectedRuntimeId
+    ? runtimes.find((runtime) => runtime.id === selectedRuntimeId)
+    : undefined
 
   const visibleAgents = useMemo(() => {
     if (filter === "runtimes") return []
@@ -200,23 +205,25 @@ export default function AgentsPage() {
   }
 
   return (
-    <div className="flex min-h-[620px] min-w-0 max-w-full flex-col gap-3 overflow-hidden md:h-[calc(100dvh-9rem)] md:min-h-[420px]">
+    <div className="flex min-h-[620px] min-w-0 max-w-full flex-col gap-2 overflow-hidden md:h-[calc(100dvh-9rem)] md:min-h-[420px]">
       <ExecutorDefaults />
-      {lastTerminalRun && <a className="text-sm text-sky-400" href={`/runs/${encodeURIComponent(lastTerminalRun)}/terminal`}>Retomar último terminal</a>}
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-        <div className="min-w-64 shrink-0"><h2 className="text-xl font-semibold sm:text-2xl">Agent Workspace</h2><p className="hidden text-sm text-slate-400 sm:block">Agentes, execuções e terminais com estado real do runtime.</p></div>
+      
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><div className="flex min-w-0 items-center gap-3">
+        <div className="min-w-56 shrink-0"><h2 className="text-lg font-semibold sm:text-xl">Agent Workspace</h2><p className="hidden text-xs text-slate-400 lg:block">Agentes, execuções e terminais com estado real do runtime.</p></div>
+          {lastTerminalRun && <a className="shrink-0 text-xs text-sky-400 hover:underline" href={`/runs/${encodeURIComponent(lastTerminalRun)}/terminal`}>Retomar terminal</a>}
+        </div>
         <div className="flex gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1" role="group" aria-label="Filtrar agentes">
           {(["todos", "online", "runtimes"] as AgentFilter[]).map((item) => (
             <button key={item} type="button" aria-pressed={filter === item} onClick={() => setFilter(item)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium ${filter === item ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+              className={`rounded-md px-2 py-1 text-xs font-medium ${filter === item ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
               {FILTER_LABEL[item]}
             </button>
           ))}
         </div>
         <div className="flex w-full max-w-full overflow-x-auto rounded-lg border border-slate-700 bg-slate-900 p-1" role="tablist">
           {visibleRuntimes.map((item) => (
-            <button key={item.id} role="tab" aria-selected={agent === item.id} onClick={() => setAgent(item.id)}
-              className={`relative min-h-10 shrink-0 rounded-md px-3 text-sm font-medium sm:px-4 ${agent === item.id ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+            <button key={item.id} role="tab" aria-selected={selectedRuntimeId === item.id} onClick={() => setSelectedRuntimeId(item.id)}
+              className={`relative min-h-8 shrink-0 rounded-md px-2 text-xs font-medium sm:px-3 ${selectedRuntimeId === item.id ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
               {item.label}
               <span
                 className={`ml-2 inline-block h-2 w-2 rounded-full ${RUNTIME_DOT[item.status] ?? "bg-slate-500"}`}
@@ -225,8 +232,8 @@ export default function AgentsPage() {
             </button>
           ))}
           {visibleAgents.map((item) => (
-            <button key={item.id} role="tab" aria-selected={agent === item.id} onClick={() => setAgent(item.id)}
-              className={`relative min-h-10 shrink-0 rounded-md px-3 text-sm font-medium sm:px-4 ${agent === item.id ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+            <button key={item.id} role="tab" aria-selected={agent === item.id && selectedRuntimeId === null} onClick={() => { setAgent(item.id); setSelectedRuntimeId(null) }}
+              className={`relative min-h-8 shrink-0 rounded-md px-2 text-xs font-medium sm:px-3 ${agent === item.id && selectedRuntimeId === null ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
               {item.label}
               {health[item.id] && (
                 <span
@@ -241,10 +248,10 @@ export default function AgentsPage() {
           ))}
         </div>
       </div>
-      <section aria-label="Runs ativas" className="flex max-h-36 flex-wrap gap-2 overflow-auto">
-        {workspaceRuns.filter(run => run.agent === agent).map(run => <div key={run.id} className="rounded border border-slate-700 p-2"><a
+      <section aria-label="Runs ativas" className="flex max-h-20 flex-nowrap gap-2 overflow-x-auto overflow-y-hidden">
+        {workspaceRuns.filter(run => run.agent === agent).map(run => <div key={run.id} className="shrink-0 rounded border border-slate-700 px-2 py-1"><a
           href={`/runs/${encodeURIComponent(run.id)}/terminal`}
-          className="rounded border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">
+          className="block rounded px-2 py-1 text-xs hover:bg-slate-800">
           <strong>{run.task_title}</strong> · {run.status}
           <span className="block text-xs text-slate-400">{run.agent} · Run {run.id}</span>
           <span className="text-sky-400">Abrir terminal da Run</span>
@@ -276,9 +283,40 @@ export default function AgentsPage() {
           </button>
         ))}
       </div>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden md:flex-row">
-        <div className={mobilePanel === "queue" ? "flex min-h-0 flex-1 flex-col md:flex-none" : "hidden md:flex md:flex-none"}>
-          <BuildQueue agent={agent} mobileExpanded={mobilePanel === "queue"} />
+      <div className="hidden items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-1.5 text-xs md:flex">
+        <button
+          type="button"
+          onClick={() => setBuildQueueOpen(open => !open)}
+          className="rounded bg-slate-800 px-2 py-1 text-sky-300 hover:bg-slate-700"
+        >
+          {buildQueueOpen ? "Ocultar fila" : "Abrir fila"}
+        </button>
+        {buildQueueSummary ? (
+          <>
+            <span className="min-w-0 truncate font-medium text-slate-200">
+              {buildQueueSummary.taskTitle}
+            </span>
+            <span className="shrink-0 text-sky-300">
+              {buildQueueSummary.status}
+            </span>
+            <span className="shrink-0 text-slate-400">
+              Subtasks {buildQueueSummary.done}/{buildQueueSummary.total}
+            </span>
+          </>
+        ) : (
+          <span className="text-slate-500">Nenhuma execução selecionada</span>
+        )}
+      </div>
+
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden md:flex-row">
+        <div className={
+          mobilePanel === "queue"
+            ? "flex min-h-0 flex-1 flex-col md:flex-none"
+            : buildQueueOpen
+              ? "hidden md:flex md:flex-none"
+              : "hidden"
+        }>
+          <BuildQueue agent={agent} mobileExpanded={mobilePanel === "queue"} onSummaryChange={setBuildQueueSummary} />
         </div>
         <div className={mobilePanel === "terminal" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden md:flex md:min-h-0 md:min-w-0 md:flex-1 md:flex-col"}>
           {selectedRuntime ? (
