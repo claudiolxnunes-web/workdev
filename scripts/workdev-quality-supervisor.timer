@@ -1,0 +1,12 @@
+# /etc/systemd/system/workdev-quality-supervisor.timer
+[Unit]
+Description=Executa o WorkDev Quality Supervisor a cada 10 minutos
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target
