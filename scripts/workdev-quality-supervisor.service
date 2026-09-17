@@ -1,0 +1,38 @@
+# /etc/systemd/system/workdev-quality-supervisor.service
+[Unit]
+Description=WorkDev Quality Supervisor — issues do GlitchTip (backend e frontend)
+Documentation=file:///opt/workdev/scripts/quality_supervisor/__main__.py
+After=network-online.target
+Wants=network-online.target
+OnFailure=workdev-quality-supervisor-falhou.service
+
+[Service]
+Type=oneshot
+
+WorkingDirectory=/opt/workdev
+
+Environment=HOME=/home/workdev
+Environment=QUALITY_SUPERVISOR_ENV_FILE=/etc/workdev/workdev-quality-supervisor.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+ExecStart=/usr/bin/flock -n /run/lock/workdev-quality-supervisor.lock \
+    /opt/workdev/apps/api/venv/bin/python -m scripts.quality_supervisor --once
+
+User=workdev
+Group=workdev
+TimeoutStartSec=120
+Nice=10
+
+ProtectSystem=strict
+ReadWritePaths=/var/lib/workdev-quality-supervisor /run/lock
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workdev-quality-supervisor
+
+[Install]
+WantedBy=multi-user.target
