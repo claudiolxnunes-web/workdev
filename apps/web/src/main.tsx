@@ -12,7 +12,14 @@ initSentry()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Sentry.ErrorBoundary fallback={<p>Algo deu errado. Recarregue a pagina.</p>}>
+    <Sentry.ErrorBoundary
+      fallback={
+        <div>
+          <p>Algo deu errado. Recarregue a pagina.</p>
+          <button onClick={() => window.location.reload()}>Recarregar</button>
+        </div>
+      }
+    >
       <BrowserRouter>
         <AuthGate><App /></AuthGate>
       </BrowserRouter>
