@@ -13,25 +13,36 @@ from app.services import agent_runtimes as runtimes
 
 @pytest.fixture
 def inventory(monkeypatch):
-    payload = {"models": [{"name": "installed:v1"}, {"name": "installed:v1"},
-                          {"name": "remote-alias", "remote_host": "https://cloud.invalid"},
-                          {"name": "remote-model", "remote_model": "cloud"}]}
+    payload = {
+        "data": [
+            {"id": "installed:v1"},
+            {"id": "installed:v1"},
+        ]
+    }
     client_class = httpx.Client
+
     def respond(request):
         assert request.url.host == "127.0.0.1"
-        assert request.url.path == "/api/tags"
+        assert request.url.path == "/v1/models"
         return httpx.Response(200, json=payload)
-    monkeypatch.setattr(runtimes.httpx, "Client", lambda **kw: client_class(
-        transport=httpx.MockTransport(respond), **kw))
+
+    monkeypatch.setattr(
+        runtimes.httpx,
+        "Client",
+        lambda **kw: client_class(
+            transport=httpx.MockTransport(respond),
+            **kw,
+        ),
+    )
     return payload
 
 
 def test_inventory_dynamic_local_only(inventory):
     assert runtimes.local_chat_models() == [
         {"provider": "ollama", "model": "installed:v1", "label": "installed:v1", "runtime_id": "local-code"}]
-    inventory["models"].append({"name": "newly-installed:v2"})
+    inventory["data"].append({"id": "newly-installed:v2"})
     assert len(runtimes.local_chat_models()) == 2
-    inventory["models"] = []
+    inventory["data"] = []
     assert runtimes.local_chat_models() == []
 
 
@@ -42,9 +53,9 @@ def test_inventory_http_empty_vs_malformed(inventory):
     app.dependency_overrides[ai.get_db] = lambda: db
     with TestClient(app) as client:
         assert client.get("/ai/models?provider=local").json()[0]["runtime_id"] == "local-code"
-        inventory["models"] = []
+        inventory["data"] = []
         assert client.get("/ai/models?provider=local").json() == []
-        inventory.pop("models")
+        inventory.pop("data")
         response = client.get("/ai/models?provider=local")
         assert response.status_code == 503
         db.query.assert_not_called()
@@ -73,11 +84,11 @@ def test_invalid_selection_never_calls_database_or_provider(inventory, monkeypat
 def test_local_client_has_registry_url_and_no_global_cache(monkeypatch):
     factory = MagicMock()
     monkeypatch.setattr(ai, "OpenAI", factory)
-    monkeypatch.setenv("WORKDEV_OLLAMA_LOCAL_URL", "http://127.0.0.1:11434")
+    monkeypatch.setenv("WORKDEV_LOCAL_CODE_URL", "http://127.0.0.1:8080")
     ai.get_openai("ollama", "local-code")
     ai.get_openai("ollama", "local-code")
     assert factory.call_count == 2
-    assert factory.call_args.kwargs["base_url"] == "http://127.0.0.1:11434/v1"
+    assert factory.call_args.kwargs["base_url"] == "http://127.0.0.1:8080/v1"
     assert factory.call_args.kwargs["max_retries"] == 0
     assert ai.COMPAT_PROVIDERS["ollama"]["base_url"] == "https://ollama.com/v1/"
 
@@ -102,7 +113,7 @@ def test_existing_tool_loop_preserves_authority_and_backlog(monkeypatch):
     execute.assert_called_once_with("get_receipt", {"id": "x"}, db, "plan", backlog_id="task-id")
     args = client.chat.completions.create.call_args.kwargs
     assert args["messages"][-1] == {"role": "tool", "tool_call_id": "call-1", "content": execute.return_value}
-    assert args["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in args
     client.close.assert_called_once()
 
 
@@ -120,17 +131,45 @@ def test_context_guard_includes_tools_and_closes_client(monkeypatch):
 
 
 @pytest.mark.parametrize("payload,expected", [
-    ({"capabilities": ["completion", "tools"], "parameters": "num_ctx 8192\ntemperature 0"}, 8192),
-    ({"capabilities": ["completion"], "parameters": "num_ctx 8192"}, None),
-    ({"capabilities": ["tools"], "parameters": ""}, None),
+    (
+        {
+            "chat_template_caps": {"supports_tools": True},
+            "default_generation_settings": {"n_ctx": 8192},
+        },
+        8192,
+    ),
+    (
+        {
+            "chat_template_caps": {"supports_tools": False},
+            "default_generation_settings": {"n_ctx": 8192},
+        },
+        None,
+    ),
+    (
+        {
+            "chat_template_caps": {"supports_tools": True},
+            "default_generation_settings": {},
+        },
+        None,
+    ),
 ])
 def test_context_from_actual_model_configuration(monkeypatch, payload, expected):
     client_class = httpx.Client
+
     def respond(request):
-        assert request.url.path == "/api/show"
-        assert request.method == "POST"
+        assert request.url.path == "/props"
+        assert request.method == "GET"
         return httpx.Response(200, json=payload)
-    monkeypatch.setattr(runtimes.httpx, "Client", lambda **kw: client_class(transport=httpx.MockTransport(respond), **kw))
+
+    monkeypatch.setattr(
+        runtimes.httpx,
+        "Client",
+        lambda **kw: client_class(
+            transport=httpx.MockTransport(respond),
+            **kw,
+        ),
+    )
+
     if expected:
         assert runtimes.local_chat_context("local-code", "installed:v1") == expected
     else:

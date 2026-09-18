@@ -454,9 +454,8 @@ describe("PlanningPanel", () => {
     expect(qwen?.textContent).not.toContain("recomendado")
   })
 
-  it("rotula runtime Ollama como assessor no seletor de executor", async () => {
-    // Enquanto o worker da fatia 3 não existe, esses runtimes devolvem texto:
-    // não editam arquivo nem rodam gate. O rótulo não pode prometer mais.
+  it("rotula runtime Ollama como executor isolado no seletor de executor", async () => {
+    // O runtime Ollama executa pelo worker isolado; o modelo não recebe shell direto.
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     getAgentRuntimes.mockResolvedValue([runtime()])
     renderPanel()
@@ -465,7 +464,7 @@ describe("PlanningPanel", () => {
     await waitFor(() => {
       const opcao = Array.from(executor.querySelectorAll("option"))
         .find((o) => o.value === "local-code")
-      expect(opcao?.textContent).toContain("assessor (não edita arquivos)")
+      expect(opcao?.textContent).toContain("executor isolado")
     })
   })
 

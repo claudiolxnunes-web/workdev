@@ -28,7 +28,7 @@ class RuntimeRegistryTest(unittest.TestCase):
 
         with patch.dict(
             "os.environ",
-            {"WORKDEV_OLLAMA_LOCAL_MODEL": "outro-modelo:14b"},
+            {"WORKDEV_LOCAL_CODE_MODEL": "outro-modelo:14b"},
         ):
             self.assertEqual(
                 agent_runtimes.model_for(runtime),
@@ -86,13 +86,13 @@ class RuntimeSecretsTest(unittest.TestCase):
                 agent_runtimes.base_url(
                     agent_runtimes.get_runtime("local-code")
                 ),
-                "http://127.0.0.1:11434",
+                "http://127.0.0.1:8080",
             )
 
     def test_trailing_slash_is_normalized(self):
         with patch.dict(
             "os.environ",
-            {"WORKDEV_OLLAMA_LOCAL_URL": "http://10.0.0.5:11434/"},
+            {"WORKDEV_LOCAL_CODE_URL": "http://10.0.0.5:11434/"},
         ):
             self.assertEqual(
                 agent_runtimes.base_url(
@@ -189,7 +189,7 @@ class RuntimeHealthTest(unittest.TestCase):
             health = self._check("local-code")
 
         self.assertEqual(health.status, agent_runtimes.STATUS_OFFLINE)
-        self.assertEqual(health.reason, "HTTP 503")
+        self.assertEqual(health.reason, "HTTP 503 em /health")
 
     def test_unconfigured_gpu_is_not_probed(self):
         with patch(
@@ -209,7 +209,7 @@ class RuntimeHealthTest(unittest.TestCase):
         ):
             health = self._check(
                 "local-code",
-                {"WORKDEV_OLLAMA_LOCAL_MODEL": "qwen2.5-coder:7b"},
+                {"WORKDEV_LOCAL_CODE_MODEL": "qwen2.5-coder:7b"},
             )
 
         self.assertEqual(health.status, agent_runtimes.STATUS_ONLINE)
@@ -223,7 +223,7 @@ class RuntimeHealthTest(unittest.TestCase):
         ):
             health = self._check(
                 "local-code",
-                {"WORKDEV_OLLAMA_LOCAL_MODEL": "qwen2.5-coder:7b"},
+                {"WORKDEV_LOCAL_CODE_MODEL": "qwen2.5-coder:7b"},
             )
 
         self.assertEqual(health.status, agent_runtimes.STATUS_DEGRADED)
@@ -241,7 +241,7 @@ class RuntimeHealthTest(unittest.TestCase):
         ):
             health = self._check(
                 "local-code",
-                {"WORKDEV_OLLAMA_LOCAL_MODEL": "qwen2.5-coder:7b"},
+                {"WORKDEV_LOCAL_CODE_MODEL": "qwen2.5-coder:7b"},
             )
 
         self.assertEqual(health.status, agent_runtimes.STATUS_DEGRADED)
@@ -304,7 +304,7 @@ class RuntimeHealthTest(unittest.TestCase):
         env = {
             "WORKDEV_OLLAMA_HOSTINGER_URL": "https://gpu-h.invalid",
             "WORKDEV_OLLAMA_RUNPOD_URL": "https://gpu-r.invalid",
-            "WORKDEV_OLLAMA_LOCAL_MODEL": "qwen2.5-coder:7b",
+            "WORKDEV_LOCAL_CODE_MODEL": "qwen2.5-coder:7b",
         }
 
         with (
@@ -335,7 +335,7 @@ class RuntimeHealthTest(unittest.TestCase):
             asyncio.run(agent_runtimes.check_runtime_cached(runtime))
             asyncio.run(agent_runtimes.check_runtime_cached(runtime))
 
-        self.assertEqual(fetch.await_count, 2)
+        self.assertEqual(fetch.await_count, 4)
 
 
 class RemoteGpuAbstractionTest(unittest.TestCase):

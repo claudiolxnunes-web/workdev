@@ -1137,7 +1137,16 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
                 max_output_tokens: int = 4096,
                 reasoning_effort: str | None = None, backlog_id=None,
                 runtime_id: str | None = None) -> ProviderResult:
-    context_limit = agent_runtimes.local_chat_context(runtime_id, model) if runtime_id else None
+    local_runtime = (
+        agent_runtimes.local_chat_runtime(runtime_id)
+        if runtime_id
+        else None
+    )
+    context_limit = (
+        agent_runtimes.local_chat_context(runtime_id, model)
+        if runtime_id
+        else None
+    )
     client = get_openai(provider, runtime_id) if runtime_id else get_openai(provider)
     try:
         msgs = [{"role": "system", "content": system or SYSTEM}] + messages
@@ -1168,7 +1177,14 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
                         {"context_limit": context_limit, "estimated_input_tokens": estimated_input_tokens, "required_tokens": required_tokens},
                     )
             if runtime_id:
-                kwargs["reasoning_effort"] = reasoning_effort or "none"
+                # llama.cpp expõe o Qwen via API OpenAI-compatible, mas este
+                # runtime não anuncia suporte a reasoning_effort. Não envie
+                # parâmetros que o engine não suporta.
+                if (
+                    local_runtime is not None
+                    and local_runtime.engine != agent_runtimes.ENGINE_LLAMACPP
+                ):
+                    kwargs["reasoning_effort"] = reasoning_effort or "none"
                 kwargs["temperature"] = 0
             if reasoning_effort and provider == "openai":
                 kwargs["reasoning_effort"] = reasoning_effort

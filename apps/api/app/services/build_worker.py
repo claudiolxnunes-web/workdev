@@ -37,6 +37,8 @@ from app.services.handoff import (
     build_context,
     update_run,
 )
+from app.services import agent_runtimes
+from app.services.llamacpp_driver import dispatch as dispatch_to_llamacpp
 from app.services.ollama_driver import OllamaDispatchError
 from app.services.ollama_driver import dispatch as dispatch_to_ollama
 
@@ -177,13 +179,26 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
     db.commit()
 
     try:
-        resultado = await dispatch_to_ollama(
+        runtime = agent_runtimes.get_runtime(job.runtime_id)
+
+        if runtime is None:
+            raise OllamaDispatchError(
+                "runtime_not_found",
+                f"Runtime {job.runtime_id} não encontrado",
+                {"runtime_id": job.runtime_id},
+            )
+
+        dispatch = (
+            dispatch_to_llamacpp
+            if runtime.engine == agent_runtimes.ENGINE_LLAMACPP
+            else dispatch_to_ollama
+        )
+
+        resultado = await dispatch(
             job.runtime_id,
             decisao.prompt,
             model=job.model,
-            # Sem isto o parcial volta a não ser gravado, e uma geração que
-            # morre aos 899s de 900 não deixa nada — a regressão que af33f42
-            # tinha justamente corrigido.
+            # O parcial continua persistido independentemente do engine.
             on_chunk=build_jobs.partial_writer(job.id),
         )
     except OllamaDispatchError as error:

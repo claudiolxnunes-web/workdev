@@ -492,6 +492,19 @@ class TestDescarregamentoAssincrono:
     def test_stop_reporta_que_ainda_esta_residente(self, monkeypatch):
         """O motivo precisa dizer a verdade para o operador."""
         monkeypatch.setattr(
+            "app.services.agent_runtimes.get_runtime",
+            lambda _a: type(
+                "FakeRuntime",
+                (),
+                {"engine": "ollama", "kind": "local", "id": "local-code"},
+            )(),
+        )
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "endpoint_for",
+            lambda _a: ("http://x:11434", {}),
+        )
+        monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
             lambda a, s, known_pgid=None, db=None: AgentState(
@@ -650,13 +663,21 @@ class TestLiberacaoDeMemoria:
         resultado = agent_lifecycle.stop("local-code", None)
 
         assert resultado["model_unloaded"] is True
-        assert resultado["model_reason"] == "descarregado"
+        assert resultado["model_reason"] == "serviço llama.cpp desligado"
 
 
 class TestLigarRuntimeOllama:
     """Achado P1: `POST /start` devolvia 409 e o 'Ligar' do plano não existia."""
 
     def test_carrega_o_modelo_quando_nao_esta_carregado(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.agent_runtimes.get_runtime",
+            lambda _a: type(
+                "FakeRuntime",
+                (),
+                {"engine": "ollama", "kind": "local", "id": "local-code"},
+            )(),
+        )
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
@@ -684,6 +705,14 @@ class TestLigarRuntimeOllama:
 
     def test_modelo_ja_carregado_e_idempotente(self, monkeypatch):
         monkeypatch.setattr(
+            "app.services.agent_runtimes.get_runtime",
+            lambda _a: type(
+                "FakeRuntime",
+                (),
+                {"engine": "ollama", "kind": "local", "id": "local-code"},
+            )(),
+        )
+        monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
             lambda a, s, known_pgid=None, db=None: AgentState(
@@ -704,6 +733,14 @@ class TestLigarRuntimeOllama:
         assert carregou == []
 
     def test_falha_ao_carregar_vira_erro_de_dominio(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.agent_runtimes.get_runtime",
+            lambda _a: type(
+                "FakeRuntime",
+                (),
+                {"engine": "ollama", "kind": "local", "id": "local-code"},
+            )(),
+        )
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",

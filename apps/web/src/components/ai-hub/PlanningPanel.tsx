@@ -39,10 +39,10 @@ type AgentChoice = { name: AgentName; label: string; disabled: boolean; hint: st
  * runtimes Ollama só quando o backend os reporta despacháveis — endpoint
  * offline não vira opção de envio.
  *
- * O rótulo diz "assessor" de propósito: hoje esses runtimes devolvem texto,
- * não editam arquivo nem rodam gate. O worker que aplica a proposta é a fatia
- * 3 do plano de correção; até ele existir, chamá-los de executor no seletor é
- * prometer na UI o que o código não faz.
+ * Runtimes Ollama são executores manuais válidos quando o Build isolado está
+ * habilitado. O modelo não recebe shell irrestrito: ele propõe a alteração e o
+ * workdev-build-worker aplica em worktree isolado, executa gates e entrega para
+ * revisão independente.
  */
 function executorChoices(runtimes: AgentRuntime[]): AgentChoice[] {
   const cli: AgentChoice[] = CLI_AGENTS.map((name) => ({
@@ -50,7 +50,7 @@ function executorChoices(runtimes: AgentRuntime[]): AgentChoice[] {
   }))
   const locais: AgentChoice[] = runtimes.map((runtime) => ({
     name: runtime.id,
-    label: `${runtime.label} · assessor (não edita arquivos) · ${runtime.status_label}`,
+    label: `${runtime.label} · executor isolado · ${runtime.status_label}`,
     disabled: !runtime.dispatchable,
     hint: runtime.reason ?? "",
   }))

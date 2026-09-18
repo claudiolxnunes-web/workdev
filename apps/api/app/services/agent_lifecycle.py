@@ -402,6 +402,30 @@ def _run(args: list[str], timeout: int = CMD_TIMEOUT_SECONDS):
     )
 
 
+
+LLAMA_CTL = "/usr/local/libexec/workdev-llama-ctl"
+
+
+def _llama_service(action: str) -> bool:
+    """Controla somente o serviço local llama.cpp via wrapper privilegiado."""
+    if action not in {"start", "stop", "is-active"}:
+        return False
+
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", LLAMA_CTL, action],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception:
+        return False
+
+    return result.returncode == 0
+
+
 def session_exists(session: str) -> bool:
     return _run(["tmux", "has-session", "-t", f"={session}"], 5).returncode == 0
 
@@ -730,7 +754,23 @@ def read_state(
     endpoint, headers = endpoint_for(agent)
     estado.endpoint_configured = bool(endpoint)
 
-    if estado.model:
+    from app.services import agent_runtimes
+
+    runtime = agent_runtimes.get_runtime(agent)
+
+    if (
+        runtime is not None
+        and runtime.engine == agent_runtimes.ENGINE_LLAMACPP
+    ):
+        health = agent_runtimes.check_runtime_blocking(runtime)
+        estado.model_loaded = (
+            health.status == agent_runtimes.STATUS_ONLINE
+            and (
+                not estado.model
+                or estado.model in health.models
+            )
+        )
+    elif estado.model:
         estado.model_loaded = model_is_loaded(estado.model, endpoint, headers)
     else:
         # Agente sem modelo residente: estado conhecido e vazio, não incerto.
@@ -922,9 +962,51 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
 
     antes = read_state(agent, session)
 
-    # Runtime Ollama não tem sessão: ligar é CARREGAR O MODELO. Antes isto
-    # devolvia 409 e o 'Ligar' do plano simplesmente não existia.
+    # Runtime sem sessão: Ollama carrega modelo; llama.cpp controla o serviço.
     if session is None:
+        from app.services import agent_runtimes
+
+        runtime = agent_runtimes.get_runtime(agent)
+
+        if (
+            runtime is not None
+            and runtime.engine == agent_runtimes.ENGINE_LLAMACPP
+        ):
+            if antes.model_loaded is True:
+                return {
+                    "agent": agent,
+                    "started": False,
+                    "already_running": True,
+                    "state": antes.as_dict(),
+                }
+
+            if not _llama_service("start"):
+                raise LifecycleError(
+                    "runtime_start_failed",
+                    f"Não foi possível iniciar o serviço llama.cpp de {agent}",
+                )
+
+            # O systemd pode retornar antes de o modelo terminar de carregar.
+            limite = time.monotonic() + LOAD_TIMEOUT_SECONDS
+
+            while time.monotonic() < limite:
+                depois = read_state(agent, session)
+
+                if depois.model_loaded is True:
+                    return {
+                        "agent": agent,
+                        "started": True,
+                        "already_running": False,
+                        "state": depois.as_dict(),
+                    }
+
+                time.sleep(1)
+
+            raise LifecycleError(
+                "runtime_start_timeout",
+                f"{agent} não ficou online dentro do prazo",
+            )
+
         if not antes.model:
             raise LifecycleError(
                 "model_not_configured",
@@ -1094,27 +1176,66 @@ def stop(agent: str, session: str | None, *, unload: bool = True, db=None) -> di
     motivo_modelo = "sem modelo associado"
 
     if unload and antes.model:
-        endpoint, headers = endpoint_for(agent)
-        usuarios = model_users(antes.model, excluding=agent, db=db)
+        from app.services import agent_runtimes
 
-        if usuarios:
-            motivo_modelo = f"mantido: em uso por {', '.join(usuarios)}"
-        elif antes.model_loaded is False:
-            motivo_modelo = "já não estava carregado"
-        elif antes.model_loaded is None:
-            motivo_modelo = (
-                "estado desconhecido: a sondagem do endpoint não respondeu"
+        runtime = agent_runtimes.get_runtime(agent)
+
+        if (
+            runtime is not None
+            and runtime.engine == agent_runtimes.ENGINE_LLAMACPP
+        ):
+            usuarios = model_users(
+                antes.model,
+                excluding=agent,
+                db=db,
             )
-        else:
-            modelo_descarregado = unload_model(antes.model, endpoint, headers)
-            motivo_modelo = (
-                "descarregado" if modelo_descarregado
-                else (
-                    "ainda residente após "
-                    f"{UNLOAD_VERIFY_TIMEOUT_SECONDS:g}s; o descarregamento "
-                    "é assíncrono — consulte o lifecycle para confirmar"
+
+            if usuarios:
+                modelo_descarregado = False
+                motivo_modelo = (
+                    f"mantido: em uso por {', '.join(usuarios)}"
                 )
-            )
+            elif antes.model_loaded is False:
+                modelo_descarregado = True
+                motivo_modelo = "já estava desligado"
+            elif antes.model_loaded is None:
+                modelo_descarregado = False
+                motivo_modelo = (
+                    "estado desconhecido: "
+                    "a sondagem do endpoint não respondeu"
+                )
+            elif _llama_service("stop"):
+                modelo_descarregado = True
+                motivo_modelo = "serviço llama.cpp desligado"
+            else:
+                modelo_descarregado = False
+                motivo_modelo = "falha ao desligar serviço llama.cpp"
+        else:
+            endpoint, headers = endpoint_for(agent)
+            usuarios = model_users(antes.model, excluding=agent, db=db)
+
+            if usuarios:
+                motivo_modelo = f"mantido: em uso por {', '.join(usuarios)}"
+            elif antes.model_loaded is False:
+                motivo_modelo = "já não estava carregado"
+            elif antes.model_loaded is None:
+                motivo_modelo = (
+                    "estado desconhecido: a sondagem do endpoint não respondeu"
+                )
+            else:
+                modelo_descarregado = unload_model(
+                    antes.model,
+                    endpoint,
+                    headers,
+                )
+                motivo_modelo = (
+                    "descarregado" if modelo_descarregado
+                    else (
+                        "ainda residente após "
+                        f"{UNLOAD_VERIFY_TIMEOUT_SECONDS:g}s; o descarregamento "
+                        "é assíncrono — consulte o lifecycle para confirmar"
+                    )
+                )
 
     # Releitura carregando o PGID original: sem isso, sobrevivente do grupo
     # ficaria invisível e o estado alegaria offline (achado P1).

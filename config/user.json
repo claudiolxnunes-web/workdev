@@ -8,5 +8,12 @@
     "enableGraphExplorer": true,
     "enableAIHub": true,
     "enableRealTimeSync": true
+  },
+  "agents": {
+    "executor": {
+      "provider": "ollama",
+      "model": "workdev-qwen27b",
+      "runtime_id": "local-code"
+    }
   }
 }

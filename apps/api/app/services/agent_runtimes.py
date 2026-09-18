@@ -1,4 +1,4 @@
-"""Registry dos runtimes Ollama (local e GPU) disponíveis para o Build.
+"""Registry dos runtimes de inferência (local e GPU) disponíveis para o Build.
 
 Três regras estruturam este módulo:
 
@@ -25,6 +25,9 @@ import httpx
 
 PROVIDER = "ollama"
 
+ENGINE_OLLAMA = "ollama"
+ENGINE_LLAMACPP = "llamacpp"
+
 KIND_LOCAL = "local"
 KIND_GPU = "gpu"
 
@@ -47,6 +50,7 @@ class OllamaRuntime:
     default_model: str | None
     api_key_env: str | None
     notes: str
+    engine: str = ENGINE_OLLAMA
     # Runtimes Ollama ficam fora do AUTO até existirem benchmarks de
     # qualidade, disponibilidade e custo. Seleção é manual, sempre.
     auto_eligible: bool = False
@@ -55,23 +59,21 @@ class OllamaRuntime:
 RUNTIMES: tuple[OllamaRuntime, ...] = (
     OllamaRuntime(
         id="local-code",
-        label="Ollama local (VPS)",
+        label="Local Code — Qwen 27B",
         kind=KIND_LOCAL,
         persistence=PERSISTENCE_LOCAL,
-        base_url_env="WORKDEV_OLLAMA_LOCAL_URL",
-        default_base_url="http://127.0.0.1:11434",
-        model_env="WORKDEV_OLLAMA_LOCAL_MODEL",
-        # Modelo presente no Ollama da VPS1 em 2026-09-16, e o mesmo que o env
-        # aponta hoje. O default anterior (`qwen2.5-coder:14b-instruct-q4_K_M`)
-        # foi removido do host na limpeza de disco: sem env, o runtime cairia
-        # num modelo inexistente. É só default: trocar o modelo é configuração,
-        # não muda a identidade `local-code`.
-        default_model="workdev-local-fast:v2",
+        base_url_env="WORKDEV_LOCAL_CODE_URL",
+        default_base_url="http://127.0.0.1:8080",
+        model_env="WORKDEV_LOCAL_CODE_MODEL",
+        # Runtime local canônico servido por llama.cpp. O alias público do
+        # modelo é estável e não expõe o caminho do GGUF no filesystem.
+        default_model="workdev-qwen27b",
         api_key_env=None,
         notes=(
-            "Roda na própria VPS do WorkDev. O modelo carregado pode mudar "
-            "sem alterar a identidade do agente."
+            "Executor local na VPS do WorkDev, servido por llama.cpp. "
+            "A identidade local-code é estável e independente do modelo."
         ),
+        engine=ENGINE_LLAMACPP,
     ),
     OllamaRuntime(
         id="gpu-hostinger",
@@ -210,6 +212,7 @@ def describe(runtime: OllamaRuntime) -> dict:
         "label": runtime.label,
         "kind": runtime.kind,
         "provider": PROVIDER,
+        "engine": runtime.engine,
         "persistence": runtime.persistence,
         "auto_eligible": runtime.auto_eligible,
         "configured": is_configured(runtime),
@@ -299,7 +302,7 @@ def auth_headers(runtime: OllamaRuntime) -> dict[str, str]:
 
 
 async def check_runtime(runtime: OllamaRuntime) -> RuntimeHealth:
-    """Sonda `/api/tags` do endpoint. Nunca levanta exceção para o chamador."""
+    """Sonda o endpoint conforme o engine. Nunca levanta exceção ao chamador."""
     url = base_url(runtime)
 
     if not url:
@@ -315,22 +318,41 @@ async def check_runtime(runtime: OllamaRuntime) -> RuntimeHealth:
     started = time.monotonic()
 
     try:
-        status_code, payload = await _fetch_tags(
-            f"{url}/api/tags",
-            auth_headers(runtime),
-        )
+        if runtime.engine == ENGINE_LLAMACPP:
+            health_status, _health = await _fetch_tags(
+                f"{url}/health",
+                auth_headers(runtime),
+            )
+            if health_status != 200:
+                return RuntimeHealth(
+                    runtime_id=runtime.id,
+                    status=STATUS_OFFLINE,
+                    reason=f"HTTP {health_status} em /health",
+                    models=(),
+                    checked_at=_now_iso(),
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
+
+            status_code, payload = await _fetch_tags(
+                f"{url}/v1/models",
+                auth_headers(runtime),
+            )
+        else:
+            status_code, payload = await _fetch_tags(
+                f"{url}/api/tags",
+                auth_headers(runtime),
+            )
+
     except httpx.TimeoutException:
         return RuntimeHealth(
             runtime_id=runtime.id,
             status=STATUS_OFFLINE,
-            reason=(
-                f"sem resposta em {HEALTH_TIMEOUT_SECONDS:g}s"
-            ),
+            reason=f"sem resposta em {HEALTH_TIMEOUT_SECONDS:g}s",
             models=(),
             checked_at=_now_iso(),
             latency_ms=None,
         )
-    except Exception as error:  # rede, DNS, TLS, GPU desligada…
+    except Exception as error:
         return RuntimeHealth(
             runtime_id=runtime.id,
             status=STATUS_OFFLINE,
@@ -352,19 +374,22 @@ async def check_runtime(runtime: OllamaRuntime) -> RuntimeHealth:
             latency_ms=latency_ms,
         )
 
-    models = tuple(
-        str(item.get("name"))
-        for item in (payload.get("models") or [])
-        if isinstance(item, dict) and item.get("name")
-    )
+    if runtime.engine == ENGINE_LLAMACPP:
+        rows = payload.get("data") or payload.get("models") or []
+        models = tuple(
+            str(item.get("id") or item.get("name"))
+            for item in rows
+            if isinstance(item, dict) and (item.get("id") or item.get("name"))
+        )
+    else:
+        models = tuple(
+            str(item.get("name"))
+            for item in (payload.get("models") or [])
+            if isinstance(item, dict) and item.get("name")
+        )
 
     expected = model_for(runtime)
 
-    # Sem modelo resolvido o runtime NÃO é `online`. Antes, `expected=None`
-    # pulava o teste abaixo e caía direto em `online`: `ensure_dispatchable`
-    # liberava, a run era criada, e só o `dispatch()` estourava
-    # `model_not_configured` — com a run já parada na fila. O erro precisa
-    # aparecer no envio, não depois.
     if not expected:
         return RuntimeHealth(
             runtime_id=runtime.id,
@@ -461,44 +486,173 @@ def local_chat_runtime(runtime_id: str) -> OllamaRuntime:
 
 
 def local_chat_models() -> list[dict]:
-    """Inventário sob demanda; não publica estado nem cria loop de healthcheck."""
-    models = []
+    """Inventário sob demanda dos runtimes locais."""
+    models: list[dict] = []
+
     for runtime in RUNTIMES:
-        if runtime.kind != KIND_LOCAL or not base_url(runtime):
+        url = base_url(runtime)
+
+        if runtime.kind != KIND_LOCAL or not url:
             continue
-        with httpx.Client(timeout=HEALTH_TIMEOUT_SECONDS, trust_env=False) as client:
-            response = client.get(f"{base_url(runtime)}/api/tags", headers=auth_headers(runtime))
+
+        with httpx.Client(
+            timeout=HEALTH_TIMEOUT_SECONDS,
+            trust_env=False,
+        ) as client:
+            if runtime.engine == ENGINE_LLAMACPP:
+                response = client.get(
+                    f"{url}/v1/models",
+                    headers=auth_headers(runtime),
+                )
+                response.raise_for_status()
+                payload = response.json()
+
+                if not isinstance(payload, dict):
+                    raise ValueError("Inventário llama.cpp inválido")
+
+                if "data" in payload:
+                    rows = payload["data"]
+                elif "models" in payload:
+                    rows = payload["models"]
+                else:
+                    raise ValueError("Inventário llama.cpp inválido")
+
+                if not isinstance(rows, list):
+                    raise ValueError("Inventário llama.cpp inválido")
+
+                names: set[str] = set()
+
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+
+                    name = row.get("id") or row.get("name")
+
+                    if (
+                        isinstance(name, str)
+                        and name.strip()
+                        and name not in names
+                    ):
+                        names.add(name)
+                        models.append({
+                            "provider": PROVIDER,
+                            "model": name,
+                            "label": name,
+                            "runtime_id": runtime.id,
+                        })
+
+                continue
+
+            response = client.get(
+                f"{url}/api/tags",
+                headers=auth_headers(runtime),
+            )
             response.raise_for_status()
             payload = response.json()
-        if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("models"), list)
+        ):
             raise ValueError("Inventário local inválido")
-        names = set()
+
+        names: set[str] = set()
+
         for row in payload["models"]:
-            if not isinstance(row, dict) or row.get("remote_host") or row.get("remote_model"):
+            if (
+                not isinstance(row, dict)
+                or row.get("remote_host")
+                or row.get("remote_model")
+            ):
                 continue
+
             name = row.get("name")
-            if isinstance(name, str) and name.strip() and name not in names:
+
+            if (
+                isinstance(name, str)
+                and name.strip()
+                and name not in names
+            ):
                 names.add(name)
-                models.append({"provider": PROVIDER, "model": name, "label": name,
-                               "runtime_id": runtime.id})
-    return sorted(models, key=lambda row: (row["runtime_id"], row["model"]))
+                models.append({
+                    "provider": PROVIDER,
+                    "model": name,
+                    "label": name,
+                    "runtime_id": runtime.id,
+                })
+
+    return sorted(
+        models,
+        key=lambda row: (row["runtime_id"], row["model"]),
+    )
 
 
 def local_chat_context(runtime_id: str, model: str) -> int:
-    """Consulta capacidade real; não infere contexto configurado do tamanho máximo do GGUF."""
+    """Consulta a capacidade e o contexto efetivos do runtime local."""
     runtime = local_chat_runtime(runtime_id)
-    with httpx.Client(timeout=HEALTH_TIMEOUT_SECONDS, trust_env=False) as client:
-        response = client.post(f"{base_url(runtime)}/api/show", headers=auth_headers(runtime),
-                               json={"model": model})
+    url = base_url(runtime)
+
+    with httpx.Client(
+        timeout=HEALTH_TIMEOUT_SECONDS,
+        trust_env=False,
+    ) as client:
+        if runtime.engine == ENGINE_LLAMACPP:
+            response = client.get(
+                f"{url}/props",
+                headers=auth_headers(runtime),
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if not isinstance(data, dict):
+                raise ValueError("Resposta /props do llama.cpp inválida")
+
+            caps = data.get("chat_template_caps") or {}
+
+            if not isinstance(caps, dict) or not caps.get("supports_tools"):
+                raise ValueError(
+                    "O modelo llama.cpp não oferece suporte a ferramentas do AI Hub"
+                )
+
+            settings = data.get("default_generation_settings") or {}
+            context = (
+                settings.get("n_ctx")
+                if isinstance(settings, dict)
+                else None
+            )
+
+            if isinstance(context, int) and context > 0:
+                return context
+
+            raise ValueError(
+                "llama.cpp não informou o contexto efetivamente configurado"
+            )
+
+        response = client.post(
+            f"{url}/api/show",
+            headers=auth_headers(runtime),
+            json={"model": model},
+        )
         response.raise_for_status()
         data = response.json()
-    if not isinstance(data, dict) or "tools" not in data.get("capabilities", []):
-        raise ValueError("O modelo local não oferece suporte a ferramentas do AI Hub")
-    # Sem num_ctx explícito não há evidência da configuração efetiva do servidor.
+
+    if (
+        not isinstance(data, dict)
+        or "tools" not in data.get("capabilities", [])
+    ):
+        raise ValueError(
+            "O modelo local não oferece suporte a ferramentas do AI Hub"
+        )
+
     for line in str(data.get("parameters", "")).splitlines():
         parts = line.split()
+
         if len(parts) == 2 and parts[0] == "num_ctx":
             context = int(parts[1])
+
             if context > 0:
                 return context
-    raise ValueError("Configure num_ctx no modelo local antes de usar o AI Hub")
+
+    raise ValueError(
+        "Configure num_ctx no modelo local antes de usar o AI Hub"
+    )

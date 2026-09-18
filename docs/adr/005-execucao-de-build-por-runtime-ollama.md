@@ -150,3 +150,20 @@ infere, sugere de forma vinculante ou sobrescreve qualquer um dos dois papéis:
 - `qwen` é posicionado como **executor**, por decisão do operador em 2026-09-09.
   Mantém canal de veredito e continua elegível como revisor se o operador
   escolher — a decisão é de posicionamento na UI, não de bloqueio.
+
+## Diretriz operacional vigente — 2026-09-17
+
+O runtime `local-code` é um executor manual válido do WorkDev.
+
+Regras vigentes:
+
+1. `local-code` pode ser escolhido manualmente como executor de Build.
+2. O modelo Ollama não recebe shell irrestrito nem autoridade direta sobre o host.
+3. O modelo produz uma proposta estruturada de alteração.
+4. `workdev-build-worker.service` é responsável por aplicar a proposta em worktree isolado.
+5. O worker executa os gates objetivos e produz commit sem push.
+6. `completed` não pode ser atribuído pelo executor; a conclusão depende da revisão independente.
+7. `local-code` permanece fora do roteamento AUTO até decisão explícita posterior baseada em qualidade e confiabilidade.
+8. Com `WORKDEV_OLLAMA_BUILD_ENABLED=true`, o worker isolado é o caminho canônico de execução Ollama.
+9. A UI deve identificar runtimes Ollama como executores isolados, e não como “assessores que não editam arquivos”.
+10. O acesso futuro ao código-fonte deve continuar mediado pelo WorkDev, com escopo controlado, nunca por shell irrestrito concedido ao modelo.
