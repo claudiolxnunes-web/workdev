@@ -413,7 +413,7 @@ def _llama_service(action: str) -> bool:
 
     try:
         result = subprocess.run(
-            ["sudo", "-n", LLAMA_CTL, action],
+            [LLAMA_CTL, action],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
