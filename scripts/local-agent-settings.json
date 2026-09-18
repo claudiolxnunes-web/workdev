@@ -1,0 +1,22 @@
+{
+  "$version": 4,
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "workdev-qwen27b",
+        "name": "Qwen 3.6 27B Local — llama.cpp",
+        "description": "Executor local via llama.cpp, na própria VPS (127.0.0.1:8080)",
+        "baseUrl": "http://127.0.0.1:8080/v1",
+        "envKey": "WORKDEV_LOCAL_CODE_KEY"
+      }
+    ]
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "model": {
+    "name": "workdev-qwen27b"
+  }
+}

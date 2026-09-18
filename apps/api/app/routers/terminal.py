@@ -34,6 +34,7 @@ ALLOWED_SESSIONS = {
     "kimi": "kimi",
     "qwen": "qwen",
     "gemini": "gemini",
+    "local-code": "local-code",
 }
 STANDBY_COMMANDS = {
     "claude": ["/opt/workdev/scripts/start_claude_agent.sh"],
@@ -41,11 +42,12 @@ STANDBY_COMMANDS = {
     "kimi": ["/opt/workdev/scripts/start_kimi_agent.sh"],
     "qwen": ["/opt/workdev/scripts/start_qwen_agent.sh"],
     "gemini": ["/opt/workdev/scripts/start_gemini_agent.sh"],
+    "local-code": ["/opt/workdev/scripts/start_local_agent.sh"],
 }
 _active_connections: set[str] = set()
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
-_PROCESS_LABELS = {"qwen": "qwen-code"}
+_PROCESS_LABELS = {"qwen": "qwen-code", "local-code": "qwen-code"}
 _HEALTH_STATE_FILE = Path(os.getenv("AGENTS_HEALTH_STATE", "/var/lib/agents-healthcheck/status.json"))
 
 
@@ -433,14 +435,21 @@ def finalize_auto_runtime(agent: str, run_id) -> dict:
         return _finalize_auto_runtime(agent, run_id)
 
 
-def _lifecycle_session(agent: str) -> str:
+def _lifecycle_session(agent: str) -> str | None:
     """Sessão do agente para o ciclo de vida.
 
-    Runtime Ollama (`local-code`, `gpu-*`) não tem sessão tmux: ele é um
-    endpoint HTTP. Ligar/desligar ali é sobre o MODELO, não sobre processo — daí
-    a sessão poder ser None sem que isso seja erro.
+    Agente com sessão de terminal própria (ALLOWED_SESSIONS) usa essa sessão,
+    mesmo que também conste no registro de runtimes Ollama/llama.cpp — é o
+    caso do local-code, que hoje tem sessão tmux real (CLI qwen apontado pro
+    llama.cpp local), mas continua listado ali para health-check/AI Hub.
+    Runtime puro (`gpu-*`) não tem sessão tmux: é um endpoint HTTP. Ligar/
+    desligar ali é sobre o MODELO, não sobre processo — daí a sessão poder
+    ser None sem que isso seja erro.
     """
     from app.services import agent_runtimes
+
+    if agent in ALLOWED_SESSIONS:
+        return _standby_session(agent)
 
     if agent_runtimes.is_ollama_agent(agent):
         return None

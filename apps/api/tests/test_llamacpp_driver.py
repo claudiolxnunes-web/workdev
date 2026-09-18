@@ -125,3 +125,32 @@ def test_dispatch_llamacpp_empty_response_is_error(monkeypatch):
         asyncio.run(dispatch("local-code", "teste"))
 
     assert exc.value.code == "empty_response"
+
+
+def test_dispatch_llamacpp_ignores_sse_control_lines(monkeypatch):
+    runtime = runtime_llamacpp()
+
+    class ControlLinesClient(FakeClient):
+        def stream(self, method, url, headers=None, json=None):
+            return FakeResponse([
+                ": keep-alive",
+                "event: message",
+                "id: 123",
+                "retry: 1000",
+                "data:",
+                'data: {"choices":[{"delta":{"content":"OK"}}]}',
+                "data: [DONE]",
+            ])
+
+    monkeypatch.setattr(
+        "app.services.llamacpp_driver.ensure_dispatchable",
+        AsyncMock(return_value=runtime),
+    )
+    monkeypatch.setattr(
+        "app.services.llamacpp_driver.httpx.AsyncClient",
+        ControlLinesClient,
+    )
+
+    result = asyncio.run(dispatch("local-code", "teste"))
+
+    assert result["response"] == "OK"

@@ -122,8 +122,19 @@ async def dispatch(
                     if not linha:
                         continue
 
+                    # SSE pode carregar comentários/keep-alives e campos de
+                    # controle que não são payload JSON.
+                    if linha.startswith(":"):
+                        continue
+
+                    if linha.startswith(("event:", "id:", "retry:")):
+                        continue
+
                     if linha.startswith("data:"):
                         linha = linha[5:].strip()
+
+                    if not linha:
+                        continue
 
                     if linha == "[DONE]":
                         break
@@ -134,7 +145,10 @@ async def dispatch(
                         raise OllamaDispatchError(
                             "invalid_response",
                             f"{runtime.label} devolveu evento SSE inválido",
-                            {"runtime_id": runtime.id},
+                            {
+                                "runtime_id": runtime.id,
+                                "line": repr(linha[:500]),
+                            },
                         ) from error
 
                     if evento.get("error"):
