@@ -383,6 +383,12 @@ export default function AIHub() {
           >
             Planos
           </button>
+          <a
+            href="/chat-livre"
+            className="shrink-0 rounded-lg border border-emerald-700 bg-emerald-950/60 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-900"
+          >
+            Chat livre
+          </a>
         </div>
         <div ref={messagesRef} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-4">
           {messages.length === 0 && (

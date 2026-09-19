@@ -11,6 +11,7 @@ from app.routers.busca_web import router as busca_web_router
 from app.routers.subtasks import router as subtasks_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.chat_sessions import router as chat_sessions_router
+from app.routers.chat_free import router as chat_free_router
 from app.routers.engineering import router as engineering_router
 from app.routers.deployments import router as deployments_router
 from app.routers.auth import router as auth_router
@@ -62,6 +63,7 @@ app.include_router(ai_router, prefix="/api")
 app.include_router(subtasks_router, prefix="/api")
 app.include_router(knowledge_router, prefix="/api")
 app.include_router(chat_sessions_router, prefix="/api")
+app.include_router(chat_free_router, prefix="/api")
 app.include_router(engineering_router, prefix="/api")
 app.include_router(deployments_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")

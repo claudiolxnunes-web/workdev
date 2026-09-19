@@ -17,6 +17,7 @@ const EngineeringPage = lazy(() =>
 )
 const RunTerminalPage = lazy(() => import("./modules/agents/RunTerminalPage"))
 const AIHub = lazy(() => import("./pages/AIHub"))
+const ChatLivre = lazy(() => import("./pages/ChatLivre"))
 const AgentsPage = lazy(() =>
   import("./modules/agents").then((module) => ({ default: module.AgentsPage }))
 )
@@ -168,6 +169,14 @@ function App() {
               element={
                 <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
                   <AIHub />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/chat-livre/:conversationId?"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <ChatLivre />
                 </Suspense>
               }
             />
