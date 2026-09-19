@@ -14,12 +14,14 @@ import {
 import { getOpenRouterModels, getLocalModels, type CatalogModel } from "../services/ai.service";
 import { MessageBubble, type Msg } from "@/components/ai-hub";
 
-// Mesmo conjunto de fontes do AI Hub — os provedores já cadastrados.
+// Provedores OpenAI-compatíveis que funcionam no chat livre. Claude
+// (Anthropic) fica de fora: usa API própria, não o protocolo OpenAI que o
+// chat livre fala — oferecê-lo daria erro 422. Kimi vai pelo OpenRouter
+// (moonshotai/kimi-*) porque o provider Kimi direto está sem cota (429);
+// Gemini idem, entra de volta quando a conta tiver crédito.
 const MODELOS = [
-  { label: "Gemini", provider: "gemini", model: "gemini-3.5-flash" },
   { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
-  { label: "Claude Haiku", provider: "anthropic", model: "claude-haiku-4-5-20251001" },
-  { label: "OpenRouter", provider: "openrouter", model: null },
+  { label: "OpenRouter (Kimi e outros)", provider: "openrouter", model: null },
   { label: "Local / Ollama", provider: "ollama", model: null },
 ];
 const modelKey = (m: CatalogModel) => (m.runtime_id ? JSON.stringify([m.runtime_id, m.model]) : m.model);
