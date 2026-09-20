@@ -28,6 +28,8 @@ from app.routers.settings import router as settings_router
 from app.routers.system import router as system_router
 from app.routers.metrics import router as metrics_router
 from app.auth import request_is_authenticated
+from app.reporting_security import ReportingAccessMiddleware
+from app.routers.reporting import router as reporting_router
 
 load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
 import sentry_sdk
@@ -57,6 +59,9 @@ app.add_middleware(
 )
 
 
+app.add_middleware(ReportingAccessMiddleware)
+
+app.include_router(reporting_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(backlog_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
