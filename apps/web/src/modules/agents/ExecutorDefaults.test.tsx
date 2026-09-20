@@ -13,7 +13,7 @@ beforeEach(() => {
 
 it("salva fonte e modelo no backend e reabre o padrão persistido", async () => {
   const view = render(<ExecutorDefaults />)
-  fireEvent.click(screen.getByText("Executor padrão"))
+  fireEvent.click(screen.getByText("Modelos e executor padrão"))
   await waitFor(() => expect(screen.getByLabelText("Fonte do executor")).toBeEnabled())
   fireEvent.change(screen.getByLabelText("Fonte do executor"), { target: { value: "ollama" } })
   fireEvent.change(screen.getByLabelText("Modelo do executor"), { target: { value: '["ollama","local-code","installed:v2"]' } })
@@ -23,14 +23,14 @@ it("salva fonte e modelo no backend e reabre o padrão persistido", async () => 
   view.unmount()
   vi.mocked(getSettings).mockResolvedValue({ app: { name: "test", version: "1", environment: "test" }, agents: { executor: { provider: "ollama", model: "installed:v2", runtime_id: "local-code" } } })
   render(<ExecutorDefaults />)
-  fireEvent.click(screen.getByText("Executor padrão"))
+  fireEvent.click(screen.getByText("Modelos e executor padrão"))
   await waitFor(() => expect(screen.getByLabelText("Modelo do executor")).toHaveValue('["ollama","local-code","installed:v2"]'))
 })
 
 it("não salva modelo removido e informa falha de persistência", async () => {
   vi.mocked(getSettings).mockResolvedValue({ app: { name: "test", version: "1", environment: "test" }, agents: { executor: { provider: "ollama", model: "removed", runtime_id: "local-code" } } })
   render(<ExecutorDefaults />)
-  fireEvent.click(screen.getByText("Executor padrão"))
+  fireEvent.click(screen.getByText("Modelos e executor padrão"))
   await screen.findByText(/O modelo salvo não está disponível/)
   expect(screen.getByText("Salvar executor padrão")).toBeDisabled()
   fireEvent.change(screen.getByLabelText("Modelo do executor"), { target: { value: '["ollama","local-code","installed:v2"]' } })

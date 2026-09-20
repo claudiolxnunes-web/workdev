@@ -265,26 +265,26 @@ export function AgentTerminal({
     URL.revokeObjectURL(url)
   }
 
-  const active = taskRunning
+  const active = status === "connected"
   return (
     <section className="relative flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
       <div className="flex shrink-0 flex-col border-b border-slate-800">
         <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 py-1 text-sm sm:px-4">
           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${active ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-red-400"}`} />
           <span className="truncate">
-          {status === "connecting" ? "Conectando…" : active ? "Conectado" : "Desconectado"}
+          {status === "connecting" ? "Conectando…" : status === "busy" ? "Aberto em outra aba" : active ? "Conectado" : "Desconectado"}
             </span>
            {active && (
             <span className="truncate text-slate-500" title={processName || undefined}>
               • {taskRunning ? `ativo${processName ? `: ${processName}` : ""}` : "aguardando"}
             </span>
           )}
-          {agent === "claude" && <span className="hidden text-xs text-amber-300 xl:inline">• Para copiar com estabilidade, use Copiar conversa</span>}
+          {!taskRunning && active && <span className="text-xs text-slate-500">Aguardando agente</span>}
           <span className={`ml-auto shrink-0 rounded px-2 py-1 text-[10px] font-bold ${OPERATION_STYLE[operationalStatus]}`}>
             {OPERATION_LABEL[operationalStatus]}
           </span>
         </div>
-        <div className="flex w-full flex-wrap items-center gap-1 border-t border-slate-800/70 px-2 py-1 sm:px-3">
+        <details className="border-t border-slate-800/70 px-3 py-1"><summary className="cursor-pointer py-1 text-xs text-slate-400">Ferramentas do terminal · copiar e reconectar</summary><div className="flex w-full flex-wrap items-center gap-1 py-1">
           {copyFeedback && <span className="hidden text-xs text-emerald-400 sm:inline">{copyFeedback}</span>}
           <button
             type="button"
@@ -312,7 +312,7 @@ export function AgentTerminal({
             Reconectar navegador
           </button>
           <span className="text-[10px] text-slate-500" title="Fechar ou reconectar o navegador não encerra o processo do agente">Sessão tmux persistente</span>
-        </div>
+        </div></details>
       </div>
       {awaitingApproval && (
         <div role="alert" className="shrink-0 border-y border-amber-500 bg-amber-400 px-3 py-3 text-sm text-slate-950 shadow-lg shadow-amber-500/20">
@@ -320,6 +320,7 @@ export function AgentTerminal({
           <p className="mt-1 text-xs font-medium">Confira as opções no terminal abaixo e responda pelo campo de mensagem. Atalhos numéricos foram removidos para evitar aprovação permanente acidental.</p>
         </div>
       )}
+      {status === "busy" && <p role="status" className="shrink-0 px-3 py-2 text-xs text-amber-300">Feche o terminal na outra aba e use Reconectar navegador.</p>}
       <div ref={containerRef} className="agent-terminal min-h-0 min-w-0 max-w-full flex-1 overflow-hidden p-2 sm:p-3" />
       <div className="flex shrink-0 flex-col gap-1 border-t border-slate-800 bg-slate-950 p-2 sm:p-3">
         <div className="flex items-end gap-2">

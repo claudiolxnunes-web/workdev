@@ -42,7 +42,7 @@ describe("BuildQueue — despacho para runtime Ollama", () => {
     getRunContext.mockResolvedValue(contexto)
   })
 
-  it("oferece o despacho para runtime Ollama e diz o que ele NÃO faz", async () => {
+  it("oferece o despacho e o acompanhamento para runtime Ollama", async () => {
     getRuns.mockResolvedValue([run()])
     render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
 
@@ -50,7 +50,7 @@ describe("BuildQueue — despacho para runtime Ollama", () => {
     expect(botao).toBeEnabled()
     // O rótulo honesto é parte do contrato: enquanto a fatia 3 não existir,
     // despachar produz texto, não código aplicado.
-    expect(screen.getByText(/não edita arquivo/)).toBeInTheDocument()
+    expect(screen.getByText(/Acompanhe abaixo/)).toBeInTheDocument()
   })
 
   it("não oferece despacho para agente de CLI", async () => {

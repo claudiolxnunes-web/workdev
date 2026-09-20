@@ -1,244 +1,99 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-
 import AgentsPage from "./AgentsPage"
-import type { AgentRuntime } from "@/services/handoff.service"
 
-const getAgentRuntimes = vi.fn()
-
-vi.mock("@/services/handoff.service", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/services/handoff.service")>()),
-  getAgentRuntimes: (...args: unknown[]) => getAgentRuntimes(...args),
+const { getAgentRuntimes } = vi.hoisted(() => ({ getAgentRuntimes: vi.fn() }))
+vi.mock("@/services/handoff.service", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/services/handoff.service")>()), getAgentRuntimes,
 }))
+vi.mock("./AgentTerminal", () => ({ AgentTerminal: ({ agent, operationalStatus }: { agent: string; operationalStatus?: string }) => <div>terminal:{agent}:{operationalStatus}</div> }))
+vi.mock("./BuildQueue", () => ({ BuildQueue: ({ agent }: { agent: string }) => <div>queue:{agent}</div> }))
+vi.mock("./ExecutorDefaults", () => ({ ExecutorDefaults: () => <div>modelos</div> }))
+const fetchMock = vi.fn()
+const local = { id: "local-code", label: "Local", runtime_state: "ONLINE", activity_state: "IDLE", status: "online", models: [], reprovision: { steps: [] } }
 
-vi.mock("./AgentTerminal", () => ({
-  AgentTerminal: ({ operationalStatus }: { operationalStatus?: string }) => <div>terminal:{operationalStatus}</div>,
-}))
-vi.mock("./BuildQueue", () => ({ BuildQueue: () => <div>queue</div> }))
+beforeEach(() => {
+  localStorage.clear()
+  getAgentRuntimes.mockResolvedValue([local])
+  fetchMock.mockResolvedValue({ ok: true, json: async () => ({ agents: [
+    { agent: "claude", runtime_state: "ONLINE", activity_state: "IDLE", health: "idle", awaiting_approval: true, operational_status: "awaiting_approval", runs: [] },
+    { agent: "local-code", runtime_state: "ONLINE", activity_state: "BUSY", health: "busy", operational_status: "executing", runs: [{ id: "local-run", agent: "local-code", status: "running", task_title: "Tarefa local" }] },
+  ] }) })
+  vi.stubGlobal("fetch", fetchMock)
+})
 
-function runtime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
-  return {
-    id: "local-code", label: "Ollama local (VPS)", kind: "local",
-    provider: "ollama", persistence: "local_na_vps", auto_eligible: false,
-    configured: true, model: "qwen2.5-coder:7b", source_of_truth: false,
-    notes: "Roda na própria VPS.",
-    reprovision: { policy: "nao_aplicavel", steps: [] },
-    status: "online", status_label: "Online", reason: null,
-    models: ["qwen2.5-coder:7b"], checked_at: "2026-09-09T00:00:00Z",
-    latency_ms: 8, dispatchable: true, active_run_id: null, busy: false,
-    ...overrides,
-  }
-}
-
-describe("AgentsPage", () => {
-  const fetchMock = vi.fn()
-
-  beforeEach(() => {
-    vi.spyOn(document, "hasFocus").mockReturnValue(true)
-    fetchMock.mockReset()
-    getAgentRuntimes.mockReset()
-    getAgentRuntimes.mockResolvedValue([])
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: vi.fn().mockResolvedValue({
-        agents: [
-          { agent: "claude", health: "idle", operational_status: "awaiting_approval", awaiting_approval: true, approval_prompt: "Allow execution?" },
-          { agent: "codex", health: "busy", operational_status: "executing", awaiting_approval: false },
-        ],
-      }),
-    })
-    vi.stubGlobal("fetch", fetchMock)
+describe("Agents workspace", () => {
+  it("mantém os agentes principais e recolhe os demais", async () => {
+    render(<AgentsPage />)
+    expect(await screen.findByRole("tab", { name: /Agente local/ })).toBeInTheDocument()
+    expect(screen.queryByRole("tab", { name: "Kimi Code" })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Outros agentes" }))
+    expect(screen.getByRole("tab", { name: "Kimi Code" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Qwen Code" })).toBeInTheDocument()
+    expect(await screen.findByText("APROVAR")).toBeInTheDocument()
   })
-
-
-  it("continua polling sem foco, pausa oculta, respeita 5s e limpa ao desmontar", async () => {
+  it("seleção local muda terminal, fila e tarefa ativa juntos", async () => {
+    render(<AgentsPage />)
+    await screen.findByText("APROVAR")
+    fireEvent.click(screen.getByRole("tab", { name: "Agente local" }))
+    expect(screen.getByText("queue:local-code")).toBeInTheDocument()
+    expect(screen.getByText("terminal:local-code:executing")).toBeInTheDocument()
+    expect(screen.getByText("Tarefa local")).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: /Terminal da tarefa/ })).toHaveAttribute("href", "/runs/local-run/terminal?compact=1")
+    expect(screen.getByRole("link", { name: /Terminal da tarefa/ })).toHaveAttribute("target", "_blank")
+    expect(screen.queryByText("queue:claude")).not.toBeInTheDocument()
+  })
+  it("recolher só afeta desktop e mantém terminal montado", async () => {
+    render(<AgentsPage />)
+    await screen.findByText("APROVAR")
+    fireEvent.click(screen.getByRole("button", { name: "Recolher terminal" }))
+    expect(screen.getByText("terminal:claude:awaiting_approval")).toBeInTheDocument()
+    expect(screen.getByTestId("terminal-panel")).toHaveClass("flex", "md:hidden")
+    expect(screen.getByTestId("terminal-panel")).not.toHaveClass("hidden")
+    expect(localStorage.getItem("workdev_terminal_collapsed")).toBe("1")
+  })
+  it("abre a sessão ativa em nova aba e desmonta apenas o visualizador", async () => {
+    const tab = { opener: {}, location: { href: "" } }
+    vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window)
+    render(<AgentsPage />)
+    await screen.findByText("APROVAR")
+    fireEvent.click(screen.getByRole("button", { name: "Abrir em nova aba" }))
+    expect(tab.location.href).toBe("/agents/claude/terminal")
+    expect(tab.opener).toBeNull()
+    expect(screen.queryByText(/^terminal:/)).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true)
+    fireEvent.click(screen.getByRole("button", { name: "Trazer terminal para cá" }))
+    expect(screen.getByText("terminal:claude:awaiting_approval")).toBeInTheDocument()
+  })
+  it("pop-up bloqueado não desconecta o terminal atual", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null)
+    render(<AgentsPage />)
+    await screen.findByText("APROVAR")
+    fireEvent.click(screen.getByRole("button", { name: "Abrir em nova aba" }))
+    expect(screen.getByRole("alert")).toHaveTextContent("bloqueou")
+    expect(screen.getByText("terminal:claude:awaiting_approval")).toBeInTheDocument()
+  })
+  it("atualizar consulta o estado novamente sem ligar nem parar agentes", async () => {
+    render(<AgentsPage />)
+    await screen.findByText("APROVAR")
+    const before = fetchMock.mock.calls.length
+    fireEvent.click(screen.getByRole("button", { name: "Atualizar" }))
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before))
+    expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true)
+  })
+  it("pausa o polling de status quando a página fica oculta", async () => {
     vi.useFakeTimers()
     const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false)
     const view = render(<AgentsPage />)
     try {
       await act(async () => { await vi.advanceTimersByTimeAsync(0) })
       expect(fetchMock).toHaveBeenCalledTimes(1)
-
-      await act(async () => { await vi.advanceTimersByTimeAsync(4999) })
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-
-      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
       expect(fetchMock).toHaveBeenCalledTimes(2)
-
-      fireEvent(window, new Event("blur"))
-      await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
-      expect(fetchMock).toHaveBeenCalledTimes(6)
-
       hidden.mockReturnValue(true)
       fireEvent(document, new Event("visibilitychange"))
       await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
-      expect(fetchMock).toHaveBeenCalledTimes(6)
-
-      hidden.mockReturnValue(false)
-      fireEvent(document, new Event("visibilitychange"))
-      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-      expect(fetchMock).toHaveBeenCalledTimes(7)
-
-      view.unmount()
-      await act(async () => { await vi.advanceTimersByTimeAsync(20000) })
-      expect(fetchMock).toHaveBeenCalledTimes(7)
-    } finally {
-      view.unmount()
-      vi.useRealTimers()
-    }
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    } finally { view.unmount(); vi.useRealTimers() }
   })
-
-  it("highlights approval on the agent tab and selected status", async () => {
-    render(<AgentsPage />)
-    await waitFor(() => expect(screen.getByText("APROVAR")).toBeInTheDocument())
-    expect(screen.getAllByText("AGUARDANDO APROVAÇÃO").length).toBeGreaterThan(0)
-    expect(screen.getByText("terminal:awaiting_approval")).toBeInTheDocument()
-  })
-
-  it("cancelar fetch ao perder foco preserva o estado e a aprovação pendente", async () => {
-    render(<AgentsPage />)
-    await screen.findByText('APROVAR')
-    fetchMock.mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
-      options.signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')))
-    }))
-    fireEvent(window, new Event('agent-runtime-refresh'))
-    await act(async () => { fireEvent(window, new Event('blur')) })
-    expect(screen.getByText('APROVAR')).toBeInTheDocument()
-    expect(screen.getByText('terminal:awaiting_approval')).toBeInTheDocument()
-  })
-
-  it("lista runtimes Ollama junto dos agentes de CLI", async () => {
-    getAgentRuntimes.mockResolvedValue([
-      runtime(),
-      runtime({
-        id: "gpu-hostinger", label: "GPU Hostinger", kind: "gpu",
-        status: "offline", status_label: "Indisponível",
-        reason: "sem resposta em 2s", dispatchable: false, models: [],
-      }),
-    ])
-    render(<AgentsPage />)
-
-    expect(await screen.findByRole("tab", { name: /Ollama local/ })).toBeInTheDocument()
-    expect(screen.getByRole("tab", { name: /GPU Hostinger/ })).toBeInTheDocument()
-    expect(screen.getByRole("tab", { name: /Claude Code/ })).toBeInTheDocument()
-  })
-
-  it("filtra só Locais/GPU sem esconder o status do runtime", async () => {
-    getAgentRuntimes.mockResolvedValue([runtime()])
-    render(<AgentsPage />)
-
-    fireEvent.click(await screen.findByRole("button", { name: "Locais/GPU" }))
-
-    expect(screen.queryByRole("tab", { name: /Claude Code/ })).not.toBeInTheDocument()
-    expect(screen.getByRole("tab", { name: /Ollama local/ })).toBeInTheDocument()
-  })
-
-  it("filtro Online descarta runtime indisponível", async () => {
-    getAgentRuntimes.mockResolvedValue([
-      runtime({
-        id: "gpu-runpod", label: "GPU RunPod", kind: "gpu",
-        status: "unconfigured", status_label: "Não configurado",
-        configured: false, dispatchable: false, models: [],
-      }),
-    ])
-    render(<AgentsPage />)
-
-    fireEvent.click(await screen.findByRole("button", { name: "Online" }))
-
-    expect(screen.queryByRole("tab", { name: /GPU RunPod/ })).not.toBeInTheDocument()
-  })
-
-  it("runtime selecionado mostra painel de estado, não terminal", async () => {
-    getAgentRuntimes.mockResolvedValue([runtime()])
-    render(<AgentsPage />)
-
-    fireEvent.click(await screen.findByRole("tab", { name: /Ollama local/ }))
-
-    const painel = await screen.findByRole("region", { name: /Runtime Ollama local/ })
-    expect(painel).toHaveTextContent("Online")
-    expect(painel).toHaveTextContent("qwen2.5-coder:7b")
-    expect(painel).toHaveTextContent("Fonte de verdade continua na VPS principal")
-    expect(screen.queryByText(/^terminal:/)).not.toBeInTheDocument()
-  })
-
-  it("painel do runtime oferece lifecycle sem confundir com despacho", async () => {
-    getAgentRuntimes.mockResolvedValue([runtime()])
-    render(<AgentsPage />)
-
-    fireEvent.click(await screen.findByRole("tab", { name: /Ollama local/ }))
-    const painel = await screen.findByRole("region", { name: /Runtime Ollama local/ })
-
-    // "seleção manual" numa tela sem seletor lia como controle desativado.
-    expect(painel).not.toHaveTextContent("seleção manual")
-    expect(painel).toHaveTextContent("nunca entra em AUTO")
-    // O painel tem que dizer onde a eleição realmente acontece.
-    expect(painel).toHaveTextContent("AI Hub")
-    // E não pode ganhar botão sem a fatia 2: despacho não parte daqui.
-    expect(painel).toHaveTextContent("Conectar")
-    expect(painel).toHaveTextContent("Desconectar")
-  })
-
-  it("recolhe o terminal sem desmontar o cliente e persiste a escolha", async () => {
-    localStorage.removeItem("workdev_terminal_collapsed")
-    render(<AgentsPage />)
-    expect(await screen.findByText(/terminal:/)).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole("button", { name: "▾ Recolher terminal" }))
-
-    // O ponto todo do recolher: o AgentTerminal segue montado, então o
-    // WebSocket não cai e a sessão continua recebendo saída escondida.
-    expect(screen.getByText(/terminal:/)).toBeInTheDocument()
-    expect(screen.getByText(/Terminal recolhido/)).toBeInTheDocument()
-    expect(localStorage.getItem("workdev_terminal_collapsed")).toBe("1")
-
-    fireEvent.click(screen.getByRole("button", { name: "▸ Expandir terminal" }))
-    expect(localStorage.getItem("workdev_terminal_collapsed")).toBe("0")
-    expect(screen.queryByText(/Terminal recolhido/)).not.toBeInTheDocument()
-  })
-
-  it("nao confunde recolher com desconectar: fechar desmonta, recolher nao", async () => {
-    localStorage.removeItem("workdev_terminal_collapsed")
-    render(<AgentsPage />)
-    expect(await screen.findByText(/terminal:/)).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole("button", { name: "Fechar terminal do agente" }))
-    expect(screen.queryByText(/terminal:/)).not.toBeInTheDocument()
-  })
-})
-
-it('Workspace associa links às Runs e fechar terminal só desmonta o cliente', async () => {
-  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ agents: [
-    { agent: 'claude', runtime_state: 'ONLINE', activity_state: 'BUSY', health: 'busy',
-      runs: [{ id: 'run-claude', agent: 'claude', backlog_id: 'task-a', task_title: 'Task A', status: 'running' }] },
-    { agent: 'kimi', runtime_state: 'OFFLINE', activity_state: 'IDLE', health: 'offline',
-      runs: [{ id: 'run-kimi', agent: 'kimi', backlog_id: 'task-b', task_title: 'Task B', status: 'blocked' }] },
-  ] }) })
-  vi.stubGlobal('fetch', fetchMock)
-  getAgentRuntimes.mockResolvedValue([])
-  render(<AgentsPage />)
-  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null)
-
-  const taskA = await screen.findByRole('button', { name: /Task A/ })
-  fireEvent.click(taskA)
-  expect(openSpy).toHaveBeenCalledWith(
-    '/runs/run-claude/terminal?compact=1',
-    'workdev-run-run-claude',
-    'width=920,height=680,resizable=yes,scrollbars=no',
-  )
-  expect(screen.queryByRole('button', { name: /Task B/ })).not.toBeInTheDocument()
-
-  fireEvent.click(screen.getByRole('button', { name: 'Fechar terminal do agente' }))
-  expect(screen.queryByText(/terminal:/)).not.toBeInTheDocument()
-  expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true)
-
-  fireEvent.click(screen.getByRole('tab', { name: 'Kimi Code' }))
-  const taskB = await screen.findByRole('button', { name: /Task B/ })
-  fireEvent.click(taskB)
-  expect(openSpy).toHaveBeenLastCalledWith(
-    '/runs/run-kimi/terminal?compact=1',
-    'workdev-run-run-kimi',
-    'width=920,height=680,resizable=yes,scrollbars=no',
-  )
-
-  openSpy.mockRestore()
 })

@@ -66,6 +66,7 @@ describe("AgentTerminal", () => {
 
   it("replays the backend snapshot before live output", async () => {
     render(<AgentTerminal agent="codex" />)
+    fireEvent.click(screen.getByText(/Ferramentas do terminal/))
     await waitFor(() => expect(mocks.sockets).toHaveLength(1))
     mocks.sockets[0].onmessage?.({ data: JSON.stringify({ type: "snapshot", content: "Oi! Como posso ajudar?" }) } as MessageEvent)
     expect(mocks.terminals[0].reset).toHaveBeenCalledOnce()
@@ -86,6 +87,7 @@ describe("AgentTerminal", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard })
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined)
     render(<AgentTerminal agent="kimi" />)
+    fireEvent.click(screen.getByText(/Ferramentas do terminal/))
     fireEvent.click(screen.getByRole("button", { name: "Copiar conversa" }))
     await screen.findByDisplayValue("linha limpa")
     fireEvent.click(screen.getByRole("button", { name: "Copiar tudo" }))
@@ -97,6 +99,7 @@ describe("AgentTerminal", () => {
 
   it("reconnects only the browser transport", async () => {
     render(<AgentTerminal agent="qwen" />)
+    fireEvent.click(screen.getByText(/Ferramentas do terminal/))
     await waitFor(() => expect(mocks.sockets).toHaveLength(1))
     fireEvent.click(screen.getByRole("button", { name: "Reconectar navegador" }))
     await waitFor(() => expect(mocks.sockets).toHaveLength(2))

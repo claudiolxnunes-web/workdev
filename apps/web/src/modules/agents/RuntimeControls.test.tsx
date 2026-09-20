@@ -14,16 +14,16 @@ describe('RuntimeControls', () => {
     expect(screen.queryByText('BUSY')).not.toBeInTheDocument()
     rerender(<RuntimeControls agent="codex" runtimeState="STOPPING" activityState="IDLE" />)
     expect(screen.getByText('STOPPING')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Conectar' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Desconectar' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Ligar' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Desligar' })).toBeDisabled()
   })
 
   it('delegação idempotente não assume ONLINE ao clicar ou terminar a requisição', async () => {
     let finish!: () => void
     setAgentConnection.mockReturnValue(new Promise<void>(resolve => { finish = resolve }))
     render(<RuntimeControls agent="codex" runtimeState="OFFLINE" />)
-    fireEvent.click(screen.getByRole('button', { name: 'Conectar' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Conectar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ligar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ligar' }))
     expect(setAgentConnection).toHaveBeenCalledTimes(1)
     expect(setAgentConnection).toHaveBeenCalledWith('codex', true)
     expect(screen.queryByText('ONLINE')).not.toBeInTheDocument()
@@ -34,7 +34,7 @@ describe('RuntimeControls', () => {
   it('desconecta pelo lifecycle e expõe falha como ERROR', async () => {
     setAgentConnection.mockRejectedValue(new Error('runtime inconsistente'))
     const { rerender } = render(<RuntimeControls agent="codex" runtimeState="ONLINE" checkedAt="first" />)
-    fireEvent.click(screen.getByRole('button', { name: 'Desconectar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Desligar' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('runtime inconsistente'))
     expect(setAgentConnection).toHaveBeenCalledWith('codex', false)
     expect(screen.getByText('ERROR')).toBeInTheDocument()
@@ -55,7 +55,7 @@ describe('RuntimeControls', () => {
     let reject!: (error: Error) => void
     setAgentConnection.mockReturnValue(new Promise((_resolve, fail) => { reject = fail }))
     const { rerender } = render(<RuntimeControls agent="codex" runtimeState="ONLINE" checkedAt="first" />)
-    fireEvent.click(screen.getByRole('button', { name: 'Desconectar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Desligar' }))
     rerender(<RuntimeControls agent="codex" runtimeState="ONLINE" checkedAt="during-stop" />)
     await act(async () => reject(new Error('identity_not_durable')))
     expect(screen.getByRole('alert')).toHaveTextContent('identity_not_durable')
@@ -64,10 +64,11 @@ describe('RuntimeControls', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('cadastro sem snapshot não implica disponibilidade e GPU não oferece controle local', () => {
+  it('cadastro sem snapshot não implica disponibilidade e GPU oferece controles do endpoint', () => {
     render(<RuntimeControls agent="gpu-runpod" persistent={false} />)
     expect(screen.getByText('ERROR')).toBeInTheDocument()
     expect(screen.getByText('Sob demanda')).toBeInTheDocument()
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ligar' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Atualizar' })).toBeEnabled()
   })
 })

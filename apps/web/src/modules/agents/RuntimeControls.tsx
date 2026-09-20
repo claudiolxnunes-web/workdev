@@ -10,7 +10,6 @@ export function RuntimeControls({ agent, runtimeState = 'ERROR', activityState =
   const latestCheckedAt = useRef(checkedAt)
   useLayoutEffect(() => { latestCheckedAt.current = checkedAt }, [checkedAt])
   const error = failure?.checkedAt === checkedAt ? failure?.message : null
-  const remote = agent.startsWith('gpu-')
   const transition = runtimeState === 'STARTING' || runtimeState === 'STOPPING'
   async function connect(connected: boolean) {
     setPending(true)
@@ -24,13 +23,16 @@ export function RuntimeControls({ agent, runtimeState = 'ERROR', activityState =
     } finally { setPending(false) }
   }
   return <div className="flex flex-wrap items-center gap-2 rounded border border-slate-700 p-2 text-xs" aria-label="Estado do agente">
-    <span>Runtime: <strong>{error ? 'ERROR' : runtimeState}</strong></span>
-    <span>Atividade: <strong>{activityState}</strong></span>
-    <span>{persistent ? 'Persistente' : 'Sob demanda'}</span>
-    {!remote && <>
-      <button className="rounded bg-sky-700 px-2 py-1 disabled:opacity-50" disabled={pending || transition || runtimeState === 'ONLINE'} onClick={() => void connect(true)}>Conectar</button>
-      <button className="rounded bg-slate-700 px-2 py-1 disabled:opacity-50" disabled={pending || transition || runtimeState === 'OFFLINE' || activityState === 'BUSY'} onClick={() => void connect(false)}>Desconectar</button>
-    </>}
+    <span className="sr-only">Runtime: <strong>{error ? 'ERROR' : runtimeState}</strong></span>
+    {activityState !== 'IDLE' && <span className="text-sky-300">{activityState === 'BUSY' ? 'Executando tarefa' : 'Aguardando você'}</span>}
+    <span className="sr-only">Atividade: <strong>{activityState}</strong></span>
+    <span className="text-slate-400">{runtimeState === 'ONLINE' ? 'Ligado' : runtimeState === 'OFFLINE' ? 'Desligado' : runtimeState === 'STARTING' ? 'Ligando…' : runtimeState === 'STOPPING' ? 'Desligando…' : 'Estado indisponível'}</span>
+    <span className="sr-only">{persistent ? 'Persistente' : 'Sob demanda'}</span>
+    <>
+      <button className="rounded bg-sky-700 px-3 py-2 disabled:opacity-50" disabled={pending || transition || runtimeState === 'ONLINE'} onClick={() => void connect(true)}>Ligar</button>
+      <button className="rounded bg-slate-700 px-3 py-2 disabled:opacity-50" disabled={pending || transition || runtimeState === 'OFFLINE' || activityState === 'BUSY'} onClick={() => void connect(false)} title={activityState === 'BUSY' ? 'Pare a tarefa em execução antes de desligar o agente' : 'Desligar agente'}>Desligar</button>
+    </>
+    <button className="rounded px-2 py-1 text-sky-300 hover:bg-slate-800" onClick={() => { onRefresh?.(); window.dispatchEvent(new Event('agent-runtime-refresh')) }}>Atualizar</button>
     {pending && <span role="status">Solicitação em andamento…</span>}
     {error && <span role="alert" className="text-red-300">{error}</span>}
   </div>

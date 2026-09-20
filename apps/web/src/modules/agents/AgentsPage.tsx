@@ -1,106 +1,38 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
+import { flushSync } from "react-dom"
 import { AgentTerminal } from "./AgentTerminal"
 import type { OperationalStatus } from "./AgentTerminal"
-import { BuildQueue, type BuildQueueSummary } from "./BuildQueue"
+import { BuildQueue } from "./BuildQueue"
 import { RuntimeControls } from "./RuntimeControls"
 import { RuntimePanel } from "./RuntimePanel"
 import { ExecutorDefaults } from "./ExecutorDefaults"
-import {
-  getAgentRuntimes, type AgentName, type AgentRuntime, type RuntimeState, type ActivityState,
-} from "@/services/handoff.service"
+import { getAgentRuntimes, agentLabels, type AgentName, type AgentRuntime, type RuntimeState, type ActivityState } from "@/services/handoff.service"
 
 const AGENTS: Array<{ id: AgentName; label: string }> = [
-  { id: "claude", label: "Claude Code" },
-  { id: "codex", label: "Codex" },
-  { id: "kimi", label: "Kimi Code" },
-  { id: "qwen", label: "Qwen Code" },
-  { id: "gemini", label: "Gemini" },
+  { id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" },
+  { id: "local-code", label: "Agente local" }, { id: "gemini", label: "Gemini" },
+  { id: "kimi", label: "Kimi Code" }, { id: "qwen", label: "Qwen Code" },
 ]
-
-type AgentFilter = "todos" | "online" | "runtimes"
-
-const FILTER_LABEL: Record<AgentFilter, string> = {
-  todos: "Todos", online: "Online", runtimes: "Locais/GPU",
-}
-
-const RUNTIME_DOT: Record<string, string> = {
-  online: "bg-emerald-400",
-  degraded: "bg-red-500",
-  offline: "bg-slate-500",
-  unconfigured: "bg-slate-500",
-}
-
 const configuredStatusPollMs = Number(import.meta.env.VITE_AGENTS_STATUS_POLL_MS)
-const STATUS_POLL_MS = Number.isFinite(configuredStatusPollMs)
-  ? Math.min(10000, Math.max(5000, configuredStatusPollMs)) : 5000
+const STATUS_POLL_MS = Number.isFinite(configuredStatusPollMs) ? Math.min(10000, Math.max(5000, configuredStatusPollMs)) : 5000
 const RUNTIME_POLL_MS = 10000
-
-type HealthStatus = "idle" | "busy" | "blocked" | "offline" | "degraded"
-type AgentHealth = { runtime_state?: RuntimeState; activity_state?: ActivityState; persistent?: boolean; health: HealthStatus; health_reason?: string | null; checked_at?: string | null }
+type AgentHealth = { runtime_state?: RuntimeState; activity_state?: ActivityState; persistent?: boolean; health: string; health_reason?: string | null; checked_at?: string | null }
 type WorkspaceRun = { id: string; agent: AgentName; backlog_id: string; task_title: string; status: string }
 type AgentOperation = { status: OperationalStatus }
 
-const OPERATION_LABEL: Record<OperationalStatus, string> = {
-  standby: "STANDBY", executing: "EXECUTANDO", awaiting_approval: "AGUARDANDO APROVAÇÃO",
-  awaiting_user: "AGUARDANDO USUÁRIO", completed: "CONCLUÍDO", blocked: "BLOQUEADO", error: "ERRO",
-}
-
-const OPERATION_STYLE: Record<OperationalStatus, string> = {
-  standby: "bg-slate-700 text-slate-200", executing: "bg-sky-900 text-sky-200",
-  awaiting_approval: "animate-pulse bg-amber-500 text-slate-950", awaiting_user: "bg-violet-900 text-violet-200",
-  completed: "bg-emerald-900 text-emerald-200", blocked: "bg-orange-900 text-orange-200",
-  error: "bg-red-900 text-red-200",
-}
-
-const HEALTH_STYLE: Record<HealthStatus, string> = {
-  idle: "bg-emerald-400",
-  busy: "bg-sky-400",
-  degraded: "bg-red-500",
-  blocked: "bg-amber-400",
-  offline: "bg-slate-500",
-}
-
-const HEALTH_LABEL: Record<HealthStatus, string> = {
-  idle: "Saudável e aguardando",
-  busy: "Executando",
-  degraded: "Erro de runtime ou snapshot",
-  blocked: "Atenção / bloqueado",
-  offline: "Desligado",
-}
-
-type MobilePanel = "terminal" | "queue"
-
 export default function AgentsPage() {
-  const lastTerminalRun = localStorage.getItem("workdev_last_terminal_run")
   const [agent, setAgent] = useState<AgentName>("claude")
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState<string | null>(null)
   const [awaitingApproval, setAwaitingApproval] = useState<Partial<Record<AgentName, boolean>>>({})
   const [health, setHealth] = useState<Partial<Record<AgentName, AgentHealth>>>({})
   const [operations, setOperations] = useState<Partial<Record<AgentName, AgentOperation>>>({})
-  const [mobilePanel, setMobilePanel] = useState<MobilePanel>("terminal")
-  const [buildQueueOpen, setBuildQueueOpen] = useState(false)
-  const [buildQueueSummary, setBuildQueueSummary] = useState<BuildQueueSummary | null>(null)
+  const [mobilePanel, setMobilePanel] = useState<"terminal" | "queue">("terminal")
+  const [buildQueueOpen, setBuildQueueOpen] = useState(true)
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const [workspaceRuns, setWorkspaceRuns] = useState<WorkspaceRun[]>([])
-  const [stopPending, setStopPending] = useState<string | null>(null)
-  const [actionError, setActionError] = useState('')
+  const [actionError, setActionError] = useState("")
   const [terminalOpen, setTerminalOpen] = useState(true)
-  // Recolher é só visual: o AgentTerminal fica montado e o WebSocket vivo, então
-  // a sessão continua recebendo saída enquanto a área está escondida. Diferente de
-  // terminalOpen, que desconecta de fato.
-  const [terminalCollapsed, setTerminalCollapsed] = useState(
-    () => localStorage.getItem("workdev_terminal_collapsed") === "1",
-  )
-  const [filter, setFilter] = useState<AgentFilter>("todos")
-
-  function toggleTerminalCollapsed() {
-    setTerminalCollapsed(collapsed => {
-      const proximo = !collapsed
-      localStorage.setItem("workdev_terminal_collapsed", proximo ? "1" : "0")
-      return proximo
-    })
-  }
-
+  const [terminalCollapsed, setTerminalCollapsed] = useState(() => localStorage.getItem("workdev_terminal_collapsed") === "1")
+  const [otherAgents, setOtherAgents] = useState(false)
   useEffect(() => {
     let cancelled = false
     let inFlight = false
@@ -182,198 +114,83 @@ export default function AgentsPage() {
     return () => { cancelled = true; window.clearInterval(interval); window.removeEventListener('agent-runtime-refresh', poll) }
   }, [])
 
-  const selectedRuntime = selectedRuntimeId
-    ? runtimes.find((runtime) => runtime.id === selectedRuntimeId)
-    : undefined
 
-  const visibleAgents = useMemo(() => {
-    if (filter === "runtimes") return []
-    if (filter === "online") {
-      return AGENTS.filter((item) => {
-        return health[item.id]?.runtime_state === "ONLINE"
-      })
-    }
-    return AGENTS
-  }, [filter, health])
+  const selectedRuntime = runtimes.find(row => row.id === agent)
+  const remote = agent.startsWith("gpu-")
+  const selectedHealth = health[agent] ?? selectedRuntime
+  const state = selectedHealth?.runtime_state
+  const activeRun = workspaceRuns.find(row => row.agent === agent && row.status === "running")
+  const choices = [...AGENTS, ...runtimes.filter(row => !AGENTS.some(item => item.id === row.id)).map(row => ({ id: row.id, label: row.label }))]
 
-  const visibleRuntimes = useMemo(() => {
-    if (filter === "online") return runtimes.filter((item) => item.dispatchable)
-    return runtimes
-  }, [filter, runtimes])
-
-  async function stopWorkspaceRun(run: WorkspaceRun) {
-    if (!window.confirm(`Parar a Run ${run.id} de ${run.task_title}?`)) return
-    setStopPending(run.id); setActionError('')
-    try {
-      const response = await fetch(`/api/handoffs/runs/${run.id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'cancelled' }),
-      })
-      if (!response.ok) {
-        const body = await response.json()
-        throw new Error(body.detail?.message || 'Não foi possível confirmar a parada da Run')
-      }
-      setWorkspaceRuns(rows => rows.filter(row => row.id !== run.id))
-      window.dispatchEvent(new Event('agent-runtime-refresh'))
-    } catch (error) { setActionError(error instanceof Error ? error.message : 'Falha na parada') }
-    finally { setStopPending(null) }
+  function choose(id: AgentName) {
+    setAgent(id)
+    setActionError("")
+    setTerminalOpen(true)
+  }
+  function toggleTerminalCollapsed() {
+    setTerminalCollapsed(value => {
+      localStorage.setItem("workdev_terminal_collapsed", value ? "0" : "1")
+      return !value
+    })
+  }
+  function detachTerminal() {
+    const tab = window.open("about:blank", "_blank")
+    if (!tab) { setActionError("O navegador bloqueou a nova aba. Permita pop-ups para abrir o terminal."); return }
+    tab.opener = null
+    // Release this viewer before attaching the same persistent session elsewhere.
+    flushSync(() => setTerminalOpen(false))
+    tab.location.href = `/agents/${encodeURIComponent(agent)}/terminal`
+    setActionError("")
   }
 
   return (
-    <div className="mx-auto flex w-full min-h-[620px] min-w-0 max-w-screen-2xl flex-col gap-2 overflow-hidden md:h-[calc(100dvh-9rem)] md:min-h-[420px]">
+    <div className="mx-auto flex w-full min-w-0 max-w-screen-2xl flex-col gap-3 md:h-[calc(100dvh-6rem)] md:min-h-[520px]" data-testid="agent-workspace">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-semibold">Agentes</h2>
+        <div className="flex items-center gap-2 text-xs">
+          <button className="hidden rounded border border-slate-700 px-3 py-2 hover:bg-slate-800 md:block" aria-expanded={buildQueueOpen} onClick={() => setBuildQueueOpen(value => !value)}>{buildQueueOpen ? "Ocultar tarefas" : "Mostrar tarefas"}</button>
+          <button className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" aria-expanded={otherAgents} onClick={() => setOtherAgents(value => !value)}>Outros agentes</button>
+        </div>
+      </header>
+      <nav aria-label="Selecionar agente" className="flex shrink-0 gap-1 overflow-x-auto rounded-lg border border-slate-800 bg-slate-900 p-1" role="tablist">
+        {choices.filter(item => otherAgents || ["claude", "codex", "local-code", agent].includes(item.id)).map(item => {
+          const current = health[item.id]?.runtime_state ?? runtimes.find(row => row.id === item.id)?.runtime_state
+          return <button key={item.id} role="tab" aria-selected={agent === item.id} onClick={() => choose(item.id)} className={`flex min-h-10 shrink-0 items-center gap-2 rounded-md px-3 text-sm ${agent === item.id ? "bg-sky-700 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+            <span className={`h-2 w-2 rounded-full ${current === "ONLINE" ? "bg-emerald-400" : current === "ERROR" ? "bg-amber-400" : "bg-slate-500"}`} />
+            {item.label}
+            {awaitingApproval[item.id] && <span className="rounded bg-amber-400 px-1 text-[10px] font-bold text-slate-950">APROVAR</span>}
+          </button>
+        })}
+      </nav>
       <ExecutorDefaults />
-      
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><div className="flex min-w-0 items-center gap-3">
-        <div className="min-w-56 shrink-0"><h2 className="text-lg font-semibold sm:text-xl">Agent Workspace</h2><p className="hidden text-xs text-slate-400 lg:block">Agentes, execuções e terminais com estado real do runtime.</p></div>
-          {lastTerminalRun && <a className="shrink-0 text-xs text-sky-400 hover:underline" href={`/runs/${encodeURIComponent(lastTerminalRun)}/terminal`}>Retomar terminal</a>}
-        </div>
-        <div className="flex gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1" role="group" aria-label="Filtrar agentes">
-          {(["todos", "online", "runtimes"] as AgentFilter[]).map((item) => (
-            <button key={item} type="button" aria-pressed={filter === item} onClick={() => setFilter(item)}
-              className={`rounded-md px-2 py-1 text-xs font-medium ${filter === item ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
-              {FILTER_LABEL[item]}
-            </button>
-          ))}
-        </div>
-        <div className="flex w-full max-w-full overflow-x-auto rounded-lg border border-slate-700 bg-slate-900 p-1" role="tablist">
-          {visibleRuntimes.map((item) => (
-            <button key={item.id} role="tab" aria-selected={selectedRuntimeId === item.id} onClick={() => setSelectedRuntimeId(item.id)}
-              className={`relative min-h-8 shrink-0 rounded-md px-2 text-xs font-medium sm:px-3 ${selectedRuntimeId === item.id ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
-              {item.label}
-              <span
-                className={`ml-2 inline-block h-2 w-2 rounded-full ${RUNTIME_DOT[item.status] ?? "bg-slate-500"}`}
-                title={`${item.status_label}${item.reason ? `: ${item.reason}` : ""}`}
-              />
-            </button>
-          ))}
-          {visibleAgents.map((item) => (
-            <button key={item.id} role="tab" aria-selected={agent === item.id && selectedRuntimeId === null} onClick={() => { setAgent(item.id); setSelectedRuntimeId(null) }}
-              className={`relative min-h-8 shrink-0 rounded-md px-2 text-xs font-medium sm:px-3 ${agent === item.id && selectedRuntimeId === null ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
-              {item.label}
-              {health[item.id] && (
-                <span
-                  className={`ml-2 inline-block h-2 w-2 rounded-full ${HEALTH_STYLE[health[item.id]!.health]}`}
-                  title={`${HEALTH_LABEL[health[item.id]!.health]}${health[item.id]!.health_reason ? `: ${health[item.id]!.health_reason}` : ""}`}
-                />
-              )}
-              {awaitingApproval[item.id] && (
-                <span className="ml-2 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-slate-950">APROVAR</span>
-              )}
-            </button>
-          ))}
-        </div>
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
+        <RuntimeControls key={agent} agent={agent} runtimeState={state} activityState={selectedHealth?.activity_state} persistent={selectedHealth?.persistent} checkedAt={selectedHealth?.checked_at} />
+        {!remote && <div className="flex flex-wrap gap-1 text-xs">
+          <button onClick={detachTerminal} className="rounded bg-sky-950 px-3 py-2 text-sky-200 hover:bg-sky-900">Abrir em nova aba</button>
+          <button className="hidden rounded px-3 py-2 text-slate-300 hover:bg-slate-800 md:block" aria-expanded={!terminalCollapsed} onClick={toggleTerminalCollapsed}>{terminalCollapsed ? "Expandir terminal" : "Recolher terminal"}</button>
+          {!terminalOpen && <button className="rounded px-3 py-2 text-sky-300" onClick={() => { setTerminalOpen(true); setTerminalCollapsed(false) }}>Trazer terminal para cá</button>}
+        </div>}
       </div>
-      <section aria-label="Runs ativas" className="flex max-h-20 flex-nowrap gap-2 overflow-x-auto overflow-y-hidden">
-        {workspaceRuns.filter(run => run.agent === agent).map(run => <div key={run.id} className="shrink-0 rounded border border-slate-700 px-2 py-1"><button
-          type="button"
-          onClick={() => window.open(
-            `/runs/${encodeURIComponent(run.id)}/terminal?compact=1`,
-            `workdev-run-${run.id}`,
-            "width=920,height=680,resizable=yes,scrollbars=no"
-          )}
-          className="block rounded px-2 py-1 text-left text-xs hover:bg-slate-800">
-          <strong>{run.task_title}</strong> · {run.status}
-          <span className="block text-xs text-slate-400">{run.agent} · Run {run.id}</span>
-          <span className="text-sky-400">Abrir terminal da execução</span>
-        </button>
-          {['queued', 'running', 'blocked'].includes(run.status) && <button
-            disabled={stopPending !== null} onClick={() => void stopWorkspaceRun(run)}
-            className="ml-2 rounded bg-red-950 px-2 py-1 text-sm">{stopPending === run.id ? 'Parando…' : 'Parar Run'}</button>}
-        </div>)}
-        {!workspaceRuns.some(run => run.agent === agent) && <span className="text-xs text-slate-400">Nenhuma Run ativa disponível neste snapshot.</span>}
-      </section>
-      {actionError && <p role="alert" className="text-red-300">{actionError}</p>}
-      {!selectedRuntime && <button className="self-start rounded border border-slate-700 px-3 py-1 text-sm"
-        onClick={() => setTerminalOpen(open => !open)}>{terminalOpen ? 'Fechar terminal do agente' : 'Abrir terminal do agente'}</button>}
-      {!selectedRuntime && <RuntimeControls key={agent} agent={agent} runtimeState={health[agent]?.runtime_state} activityState={health[agent]?.activity_state} persistent={health[agent]?.persistent} checkedAt={health[agent]?.checked_at} />}
-      {!selectedRuntime && health[agent] && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-300">
-          <span className={`h-2.5 w-2.5 rounded-full ${HEALTH_STYLE[health[agent]!.health]}`} />
-          <span className="font-medium">{HEALTH_LABEL[health[agent]!.health]}</span>
-          {operations[agent] && <span className={`rounded px-2 py-1 font-bold ${OPERATION_STYLE[operations[agent]!.status]}`}>{OPERATION_LABEL[operations[agent]!.status]}</span>}
-          {health[agent]!.health_reason && <span className="text-amber-300">Motivo: {health[agent]!.health_reason}</span>}
-          {health[agent]!.checked_at && <span className="ml-auto text-slate-500">Última verificação: {new Date(health[agent]!.checked_at!).toLocaleTimeString("pt-BR")}</span>}
-        </div>
-      )}
-      <div className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1 md:hidden" role="tablist" aria-label="Painel">
-        {(["terminal", "queue"] as MobilePanel[]).map((panel) => (
-          <button key={panel} role="tab" aria-selected={mobilePanel === panel} onClick={() => setMobilePanel(panel)}
-            className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium ${mobilePanel === panel ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
-            {panel === "terminal" ? "Terminal" : "Fila de Build"}
-          </button>
-        ))}
+      {actionError && <p role="alert" className="text-sm text-red-300">{actionError}</p>}
+      {health[agent]?.health_reason && <details className="shrink-0 text-xs text-amber-300"><summary className="cursor-pointer">Detalhes do estado do agente</summary><p className="mt-1">{health[agent]?.health_reason}</p></details>}
+      {activeRun && <div className="flex shrink-0 items-center gap-2 rounded-lg border border-sky-900 bg-sky-950/40 px-3 py-2 text-sm">
+        <span className="shrink-0 text-sky-300">Em execução</span><strong className="min-w-0 flex-1 truncate">{activeRun.task_title}</strong>
+        <a href={`/runs/${encodeURIComponent(activeRun.id)}/terminal?compact=1`} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs text-sky-300">Terminal da tarefa ↗</a>
+      </div>}
+      <div className="flex shrink-0 gap-1 rounded-lg bg-slate-900 p-1 md:hidden" role="tablist" aria-label="Painel">
+        {(["terminal", "queue"] as const).map(panel => <button key={panel} role="tab" aria-selected={mobilePanel === panel} onClick={() => setMobilePanel(panel)} className={`min-h-10 flex-1 rounded text-sm ${mobilePanel === panel ? "bg-sky-700" : "text-slate-300"}`}>{panel === "terminal" ? "Terminal" : "Tarefas e subtarefas"}</button>)}
       </div>
-      <div className="hidden items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-1.5 text-xs md:flex">
-        <button
-          type="button"
-          onClick={() => setBuildQueueOpen(open => !open)}
-          className="rounded bg-slate-800 px-2 py-1 text-sky-300 hover:bg-slate-700"
-        >
-          {buildQueueOpen ? "Ocultar fila" : "Abrir fila"}
-        </button>
-        {!selectedRuntime && (
-          <button
-            type="button"
-            onClick={toggleTerminalCollapsed}
-            aria-expanded={!terminalCollapsed}
-            className="rounded bg-slate-800 px-2 py-1 text-sky-300 hover:bg-slate-700"
-          >
-            {terminalCollapsed ? "▸ Expandir terminal" : "▾ Recolher terminal"}
-          </button>
-        )}
-        {terminalCollapsed && !selectedRuntime && (
-          <span className="shrink-0 text-slate-400">
-            Terminal recolhido — {agent} segue conectado
-          </span>
-        )}
-        {buildQueueSummary ? (
-          <>
-            <span className="min-w-0 truncate font-medium text-slate-200">
-              {buildQueueSummary.taskTitle}
-            </span>
-            <span className="shrink-0 text-sky-300">
-              {buildQueueSummary.status}
-            </span>
-            <span className="shrink-0 text-slate-400">
-              Subtasks {buildQueueSummary.done}/{buildQueueSummary.total}
-            </span>
-          </>
-        ) : (
-          <span className="text-slate-500">Nenhuma execução selecionada</span>
-        )}
-      </div>
-
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden md:flex-row">
-        <div className={
-          mobilePanel === "queue"
-            ? "flex min-h-0 flex-1 flex-col md:flex-none"
-            : buildQueueOpen
-              ? "hidden md:flex md:flex-none"
-              : "hidden"
-        }>
-          <BuildQueue agent={agent} mobileExpanded={mobilePanel === "queue"} onSummaryChange={setBuildQueueSummary} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 md:flex-row">
+        <div className={`${mobilePanel === "queue" ? "flex" : "hidden"} ${buildQueueOpen ? "md:flex" : "md:hidden"} min-h-0 flex-col md:w-80 md:shrink-0`}>
+          <BuildQueue key={agent} agent={agent} mobileExpanded={mobilePanel === "queue"} />
         </div>
-        <div className={
-          // `hidden` mantém o componente montado (só display:none), então o
-          // ResizeObserver do AgentTerminal refaz o fit sozinho ao reexpandir.
-          terminalCollapsed
-            ? "hidden"
-            : mobilePanel === "terminal"
-              ? "flex min-h-0 min-w-0 flex-1 flex-col"
-              : "hidden md:flex md:min-h-0 md:min-w-0 md:flex-1 md:flex-col"
-        }>
-          {selectedRuntime ? (
-            // Runtime Ollama não tem sessão tmux: no lugar do terminal vai o
-            // painel de estado operacional do endpoint.
-            <RuntimePanel runtime={selectedRuntime} />
-          ) : terminalOpen ? (
-            <AgentTerminal
-              key={agent}
-              agent={agent}
-              awaitingApproval={Boolean(awaitingApproval[agent])}
-              operationalStatus={operations[agent]?.status}
-            />
-          ) : <p className="text-sm text-slate-400">Terminal desconectado. O agente continua em execução.</p>}
+        <div data-testid="terminal-panel" className={`${mobilePanel === "terminal" ? "flex" : "hidden"} ${terminalCollapsed && !remote ? "md:hidden" : "md:flex"} min-h-[480px] min-w-0 flex-1 flex-col md:min-h-0`}>
+          {remote && selectedRuntime ? <RuntimePanel runtime={selectedRuntime} showControls={false} />
+            : !terminalOpen ? <div className="rounded-lg border border-slate-800 p-6 text-sm text-slate-400">Terminal aberto em outra aba. Feche essa aba antes de trazê-lo para cá.</div>
+            : state === "OFFLINE" ? <div className="rounded-lg border border-slate-800 p-6 text-sm text-slate-400">{agentLabels[agent]} está desligado. Use Ligar para iniciar e abrir o terminal.</div>
+            : <AgentTerminal key={agent} agent={agent} awaitingApproval={Boolean(awaitingApproval[agent])} operationalStatus={operations[agent]?.status} />}
         </div>
+        {terminalCollapsed && !remote && <button className="hidden self-start rounded border border-slate-800 px-4 py-3 text-sm text-sky-300 md:block" onClick={toggleTerminalCollapsed}>Terminal recolhido · Expandir</button>}
       </div>
     </div>
   )
