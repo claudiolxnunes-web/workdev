@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 import { useProject } from "../useProject";
 
 type Migration = { version?: string; name?: string };
@@ -40,7 +40,9 @@ export function DatabaseTab() {
   }, [project.slug]);
 
   useEffect(() => {
-    refresh();
+    startTransition(() => {
+      refresh();
+    });
   }, [refresh]);
 
   if (loading && !data) {

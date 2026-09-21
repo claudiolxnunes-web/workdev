@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, startTransition } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Trash2, Pencil, Check, X, AlertTriangle } from "lucide-react";
 import {
@@ -68,13 +68,15 @@ export default function ChatLivre() {
   }, []);
 
   useEffect(() => {
-    loadList();
+    startTransition(() => {
+      loadList();
+    });
   }, [loadList]);
 
   useEffect(() => {
     if (!dynamicSource) return;
     let active = true;
-    setCatalogStatus("loading");
+    startTransition(() => setCatalogStatus("loading"));
     (localSource ? getLocalModels() : getOpenRouterModels()).then((models) => {
       if (!active) return;
       setCatalogModels(models);
@@ -88,11 +90,13 @@ export default function ChatLivre() {
 
   useEffect(() => {
     if (!conversationId) {
-      setActive(null);
-      setMessages([]);
-      setTokens(0);
-      setCost(0);
-      setContextWarning(false);
+      startTransition(() => {
+        setActive(null);
+        setMessages([]);
+        setTokens(0);
+        setCost(0);
+        setContextWarning(false);
+      });
       return;
     }
     let cancelled = false;

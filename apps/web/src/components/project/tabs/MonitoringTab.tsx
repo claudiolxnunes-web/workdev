@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 import { useProject } from "../useProject";
 
 type SlugMonitoring = {
@@ -37,7 +37,9 @@ export function MonitoringTab() {
   }, [project.slug]);
 
   useEffect(() => {
-    refresh();
+    startTransition(() => {
+      refresh();
+    });
   }, [refresh]);
 
   if (loading && !data) {
