@@ -22,6 +22,10 @@ class AdaptiveConfig(BaseModel):
     primary: ObserverModel = ObserverModel(provider='openai', model='gpt-5.6-luna')
     fallback: ObserverModel | None = ObserverModel(provider='gemini', model='gemini-3.5-flash')
     max_output_tokens: int = Field(default=600, ge=100, le=2000)
+    # Teto de tempo dedicado ao Jev Pré-Plano (jev_planning.py) — não o mesmo
+    # timeout_seconds usado pelo Jev pós-plano/Observer, para que o dial de um
+    # caminho não mude o outro sem querer.
+    planning_timeout_seconds: float = Field(default=15, ge=1, le=60)
     # Jev/Observer rodam sem usuário presente: não existe tela para clicar
     # "confirmar custo premium" por chamada. A confirmação, aqui, é o próprio
     # ato deliberado do admin de configurar primary/fallback/jev_model como um

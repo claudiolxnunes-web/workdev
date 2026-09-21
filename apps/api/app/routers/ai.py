@@ -152,28 +152,61 @@ def get_db():
         db.close()
 
 
+def _jev_planning_block(db: Session, backlog_id, nivel: str | None) -> str | None:
+    """Bloco consultivo do Jev Pré-Plano — só quando faz sentido, nunca quebra o chat.
+
+    `None` (sem efeito no prompt) fora do nível PLAN, sem task em escopo,
+    supervisão adaptativa desligada, ou quando a task já tem algum
+    ExecutionPlan — a janela "antes de existir ExecutionPlan" já passou, e o
+    Jev pós-plano (jev_decision.py) assume a partir da criação do Build.
+    """
+    if autoridade.normalizar(nivel) != autoridade.PLAN or backlog_id is None:
+        return None
+    try:
+        from app.services import adaptive_config, jev_planning
+        if not adaptive_config.load().enabled:
+            return None
+        tem_plano = db.query(ExecutionPlan.id).filter(
+            ExecutionPlan.backlog_id == backlog_id).first()
+        if tem_plano:
+            return None
+        task = db.get(BacklogItem, backlog_id)
+        if task is None:
+            return None
+        assessment = jev_planning.assess(db, task)
+        return jev_planning.render_system_block(assessment)
+    except Exception:  # noqa: BLE001 — consultivo; nunca deve derrubar o chat
+        return None
+
+
 def build_system(db: Session, project_slug: str | None = None,
-                 nivel: str | None = None) -> str:
+                 nivel: str | None = None, backlog_id=None) -> str:
     """System prompt com o contexto do WorkDev apurado no banco.
 
     Sem `project_slug`, monta o contexto global. Com um slug desconhecido,
     degrada para o global e diz isso ao modelo — em vez de responder no vazio.
 
     Uma falha ao ler o contexto nunca derruba a conversa: o chat volta ao
-    system base e segue com as ferramentas, que continuam funcionando.
+    system base e segue com as ferramentas, que continuam funcionando. O
+    mesmo vale para o bloco do Jev Pré-Plano (`backlog_id`, ver
+    `_jev_planning_block`): é aditivo e nunca impede a resposta.
     """
     modo = autoridade.instrucao_de_nivel(nivel)
+    jev_block = _jev_planning_block(db, backlog_id, nivel)
     try:
         contexto = context_engine.build_chat_context(db, project_slug)
     except Exception as erro:  # noqa: BLE001 — contexto é melhoria, não requisito
-        return "\n\n".join(_with_plan_policy([
+        partes = _with_plan_policy([
             SYSTEM,
             modo,
             (
                 f"[contexto indisponível: {type(erro).__name__}. "
                 f"Use as ferramentas para consultar o estado atual.]"
             ),
-        ], nivel))
+        ], nivel)
+        if jev_block:
+            partes.append(jev_block)
+        return "\n\n".join(partes)
 
     if contexto is None:
         contexto = context_engine.montar_contexto_global(db)
@@ -181,11 +214,14 @@ def build_system(db: Session, project_slug: str | None = None,
             f"\n\n[o projeto '{project_slug}' não existe no WorkDev; "
             f"contexto global abaixo]"
         )
-        return "\n\n".join(_with_plan_policy([
+        partes = _with_plan_policy([
             SYSTEM,
             f"{modo}{aviso}",
             context_engine.renderizar_contexto(contexto),
-        ], nivel))
+        ], nivel)
+        if jev_block:
+            partes.append(jev_block)
+        return "\n\n".join(partes)
 
     partes = _with_plan_policy(
         [SYSTEM, modo, context_engine.renderizar_contexto(contexto)],
@@ -194,6 +230,8 @@ def build_system(db: Session, project_slug: str | None = None,
 
     if contexto.get("escopo") == context_engine.ESCOPO_PROJETO:
         partes.append(FOCO_PROJETO)
+    if jev_block:
+        partes.append(jev_block)
     return "\n\n".join(partes)
 
 
@@ -1499,7 +1537,7 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
 
     # E1.2: o contexto passa a ser montado sempre — global quando não há projeto
     # ativo. Antes, o chat global ia ao modelo sem nenhum dado do WorkDev.
-    system = build_system(db, slug_efetivo, nivel)
+    system = build_system(db, slug_efetivo, nivel, backlog_id)
     if session is not None:
         persisted_system = (
             db.query(ChatMessageDB)
