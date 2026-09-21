@@ -51,11 +51,14 @@ async def _ciclo() -> bool:
         from app.services.local_code_build import reconcile
         reconcile(db)
         db.commit()
+        from app.services.observer_events import consume_one
+        observed = consume_one(db)
+        db.commit()
         job = build_worker.claim_next_job(db)
 
         if job is None:
             db.commit()
-            return False
+            return observed
 
         log.info("job %s (run %s, runtime %s)", job.id, job.run_id, job.runtime_id)
 

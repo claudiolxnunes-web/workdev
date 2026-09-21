@@ -514,6 +514,30 @@ def queue_build(
             f"A task já possui uma execução ativa ({active.status})"
         )
 
+    adaptive_event = None
+    from app.services import adaptive_config
+    if agent != 'local-code' and adaptive_config.load().enabled and isinstance(db, Session):
+        from app.services.task_complexity import classify_task
+        from app.services.jev_decision import classify
+        task = db.get(BacklogItem, plan.backlog_id)
+        assessment = classify_task(task, plan, load_subtasks(db, plan.backlog_id))
+        floor = max((assessment.level, complexity or assessment.level),
+                    key=('low', 'medium', 'high', 'critical').index)
+        # Nada foi escrito nesta transação até aqui (só leituras acima). O
+        # commit é um checkpoint sem efeito colateral que devolve a conexão
+        # ao pool ANTES da chamada de rede do Jev (até timeout_seconds, hoje
+        # 15s) — sem isto, a conexão HTTP deste request fica presa ao Jev
+        # inteiro. classify() precisa rodar antes de criar a AgentRun porque
+        # a complexidade decidida por ele alimenta a criação da run logo
+        # abaixo; não dá para adiar para BackgroundTasks (padrão do graph_sync)
+        # sem mudar quando a exigência de revisão é decidida.
+        db.commit()
+        policy, adaptive_event = classify(db, task, plan, deterministic_complexity=floor,
+            mandatory_review=review_requested is True, mandatory_human=floor == 'critical')
+        complexity = policy.complexity.value.lower()
+        complexity_score = max(complexity_score or 0, {'low': 10, 'medium': 40, 'high': 70, 'critical': 100}[complexity])
+        routing_reason = (routing_reason or '') + '; ' + policy.reason
+
     run = AgentRun(
         plan_id=plan.id,
         backlog_id=plan.backlog_id,
@@ -531,6 +555,10 @@ def queue_build(
 
     db.add(run)
     db.flush()
+
+    if adaptive_event is not None:
+        adaptive_event.run_id = run.id
+        adaptive_event.payload = {**adaptive_event.payload, 'run_id': str(run.id)}
 
     routing_payload = {
         "agent": agent,
@@ -635,6 +663,12 @@ def update_run(
                               and decision_event and current_sha
                               and (decision_event.payload or {}).get("commit_sha") == current_sha
                               and (decision_event.payload or {}).get("decision") == "NO_REVIEW_COMPLETE")
+                if waived:
+                    from app.services.adaptive_review import exemption_current
+                    waived = exemption_current(db, run)
+                if waived:
+                    from app.services.adaptive_review import can_waive
+                    waived = can_waive(db, run)
                 if not independent and not waived:
                     raise HandoffError("Conclusão exige revisão independente aprovada ou dispensa pela política após os gates", "review_required")
 

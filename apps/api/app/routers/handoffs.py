@@ -1204,6 +1204,8 @@ def update_agent_run(
             AgentRunEvent.event_type == "build.review_preference").order_by(AgentRunEvent.created_at.desc()).first()
         if preference is not None and isinstance(preference.payload, dict):
             decision = with_user_preference(decision, preference.payload.get("requested"), run.reviewer_agent, run.agent)
+        from app.services.adaptive_review import request_observation
+        decision = request_observation(db, run, decision, diff)
         persist_decision(db, run, decision, len(diff.files), changed_lines(diff.text))
         if decision.decision == 'NO_REVIEW_GATE_FAIL':
             run, event = update_run(db, run, {
@@ -1799,6 +1801,8 @@ def create_run_event(
         run_id,
     )
 
+    if payload.event_type.startswith(('observer.', 'routing.jev_')):
+        raise HTTPException(403, 'Adaptive policy evidence is backend-owned')
     event = add_run_event(
         db,
         run,

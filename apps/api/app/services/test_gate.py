@@ -301,7 +301,7 @@ def _check_vitest(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
 
 
 def _check_lint(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
-    """Executar lint no frontend. OBRIGATÓRIO, mas com tratamento de dívida histórica."""
+    """Lint é gate físico obrigatório, incluindo falhas preexistentes."""
     import shutil
 
     pnpm_path = shutil.which("pnpm")
@@ -335,16 +335,9 @@ def _check_lint(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
             duration_ms=duration,
         )
 
-    # Verificar se é dívida histórica conhecida (não relacionada à task atual)
-    # Para Fase 1, registramos mas não bloqueamos se for apenas lint
-    # Isso deve ser removido quando dívida de lint for resolvida
-    issues = len([l for l in stderr.split("\n") if l.strip()])
-
     return CheckResult(
-        name="lint",
-        passed=True,  # ⚠️ PASS com aviso - dívida histórica conhecida
-        mandatory=False,  # ⚠️ Opcional até dívida ser resolvida
-        reason=f"{issues} issues de lint (dívida histórica conhecida, não bloqueia Fase 1)",
+        name="lint", passed=False, mandatory=True,
+        reason="Lint reprovado; nenhuma política de IA pode dispensar este gate",
         duration_ms=duration,
     )
 

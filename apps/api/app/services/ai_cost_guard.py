@@ -33,6 +33,9 @@ class ModelPolicy:
 # Fundação central da política. Na Etapa 2 estes registros serão administrados
 # pelo catálogo persistido; por ora não há IDs ou preços espalhados no frontend.
 MODEL_POLICIES: dict[tuple[str, str], ModelPolicy] = {
+    ("openrouter", "typesafe/jev-1.13"): ModelPolicy(
+        "openrouter", "typesafe/jev-1.13", "economic", Decimal("0.042"), Decimal("0"),
+    ),
     ("openai", "gpt-5.6-luna"): ModelPolicy(
         "openai", "gpt-5.6-luna", "economic", None, None,
         allowed_efforts=("low", "medium"),
