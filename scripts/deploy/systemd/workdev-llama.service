@@ -1,0 +1,22 @@
+[Unit]
+Description=WorkDev llama.cpp Qwen 27B
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/llama.cpp
+ExecStart=/opt/llama.cpp/build/bin/llama-server \
+  -m /opt/models/qwen27b/workdev-qwen3.6-27b-q4ks.gguf \
+  -a workdev-qwen27b \
+  -c 16384 \
+  -t 8 \
+  -np 1 \
+  --no-reasoning-preserve \
+  --host 127.0.0.1 \
+  --port 8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
