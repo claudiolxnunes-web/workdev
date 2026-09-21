@@ -890,7 +890,7 @@ def send_to_build(
                 },
             )
 
-    if payload.routing_mode == "manual" and is_ollama_agent(agent):
+    if payload.routing_mode == "manual" and is_ollama_agent(agent) and agent != "local-code":
         # Endpoint indisponível não vira run pendurada: recusa antes de criar
         # qualquer estado. Os demais agentes seguem utilizáveis normalmente.
         try:
@@ -1086,6 +1086,8 @@ def start_workspace_run(run_id: UUID, background: BackgroundTasks, db: Session =
     run = _get_run(db, run_id)
     if run.status != 'queued' or run.agent not in STANDBY_COMMANDS:
         raise HTTPException(409, 'Somente Run CLI aguardando pode iniciar sessão isolada')
+    if run.agent == 'local-code':
+        return dispatch_run_to_ollama(run_id, background, db)
     context = build_context(db, run)
     audit('start_run', agent=run.agent, run_id=run.id)
     background.add_task(_run_auto_agent, run.id, run.agent, run.model, context['prompt'], True)
@@ -1324,7 +1326,7 @@ async def _consume_dispatch_job(
     db = SessionLocal()
     try:
         job = db.query(AgentBuildJob).filter(AgentBuildJob.id == job_id).first()
-        if job is None or job.state != "queued":
+        if job is None or job.state != "queued" or job.runtime_id == "local-code":
             return
         build_jobs.start_job(db, job)
         db.commit()
@@ -1444,6 +1446,17 @@ def dispatch_run_to_ollama(
     vivo, e a recusa vem do índice parcial do banco, não de um `if` daqui.
     """
     run = _get_run(db, run_id)
+
+    if run.agent == 'local-code':
+        from app.services.local_code_build import enqueue
+        if run.status not in {'queued', 'running'}:
+            raise HTTPException(409, 'Run não aceita despacho')
+        try:
+            job = enqueue(db, run)
+        except HandoffError as error:
+            raise HTTPException(409, str(error)) from error
+        db.commit()
+        return {'run': _run_out(db, run), 'dispatch': build_jobs.job_out(job)}
 
     if not is_ollama_agent(run.agent):
         raise HTTPException(

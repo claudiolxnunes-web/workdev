@@ -14,6 +14,7 @@ const local = { id: "local-code", label: "Local", runtime_state: "ONLINE", activ
 
 beforeEach(() => {
   localStorage.clear()
+  sessionStorage.clear()
   getAgentRuntimes.mockResolvedValue([local])
   fetchMock.mockResolvedValue({ ok: true, json: async () => ({ agents: [
     { agent: "claude", runtime_state: "ONLINE", activity_state: "IDLE", health: "idle", awaiting_approval: true, operational_status: "awaiting_approval", runs: [] },
@@ -39,9 +40,18 @@ describe("Agents workspace", () => {
     expect(screen.getByText("queue:local-code")).toBeInTheDocument()
     expect(screen.getByText("terminal:local-code:executing")).toBeInTheDocument()
     expect(screen.getByText("Tarefa local")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: /Terminal da tarefa/ })).toHaveAttribute("href", "/runs/local-run/terminal?compact=1")
+    expect(screen.getByRole("link", { name: /Terminal da tarefa/ })).toHaveAttribute("href", "/agents/local-code/terminal")
     expect(screen.getByRole("link", { name: /Terminal da tarefa/ })).toHaveAttribute("target", "_blank")
     expect(screen.queryByText("queue:claude")).not.toBeInTheDocument()
+  })
+  it("reabre a mesma seleção local após remontar sem iniciar sessão", async () => {
+    const view = render(<AgentsPage />)
+    await screen.findByText("APROVAR")
+    fireEvent.click(screen.getByRole("tab", { name: "Agente local" }))
+    view.unmount()
+    render(<AgentsPage />)
+    expect(await screen.findByText("terminal:local-code:executing")).toBeInTheDocument()
+    expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true)
   })
   it("recolher só afeta desktop e mantém terminal montado", async () => {
     render(<AgentsPage />)

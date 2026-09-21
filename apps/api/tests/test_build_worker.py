@@ -71,12 +71,12 @@ class TestClaim:
 
 
 class TestHabilitacao:
-    def test_desligado_por_padrao(self, monkeypatch):
+    def test_fila_cli_independe_da_flag_http(self, monkeypatch):
         monkeypatch.delenv("WORKDEV_OLLAMA_BUILD_ENABLED", raising=False)
 
         pode, motivo = build_worker.worker_should_run()
 
-        assert pode is False
+        assert pode is True
         assert "WORKDEV_OLLAMA_BUILD_ENABLED" in motivo
 
     def test_ligado_quando_a_flag_esta_on(self, monkeypatch):

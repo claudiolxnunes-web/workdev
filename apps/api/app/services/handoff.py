@@ -573,6 +573,10 @@ def queue_build(
         task.owner = agent
         task.updated_at = _now()
 
+    if agent == 'local-code':
+        from app.services.local_code_build import enqueue
+        enqueue(db, run)
+
     db.commit()
     db.refresh(run)
     db.refresh(event)

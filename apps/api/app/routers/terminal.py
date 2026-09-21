@@ -374,6 +374,8 @@ def _start_agent_runtime(
 
 
 def start_agent_runtime(agent, prompt, timeout_seconds=15.0, model=None, run_id=None):
+    if agent == 'local-code' and run_id is not None:
+        raise RuntimeError('local-code usa a fila persistente; sessão AUTO recusada')
     if agent == 'gemini' and run_id is not None:
         return _start_gemini_headless_runtime(agent, prompt, model, run_id)
     if run_id is None:

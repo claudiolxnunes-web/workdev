@@ -13,7 +13,7 @@ import tempfile
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
-PERSISTENT_AGENTS = frozenset({'claude', 'codex'})
+PERSISTENT_AGENTS = frozenset({'claude', 'codex', 'local-code'})
 
 
 def is_persistent(agent: str, session: str | None) -> bool:

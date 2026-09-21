@@ -36,20 +36,19 @@ const contexto = {
   subtasks: [], events: [], prompt: "prompt",
 }
 
-describe("BuildQueue — despacho para runtime Ollama", () => {
+describe("BuildQueue — despacho para CLI local", () => {
   beforeEach(() => {
     getRuns.mockReset(); getRunContext.mockReset(); dispatchRun.mockReset()
     getRunContext.mockResolvedValue(contexto)
   })
 
-  it("oferece o despacho e o acompanhamento para runtime Ollama", async () => {
+  it("oferece entrega à CLI e acesso à sessão canônica", async () => {
     getRuns.mockResolvedValue([run()])
     render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
 
-    const botao = await screen.findByRole("button", { name: "Despachar para o runtime" })
+    const botao = await screen.findByRole("button", { name: "Entregar à CLI local" })
     expect(botao).toBeEnabled()
-    // O rótulo honesto é parte do contrato: enquanto a fatia 3 não existir,
-    // despachar produz texto, não código aplicado.
+    expect(screen.getByRole("link", { name: /Abrir terminal da execução/ })).toHaveAttribute("href", "/agents/local-code/terminal")
     expect(screen.getByText(/Acompanhe abaixo/)).toBeInTheDocument()
   })
 
@@ -86,7 +85,7 @@ describe("BuildQueue — despacho para runtime Ollama", () => {
     ))
     render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
 
-    fireEvent.click(await screen.findByRole("button", { name: "Despachar para o runtime" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Entregar à CLI local" }))
 
     await waitFor(() => {
       expect(screen.getByText(/Já existe um despacho ativo/)).toBeInTheDocument()

@@ -47,6 +47,8 @@ def stop_run(db, run):
     Shared file lock serializes launch/stop across API workers. The manager uses
     its own DB session, so its commits cannot release the workflow transaction.
     """
+    if run.agent == 'local-code':
+        return _stop_local_run(db, run)
     with agent_lifecycle.run_lock(run.id):
         db.refresh(run, with_for_update={'key_share': True})
         if run.status == 'cancelled':
@@ -67,6 +69,30 @@ def stop_run(db, run):
                         raise TerminalSessionError('Terminal cleanup incomplete')
             # Same validator/gates as other workflow transitions, never a second machine.
             run, _ = update_run(db, run, {'status': 'cancelled', 'message': 'Parada física confirmada pelo Workspace'})
+            audit('stop_run', agent=run.agent, run_id=run.id, result='succeeded')
+            return run
+        except Exception as error:
+            db.rollback()
+            audit('stop_run', agent=run.agent, run_id=run.id, result='failed',
+                  code=getattr(error, 'code', type(error).__name__))
+            raise
+
+
+def _stop_local_run(db, run):
+    from app.services import local_code_build, local_code_channel
+    # Lock order is agent -> DB in both dispatcher and cancellation.
+    with agent_lifecycle.run_lock(run.id), agent_lifecycle.agent_lock(run.agent):
+        audit('stop_run', agent=run.agent, run_id=run.id)
+        try:
+            if local_code_build.cancel_queued(db, run):
+                audit('stop_run', agent=run.agent, run_id=run.id, result='succeeded')
+                return run
+            db.refresh(run, with_for_update=True)
+            if run.status != 'cancelled' and 'cancelled' not in RUN_TRANSITIONS.get(run.status, set()):
+                raise HandoffError(f'Transição inválida: {run.status} → cancelled')
+            local_code_channel.stop(run.id, locked=True)
+            run, _ = update_run(db, run, {'status': 'cancelled', 'message': 'CLI confirmou interrupção; sessão persistente preservada'})
+            db.commit()
             audit('stop_run', agent=run.agent, run_id=run.id, result='succeeded')
             return run
         except Exception as error:

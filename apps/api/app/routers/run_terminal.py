@@ -95,6 +95,8 @@ def _create_unlocked(run_id: str):
         if agent:
             from app.services import agent_lifecycle
             binding = agent_lifecycle.run_binding(agent, run_id)
+            if agent == 'local-code' and not binding:
+                raise TerminalSessionError('Run local-code aguardando entrega; abra o terminal canônico do agente')
             if binding:
                 if binding.get('stopped') or agent_lifecycle.process_starttime(binding['pid']) != binding['starttime']:
                     raise TerminalSessionError('Run process is no longer available')

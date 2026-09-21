@@ -21,9 +21,13 @@ export WORKDEV_LOCAL_CODE_KEY="${WORKDEV_LOCAL_CODE_KEY:-local-sem-autenticacao}
 
 unset DASHSCOPE_API_KEY OPENROUTER_API_KEY
 unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL
-export QWEN_CODE_SYSTEM_SETTINGS_PATH="$LOCAL_SETTINGS_FILE"
+# Overlay only: provider/model catalog remains untouched.
+PROTOCOL_SCRIPT="$(dirname "$(realpath "$0")")/local_code_protocol.py"
+export QWEN_CODE_SYSTEM_SETTINGS_PATH
+QWEN_CODE_SYSTEM_SETTINGS_PATH="$(python3 "$PROTOCOL_SCRIPT" settings "$LOCAL_SETTINGS_FILE")"
+export WORKDEV_LOCAL_CODE_INPUT_FILE="$(dirname "$QWEN_CODE_SYSTEM_SETTINGS_PATH")/input.jsonl"
 export QWEN_CODE_SKIP_UPDATE_CHECK_ONCE="true"
 export NO_UPDATE_NOTIFIER="1"
 
 cd "${WORKDEV_AGENT_CWD:-${WORKDEV_DIR:-/opt/workdev}}"
-exec "$QWEN_EXECUTABLE" --model "${WORKDEV_LOCAL_CODE_MODEL:-workdev-qwen27b}" "$@"
+exec "$QWEN_EXECUTABLE" --model "${WORKDEV_LOCAL_CODE_MODEL:-workdev-qwen27b}" --prompt-interactive WORKDEV_READY "$@"

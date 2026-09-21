@@ -1449,6 +1449,11 @@ def stop_run_process(agent, run_id):
     Caller serializes on run_lock. Agent lock also excludes agent lifecycle and
     launch. Tombstone survives an API/DB failure, making retries idempotent.
     """
+    if agent == 'local-code':
+        row = run_binding(agent, run_id)
+        if row and row.get('mode') == 'persistent_cli':
+            from app.services.local_code_channel import stop as stop_cli_run
+            return stop_cli_run(run_id)
     with agent_lock(agent):
         row = run_binding(agent, run_id)
         if not row:

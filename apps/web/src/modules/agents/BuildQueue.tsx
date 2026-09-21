@@ -272,7 +272,7 @@ export function BuildQueue({
           <details><summary className="cursor-pointer text-xs text-slate-400">Objetivo e contexto da tarefa</summary><p className="mt-2 text-slate-300">{context.plan.objective}</p></details>
           <button onClick={() => void copyPrompt()} className="w-full rounded-lg bg-sky-600 px-3 py-2 font-medium hover:bg-sky-500">{copied ? "Contexto copiado" : "Copiar contexto para o Agent"}</button>
           <a
-            href={`/runs/${encodeURIComponent(selectedId ?? "")}/terminal?compact=1`}
+            href={selected.agent === "local-code" ? "/agents/local-code/terminal" : `/runs/${encodeURIComponent(selectedId ?? "")}/terminal?compact=1`}
             target="_blank" rel="noopener noreferrer"
             className="w-full rounded-lg bg-slate-800 px-3 py-2 font-medium text-sky-300 hover:bg-slate-700"
             title="Abre o terminal interativo desta execução (WebSocket + PTY)"
@@ -299,7 +299,7 @@ export function BuildQueue({
               >
                 {DESPACHO_EM_CURSO.includes(selected.dispatch_state)
                   ? "Despacho em curso…"
-                  : "Despachar para o runtime"}
+                  : selected.agent === "local-code" ? "Entregar à CLI local" : "Despachar para o runtime"}
               </button>
               <p className="mt-2 text-[11px] text-amber-300">
                 Acompanhe abaixo o andamento e o resultado da tarefa.

@@ -78,16 +78,27 @@ def claim_next_job(db: Session) -> AgentBuildJob | None:
     `SKIP LOCKED` é o ponto: sem ele, dois workers serializariam na mesma linha
     e o segundo ficaria parado esperando em vez de pegar outro trabalho.
     """
+    from app.services import local_code_channel as channel
+    try:
+        state = channel.read()
+        local_ready = state.get('phase') == 'idle' and not state.get('run_id') and channel.identity_matches(state)
+    except channel.lifecycle.LifecycleError:
+        local_ready = False
     linha = db.execute(
         text(
             """
             SELECT id FROM agent_build_jobs
             WHERE state = 'queued'
+              AND (:http_enabled OR runtime_id = 'local-code')
+              AND (runtime_id != 'local-code' OR (:local_ready AND NOT EXISTS (
+                  SELECT 1 FROM agent_build_jobs busy
+                  WHERE busy.runtime_id = 'local-code' AND busy.state = 'running'
+              )))
             ORDER BY created_at
             FOR UPDATE SKIP LOCKED
             LIMIT 1
             """
-        )
+        ), {"http_enabled": build_enabled(), "local_ready": local_ready},
     ).first()
 
     if linha is None:
@@ -118,6 +129,10 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
         build_jobs.fail_job(db, job, error="Execução não existe mais")
         db.commit()
         return None
+
+    if job.runtime_id == "local-code":
+        from app.services import local_code_build
+        return local_code_build.dispatch(db, job, run)
 
     build_jobs.start_job(db, job)
 
@@ -327,9 +342,5 @@ def _falhar(
 
 def worker_should_run() -> tuple[bool, str]:
     """Diz se o worker pode operar, e por quê não, quando não pode."""
-    if not build_enabled():
-        return False, (
-            "WORKDEV_OLLAMA_BUILD_ENABLED não está ligada; o worker não "
-            "consome a fila"
-        )
-    return True, "habilitado"
+    # local-code queue is independent from the HTTP/envelope feature flag.
+    return True, "fila CLI habilitada; HTTP segue WORKDEV_OLLAMA_BUILD_ENABLED"

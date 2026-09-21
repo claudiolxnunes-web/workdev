@@ -21,7 +21,10 @@ type WorkspaceRun = { id: string; agent: AgentName; backlog_id: string; task_tit
 type AgentOperation = { status: OperationalStatus }
 
 export default function AgentsPage() {
-  const [agent, setAgent] = useState<AgentName>("claude")
+  const [agent, setAgent] = useState<AgentName>(() => {
+    const saved = sessionStorage.getItem("workdev_selected_agent")
+    return AGENTS.find(item => item.id === saved)?.id ?? "claude"
+  })
   const [awaitingApproval, setAwaitingApproval] = useState<Partial<Record<AgentName, boolean>>>({})
   const [health, setHealth] = useState<Partial<Record<AgentName, AgentHealth>>>({})
   const [operations, setOperations] = useState<Partial<Record<AgentName, AgentOperation>>>({})
@@ -120,10 +123,12 @@ export default function AgentsPage() {
   const selectedHealth = health[agent] ?? selectedRuntime
   const state = selectedHealth?.runtime_state
   const activeRun = workspaceRuns.find(row => row.agent === agent && row.status === "running")
+  const queuedRuns = workspaceRuns.filter(row => row.agent === agent && row.status === "queued")
   const choices = [...AGENTS, ...runtimes.filter(row => !AGENTS.some(item => item.id === row.id)).map(row => ({ id: row.id, label: row.label }))]
 
   function choose(id: AgentName) {
     setAgent(id)
+    sessionStorage.setItem("workdev_selected_agent", id)
     setActionError("")
     setTerminalOpen(true)
   }
@@ -171,11 +176,12 @@ export default function AgentsPage() {
           {!terminalOpen && <button className="rounded px-3 py-2 text-sky-300" onClick={() => { setTerminalOpen(true); setTerminalCollapsed(false) }}>Trazer terminal para cá</button>}
         </div>}
       </div>
+      {queuedRuns.length > 0 && <p className="text-xs text-amber-300" role="status">QUEUED · {queuedRuns.length} tarefa(s) aguardando</p>}
       {actionError && <p role="alert" className="text-sm text-red-300">{actionError}</p>}
       {health[agent]?.health_reason && <details className="shrink-0 text-xs text-amber-300"><summary className="cursor-pointer">Detalhes do estado do agente</summary><p className="mt-1">{health[agent]?.health_reason}</p></details>}
       {activeRun && <div className="flex shrink-0 items-center gap-2 rounded-lg border border-sky-900 bg-sky-950/40 px-3 py-2 text-sm">
         <span className="shrink-0 text-sky-300">Em execução</span><strong className="min-w-0 flex-1 truncate">{activeRun.task_title}</strong>
-        <a href={`/runs/${encodeURIComponent(activeRun.id)}/terminal?compact=1`} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs text-sky-300">Terminal da tarefa ↗</a>
+        <a href={agent === "local-code" ? "/agents/local-code/terminal" : `/runs/${encodeURIComponent(activeRun.id)}/terminal?compact=1`} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs text-sky-300">Terminal da tarefa ↗</a>
       </div>}
       <div className="flex shrink-0 gap-1 rounded-lg bg-slate-900 p-1 md:hidden" role="tablist" aria-label="Painel">
         {(["terminal", "queue"] as const).map(panel => <button key={panel} role="tab" aria-selected={mobilePanel === panel} onClick={() => setMobilePanel(panel)} className={`min-h-10 flex-1 rounded text-sm ${mobilePanel === panel ? "bg-sky-700" : "text-slate-300"}`}>{panel === "terminal" ? "Terminal" : "Tarefas e subtarefas"}</button>)}

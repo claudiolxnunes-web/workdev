@@ -48,6 +48,9 @@ async def _ciclo() -> bool:
     """Processa um job, se houver. Devolve True se processou algo."""
     db = SessionLocal()
     try:
+        from app.services.local_code_build import reconcile
+        reconcile(db)
+        db.commit()
         job = build_worker.claim_next_job(db)
 
         if job is None:
@@ -67,7 +70,7 @@ async def _ciclo() -> bool:
         else:
             log.warning("job %s recusado: %s", job.id, outcome.code)
 
-        return True
+        return job.state != 'queued'
     except Exception:
         db.rollback()
         log.exception("falha inesperada no ciclo do worker")
