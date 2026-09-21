@@ -24,19 +24,21 @@ beforeEach(() => {
 })
 
 describe("Agents workspace", () => {
-  it("mantém os agentes principais e recolhe os demais", async () => {
+  it("mostra Gemini, Qwen e Kimi diretamente e seleciona suas sessões", async () => {
     render(<AgentsPage />)
-    expect(await screen.findByRole("tab", { name: /Agente local/ })).toBeInTheDocument()
-    expect(screen.queryByRole("tab", { name: "Kimi Code" })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Outros agentes" }))
-    expect(screen.getByRole("tab", { name: "Kimi Code" })).toBeInTheDocument()
-    expect(screen.getByRole("tab", { name: "Qwen Code" })).toBeInTheDocument()
+    expect(await screen.findByRole("tab", { name: /Qwen 27B · Local/ })).toBeInTheDocument()
+    for (const [label, id] of [["Gemini", "gemini"], ["Kimi Code", "kimi"], ["OpenRouter · Qwen CLI", "qwen"]]) {
+      fireEvent.click(screen.getByRole("tab", { name: label }))
+      expect(screen.getByText(`terminal:${id}:`)).toBeInTheDocument()
+      expect(screen.getByText(`queue:${id}`)).toBeInTheDocument()
+    }
     expect(await screen.findByText("APROVAR")).toBeInTheDocument()
+    expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true)
   })
   it("seleção local muda terminal, fila e tarefa ativa juntos", async () => {
     render(<AgentsPage />)
     await screen.findByText("APROVAR")
-    fireEvent.click(screen.getByRole("tab", { name: "Agente local" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Qwen 27B · Local" }))
     expect(screen.getByText("queue:local-code")).toBeInTheDocument()
     expect(screen.getByText("terminal:local-code:executing")).toBeInTheDocument()
     expect(screen.getByText("Tarefa local")).toBeInTheDocument()
@@ -47,7 +49,7 @@ describe("Agents workspace", () => {
   it("reabre a mesma seleção local após remontar sem iniciar sessão", async () => {
     const view = render(<AgentsPage />)
     await screen.findByText("APROVAR")
-    fireEvent.click(screen.getByRole("tab", { name: "Agente local" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Qwen 27B · Local" }))
     view.unmount()
     render(<AgentsPage />)
     expect(await screen.findByText("terminal:local-code:executing")).toBeInTheDocument()

@@ -10,8 +10,8 @@ import { getAgentRuntimes, agentLabels, type AgentName, type AgentRuntime, type 
 
 const AGENTS: Array<{ id: AgentName; label: string }> = [
   { id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" },
-  { id: "local-code", label: "Agente local" }, { id: "gemini", label: "Gemini" },
-  { id: "kimi", label: "Kimi Code" }, { id: "qwen", label: "Qwen Code" },
+  { id: "local-code", label: "Qwen 27B · Local" }, { id: "gemini", label: "Gemini" },
+  { id: "kimi", label: "Kimi Code" }, { id: "qwen", label: "OpenRouter · Qwen CLI" },
 ]
 const configuredStatusPollMs = Number(import.meta.env.VITE_AGENTS_STATUS_POLL_MS)
 const STATUS_POLL_MS = Number.isFinite(configuredStatusPollMs) ? Math.min(10000, Math.max(5000, configuredStatusPollMs)) : 5000
@@ -154,11 +154,11 @@ export default function AgentsPage() {
         <h2 className="text-lg font-semibold">Agentes</h2>
         <div className="flex items-center gap-2 text-xs">
           <button className="hidden rounded border border-slate-700 px-3 py-2 hover:bg-slate-800 md:block" aria-expanded={buildQueueOpen} onClick={() => setBuildQueueOpen(value => !value)}>{buildQueueOpen ? "Ocultar tarefas" : "Mostrar tarefas"}</button>
-          <button className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" aria-expanded={otherAgents} onClick={() => setOtherAgents(value => !value)}>Outros agentes</button>
+          <button className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" aria-expanded={otherAgents} onClick={() => setOtherAgents(value => !value)}>Runtimes remotos</button>
         </div>
       </header>
-      <nav aria-label="Selecionar agente" className="flex shrink-0 gap-1 overflow-x-auto rounded-lg border border-slate-800 bg-slate-900 p-1" role="tablist">
-        {choices.filter(item => otherAgents || ["claude", "codex", "local-code", agent].includes(item.id)).map(item => {
+      <nav aria-label="Selecionar agente" className="flex shrink-0 flex-wrap gap-1 rounded-lg border border-slate-800 bg-slate-900 p-1" role="tablist">
+        {choices.filter(item => otherAgents || AGENTS.some(primary => primary.id === item.id) || item.id === agent).map(item => {
           const current = health[item.id]?.runtime_state ?? runtimes.find(row => row.id === item.id)?.runtime_state
           return <button key={item.id} role="tab" aria-selected={agent === item.id} onClick={() => choose(item.id)} className={`flex min-h-10 shrink-0 items-center gap-2 rounded-md px-3 text-sm ${agent === item.id ? "bg-sky-700 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
             <span className={`h-2 w-2 rounded-full ${current === "ONLINE" ? "bg-emerald-400" : current === "ERROR" ? "bg-amber-400" : "bg-slate-500"}`} />
@@ -167,6 +167,7 @@ export default function AgentsPage() {
           </button>
         })}
       </nav>
+      {agent === "qwen" && <p className="text-xs text-slate-400">OpenRouter está disponível nesta sessão do Qwen Code. Use /model no terminal para escolher o modelo e o provider.</p>}
       <ExecutorDefaults />
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <RuntimeControls key={agent} agent={agent} runtimeState={state} activityState={selectedHealth?.activity_state} persistent={selectedHealth?.persistent} checkedAt={selectedHealth?.checked_at} />
