@@ -194,16 +194,23 @@ def test_auto_launcher_refuses_parallel_local_session():
         start_agent_runtime('local-code', 'plano', run_id=uuid4())
 
 
-def test_run_terminal_refuses_auxiliary_shell_without_binding(monkeypatch):
+def test_run_terminal_refuses_auxiliary_shell_without_binding(monkeypatch, tmp_path):
     from contextlib import nullcontext
     from app.routers import run_terminal
     from app.services.terminal_sessions import TerminalSessionError
+
+    terminal_dir = tmp_path / "terminals"
+    monkeypatch.setenv("WORKDEV_TERMINAL_DIR", str(terminal_dir))
+
     db = Mock()
     db.get.return_value = SimpleNamespace(agent='local-code', status='queued')
     monkeypatch.setattr(run_terminal, 'SessionLocal', lambda: nullcontext(db))
     monkeypatch.setattr(lifecycle, 'run_binding', lambda *args: None)
+
     create = Mock()
     monkeypatch.setattr(run_terminal.TerminalSessionManager, 'create', create)
+
     with pytest.raises(TerminalSessionError, match='canônico'):
         run_terminal._create_unlocked(str(uuid4()))
+
     create.assert_not_called()

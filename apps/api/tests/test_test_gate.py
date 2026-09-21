@@ -101,7 +101,19 @@ def test_gate_executa_fail_closed():
 
     from unittest.mock import patch
     # Executar gate (patch venv para não existir)
-    with patch("app.services.test_gate.API_VENV", Path("/tmp/invalid_venv/bin/python")), patch("app.services.test_gate._run_command", return_value=(0, "", "", 0)):
+    with (
+        patch("app.services.test_gate.API_VENV", Path("/tmp/invalid_venv/bin/python")),
+        patch("app.services.test_gate._run_command", return_value=(0, "", "", 0)),
+        patch(
+            "app.services.test_gate._check_guardrails",
+            return_value=CheckResult(
+                name="guardrails",
+                passed=True,
+                mandatory=True,
+                reason="Guardrails operacionais OK",
+            ),
+        ),
+    ):
         evidence = execute_gate(run)
 
     # FAIL-CLOSED: sem venv → FAIL
