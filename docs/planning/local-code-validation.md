@@ -81,3 +81,18 @@ os gates; não se declara aprovação ou conclusão.
   apagar o arquivo de entrada de uma sessão ativa.
 - Alterações concorrentes em docs/agents e compare_report.md foram preservadas
   e não integram o escopo deste trabalho.
+
+## Impedimento encontrado na entrega formal
+
+Após o commit `0a7af3d`, a CLI `workdev_agent.py review` foi executada e a API
+recusou com HTTP 409: `Transição inválida: failed → review`.
+Consulta direta da execução confirmou `failed` desde
+`2026-09-21T14:30:58.525079+00:00`, com erro
+`Runtime AUTO encerrou antes de registrar resultado`. O campo
+`review_base_sha` também está ausente. O commit foi associado à run, mas ela
+não entrou em review. Não se alterou o banco diretamente nem se inventou uma
+base de auditoria para contornar essas restrições.
+
+É necessária recuperação auditada do workflow pelo responsável, ou nova
+execução com escopo/base explícitos, além da resolução do gate de lint previsto
+no plano. A implementação está commitada; a task não foi declarada concluída.
