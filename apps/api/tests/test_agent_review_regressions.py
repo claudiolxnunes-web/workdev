@@ -107,10 +107,10 @@ def test_exit_code_marks_unhealthy_always_on(runtime, expected):
 
 
 def test_persistence_matches_runtime_policy():
-    for agent in ('codex', 'claude'):
+    for agent in ('codex', 'claude', 'local-code'):
         assert snapshot.is_persistent(agent, agent)
         assert not snapshot.is_persistent(agent, f'auto-{agent}-run')
-    for agent in ('kimi', 'qwen', 'gemini', 'local-code'):
+    for agent in ('kimi', 'qwen', 'gemini'):
         assert not snapshot.is_persistent(agent, agent)
 
 
