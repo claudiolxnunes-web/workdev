@@ -428,7 +428,12 @@ def test_cancelled_attach_closes_orphan_socket_and_releases_writer(api_terminal,
         return connection, {}, b''
     monkeypatch.setattr(run_terminal, '_attach', attach)
 
+    class FakeHeaders:
+        def getlist(self, _name):
+            return []
+
     class FakeWS:
+        headers = FakeHeaders()
         query_params = {'role': 'writer'}
         cookies = {COOKIE_NAME: create_session_token()}
         async def close(self, code=1000, reason=''):
@@ -444,8 +449,15 @@ def test_cancelled_attach_closes_orphan_socket_and_releases_writer(api_terminal,
 
     async def drive():
         task = asyncio.create_task(run_terminal.run_terminal_ws(FakeWS(), str(run_id)))
-        while not entered.is_set():
+        for _ in range(200):
+            if entered.is_set():
+                break
+            if task.done():
+                await task
+                pytest.fail("handler terminou antes de iniciar _attach")
             await asyncio.sleep(.01)
+        else:
+            pytest.fail("_attach não iniciou dentro de 2 segundos")
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
