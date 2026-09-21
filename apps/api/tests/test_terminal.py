@@ -35,6 +35,7 @@ from app.routers.terminal import (
     agent_send,
     agent_transcript,
     agents_status,
+    start_agent_lifecycle,
     start_agent_session,
     start_agent_runtime,
     stop_agent_runtime,
@@ -48,6 +49,16 @@ class FailingWebSocket:
 
 
 class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    @patch("app.services.agent_workspace.audit")
+    @patch("app.routers.terminal.agent_lifecycle.start")
+    async def test_local_code_passa_sessao_e_launcher_ao_lifecycle(self, start, audit):
+        start.return_value = {"started": True, "already_running": False}
+        result = await start_agent_lifecycle("local-code")
+        start.assert_called_once_with(
+            "local-code", "local-code", ["/opt/workdev/scripts/start_local_agent.sh"],
+        )
+        self.assertEqual(result, start.return_value)
+
     async def test_tmux_targets_require_exact_session_name(self):
         self.assertEqual(_session_target("code"), "=code")
         self.assertEqual(_pane_target("code"), "=code:")

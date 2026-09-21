@@ -27,6 +27,7 @@ def registro_isolado(tmp_path, monkeypatch):
         agent_lifecycle, "GROUPS_FILE", tmp_path / "agent-groups.json"
     )
     monkeypatch.setenv("AGENTS_HEALTH_STATE", str(tmp_path / "status.json"))
+    monkeypatch.setattr(agent_lifecycle, "_llama_service", lambda action: True)
     # Identidade, operações e snapshot são isolados em disco.
     yield
 
@@ -1482,3 +1483,103 @@ class TestRecuperacaoNaoApaga:
 
         assert agent_lifecycle.remember_group("kimi", 4242) is True
         assert agent_lifecycle.recall_groups("kimi") == [4242]
+
+
+class TestLlamacppHibrido:
+    @pytest.fixture
+    def runtime(self, monkeypatch):
+        from app.services import agent_runtimes
+        from unittest.mock import Mock
+
+        monkeypatch.setattr(agent_runtimes, "get_runtime", lambda agent: SimpleNamespace(
+            engine=agent_runtimes.ENGINE_LLAMACPP, kind=agent_runtimes.KIND_LOCAL,
+        ))
+        events = []
+        service = Mock(side_effect=lambda action: events.append(action) or action != "is-active")
+        run = Mock(side_effect=lambda args, timeout=10: (
+            events.append(args[1]) or SimpleNamespace(returncode=0, stderr="")
+        ))
+        read = Mock()
+        monkeypatch.setattr(agent_lifecycle, "_llama_service", service)
+        monkeypatch.setattr(agent_lifecycle, "_run", run)
+        monkeypatch.setattr(agent_lifecycle, "read_state", read)
+        monkeypatch.setattr(agent_lifecycle.time, "sleep", lambda seconds: None)
+        return SimpleNamespace(events=events, service=service, run=run, read=read)
+
+    def state(self, model=False, cli=False, session="local-code"):
+        return AgentState(
+            agent="local-code", session=session, model_loaded=model,
+            session_exists=cli, current_process="node" if cli else "",
+        )
+
+    @pytest.mark.parametrize("model,cli", [(False, False), (True, False), (False, True), (True, True)])
+    def test_start_hibrido(self, runtime, model, cli):
+        runtime.read.side_effect = [
+            self.state(model, cli),
+            *([self.state(False, cli), self.state(True, cli)] if not model else []),
+            *([self.state(True, True)] if not cli else []),
+        ]
+        launcher = ["/opt/workdev/scripts/start_local_agent.sh"]
+
+        result = agent_lifecycle.start("local-code", "local-code", launcher)
+
+        assert runtime.events == ([] if model else ["is-active", "start"]) + ([] if cli else ["new-session"])
+        assert result["started"] is not (model and cli)
+        assert result["already_running"] is (model and cli)
+        assert result["state"]["model_loaded"] is True
+        if cli:
+            runtime.run.assert_not_called()
+        else:
+            runtime.run.assert_called_once_with([
+                "tmux", "new-session", "-d", "-s", "local-code",
+                "-c", "/opt/workdev", *launcher,
+            ], 15)
+        assert runtime.read.call_count == 1 + (2 if not model else 0) + (0 if cli else 1)
+
+    @pytest.mark.parametrize("model,service_active", [(False, False), (True, True), (False, True)])
+    @pytest.mark.parametrize("failure", ["returncode", "exception"])
+    def test_falha_tmux_rollback_somente_servico_iniciado(self, runtime, model, service_active, failure):
+        import subprocess
+        runtime.read.side_effect = [self.state(model), self.state(True)]
+        runtime.service.side_effect = lambda action: runtime.events.append(action) or (service_active if action == "is-active" else True)
+        if failure == "exception":
+            runtime.run.side_effect = subprocess.TimeoutExpired("tmux", 15)
+            expected = subprocess.TimeoutExpired
+        else:
+            runtime.run.side_effect = None
+            runtime.run.return_value = SimpleNamespace(returncode=1, stderr="tmux falhou")
+            expected = agent_lifecycle.LifecycleError
+
+        with pytest.raises(expected):
+            agent_lifecycle.start("local-code", "local-code", ["launcher"])
+
+        assert runtime.events == ([] if model else ["is-active"] + ([] if service_active else ["start", "stop"]))
+
+    @pytest.mark.parametrize("model", [False, True])
+    def test_headless(self, runtime, model):
+        runtime.read.side_effect = [self.state(model, session=None), self.state(True, session=None)]
+        result = agent_lifecycle.start("local-code", None, None)
+        assert result["started"] is not model
+        assert result["already_running"] is model
+        assert result["state"]["model_loaded"] is True
+        runtime.run.assert_not_called()
+        assert runtime.events == ([] if model else ["is-active", "start"])
+
+    def test_repara_shell_apos_health(self, runtime):
+        shell = self.state(False, True)
+        shell.current_process = "bash"
+        ready = self.state(True, True)
+        ready.current_process = "bash"
+        runtime.read.side_effect = [shell, ready, self.state(True, True)]
+        agent_lifecycle.start("local-code", "local-code", ["launcher"])
+        assert runtime.events == ["is-active", "start", "kill-session", "new-session"]
+
+    def test_timeout_health_nao_cria_cli_e_faz_rollback(self, runtime, monkeypatch):
+        from unittest.mock import Mock
+        runtime.read.return_value = self.state()
+        monkeypatch.setattr(agent_lifecycle.time, "monotonic", Mock(side_effect=[0, 601]))
+        with pytest.raises(agent_lifecycle.LifecycleError) as exc:
+            agent_lifecycle.start("local-code", "local-code", ["launcher"])
+        assert exc.value.code == "runtime_start_timeout"
+        runtime.run.assert_not_called()
+        assert runtime.events == ["is-active", "start", "stop"]

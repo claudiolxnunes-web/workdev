@@ -51,7 +51,8 @@ UNLOAD_VERIFY_TIMEOUT_SECONDS = 20.0
 UNLOAD_POLL_SECONDS = 1.0
 
 PROBE_TIMEOUT_SECONDS = 5.0
-LOAD_TIMEOUT_SECONDS = 300.0
+# Cold starts observados ultrapassam cinco minutos; aguardar até dez.
+LOAD_TIMEOUT_SECONDS = 600.0
 
 CMD_TIMEOUT_SECONDS = 10
 
@@ -962,51 +963,59 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
 
     antes = read_state(agent, session)
 
-    # Runtime sem sessão: Ollama carrega modelo; llama.cpp controla o serviço.
-    if session is None:
-        from app.services import agent_runtimes
+    from app.services import agent_runtimes
 
-        runtime = agent_runtimes.get_runtime(agent)
+    runtime = agent_runtimes.get_runtime(agent)
+    if runtime is not None and runtime.engine == agent_runtimes.ENGINE_LLAMACPP:
+        service_started = False
+        model_started = antes.model_loaded is not True
+        try:
+            if model_started:
+                # Serviço já carregando não pertence a esta chamada para rollback.
+                if not _llama_service("is-active"):
+                    if not _llama_service("start"):
+                        raise LifecycleError(
+                            "runtime_start_failed",
+                            f"Não foi possível iniciar o serviço llama.cpp de {agent}",
+                        )
+                    service_started = True
 
-        if (
-            runtime is not None
-            and runtime.engine == agent_runtimes.ENGINE_LLAMACPP
-        ):
-            if antes.model_loaded is True:
+                limite = time.monotonic() + LOAD_TIMEOUT_SECONDS
+                while time.monotonic() < limite:
+                    antes = read_state(agent, session)
+                    if antes.model_loaded is True:
+                        break
+                    time.sleep(1)
+                else:
+                    raise LifecycleError(
+                        "runtime_start_timeout",
+                        f"{agent} não ficou online dentro do prazo",
+                    )
+
+            if session is None:
                 return {
                     "agent": agent,
-                    "started": False,
-                    "already_running": True,
+                    "started": model_started,
+                    "already_running": not model_started,
                     "state": antes.as_dict(),
                 }
 
-            if not _llama_service("start"):
+            result = _start_cli(agent, session, launcher, antes)
+        except Exception as error:
+            # Inclui timeout/exceção do tmux, sem parar serviço preexistente.
+            if service_started and not _llama_service("stop"):
                 raise LifecycleError(
-                    "runtime_start_failed",
-                    f"Não foi possível iniciar o serviço llama.cpp de {agent}",
-                )
+                    "runtime_rollback_failed",
+                    f"Falha ao desligar llama.cpp de {agent} após erro no start",
+                ) from error
+            raise
 
-            # O systemd pode retornar antes de o modelo terminar de carregar.
-            limite = time.monotonic() + LOAD_TIMEOUT_SECONDS
+        if model_started:
+            result.update(started=True, already_running=False)
+        return result
 
-            while time.monotonic() < limite:
-                depois = read_state(agent, session)
-
-                if depois.model_loaded is True:
-                    return {
-                        "agent": agent,
-                        "started": True,
-                        "already_running": False,
-                        "state": depois.as_dict(),
-                    }
-
-                time.sleep(1)
-
-            raise LifecycleError(
-                "runtime_start_timeout",
-                f"{agent} não ficou online dentro do prazo",
-            )
-
+    # Ollama sem sessão continua carregando pelo endpoint configurado.
+    if session is None:
         if not antes.model:
             raise LifecycleError(
                 "model_not_configured",
@@ -1044,6 +1053,13 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
             "state": read_state(agent, session).as_dict(),
         }
 
+    return _start_cli(agent, session, launcher, antes)
+
+
+def _start_cli(
+    agent: str, session: str, launcher: list[str] | None, antes: AgentState,
+) -> dict:
+    """Cria/repara a CLI sob o lock do start, após o modelo estar pronto."""
     if antes.agent_process_running:
         return {
             "agent": agent,
