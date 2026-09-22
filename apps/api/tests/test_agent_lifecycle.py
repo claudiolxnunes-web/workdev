@@ -1583,3 +1583,6 @@ class TestLlamacppHibrido:
         assert exc.value.code == "runtime_start_timeout"
         runtime.run.assert_not_called()
         assert runtime.events == ["is-active", "start", "stop"]
+
+
+from tests.test_runtime_state_audit import audit_store  # noqa: F401 -- isolated audit database fixture

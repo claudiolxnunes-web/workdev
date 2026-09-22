@@ -1801,8 +1801,8 @@ def create_run_event(
         run_id,
     )
 
-    if payload.event_type.startswith(('observer.', 'routing.jev_')):
-        raise HTTPException(403, 'Adaptive policy evidence is backend-owned')
+    if payload.event_type.startswith(('observer.', 'routing.jev_', 'runtime.')):
+        raise HTTPException(403, 'Policy and runtime audit evidence is backend-owned')
     event = add_run_event(
         db,
         run,

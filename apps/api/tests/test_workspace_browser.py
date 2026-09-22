@@ -107,3 +107,6 @@ def test_workspace_agent_and_run_detach_reconnect_stop_and_audit(workspace_api, 
                 except Exception: pass
             for session in (standalone,run_session):
                 subprocess.run(['tmux','kill-session','-t','='+session],capture_output=True)
+
+
+from tests.test_runtime_state_audit import audit_store  # noqa: F401 -- isolated audit database fixture

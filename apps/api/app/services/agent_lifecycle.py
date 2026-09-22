@@ -1306,7 +1306,7 @@ def lifecycle_operation(agent: str, session: str | None, phase: str, db=None):
         agent_snapshot.atomic_json(operation_file(agent), operation)
         agent_snapshot.publish([agent_snapshot.AgentSnapshot(agent=agent,
             runtime_state=phase, activity_state='IDLE', checked_at=agent_snapshot.now(),
-            persistent=agent_snapshot.is_persistent(agent, session))])
+            persistent=agent_snapshot.is_persistent(agent, session))], source='lifecycle')
     except OSError as error:
         raise LifecycleError('state_not_durable', 'Operação abortada: estado não persistido') from error
     outcome = {}
@@ -1331,13 +1331,13 @@ def lifecycle_operation(agent: str, session: str | None, phase: str, db=None):
         agent_snapshot.atomic_json(operation_file(agent), operation)
         agent_snapshot.publish([agent_snapshot.AgentSnapshot(agent=agent,
             runtime_state='ERROR', activity_state='IDLE', checked_at=agent_snapshot.now(),
-            reason=operation['reason'], persistent=agent_snapshot.is_persistent(agent, session))])
+            reason=operation['reason'], persistent=agent_snapshot.is_persistent(agent, session))], source='lifecycle')
         raise
     else:
         operation['updated_at'] = agent_snapshot.now()
         agent_snapshot.atomic_json(operation_file(agent), operation)
         row.checked_at = agent_snapshot.now()
-        agent_snapshot.publish([row])
+        agent_snapshot.publish([row], source='lifecycle')
 
 
 def try_recover(agent: str, session: str, launcher: list[str]) -> dict | None:

@@ -46,7 +46,7 @@ def poll():
     return row
 
 
-def test_forced_agent_death_reaches_offline_or_error(runtime):
+def test_forced_agent_death_reaches_offline_or_error(runtime, audit_store):
     start_fixture()
     deadline = time.monotonic()+5
     while poll().runtime_state.value != 'ONLINE' and time.monotonic() < deadline:
@@ -56,13 +56,17 @@ def test_forced_agent_death_reaches_offline_or_error(runtime):
     assert pid and pid != os.getpid()
     started = time.monotonic()
     os.kill(pid, signal.SIGKILL)
-    while time.monotonic()-started < 5:
-        row = poll()
-        if row.runtime_state.value in {'OFFLINE', 'ERROR'}:
+    before = len(audit_store.events())
+    while time.monotonic()-started < 15:
+        poll()
+        confirmed = snapshots.read_snapshot(['codex'])['agents'][0]['runtime_state']
+        if confirmed in {'OFFLINE', 'ERROR'}:
             break
-        time.sleep(.05)
-    assert snapshots.read_snapshot(['codex'])['agents'][0]['runtime_state'] in {'OFFLINE', 'ERROR'}
-    assert time.monotonic()-started < 5
+        assert len(audit_store.events()) == before
+        time.sleep(.1)
+    assert confirmed in {'OFFLINE', 'ERROR'}
+    assert 10 <= time.monotonic()-started < 15
+    assert len(audit_store.events()) == before + 1
 
 
 def test_stopping_survives_reader_restart_and_stop_is_idempotent(runtime, monkeypatch):
@@ -115,3 +119,29 @@ with file_lock(p.with_suffix('.lock')):
     results = [process.wait(timeout=10) for process in processes]
     assert results == [0] * 8
     assert target.read_text() == '8'
+
+
+from tests.test_runtime_state_audit import audit_store  # noqa: F401 -- isolated audit database fixture
+
+
+def test_real_tmux_lifecycle_is_audited_and_http_polling_is_read_only(runtime, audit_store):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.routers.terminal import router
+    start_fixture()
+    time.sleep(.1)
+    poll()
+    app=FastAPI()
+    app.include_router(router)
+    before=audit_store.events()
+    with TestClient(app) as client:
+        for _ in range(3):
+            response=client.get('/api/agents/status')
+            assert response.status_code==200
+    assert audit_store.events()==before
+    assert lifecycle.stop('codex','fixture')['stopped']
+    events=audit_store.events()
+    assert [event['novo_estado']['runtime'] for event in events][-2:]==['STOPPING','OFFLINE']
+    for left,right in zip(events,events[1:]):
+        assert left['novo_estado']==right['estado_anterior']
+        assert left['timestamp']<right['timestamp']

@@ -258,3 +258,6 @@ def test_refresh_contract_explicitly_reads_snapshot_only(monkeypatch):
     assert response['source'] == 'status.json'
     assert response['probe_requested'] is False
     assert response['updated_at'] == 'sample'
+
+
+from tests.test_runtime_state_audit import audit_store  # noqa: F401 -- isolated audit database fixture

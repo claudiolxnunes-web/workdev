@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import fcntl
 import json
+import logging
 import os
 from pathlib import Path
 import tempfile
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -89,22 +91,96 @@ def atomic_json(path: Path, payload: dict):
             temporary.unlink(missing_ok=True)
 
 
-def publish(rows: list[AgentSnapshot], path: Path | None = None):
-    """Merge under one OS lock, rejecting samples older than lifecycle events."""
+def _semantic(row):
+    return {'runtime': row['runtime_state'], 'activity': row['activity_state']}
+
+
+def publish(rows: list[AgentSnapshot], path: Path | None = None, *, source='healthcheck'):
+    """Confirmar, publicar e registrar sob o mesmo lock canônico.
+
+    O journal integra o snapshot: estado novo e evento pendente são uma única
+    escrita durável. PostgreSQL recebe UUIDs estáveis, permitindo replay após
+    crash antes da limpeza do journal. Uma falha de banco não perde transições.
+    """
+    from app.services import runtime_state_audit
+    from sqlalchemy.exc import SQLAlchemyError
+    if source not in {'healthcheck', 'lifecycle'}:
+        raise ValueError('invalid snapshot source')
     path = path or state_file()
     with file_lock(path.with_suffix('.lock')):
         try:
             payload = json.loads(path.read_text())
-            agents = payload['agents'] if payload.get('version') == 2 else {}
-            if not isinstance(agents, dict):
-                agents = {}
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            agents = {}
+            if not isinstance(payload, dict):
+                raise ValueError('invalid snapshot')
+            if payload.get('version') != 2:
+                if payload.get('version') == 1 and not payload.get('audit_pending'):
+                    payload = {}  # Migração do snapshot legado, sem histórico v2.
+                else:
+                    raise ValueError('unsupported snapshot audit version')
+        except FileNotFoundError:
+            payload = {}
+        except (ValueError, TypeError) as error:
+            # Nunca descartar silenciosamente um journal potencialmente pendente.
+            raise OSError('snapshot audit journal unreadable') from error
+        agents = payload.setdefault('agents', {})
+        candidates = payload.setdefault('audit_candidates', {})
+        pending = payload.setdefault('audit_pending', [])
+        if not isinstance(agents, dict) or not isinstance(candidates, dict) or not isinstance(pending, list):
+            raise OSError('snapshot audit journal invalid')
+        payload.setdefault('audit_sequence', 0)
+        payload.setdefault('audit_stream', str(uuid4()))
         for row in rows:
-            old = agents.get(row.agent, {})
-            if not isinstance(old, dict) or old.get('checked_at', '') <= row.checked_at:
-                agents[row.agent] = row.model_dump(mode='json')
-        atomic_json(path, {'version': 2, 'updated_at': now(), 'agents': agents})
+            sample = row.model_dump(mode='json')
+            stamp = datetime.fromisoformat(row.checked_at)
+            if stamp.tzinfo is None:
+                raise ValueError('snapshot timestamp must be timezone aware')
+            old = agents.get(row.agent)
+            candidate = candidates.get(row.agent)
+            latest = candidate['last_sample'] if candidate else (old or {}).get('checked_at')
+            if latest and stamp <= datetime.fromisoformat(latest):
+                continue
+            if old and source == 'healthcheck' and row.runtime_state in {RuntimeState.ERROR, RuntimeState.OFFLINE} and _semantic(old) != _semantic(sample):
+                # Dois samples distintos e ao menos 10s. Nunca usar repetição de
+                # publicação da mesma coleta como confirmação de falha.
+                if not candidate or candidate['state'] != _semantic(sample):
+                    candidates[row.agent] = {'state': _semantic(sample),
+                        'since': row.checked_at, 'last_sample': row.checked_at}
+                    continue
+                candidate['last_sample'] = row.checked_at
+                if (stamp - datetime.fromisoformat(candidate['since'])).total_seconds() < 10:
+                    continue
+            candidates.pop(row.agent, None)
+            if old and _semantic(old) != _semantic(sample):
+                current = datetime.now(timezone.utc)
+                previous = payload.get('audit_timestamp')
+                if previous:
+                    current = max(current, datetime.fromisoformat(previous) + timedelta(microseconds=1))
+                timestamp = current.isoformat()
+                payload['audit_timestamp'] = timestamp
+                payload['audit_sequence'] += 1
+                event = {'runtime_id': row.agent, 'estado_anterior': _semantic(old),
+                    'novo_estado': _semantic(sample), 'timestamp': timestamp,
+                    'source': source, 'sequence': payload['audit_sequence'],
+                    'stream_id': payload['audit_stream']}
+                related_run = row.active_run_id or old.get('active_run_id')
+                if related_run:
+                    event['run_id'] = related_run
+                if row.reason or row.activity_reason:
+                    from app.services.context_redaction import redact
+                    event['erro'] = redact(row.reason or row.activity_reason).text[:1000]
+                pending.append({'event_id': str(uuid4()), 'payload': event})
+            agents[row.agent] = sample
+        payload.update(version=2, updated_at=now())
+        atomic_json(path, payload)
+        if pending:
+            try:
+                runtime_state_audit.persist(pending)
+            except SQLAlchemyError:
+                # Somente tipo fixo, nunca connection string/SQL/segredos.
+                logging.getLogger(__name__).warning('runtime audit database unavailable; durable replay pending')
+            else:
+                payload['audit_pending'] = []
+                atomic_json(path, payload)
 
 
 def public_row(row: AgentSnapshot) -> dict:
