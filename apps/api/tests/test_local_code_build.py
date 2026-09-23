@@ -21,7 +21,7 @@ def queue_db(tmp_path, monkeypatch):
     class Event: pass
     mapping.map_imperatively(Run, Table('agent_runs', mapping.metadata,
         Column('id', UUID(as_uuid=True), primary_key=True), Column('agent', String),
-        Column('status', String), Column('model', String), Column('dispatch_state', String),
+        Column('status', String), Column('model', String), Column('local_model_key', String), Column('dispatch_state', String),
         Column('dispatch_attempts', Integer, default=0), Column('dispatch_token', UUID(as_uuid=True)),
         Column('last_dispatch_at', DateTime)))
     mapping.map_imperatively(Job, Table('agent_build_jobs', mapping.metadata,
@@ -151,6 +151,20 @@ def test_lost_cli_retains_queue(cli, queue_db, monkeypatch):
         build.dispatch(db, db.get(queue_db.Job, job_id), db.get(queue_db.Run, run_id))
         assert db.get(queue_db.Job, job_id).state == 'queued'
         assert db.get(queue_db.Run, run_id).status == 'queued'
+
+
+def test_dispatch_records_physical_model_key(cli, queue_db, monkeypatch):
+    """local_model.current() é gravado na run no despacho; o alias fica intacto."""
+    from app.services import local_model
+    monkeypatch.setattr(local_model, 'current', lambda: 'bonsai')
+    monkeypatch.setattr(channel, 'send_marker', deliver_and_ack)
+    run_id, job_id = queue_db.new()
+    with queue_db.factory() as db:
+        build.dispatch(db, db.get(queue_db.Job, job_id), db.get(queue_db.Run, run_id))
+    with queue_db.factory() as db:
+        run = db.get(queue_db.Run, run_id)
+        assert run.local_model_key == 'bonsai'
+        assert run.model == 'workdev-qwen27b'  # alias estável inalterado
 
 
 def test_dispatch_route_queues_without_http_or_background(queue_db, monkeypatch):

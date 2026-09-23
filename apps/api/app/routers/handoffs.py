@@ -174,6 +174,10 @@ def _run_out(
         "reviewer_agent": run.reviewer_agent,
         "review_attempts": run.review_attempts or 0,
         "model": run.model,
+        # Modelo físico servido pelo llama.cpp no despacho do local-code
+        # (q4/q2/bonsai). NULL para os demais agentes; `model` segue com o
+        # alias estável.
+        "local_model_key": run.local_model_key,
         "reasoning_effort": run.reasoning_effort,
         "complexity": run.complexity,
         "complexity_score": run.complexity_score,

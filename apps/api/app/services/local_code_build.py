@@ -4,6 +4,7 @@ import subprocess
 
 from app.models.handoff import AgentBuildJob, AgentRun
 from app.services import agent_lifecycle as lifecycle, build_jobs, local_code_channel as channel
+from app.services import local_model
 from app.services.handoff import add_run_event, build_context, update_run, HandoffError
 
 
@@ -42,6 +43,10 @@ def dispatch(db, job, run):
             prompt = build_context(db, run)['prompt']
             from app.services.review_scope import capture_start_base
             capture_start_base(db, run)
+            # Modelo físico real servido agora pelo llama.cpp (q4/q2/bonsai).
+            # O alias estável workdev-qwen27b em run.model não muda; esta chave
+            # registra qual peso respondeu a execução.
+            run.local_model_key = local_model.current()
             data = channel.reserve(run.id, job.id, prompt)
             if data is None:
                 db.rollback()  # BUSY/offline/manual: keep queued, release SKIP LOCKED claim.
