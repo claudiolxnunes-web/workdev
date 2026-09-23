@@ -758,3 +758,41 @@ async def agent_terminal(websocket: WebSocket, agent: str):
 from app.routers.agent_runtimes import router as _agent_runtimes_router  # noqa: E402
 
 router.include_router(_agent_runtimes_router)
+
+
+# --------------------------------------------------------------------------
+# Modelo do local-code (Q4 / Q2 / Bonsai): mesma sessão, outro GGUF
+# --------------------------------------------------------------------------
+
+class LocalModelSwitch(BaseModel):
+    model: str
+
+
+@router.get("/api/agents/local-code/model")
+async def get_local_code_model():
+    from app.services import local_model
+
+    return {"current": local_model.current(), "options": local_model.options()}
+
+
+@router.post("/api/agents/local-code/model", status_code=202)
+async def switch_local_code_model(payload: LocalModelSwitch):
+    from app.services import local_model
+    from app.services.agent_workspace import audit
+
+    def executar():
+        with SessionLocal() as db:
+            return local_model.switch(payload.model, db)
+
+    await asyncio.to_thread(audit, "switch_local_model", agent="local-code")
+    try:
+        resultado = await asyncio.to_thread(executar)
+    except local_model.SwitchError as error:
+        await asyncio.to_thread(audit, "switch_local_model", agent="local-code",
+                                result="failed", code=error.code)
+        raise HTTPException(
+            status_code=503 if error.code == "switch_failed" else 409,
+            detail={"code": error.code, "message": error.message},
+        ) from error
+    await asyncio.to_thread(audit, "switch_local_model", agent="local-code", result="succeeded")
+    return resultado

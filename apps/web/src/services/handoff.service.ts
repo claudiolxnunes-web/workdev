@@ -477,3 +477,16 @@ export function subscribeToHandoffs(onChange: () => void): () => void {
     .subscribe()
   return () => { void supabase.removeChannel(channel) }
 }
+
+export interface LocalModelInfo {
+  current: string | null
+  options: Array<{ key: string; label: string }>
+}
+
+export async function getLocalModel(): Promise<LocalModelInfo> {
+  return read<LocalModelInfo>(fetch("/api/agents/local-code/model", { headers }))
+}
+
+export async function switchLocalModel(model: string): Promise<{ model: string; switched: boolean; restarted: boolean }> {
+  return read(fetch("/api/agents/local-code/model", { method: "POST", headers, body: JSON.stringify({ model }) }))
+}
