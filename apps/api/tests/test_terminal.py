@@ -48,6 +48,27 @@ class FailingWebSocket:
         raise RuntimeError("client disconnected")
 
 
+class TerminalBusyHandshakeTest(unittest.TestCase):
+    def test_busy_terminal_delivers_close_reason_after_handshake(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from unittest.mock import AsyncMock
+        from app.routers.terminal import router
+
+        app = FastAPI()
+        app.include_router(router)
+        with patch('app.routers.terminal.websocket_is_authenticated', return_value=True), \
+             patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=False), \
+             patch('app.routers.terminal.subprocess.Popen') as process, \
+             TestClient(app) as client:
+            with client.websocket_connect('/ws/agents/codex') as socket:
+                self.assertEqual(socket.receive(), {
+                    'type': 'websocket.close', 'code': 1008,
+                    'reason': 'Terminal já está em uso',
+                })
+            process.assert_not_called()
+
+
 class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
     @patch("app.services.agent_workspace.audit")
     @patch("app.routers.terminal.agent_lifecycle.start")

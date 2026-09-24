@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import AgentsPage from "./AgentsPage"
 
 const { getAgentRuntimes } = vi.hoisted(() => ({ getAgentRuntimes: vi.fn() }))
@@ -11,6 +11,7 @@ vi.mock("./BuildQueue", () => ({ BuildQueue: ({ agent }: { agent: string }) => <
 vi.mock("./ExecutorDefaults", () => ({ ExecutorDefaults: () => <div>modelos</div> }))
 const fetchMock = vi.fn()
 const local = { id: "local-code", label: "Local", runtime_state: "ONLINE", activity_state: "IDLE", status: "online", models: [], reprovision: { steps: [] } }
+afterEach(() => vi.useRealTimers())
 
 beforeEach(() => {
   localStorage.clear()
@@ -24,6 +25,21 @@ beforeEach(() => {
 })
 
 describe("Agents workspace", () => {
+  it('retoma polling após snapshot sem resposta e evita consultas de runtimes sobrepostas', async () => {
+    vi.useFakeTimers()
+    getAgentRuntimes.mockReturnValue(new Promise(() => {}))
+    fetchMock.mockImplementationOnce((_url: string, options: RequestInit) => new Promise((_resolve, reject) => {
+      options.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+    }))
+    const before = getAgentRuntimes.mock.calls.length
+    const view = render(<AgentsPage />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+    expect(screen.getByText('Snapshot indisponível')).toBeInTheDocument()
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(screen.getByText('APROVAR')).toBeInTheDocument()
+    expect(getAgentRuntimes.mock.calls.length - before).toBe(1)
+    view.unmount()
+  })
   it("mostra Gemini, Qwen e Kimi diretamente e seleciona suas sessões", async () => {
     render(<AgentsPage />)
     expect(await screen.findByRole("tab", { name: /Qwen 27B · Local/ })).toBeInTheDocument()

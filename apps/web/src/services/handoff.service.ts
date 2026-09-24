@@ -49,7 +49,22 @@ export type RuntimeState = 'OFFLINE' | 'STARTING' | 'ONLINE' | 'STOPPING' | 'ERR
 export type ActivityState = 'IDLE' | 'BUSY' | 'WAITING_INPUT'
 
 export async function setAgentConnection(agent: AgentName, connected: boolean): Promise<unknown> {
-  return read(fetch(`/api/agents/${agent}/${connected ? 'start' : 'stop?confirm=true'}`, { method: 'POST', headers }))
+  return runtimeRequest(`/api/agents/${agent}/${connected ? 'start' : 'stop?confirm=true'}`, { method: 'POST', headers }, 30000)
+}
+
+async function runtimeRequest<T>(url: string, options: RequestInit, timeout = 10000): Promise<T> {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeout)
+  try {
+    return await read<T>(fetch(url, { ...options, signal: controller.signal }))
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(options.method === 'POST'
+        ? 'A resposta demorou. A operação pode continuar no servidor; confira o estado em Atualizar antes de tentar novamente.'
+        : 'Tempo esgotado ao consultar o estado do agente.', { cause: error })
+    }
+    throw error
+  } finally { window.clearTimeout(timer) }
 }
 
 export interface AgentRuntime {
@@ -363,9 +378,7 @@ export async function sendToBuild(
 }
 
 export async function getAgentRuntimes(): Promise<AgentRuntime[]> {
-  const body = await read<{ runtimes: AgentRuntime[] }>(
-    fetch('/api/agent-runtimes', { headers }),
-  )
+  const body = await runtimeRequest<{ runtimes: AgentRuntime[] }>('/api/agent-runtimes', { headers })
   return body.runtimes ?? []
 }
 
@@ -484,9 +497,9 @@ export interface LocalModelInfo {
 }
 
 export async function getLocalModel(): Promise<LocalModelInfo> {
-  return read<LocalModelInfo>(fetch("/api/agents/local-code/model", { headers }))
+  return runtimeRequest<LocalModelInfo>("/api/agents/local-code/model", { headers })
 }
 
 export async function switchLocalModel(model: string): Promise<{ model: string; switched: boolean; restarted: boolean }> {
-  return read(fetch("/api/agents/local-code/model", { method: "POST", headers, body: JSON.stringify({ model }) }))
+  return runtimeRequest("/api/agents/local-code/model", { method: "POST", headers, body: JSON.stringify({ model }) }, 30000)
 }

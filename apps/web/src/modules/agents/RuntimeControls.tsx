@@ -16,11 +16,13 @@ export function RuntimeControls({ agent, runtimeState = 'ERROR', activityState =
     setFailure(null)
     try {
       await setAgentConnection(agent, connected)
-      onRefresh?.()
-      window.dispatchEvent(new Event('agent-runtime-refresh'))
     } catch (cause) {
       setFailure({ message: cause instanceof Error ? cause.message : 'Falha no controle do agente', checkedAt: latestCheckedAt.current })
-    } finally { setPending(false) }
+    } finally {
+      setPending(false)
+      onRefresh?.()
+      window.dispatchEvent(new Event('agent-runtime-refresh'))
+    }
   }
   return <div className="flex flex-wrap items-center gap-2 rounded border border-slate-700 p-2 text-xs" aria-label="Estado do agente">
     <span className="sr-only">Runtime: <strong>{error ? 'ERROR' : runtimeState}</strong></span>

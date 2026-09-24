@@ -51,6 +51,8 @@ export default function AgentsPage() {
       if (!active() || inFlight) return
       inFlight = true
       controller = new AbortController()
+      let timedOut = false
+      const timeout = window.setTimeout(() => { timedOut = true; controller?.abort() }, 10000)
       try {
         const response = await fetch("/api/agents/status?workspace=true", { signal: controller.signal })
         if (!response.ok) throw new Error("Snapshot indisponível")
@@ -73,18 +75,18 @@ export default function AgentsPage() {
         setHealth(nextHealth)
         setOperations(nextOperations)
       } catch (error) {
-        if (!cancelled && !controller?.signal.aborted && !(error instanceof Error && error.name === 'AbortError')) {
+        if (!cancelled && (timedOut || (!controller?.signal.aborted && !(error instanceof Error && error.name === 'AbortError')))) {
           setHealth(Object.fromEntries(AGENTS.map(item => [item.id, { health: 'degraded', runtime_state: 'ERROR', activity_state: 'IDLE', health_reason: 'Snapshot indisponível' }])))
           setWorkspaceRuns([])
           setAwaitingApproval({})
           setOperations({})
         }
       }
-      finally { inFlight = false; schedule() }
+      finally { window.clearTimeout(timeout); inFlight = false; schedule() }
     }
     function visibilityChanged() {
       window.clearTimeout(timer)
-      if (active()) schedule()
+      if (active()) void poll()
       else controller?.abort()
     }
     document.addEventListener("visibilitychange", visibilityChanged)
@@ -104,13 +106,16 @@ export default function AgentsPage() {
     // Runtimes Ollama são sondados pelo backend. Endpoint fora do ar volta
     // como estado, então a página nunca quebra por causa de uma GPU desligada.
     let cancelled = false
+    let inFlight = false
     async function poll() {
+      if (cancelled || inFlight || document.hidden) return
+      inFlight = true
       try {
         const rows = await getAgentRuntimes()
         if (!cancelled) setRuntimes(rows)
       } catch {
         if (!cancelled) setRuntimes(previous => previous.map(row => ({ ...row, runtime_state: 'ERROR', activity_state: 'IDLE', status: 'offline', status_label: 'ERROR', reason: 'Snapshot indisponível', dispatchable: false, busy: false })))
-      }
+      } finally { inFlight = false }
     }
     void poll()
     const interval = window.setInterval(poll, RUNTIME_POLL_MS)

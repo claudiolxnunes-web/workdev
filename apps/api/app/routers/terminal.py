@@ -672,6 +672,9 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Agente inválido")
         return
     if not await _claim(session):
+        # After authentication, complete the handshake so browsers receive
+        # the close code/reason instead of an opaque HTTP 403 / code 1006.
+        await websocket.accept()
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Terminal já está em uso")
         return
 
