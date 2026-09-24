@@ -516,7 +516,7 @@ def queue_build(
 
     adaptive_event = None
     from app.services import adaptive_config
-    if agent != 'local-code' and adaptive_config.load().enabled and isinstance(db, Session):
+    if adaptive_config.load().enabled and isinstance(db, Session):
         from app.services.task_complexity import classify_task
         from app.services.jev_decision import classify
         task = db.get(BacklogItem, plan.backlog_id)
