@@ -5,11 +5,18 @@
 set -eu
 
 key="$(head -c 32 /var/lib/workdev-llama/model 2>/dev/null | tr -cd 'a-z0-9')"
+set --
 
 case "$key" in
   q2) model=/opt/models/qwen27b/workdev-qwen3.6-27b-v4.1-Q2_K.gguf ;;
   q4) model=/opt/models/qwen27b/workdev-qwen3.6-27b-v4.1-Q4_K_S.gguf ;;
-  fast|*) model=/opt/workdev/models/workdev-local-fast/workdev-local-fast-v2-Q4_K_M.gguf ;;
+  fast|*)
+    model=/opt/workdev/models/workdev-local-fast/workdev-local-fast-v2-Q4_K_M.gguf
+    # Qwen Code não envia chat_template_kwargs. Neste 4B, o template padrão
+    # consome a resposta em reasoning_content e o terminal fica sem texto.
+    # Só o Fast recebe este padrão; Q2/Q4 preservam seu comportamento atual.
+    set -- --chat-template-kwargs '{"enable_thinking":false}'
+    ;;
 esac
 
 exec /opt/llama.cpp/build/bin/llama-server \
@@ -18,6 +25,7 @@ exec /opt/llama.cpp/build/bin/llama-server \
   -c 32768 \
   -t 8 \
   -np 1 \
+  "$@" \
   --no-reasoning-preserve \
   --host 127.0.0.1 \
   --port 8080

@@ -41,6 +41,10 @@ def test_python_and_wrapper_resolve_same_model(tmp_path, monkeypatch, raw, expec
     assert args[args.index('-a') + 1] == 'workdev-qwen27b'
     assert args[args.index('--port') + 1] == '8080'
     assert args[args.index('-c') + 1] == '32768'
+    if expected == 'fast':
+        assert args[args.index('--chat-template-kwargs') + 1] == '{"enable_thinking":false}'
+    else:
+        assert '--chat-template-kwargs' not in args
 
 
 def test_endpoint_lists_fast_first_and_preserves_27b(tmp_path, monkeypatch):
