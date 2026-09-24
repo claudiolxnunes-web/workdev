@@ -153,17 +153,18 @@ def test_lost_cli_retains_queue(cli, queue_db, monkeypatch):
         assert db.get(queue_db.Run, run_id).status == 'queued'
 
 
-def test_dispatch_records_physical_model_key(cli, queue_db, monkeypatch):
+@pytest.mark.parametrize("physical_key", ["fast", "q4", "q2", "bonsai"])
+def test_dispatch_records_physical_model_key(cli, queue_db, monkeypatch, physical_key):
     """local_model.current() é gravado na run no despacho; o alias fica intacto."""
     from app.services import local_model
-    monkeypatch.setattr(local_model, 'current', lambda: 'bonsai')
+    monkeypatch.setattr(local_model, 'current', lambda: physical_key)
     monkeypatch.setattr(channel, 'send_marker', deliver_and_ack)
     run_id, job_id = queue_db.new()
     with queue_db.factory() as db:
         build.dispatch(db, db.get(queue_db.Job, job_id), db.get(queue_db.Run, run_id))
     with queue_db.factory() as db:
         run = db.get(queue_db.Run, run_id)
-        assert run.local_model_key == 'bonsai'
+        assert run.local_model_key == physical_key
         assert run.model == 'workdev-qwen27b'  # alias estável inalterado
 
 

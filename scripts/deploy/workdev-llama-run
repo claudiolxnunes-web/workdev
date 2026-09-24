@@ -1,0 +1,23 @@
+#!/bin/sh
+# Sobe o llama.cpp do local-code com o modelo de /var/lib/workdev-llama/model.
+# O arquivo é gravável pela API, então é dado não confiável: só as chaves
+# abaixo valem, qualquer outra coisa cai no Fast padrão.
+set -eu
+
+key="$(head -c 32 /var/lib/workdev-llama/model 2>/dev/null | tr -cd 'a-z0-9')"
+
+case "$key" in
+  q2) model=/opt/models/qwen27b/workdev-qwen3.6-27b-v4.1-Q2_K.gguf ;;
+  q4) model=/opt/models/qwen27b/workdev-qwen3.6-27b-v4.1-Q4_K_S.gguf ;;
+  fast|*) model=/opt/workdev/models/workdev-local-fast/workdev-local-fast-v2-Q4_K_M.gguf ;;
+esac
+
+exec /opt/llama.cpp/build/bin/llama-server \
+  -m "$model" \
+  -a workdev-qwen27b \
+  -c 32768 \
+  -t 8 \
+  -np 1 \
+  --no-reasoning-preserve \
+  --host 127.0.0.1 \
+  --port 8080

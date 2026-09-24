@@ -1,4 +1,4 @@
-"""Troca do modelo servido pelo local-code (Q4 / Q2 / Bonsai).
+"""Troca do modelo servido pelo local-code (Fast / Q4 / Q2).
 
 Existe um único llama-server na porta 8080, com alias fixo `workdev-qwen27b`.
 Trocar de modelo é gravar a chave em KEY_FILE e reiniciar o serviço: a
@@ -24,9 +24,9 @@ AGENT = "local-code"
 KEY_FILE = Path("/var/lib/workdev-llama/model")
 
 MODELS = {
-    "q4": "Qwen 27B Q4_K_S (padrão)",
-    "q2": "Qwen 27B Q2_K (mais leve)",
-    "bonsai": "Bonsai 27B Q1 (mínimo de RAM)",
+    "fast": "WorkDev Local Fast V2 — Qwen3.8 4B (padrão)",
+    "q4": "Qwen 27B Q4_K_S (secundário)",
+    "q2": "Qwen 27B Q2_K (secundário)",
 }
 
 IDLE_PHASES = {None, "idle", "offline"}
@@ -40,15 +40,15 @@ class SwitchError(RuntimeError):
 
 
 def current() -> str | None:
-    """Modelo configurado, com a mesma regra do wrapper (desconhecido = q4)."""
+    """Modelo configurado, com a mesma regra do wrapper (desconhecido = fast)."""
     try:
         bruto = KEY_FILE.read_bytes()[:32].decode("ascii", "ignore")
     except FileNotFoundError:
-        return "q4"
+        return "fast"
     except OSError:
         return None
     chave = "".join(c for c in bruto if c.isascii() and (c.islower() or c.isdigit()))
-    return chave if chave in MODELS else "q4"
+    return chave if chave in MODELS else "fast"
 
 
 def options() -> list[dict]:
