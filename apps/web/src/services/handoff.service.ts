@@ -26,11 +26,11 @@ export interface CliAgentModelInfo {
 }
 
 export function getCliAgentModel(agent: SelectableCliAgent): Promise<CliAgentModelInfo> {
-  return runtimeRequest(`/api/agents/${agent}/model`, { method: "GET", headers })
+  return runtimeRequest(`/api/cli-agent-models/${agent}`, { method: "GET", headers })
 }
 
 export function selectCliAgentModel(agent: SelectableCliAgent, model: string): Promise<CliAgentModelInfo> {
-  return runtimeRequest(`/api/agents/${agent}/model`, {
+  return runtimeRequest(`/api/cli-agent-models/${agent}`, {
     method: "PUT", headers, body: JSON.stringify({ model }),
   })
 }

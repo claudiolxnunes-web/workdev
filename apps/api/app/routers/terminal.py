@@ -50,7 +50,7 @@ class CliModelSelection(BaseModel):
     model: str
 
 
-@router.get("/api/agents/{agent}/model")
+@router.get("/api/cli-agent-models/{agent}")
 def get_cli_agent_model(agent: str):
     try:
         return cli_agent_models.describe(agent)
@@ -58,7 +58,7 @@ def get_cli_agent_model(agent: str):
         raise HTTPException(status_code=404, detail=str(error)) from error
 
 
-@router.put("/api/agents/{agent}/model")
+@router.put("/api/cli-agent-models/{agent}")
 def select_cli_agent_model(agent: str, payload: CliModelSelection):
     if agent not in cli_agent_models.MODELS:
         raise HTTPException(status_code=404, detail="Agente sem seleção de modelo")
