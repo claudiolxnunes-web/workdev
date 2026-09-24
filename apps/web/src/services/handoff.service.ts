@@ -17,6 +17,24 @@ export type AgentName = CliAgentName | RuntimeAgentName
 export const CLI_AGENTS: CliAgentName[] = ["codex", "claude", "kimi", "qwen", "gemini"]
 export const RUNTIME_AGENTS: RuntimeAgentName[] = ["local-code", "gpu-hostinger", "gpu-runpod"]
 
+export type SelectableCliAgent = "codex" | "claude" | "kimi" | "gemini"
+export interface CliAgentModelInfo {
+  agent: SelectableCliAgent
+  selected: string
+  active: string | null
+  options: Array<{ model: string; label: string }>
+}
+
+export function getCliAgentModel(agent: SelectableCliAgent): Promise<CliAgentModelInfo> {
+  return runtimeRequest(`/api/agents/${agent}/model`, { method: "GET", headers })
+}
+
+export function selectCliAgentModel(agent: SelectableCliAgent, model: string): Promise<CliAgentModelInfo> {
+  return runtimeRequest(`/api/agents/${agent}/model`, {
+    method: "PUT", headers, body: JSON.stringify({ model }),
+  })
+}
+
 /**
  * Quem CONSEGUE emitir veredito. Espelha `AGENTS_WITH_REVIEW_CHANNEL` do
  * backend (`app/services/handoff.py`): capacidade implementada, não hierarquia

@@ -2,9 +2,9 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import AgentsPage from "./AgentsPage"
 
-const { getAgentRuntimes } = vi.hoisted(() => ({ getAgentRuntimes: vi.fn() }))
+const { getAgentRuntimes, getCliAgentModel } = vi.hoisted(() => ({ getAgentRuntimes: vi.fn(), getCliAgentModel: vi.fn() }))
 vi.mock("@/services/handoff.service", async importOriginal => ({
-  ...(await importOriginal<typeof import("@/services/handoff.service")>()), getAgentRuntimes,
+  ...(await importOriginal<typeof import("@/services/handoff.service")>()), getAgentRuntimes, getCliAgentModel,
 }))
 vi.mock("./AgentTerminal", () => ({ AgentTerminal: ({ agent, operationalStatus }: { agent: string; operationalStatus?: string }) => <div>terminal:{agent}:{operationalStatus}</div> }))
 vi.mock("./BuildQueue", () => ({ BuildQueue: ({ agent }: { agent: string }) => <div>queue:{agent}</div> }))
@@ -17,6 +17,8 @@ beforeEach(() => {
   localStorage.clear()
   sessionStorage.clear()
   getAgentRuntimes.mockResolvedValue([local])
+  getCliAgentModel.mockImplementation(async (agent: string) => ({ agent, selected: "model", active: null,
+    options: [{ model: "model", label: "Modelo atual" }] }))
   fetchMock.mockResolvedValue({ ok: true, json: async () => ({ agents: [
     { agent: "claude", runtime_state: "ONLINE", activity_state: "IDLE", health: "idle", awaiting_approval: true, operational_status: "awaiting_approval", runs: [] },
     { agent: "local-code", runtime_state: "ONLINE", activity_state: "BUSY", health: "busy", operational_status: "executing", runs: [{ id: "local-run", agent: "local-code", status: "running", task_title: "Tarefa local" }] },

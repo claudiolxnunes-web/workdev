@@ -267,7 +267,7 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
              patch('app.routers.terminal.agent_lifecycle.bind_run') as bind:
             result = start_agent_runtime("codex", "prompt", timeout_seconds=1, run_id="run-1")
             bind.assert_called_once_with('codex', 'run-1', 'auto-codex-run-1')
-        start_session.assert_called_once_with("codex", "auto-codex-run-1")
+        start_session.assert_called_once_with("codex", "auto-codex-run-1", None)
         send_text.assert_called_once_with("auto-codex-run-1", "prompt")
         self.assertEqual(result["session"], "auto-codex-run-1")
     @patch("app.routers.terminal._stop_standby_session", return_value=True)
@@ -342,6 +342,7 @@ class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(_start_standby_session("kimi", "kimi"))
         self.assertEqual(run.call_args.args[0], [
             "tmux", "new-session", "-d", "-s", "kimi", "-c", "/opt/workdev",
+            "env", "KIMI_PROVIDER=openrouter", "KIMI_MODEL=moonshotai/kimi-k3",
             "/opt/workdev/scripts/start_kimi_agent.sh",
         ])
 

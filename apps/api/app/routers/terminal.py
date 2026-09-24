@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from app.auth import websocket_is_authenticated
 from app.database import SessionLocal
-from app.services import agent_lifecycle, agent_snapshot, agent_runtimes
+from app.services import agent_lifecycle, agent_snapshot, agent_runtimes, cli_agent_models
 from app.services.agent_activity import approval_lines
 from app.services.terminal_transcript import clean_terminal_text, read_transcript
 
@@ -44,6 +44,33 @@ STANDBY_COMMANDS = {
     "gemini": ["/opt/workdev/scripts/start_gemini_agent.sh"],
     "local-code": ["/opt/workdev/scripts/start_local_agent.sh"],
 }
+
+
+class CliModelSelection(BaseModel):
+    model: str
+
+
+@router.get("/api/agents/{agent}/model")
+def get_cli_agent_model(agent: str):
+    try:
+        return cli_agent_models.describe(agent)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.put("/api/agents/{agent}/model")
+def select_cli_agent_model(agent: str, payload: CliModelSelection):
+    if agent not in cli_agent_models.MODELS:
+        raise HTTPException(status_code=404, detail="Agente sem seleção de modelo")
+    snapshot = agent_snapshot.read_snapshot([agent], _HEALTH_STATE_FILE)
+    state = snapshot["agents"][0]
+    if state.get("activity_state") == "BUSY":
+        raise HTTPException(status_code=409, detail="Aguarde a tarefa terminar para trocar o modelo")
+    try:
+        cli_agent_models.choose(agent, payload.model)
+        return cli_agent_models.describe(agent)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 _active_connections: set[str] = set()
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
@@ -219,7 +246,7 @@ def _start_gemini_headless_runtime(
 
     command = [
         *STANDBY_COMMANDS[agent],
-        *(["--model", model] if model else []),
+        "--model", model or cli_agent_models.selected(agent),
         "--prompt",
         prompt,
     ]
@@ -257,7 +284,7 @@ def _start_gemini_headless_runtime(
         "returncode": result.returncode,
     }
 
-def _start_standby_session(agent: str, session: str) -> bool:
+def _start_standby_session(agent: str, session: str, model: str | None = None) -> bool:
     current_process = _current_process(session)
     if current_process and current_process not in _SHELL_PROCESSES:
         return False
@@ -272,7 +299,7 @@ def _start_standby_session(agent: str, session: str) -> bool:
     result = subprocess.run(
         [
             "tmux", "new-session", "-d", "-s", session,
-            "-c", "/opt/workdev", *STANDBY_COMMANDS[agent],
+            "-c", "/opt/workdev", *cli_agent_models.launcher(agent, STANDBY_COMMANDS[agent], model),
         ],
         capture_output=True,
         text=True,
@@ -330,8 +357,8 @@ def _start_agent_runtime(
             model,
         )
 
-    started = (_start_standby_session(agent, session) if run_id else
-        agent_lifecycle.start(agent, session, STANDBY_COMMANDS[agent])['started'])
+    started = (_start_standby_session(agent, session, model) if run_id else
+        agent_lifecycle.start(agent, session, cli_agent_models.launcher(agent, STANDBY_COMMANDS[agent], model))['started'])
 
     if run_id is not None:
         agent_lifecycle.bind_run(agent, run_id, session)
@@ -496,6 +523,8 @@ async def start_agent_lifecycle(agent: str):
     # Runtime Ollama não tem sessão: ligar é carregar o modelo no endpoint.
     # A primeira versão devolvia 409 aqui e o "Ligar" do plano não existia.
     launcher = STANDBY_COMMANDS.get(agent) if session else None
+    if launcher:
+        launcher = cli_agent_models.launcher(agent, launcher)
 
     try:
         resultado = await asyncio.to_thread(
@@ -509,6 +538,13 @@ async def start_agent_lifecycle(agent: str):
     except (RuntimeError, subprocess.TimeoutExpired) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
+    if agent in cli_agent_models.MODELS and resultado.get("started"):
+        try:
+            cli_agent_models.record_active(agent, cli_agent_models.selected(agent))
+        except OSError:
+            # A CLI já foi ligada; não afirmar que o start falhou nem inventar
+            # qual modelo está ativo se o registro de estado não foi gravado.
+            resultado["model_record_warning"] = "Modelo iniciado, mas não foi possível registrar o estado"
     return resultado
 
 

@@ -7,6 +7,7 @@ import { RuntimeControls } from "./RuntimeControls"
 import { RuntimePanel } from "./RuntimePanel"
 import { ExecutorDefaults } from "./ExecutorDefaults"
 import { LocalModelSelector } from "./LocalModelSelector"
+import { CliModelSelector } from "./CliModelSelector"
 import { getAgentRuntimes, agentLabels, type AgentName, type AgentRuntime, type RuntimeState, type ActivityState } from "@/services/handoff.service"
 
 const AGENTS: Array<{ id: AgentName; label: string }> = [
@@ -175,6 +176,8 @@ export default function AgentsPage() {
       </nav>
       {agent === "qwen" && <p className="text-xs text-slate-400">OpenRouter está disponível nesta sessão do Qwen Code. Use /model no terminal para escolher o modelo e o provider.</p>}
       {agent === "local-code" && <LocalModelSelector />}
+      {(agent === "gemini" || agent === "claude" || agent === "codex" || agent === "kimi") &&
+        <CliModelSelector agent={agent} busy={selectedHealth?.activity_state === "BUSY"} />}
       <ExecutorDefaults />
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <RuntimeControls key={agent} agent={agent} runtimeState={state} activityState={selectedHealth?.activity_state} persistent={selectedHealth?.persistent} checkedAt={selectedHealth?.checked_at} />
