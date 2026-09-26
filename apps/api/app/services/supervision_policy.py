@@ -59,25 +59,29 @@ class ObserverFinding(BaseModel):
 
 
 def decide_supervision(decision: JevDecision | None, deterministic_complexity: str,
-                       *, threshold=.75, mandatory_review=False, mandatory_human=False):
+                       *, threshold=.75, human_approval_threshold=.75,
+                       mandatory_review=False, mandatory_human=False):
     levels = list(Complexity)
     try:
         floor = Complexity(deterministic_complexity.upper())
     except (ValueError, AttributeError):
         floor = Complexity.HIGH
-    confident = bool(decision and min(decision.complexity_confidence,
-        decision.supervision_confidence, decision.human_approval_confidence) >= threshold)
+    # Roteamento (complexidade/supervisão) e aprovação humana têm riscos
+    # diferentes — cada eixo tem seu próprio piso de confiança.
+    routing_confident = bool(decision and min(decision.complexity_confidence,
+        decision.supervision_confidence) >= threshold)
+    approval_confident = bool(decision and decision.human_approval_confidence >= human_approval_threshold)
     # Modelo indisponível/incerto nunca produz dispensa de supervisão.
-    chosen = max((floor, decision.complexity), key=levels.index) if confident else max((floor, Complexity.HIGH), key=levels.index)
+    chosen = max((floor, decision.complexity), key=levels.index) if routing_confident else max((floor, Complexity.HIGH), key=levels.index)
     review = mandatory_review or chosen in (Complexity.HIGH, Complexity.CRITICAL)
     observe = chosen != Complexity.LOW
-    if confident:
+    if routing_confident:
         review |= decision.supervision in ('REVIEWER', 'OBSERVER_AND_REVIEWER')
         observe |= decision.supervision in ('OBSERVER', 'OBSERVER_AND_REVIEWER')
     return SupervisionPolicy(complexity=chosen, observer_required=observe,
         review_required=review, human_approval_required=mandatory_human,
-        human_approval_recommended=bool(decision and decision.human_approval == 'YES'),
+        human_approval_recommended=bool(approval_confident and decision.human_approval == 'YES'),
         decompose_recommended=bool(decision and decision.decompose_score >= .5),
-        conservative_fallback=not confident,
-        reason='Jev confiante, limitado pela política determinística' if confident
-               else 'Jev ausente/incerto: piso conservador HIGH')
+        conservative_fallback=not routing_confident,
+        reason='Jev confiante, limitado pela política determinística' if routing_confident
+               else 'Jev incerto no roteamento: piso conservador HIGH')

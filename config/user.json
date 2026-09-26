@@ -10,6 +10,10 @@
     "enableRealTimeSync": true
   },
   "agents": {
-    "executor": null
+    "executor": null,
+    "adaptive_supervision": {
+      "enabled": true,
+      "confidence_threshold": 0.35
+    }
   }
 }

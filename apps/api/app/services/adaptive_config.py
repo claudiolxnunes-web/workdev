@@ -15,6 +15,10 @@ class AdaptiveConfig(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
     enabled: bool = False
     confidence_threshold: float = Field(default=.75, ge=0, le=1)
+    # Threshold separado pro eixo de aprovação humana: errar o roteamento
+    # (complexidade/supervisão) pra mais só custa revisão extra; dispensar
+    # aprovação humana errado custa uma ação irreversível sem checagem.
+    human_approval_confidence_threshold: float = Field(default=.75, ge=0, le=1)
     jev_model: str = 'typesafe/jev-1.13'
     timeout_seconds: float = Field(default=15, ge=1, le=60)
     max_cost_usd: Decimal = Field(default=Decimal('.02'), gt=0)

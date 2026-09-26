@@ -17,6 +17,9 @@
     }
   },
   "model": {
-    "name": "workdev-qwen27b"
+    "name": "workdev-qwen27b",
+    "generationConfig": {
+      "contextWindowSize": 65536
+    }
   }
 }

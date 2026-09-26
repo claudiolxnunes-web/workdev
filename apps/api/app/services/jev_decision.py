@@ -61,7 +61,9 @@ def classify(db, task, plan, *, deterministic_complexity, run_id=None, mandatory
     except Exception as exc:
         error = type(exc).__name__
     policy = decide_supervision(decision, deterministic_complexity,
-        threshold=config.confidence_threshold, mandatory_review=mandatory_review, mandatory_human=mandatory_human)
+        threshold=config.confidence_threshold,
+        human_approval_threshold=config.human_approval_confidence_threshold,
+        mandatory_review=mandatory_review, mandatory_human=mandatory_human)
     payload = {**identifiers, 'requested_model': config.jev_model, 'actual_model': response.get('model'),
         'decision': decision.model_dump(mode='json') if decision else None,
         'policy': policy.model_dump(mode='json'), 'usage': response.get('usage', {}),
