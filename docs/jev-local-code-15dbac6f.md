@@ -39,3 +39,30 @@ limitados pelas guardas existentes. Falha mantém fallback conservador.
 As alterações preexistentes de terminal, interface e config foram preservadas
 e não integram esta entrega. Autorização de publicação não significa deploy
 realizado: conclusão na API, push e deploy precisam de confirmação operacional.
+
+## Revisão independente retroativa (2026-09-26)
+
+Revisão feita por agente diferente do Codex (que escreveu a mudança), conforme
+exigido na descrição original da task ("revisão por agente diferente").
+
+Diff revisado: commit `52b24ea` — uma única linha em `handoff.py` (remove a
+exclusão `agent != 'local-code'`), mais 9 cenários de teste novos em
+`test_adaptive_supervision.py` cobrindo local-code habilitado/desabilitado,
+falha/timeout/restricted, separação executor/revisor e piso critical.
+
+Achados: nenhum bloqueador. Todas as guardas preexistentes (feature flag,
+Session, classificação determinística, fallback conservador, bloqueio de
+egresso restricted, separação executor/revisor) permanecem intactas.
+
+Validação adicional feita nesta sessão, que não existia na entrega original:
+- Confirmadas 3 chamadas reais ao Jev em produção (routing.jev_decision, com
+  custo/tokens reais), incluindo o próprio caminho local-code.
+- Corrigido o bug real que mascarava essas chamadas: threshold de confiança
+  único (0.75) fazia toda decisão cair no fallback conservador. Agora dois
+  thresholds separados (0.35 roteamento / 0.75 aprovação humana).
+- Suíte completa (1349 testes) validada como usuário `workdev` (mesmo usuário
+  do gate de deploy), não como root.
+
+Task `201334b9` e as 2 subtasks associadas marcadas como `done` via API.
+Nenhuma mudança de código adicional foi necessária — a implementação de
+`52b24ea` está correta e agora está com a validação real que faltava.
