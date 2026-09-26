@@ -22,6 +22,8 @@ import os
 
 import httpx
 
+from app.services import local_model
+
 
 PROVIDER = "ollama"
 
@@ -534,12 +536,21 @@ def local_chat_models() -> list[dict]:
                         and name not in names
                     ):
                         names.add(name)
-                        models.append({
+                        entry = {
                             "provider": PROVIDER,
                             "model": name,
                             "label": name,
                             "runtime_id": runtime.id,
-                        })
+                        }
+                        if runtime.id == "local-code":
+                            # Alias de inferencia (name) e estavel de proposito (workdev-qwen27b,
+                            # ver migracao 9f2b4d6a8c10) -- o rotulo exibido deve refletir o peso
+                            # REAL carregado agora (fast/q4/q2), senao o seletor "Modelo do
+                            # executor" so mostra o 27B (achado 26/set/2026).
+                            friendly = local_model.MODELS.get(local_model.current())
+                            if friendly:
+                                entry["label"] = friendly
+                        models.append(entry)
 
                 continue
 

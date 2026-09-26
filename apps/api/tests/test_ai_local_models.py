@@ -37,13 +37,25 @@ def inventory(monkeypatch):
     return payload
 
 
-def test_inventory_dynamic_local_only(inventory):
+def test_inventory_dynamic_local_only(inventory, monkeypatch):
+    # local-code e o unico runtime local aqui; seu rotulo agora reflete o
+    # peso REAL carregado (local_model.current()), nao o alias cru do
+    # /v1/models (achado 26/set/2026 -- "so aparece o 27B").
+    monkeypatch.setattr(runtimes.local_model, "current", lambda: "q4")
     assert runtimes.local_chat_models() == [
-        {"provider": "ollama", "model": "installed:v1", "label": "installed:v1", "runtime_id": "local-code"}]
+        {"provider": "ollama", "model": "installed:v1", "label": runtimes.local_model.MODELS["q4"], "runtime_id": "local-code"}]
     inventory["data"].append({"id": "newly-installed:v2"})
     assert len(runtimes.local_chat_models()) == 2
     inventory["data"] = []
     assert runtimes.local_chat_models() == []
+
+
+def test_inventory_label_falls_back_to_raw_name_when_current_unknown(inventory, monkeypatch):
+    # Se local_model.current() nao resolve (chave sumida/corrompida -> None),
+    # o rotulo cai pro nome cru devolvido por /v1/models, nunca quebra.
+    monkeypatch.setattr(runtimes.local_model, "current", lambda: None)
+    assert runtimes.local_chat_models() == [
+        {"provider": "ollama", "model": "installed:v1", "label": "installed:v1", "runtime_id": "local-code"}]
 
 
 def test_inventory_http_empty_vs_malformed(inventory):
