@@ -176,7 +176,7 @@ def test_uncertainty_cannot_waive_review(confidence):
 
 def test_configurable_threshold_and_multidimensional_policy():
     d=decision('LOW',.7, 'OBSERVER_AND_REVIEWER', human='YES', decompose=.9)
-    p=decide_supervision(d, 'LOW', threshold=.65, mandatory_human=True)
+    p=decide_supervision(d, 'LOW', threshold=.65, human_approval_threshold=.65, mandatory_human=True)
     assert p.observer_required and p.review_required and p.human_approval_required
     assert p.human_approval_recommended and p.decompose_recommended
     assert not p.conservative_fallback
