@@ -69,5 +69,71 @@ class Vps2ProcessMetricsTest(unittest.TestCase):
         self.assertIn("error", result)
 
 
+
+
+class JevMcpMonitorTest(unittest.TestCase):
+    """Monitor de conectividade MCP/Jev (achado 26/set/2026): link
+    Tailscale VPS1<->VPS2 + alcance HTTP do MCP na porta 8891."""
+
+    @staticmethod
+    def _run_side_effect(tailscale_stdout, tailscale_returncode, curl_stdout, curl_returncode, curl_stderr=""):
+        def _fake_run(command, timeout=6):
+            if command[0] == "tailscale":
+                return subprocess.CompletedProcess(
+                    args=command, returncode=tailscale_returncode, stdout=tailscale_stdout, stderr="",
+                )
+            return subprocess.CompletedProcess(
+                args=command, returncode=curl_returncode, stdout=curl_stdout, stderr=curl_stderr,
+            )
+        return _fake_run
+
+    @patch("app.routers.monitoring._run")
+    def test_online_when_peer_online_and_http_reachable(self, mock_run):
+        tailscale_json = (
+            '{"Peer": {"x": {"HostName": "srv1750921", "Online": true}}}'
+        )
+        mock_run.side_effect = self._run_side_effect(tailscale_json, 0, "404", 0)
+        tailscale_service, jev_service = monitoring._check_jev_mcp()
+        self.assertEqual(tailscale_service["status"], "online")
+        self.assertIn("srv1750921", tailscale_service["detail"])
+        self.assertEqual(jev_service["status"], "online")
+        self.assertIn("404", jev_service["detail"])
+
+    @patch("app.routers.monitoring._run")
+    def test_offline_when_peer_reported_offline(self, mock_run):
+        tailscale_json = (
+            '{"Peer": {"x": {"HostName": "srv1750921", "Online": false}}}'
+        )
+        mock_run.side_effect = self._run_side_effect(tailscale_json, 0, "404", 0)
+        tailscale_service, _jev_service = monitoring._check_jev_mcp()
+        self.assertEqual(tailscale_service["status"], "offline")
+
+    @patch("app.routers.monitoring._run")
+    def test_offline_when_peer_missing_from_status(self, mock_run):
+        tailscale_json = '{"Peer": {}}'
+        mock_run.side_effect = self._run_side_effect(tailscale_json, 0, "404", 0)
+        tailscale_service, _jev_service = monitoring._check_jev_mcp()
+        self.assertEqual(tailscale_service["status"], "offline")
+        self.assertIn("nao encontrado", tailscale_service["detail"])
+
+    @patch("app.routers.monitoring._run")
+    def test_jev_mcp_unreachable_when_curl_fails(self, mock_run):
+        tailscale_json = (
+            '{"Peer": {"x": {"HostName": "srv1750921", "Online": true}}}'
+        )
+        mock_run.side_effect = self._run_side_effect(
+            tailscale_json, 0, "", 7, curl_stderr="Connection refused",
+        )
+        _tailscale_service, jev_service = monitoring._check_jev_mcp()
+        self.assertEqual(jev_service["status"], "offline")
+        self.assertIn("Connection refused", jev_service["detail"])
+
+    @patch("app.routers.monitoring._run", side_effect=OSError("boom"))
+    def test_tailscale_check_survives_os_error(self, _mock_run):
+        tailscale_service, jev_service = monitoring._check_jev_mcp()
+        self.assertEqual(tailscale_service["status"], "offline")
+        self.assertEqual(jev_service["status"], "offline")
+
+
 if __name__ == "__main__":
     unittest.main()
