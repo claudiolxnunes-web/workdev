@@ -54,6 +54,33 @@ def _check_vps1() -> dict:
     )
 
 
+def _check_ollama() -> dict:
+    """Ollama roda LOCAL na VPS1, nunca existiu na VPS2 -- a checagem
+    antiga vivia dentro do SSH remoto pra VPS2 e por isso reportava
+    offline pra sempre, mesmo com o serviço no ar (achado 26/set/2026,
+    aba Monitoring parada em "3/8 online" com Ollama sempre vermelho)."""
+    started = time.monotonic()
+    try:
+        api = _run(["systemctl", "is-active", "ollama"], timeout=3)
+        reachable = _run(
+            ["curl", "-fsS", "--max-time", "2", "http://127.0.0.1:11434/api/tags"],
+            timeout=3,
+        )
+        active = api.stdout.strip() == "active" and reachable.returncode == 0
+        api_ok = "ok" if reachable.returncode == 0 else "sem resposta"
+        detail = f"systemd: {api.stdout.strip()}; API: {api_ok}"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        active = False
+        detail = f"Falha na checagem: {type(exc).__name__}"
+    return _service(
+        "Ollama",
+        "VPS1 · :11434",
+        active,
+        detail,
+        round((time.monotonic() - started) * 1000),
+    )
+
+
 def _check_postgres() -> dict:
     started = time.monotonic()
     try:
@@ -83,8 +110,6 @@ def _check_vps2() -> list[dict]:
         "then echo openclaw=active; else echo openclaw=inactive; fi; "
         "printf 'agent='; systemctl is-active agente.service 2>/dev/null || true; "
         "printf 'agent_api='; systemctl is-active agente-api.service 2>/dev/null || true; "
-        "if curl -fsS --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null; "
-        "then echo ollama=active; else echo ollama=inactive; fi"
     )
     command = [
         "ssh",
@@ -105,7 +130,6 @@ def _check_vps2() -> list[dict]:
             _service("VPS 2 Intelligence", "VPS2", False, detail, latency),
             _service("OpenClaw", "VPS2", False, "VPS2 indisponível", latency),
             _service("Agente Pessoal", "VPS2", False, "VPS2 indisponível", latency),
-            _service("Ollama", "VPS2", False, "VPS2 indisponível", latency),
         ]
 
     if result.returncode != 0:
@@ -114,7 +138,6 @@ def _check_vps2() -> list[dict]:
             _service("VPS 2 Intelligence", "VPS2", False, detail, latency),
             _service("OpenClaw", "VPS2", False, "VPS2 indisponível", latency),
             _service("Agente Pessoal", "VPS2", False, "VPS2 indisponível", latency),
-            _service("Ollama", "VPS2", False, "VPS2 indisponível", latency),
         ]
 
     states = dict(
@@ -130,10 +153,6 @@ def _check_vps2() -> list[dict]:
         _service(
             "Agente Pessoal", "VPS2 · systemd", agent_active,
             f"bot: {states.get('agent', 'desconhecido')}; API: {states.get('agent_api', 'desconhecido')}", latency,
-        ),
-        _service(
-            "Ollama", "VPS2 · :11434", states.get("ollama") == "active",
-            f"API: {states.get('ollama', 'desconhecido')}", latency,
         ),
     ]
 
@@ -348,16 +367,18 @@ def status_by_slug(slug: str):
 
 @router.get("/status")
 def status():
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         vps1_future = executor.submit(_check_vps1)
         postgres_future = executor.submit(_check_postgres)
         vps2_future = executor.submit(_check_vps2)
         jev_future = executor.submit(_check_jev_mcp)
+        ollama_future = executor.submit(_check_ollama)
         services = [
             vps1_future.result(),
             *vps2_future.result(),
             postgres_future.result(),
             *jev_future.result(),
+            ollama_future.result(),
         ]
 
     online = sum(service["status"] == "online" for service in services)

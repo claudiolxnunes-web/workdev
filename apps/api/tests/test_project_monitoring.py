@@ -135,5 +135,44 @@ class JevMcpMonitorTest(unittest.TestCase):
         self.assertEqual(jev_service["status"], "offline")
 
 
+class OllamaLocalMonitorTest(unittest.TestCase):
+    """Ollama roda local na VPS1 -- a checagem antiga vivia dentro do
+    SSH remoto pra VPS2, onde o servico nunca existiu (achado
+    26/set/2026, card sempre vermelho mesmo com o servico no ar)."""
+
+    @patch("app.routers.monitoring._run")
+    def test_online_when_systemd_active_and_api_reachable(self, mock_run):
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="active\n", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="{}", stderr=""),
+        ]
+        service = monitoring._check_ollama()
+        self.assertEqual(service["status"], "online")
+        self.assertEqual(service["target"], "VPS1 · :11434")
+
+    @patch("app.routers.monitoring._run")
+    def test_offline_when_systemd_inactive(self, mock_run):
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="inactive\n", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=7, stdout="", stderr="Connection refused"),
+        ]
+        service = monitoring._check_ollama()
+        self.assertEqual(service["status"], "offline")
+
+    @patch("app.routers.monitoring._run")
+    def test_offline_when_systemd_active_but_api_unreachable(self, mock_run):
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="active\n", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=7, stdout="", stderr="Connection refused"),
+        ]
+        service = monitoring._check_ollama()
+        self.assertEqual(service["status"], "offline")
+
+    @patch("app.routers.monitoring._run", side_effect=OSError("boom"))
+    def test_survives_os_error(self, _mock_run):
+        service = monitoring._check_ollama()
+        self.assertEqual(service["status"], "offline")
+
+
 if __name__ == "__main__":
     unittest.main()
