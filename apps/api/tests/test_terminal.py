@@ -296,22 +296,25 @@ class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
             await agent_send("desconhecido", AgentSendRequest(text="oi"))
         self.assertEqual(ctx.exception.status_code, 404)
 
+    @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
     @patch("app.routers.terminal._send_text")
-    async def test_blank_text_is_forwarded_as_a_bare_enter(self, mock_send):
-        result = await agent_send("codex", AgentSendRequest(text=""))
+    async def test_blank_text_is_forwarded_as_a_bare_enter(self, mock_send, _active_work):
+        result = await agent_send("codex", AgentSendRequest(text=""), db=None)
         mock_send.assert_called_once_with("codex", "")
         self.assertEqual(result, {"agent": "codex", "sent": True})
 
+    @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
     @patch("app.routers.terminal._send_text")
-    async def test_sends_text_to_the_mapped_tmux_session(self, mock_send):
-        result = await agent_send("claude", AgentSendRequest(text="continuar"))
+    async def test_sends_text_to_the_mapped_tmux_session(self, mock_send, _active_work):
+        result = await agent_send("claude", AgentSendRequest(text="continuar"), db=None)
         mock_send.assert_called_once_with("code", "continuar")
         self.assertEqual(result, {"agent": "claude", "sent": True})
 
+    @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
     @patch("app.routers.terminal._send_text", side_effect=RuntimeError("indisponível"))
-    async def test_reports_503_when_tmux_session_is_unavailable(self, _mock_send):
+    async def test_reports_503_when_tmux_session_is_unavailable(self, _mock_send, _active_work):
         with self.assertRaises(HTTPException) as ctx:
-            await agent_send("codex", AgentSendRequest(text="oi"))
+            await agent_send("codex", AgentSendRequest(text="oi"), db=None)
         self.assertEqual(ctx.exception.status_code, 503)
 
     @patch("app.routers.terminal.read_transcript", return_value=("linha limpa", 123.0))

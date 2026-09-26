@@ -11,11 +11,13 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.auth import websocket_is_authenticated
 from app.database import SessionLocal
+from app.routers.ai import get_db
 from app.services import agent_lifecycle, agent_snapshot, agent_runtimes, cli_agent_models
 from app.services.agent_activity import approval_lines
 from app.services.terminal_transcript import clean_terminal_text, read_transcript
@@ -129,10 +131,11 @@ def _send_text(session: str, text: str) -> None:
 
 
 @router.post("/api/agents/{agent}/send")
-async def agent_send(agent: str, payload: AgentSendRequest):
-    session = ALLOWED_SESSIONS.get(agent)
-    if not session:
+async def agent_send(agent: str, payload: AgentSendRequest, db: Session = Depends(get_db)):
+    standby = ALLOWED_SESSIONS.get(agent)
+    if not standby:
         raise HTTPException(status_code=404, detail="Agente inválido")
+    session = _live_session(agent, standby, db)
     try:
         await asyncio.to_thread(_send_text, session, payload.text)
     except RuntimeError as error:
@@ -144,10 +147,12 @@ async def agent_send(agent: str, payload: AgentSendRequest):
 async def agent_history(
     agent: str,
     lines: int = Query(default=10000, ge=100, le=100000),
+    db: Session = Depends(get_db),
 ):
-    session = ALLOWED_SESSIONS.get(agent)
-    if not session:
+    standby = ALLOWED_SESSIONS.get(agent)
+    if not standby:
         raise HTTPException(status_code=404, detail="Agente inválido")
+    session = _live_session(agent, standby, db)
     try:
         content = await asyncio.to_thread(_capture_history, session, lines)
     except (RuntimeError, subprocess.TimeoutExpired) as error:
@@ -339,7 +344,21 @@ def _standby_session(agent: str) -> str:
 
 def _auto_session(agent: str, run_id) -> str:
     _standby_session(agent)
-    return f"auto-{agent}-{run_id}"
+    return agent_snapshot.auto_session_name(agent, run_id)
+
+
+def _live_session(agent: str, session: str, db) -> str:
+    """Sessao de fato ativa: a standby, a menos que haja uma run fisica
+    rodando na sessao AUTO correspondente (runtime AUTO, opt-in) -- sem
+    isso, terminal/send atacam uma sessao parada enquanto o trabalho real
+    roda em outro lugar (achado 26/set/2026, aba Agentes)."""
+    work = agent_lifecycle.active_work(db, agent)
+    if work and work.get('run_id'):
+        auto = agent_snapshot.auto_session_name(agent, work['run_id'])
+        process = _current_process(auto)
+        if process and process not in _SHELL_PROCESSES:
+            return auto
+    return session
 
 def _start_agent_runtime(
     agent: str,
@@ -707,6 +726,8 @@ async def agent_terminal(websocket: WebSocket, agent: str):
     if not session:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Agente inválido")
         return
+    with SessionLocal() as db:
+        session = _live_session(agent, session, db)
     if not await _claim(session):
         # After authentication, complete the handshake so browsers receive
         # the close code/reason instead of an opaque HTTP 403 / code 1006.

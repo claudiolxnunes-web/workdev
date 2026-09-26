@@ -22,6 +22,14 @@ def is_persistent(agent: str, session: str | None) -> bool:
     return agent in PERSISTENT_AGENTS and bool(session) and not session.startswith('auto-')
 
 
+def auto_session_name(agent: str, run_id) -> str:
+    """Nome da sessao tmux do runtime AUTO -- mesma convencao usada em
+    terminal.py (achado 26/set/2026: healthcheck e terminal so sondavam a
+    sessao standby, ficando cegos pro trabalho real quando despachado via
+    AUTO). Centralizado aqui pra nunca divergir do formato."""
+    return f"auto-{agent}-{run_id}"
+
+
 class RuntimeState(str, Enum):
     OFFLINE = 'OFFLINE'
     STARTING = 'STARTING'

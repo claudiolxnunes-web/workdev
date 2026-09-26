@@ -98,9 +98,22 @@ def collect_agent(agent: str, session: str | None, db, allow_restart=False, work
         if work is not None:
             state.active_work = work
         activity, reason = 'IDLE', None
-        if session and state.agent_process_running:
-            health = classify(agent, session, state.current_process,
-                capture_recent(session), checked_at)
+        effective_session = session
+        # Trabalho fisico pode estar rodando na sessao AUTO (runtime AUTO,
+        # opt-in), invisivel pra sessao standby sondada acima -- sem isso a
+        # aba mostra offline/idle com o agente de fato ocupado la (achado
+        # 26/set/2026, aba Agentes).
+        if work and work.get('run_id'):
+            auto_session = agent_snapshot.auto_session_name(agent, work['run_id'])
+            auto_state = agent_lifecycle.read_state(agent, auto_session, db=db)
+            if auto_state.agent_process_running:
+                state.current_process = auto_state.current_process
+                state.session = auto_state.session
+                state.session_exists = True
+                effective_session = auto_session
+        if effective_session and state.agent_process_running:
+            health = classify(agent, effective_session, state.current_process,
+                capture_recent(effective_session), checked_at)
             activity = {'busy': 'BUSY', 'waiting_input': 'WAITING_INPUT'}.get(health.status, 'IDLE')
             # Terminal text is activity evidence, not proof of physical failure.
             reason = health.reason

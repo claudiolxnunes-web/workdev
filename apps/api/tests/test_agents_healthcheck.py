@@ -106,3 +106,50 @@ def test_dead_lifecycle_owner_becomes_error(tmp_path, monkeypatch):
     row = healthcheck.collect_agent('codex', 'codex', None)
     assert row.runtime_state.value == 'ERROR'
     assert row.reason == 'lifecycle_interrupted'
+
+
+def test_auto_session_activity_overrides_offline_standby(monkeypatch):
+    """Achado 26/set/2026: uma run despachada via runtime AUTO roda numa
+    sessao tmux separada (auto-{agent}-{run_id}), invisivel pra sessao
+    standby sondada por padrao. Sem a checagem da sessao AUTO, a aba
+    mostrava o agente offline/idle mesmo com trabalho real em andamento."""
+    from datetime import datetime, timezone
+    from app.services import agent_lifecycle as lifecycle
+
+    standby_state = lifecycle.AgentState(agent='kimi', session='kimi', session_exists=False, current_process='')
+    auto_state = lifecycle.AgentState(agent='kimi', session='auto-kimi-42', session_exists=True, current_process='kimi-code')
+
+    def fake_read_state(agent, session, *, db=None, **kwargs):
+        return auto_state if session == 'auto-kimi-42' else standby_state
+
+    def fake_classify(agent, session, process, output, checked_at):
+        return healthcheck.AgentHealth(agent, session, 'busy', process, None, checked_at)
+
+    monkeypatch.setattr(lifecycle, 'read_state', fake_read_state)
+    monkeypatch.setattr(healthcheck, 'classify', fake_classify)
+    monkeypatch.setattr(healthcheck, 'capture_recent', lambda *_args: '')
+
+    row = healthcheck.collect_agent('kimi', 'kimi', None, work={'run_id': '42', 'status': 'running'})
+
+    assert row.runtime_state.value == 'ONLINE'
+    assert row.activity_state.value == 'BUSY'
+    assert row.persistent is False
+
+
+def test_idle_agent_without_active_work_unaffected_by_auto_check(monkeypatch):
+    """Sem run ativa, o comportamento de sempre continua: so a sessao
+    standby importa."""
+    from app.services import agent_lifecycle as lifecycle
+
+    standby_state = lifecycle.AgentState(agent='gemini', session='gemini', session_exists=False, current_process='')
+    monkeypatch.setattr(lifecycle, 'read_state', lambda *args, **kwargs: standby_state)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('sem work ativo, a sessao AUTO nao deve ser consultada')
+
+    monkeypatch.setattr(lifecycle, 'try_recover', forbidden)
+
+    row = healthcheck.collect_agent('gemini', 'gemini', None, work=None)
+
+    assert row.runtime_state.value == 'OFFLINE'
+    assert row.persistent is False
