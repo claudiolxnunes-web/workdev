@@ -2,14 +2,16 @@ import { useEffect, useState } from "react"
 import { getCliAgentModel, selectCliAgentModel, type CliAgentModelInfo, type SelectableCliAgent } from "@/services/handoff.service"
 
 export function CliModelSelector({ agent, busy }: { agent: SelectableCliAgent; busy: boolean }) {
+  return <CliModelSelectorAgent key={agent} agent={agent} busy={busy} />
+}
+
+function CliModelSelectorAgent({ agent, busy }: { agent: SelectableCliAgent; busy: boolean }) {
   const [info, setInfo] = useState<CliAgentModelInfo | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState("")
 
   useEffect(() => {
     let cancelled = false
-    setInfo(null)
-    setError("")
     getCliAgentModel(agent)
       .then(value => { if (!cancelled) setInfo(value) })
       .catch(() => { if (!cancelled) setError("Não foi possível carregar os modelos") })

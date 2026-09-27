@@ -17,7 +17,7 @@ WorkingDirectory=/opt/workdev
 # HOME explícito. Serviço systemd não herda o do login, e python-dotenv,
 # psycopg e o SDK da Anthropic consultam o diretório do usuário.
 Environment=HOME=/home/workdev
-Environment=SUPERVISOR_ENV_FILE=/etc/workdev/workdev-api.env
+Environment=SUPERVISOR_ENV_FILE=/opt/workdev/apps/api/.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 

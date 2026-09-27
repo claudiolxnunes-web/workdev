@@ -59,6 +59,7 @@ class TerminalBusyHandshakeTest(unittest.TestCase):
         app.include_router(router)
         with patch('app.routers.terminal.websocket_is_authenticated', return_value=True), \
              patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=False), \
+             patch('app.routers.terminal.agent_lifecycle.active_work', return_value=None), \
              patch('app.routers.terminal.subprocess.Popen') as process, \
              TestClient(app) as client:
             with client.websocket_connect('/ws/agents/codex') as socket:
