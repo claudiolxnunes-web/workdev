@@ -11,6 +11,7 @@ import Deployments from "./pages/Deployments"
 import Monitoring from "./pages/Monitoring"
 import Settings from "./pages/Settings"
 import Backlog from "./pages/Backlog"
+import { AgentReset } from "./modules/agents/AgentReset"
 
 const EngineeringPage = lazy(() =>
   import('./modules/engineering').then((m) => ({ default: m.EngineeringPage }))
@@ -196,6 +197,7 @@ function App() {
               path="/agents"
               element={
                 <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <AgentReset />
                   <AgentsPage />
                 </Suspense>
               }

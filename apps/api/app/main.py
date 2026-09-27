@@ -30,6 +30,7 @@ from app.routers.metrics import router as metrics_router
 from app.auth import request_is_authenticated
 from app.reporting_security import ReportingAccessMiddleware
 from app.routers.reporting import router as reporting_router
+from app.routers.agent_reset import router as agent_reset_router
 
 load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
 import sentry_sdk
@@ -86,6 +87,7 @@ app.include_router(busca_web_router, prefix="/api")
 app.include_router(terminal_router)
 app.include_router(run_terminal_router)
 app.include_router(metrics_router, prefix="/api")
+app.include_router(agent_reset_router, prefix="/api")
 
 
 @app.get("/health")
