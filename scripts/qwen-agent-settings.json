@@ -10,6 +10,34 @@
         "envKey": "OPENROUTER_API_KEY"
       },
       {
+        "id": "deepseek/deepseek-v4-flash",
+        "name": "DeepSeek V4 Flash — OpenRouter",
+        "description": "Modelo rápido e econômico para código e agentes",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
+      },
+      {
+        "id": "moonshotai/kimi-k2.7-code",
+        "name": "Kimi K2.7 Code — OpenRouter",
+        "description": "Modelo especializado em programação",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
+      },
+      {
+        "id": "moonshotai/kimi-k2.6",
+        "name": "Kimi K2.6 — OpenRouter",
+        "description": "Modelo multimodal e agentic",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
+      },
+      {
+        "id": "x-ai/grok-4.7",
+        "name": "Grok 4.7 — OpenRouter",
+        "description": "Modelo para código e tarefas agentic de longa duração",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
+      },
+      {
         "id": "qwen3-coder-plus",
         "name": "Qwen3 Coder Plus — DashScope",
         "description": "Chave direta do Alibaba Cloud Model Studio",

@@ -1,4 +1,4 @@
-"""Persisted model selection for the four remote CLI agents.
+"""Persisted model selection for remote CLI agents.
 
 The selected model applies to new processes only. The active model is recorded
 separately so an existing tmux session is never mislabeled after a selection.
@@ -19,11 +19,26 @@ MODELS = {
                ("claude-haiku-4-5", "Claude Haiku 4.5")),
     "codex": (("gpt-5.6-sol", "Codex Sol"), ("gpt-5.6-terra", "Codex Terra"),
               ("gpt-5.6-luna", "Codex Luna")),
-    "kimi": (("moonshotai/kimi-k2.7-code", "Kimi K2.7 Code"),
-             ("moonshotai/kimi-k3", "Kimi K3")),
+    "kimi": (("moonshotai/kimi-k3", "Kimi K3"),),
+    "qwen": (("qwen/qwen3.5-397b-a17b", "Qwen Coder (Qwen 3.5)"),
+             ("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash"),
+             ("moonshotai/kimi-k2.7-code", "Kimi K2.7 Code"),
+             ("moonshotai/kimi-k2.6", "Kimi K2.6"),
+             ("x-ai/grok-4.7", "Grok 4.7")),
 }
 DEFAULTS = {"gemini": "gemini-3.5-flash", "claude": "claude-opus-5",
-            "codex": "gpt-5.6-sol", "kimi": "moonshotai/kimi-k3"}
+            "codex": "gpt-5.6-sol", "kimi": "moonshotai/kimi-k3",
+            "qwen": "qwen/qwen3.5-397b-a17b"}
+
+# USD por 1M tokens, conferidos no catálogo público da OpenRouter em
+# 2026-09-28. O frontend deriva ``expensive`` do threshold aprovado de output.
+OPENROUTER_PRICING = {
+    "qwen/qwen3.5-397b-a17b": (0.39, 2.34),
+    "deepseek/deepseek-v4-flash": (0.0679, 0.168),
+    "moonshotai/kimi-k2.7-code": (0.68, 3.40),
+    "moonshotai/kimi-k2.6": (0.58, 3.40),
+    "x-ai/grok-4.7": (1.60, 4.80),
+}
 
 
 def _path() -> Path:
@@ -55,9 +70,19 @@ def describe(agent: str) -> dict:
     data = _read(_path()).get(agent, {})
     chosen = selected(agent)
     active = data.get("active")
+    options = []
+    for model, label in MODELS[agent]:
+        pricing = OPENROUTER_PRICING.get(model)
+        options.append({
+            "model": model,
+            "label": label,
+            "input_cost_per_million": pricing[0] if pricing else None,
+            "output_cost_per_million": pricing[1] if pricing else None,
+            "expensive": bool(pricing and pricing[1] >= 10),
+        })
     return {"agent": agent, "selected": chosen,
             "active": active if isinstance(active, str) and _valid(agent, active) else None,
-            "options": [{"model": model, "label": label} for model, label in MODELS[agent]]}
+            "options": options}
 
 
 def _update(agent: str, field: str, model: str) -> None:
@@ -102,4 +127,6 @@ def launcher(agent: str, command: list[str], model: str | None = None) -> list[s
         return ["env", f"GEMINI_MODEL={chosen}", *command]
     if agent == "kimi":
         return ["env", "KIMI_PROVIDER=openrouter", f"KIMI_MODEL={chosen}", *command]
+    if agent == "qwen":
+        return ["env", "QWEN_PROVIDER=openrouter", f"QWEN_MODEL={chosen}", *command]
     return [*command, "--model", chosen]

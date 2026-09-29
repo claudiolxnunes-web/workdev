@@ -18,7 +18,8 @@ beforeEach(() => {
   sessionStorage.clear()
   getAgentRuntimes.mockResolvedValue([local])
   getCliAgentModel.mockImplementation(async (agent: string) => ({ agent, selected: "model", active: null,
-    options: [{ model: "model", label: "Modelo atual" }] }))
+    options: [{ model: "model", label: "Modelo atual", input_cost_per_million: null,
+      output_cost_per_million: null, expensive: false }] }))
   fetchMock.mockResolvedValue({ ok: true, json: async () => ({ agents: [
     { agent: "claude", runtime_state: "ONLINE", activity_state: "IDLE", health: "idle", awaiting_approval: true, operational_status: "awaiting_approval", runs: [] },
     { agent: "local-code", runtime_state: "ONLINE", activity_state: "BUSY", health: "busy", operational_status: "executing", runs: [{ id: "local-run", agent: "local-code", status: "running", task_title: "Tarefa local" }] },
@@ -45,7 +46,7 @@ describe("Agents workspace", () => {
   it("mostra Gemini, Qwen e Kimi diretamente e seleciona suas sessões", async () => {
     render(<AgentsPage />)
     expect(await screen.findByRole("tab", { name: /Qwen 27B · Local/ })).toBeInTheDocument()
-    for (const [label, id] of [["Gemini", "gemini"], ["Kimi Code", "kimi"], ["OpenRouter · Qwen CLI", "qwen"]]) {
+    for (const [label, id] of [["Gemini", "gemini"], ["Kimi Code", "kimi"], ["OpenRouter Agente", "qwen"]]) {
       fireEvent.click(screen.getByRole("tab", { name: label }))
       expect(screen.getByText(`terminal:${id}:`)).toBeInTheDocument()
       expect(screen.getByText(`queue:${id}`)).toBeInTheDocument()

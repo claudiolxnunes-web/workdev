@@ -8,16 +8,24 @@ const { getCliAgentModel, selectCliAgentModel } = vi.hoisted(() => ({
 vi.mock("@/services/handoff.service", () => ({ getCliAgentModel, selectCliAgentModel }))
 
 describe("CliModelSelector", () => {
-  it("saves Kimi 2.7 while retaining the current session model", async () => {
+  it("saves an OpenRouter model with price while retaining the active session", async () => {
     const options = [
-      { model: "moonshotai/kimi-k3", label: "Kimi K3" },
-      { model: "moonshotai/kimi-k2.7-code", label: "Kimi K2.7 Code" },
+      { model: "qwen/qwen3.5-397b-a17b", label: "Qwen Coder (Qwen 3.5)", input_cost_per_million: 0.39, output_cost_per_million: 2.34, expensive: false },
+      { model: "moonshotai/kimi-k2.7-code", label: "Kimi K2.7 Code", input_cost_per_million: 0.68, output_cost_per_million: 3.4, expensive: false },
     ]
-    getCliAgentModel.mockResolvedValue({ agent: "kimi", selected: options[0].model, active: options[0].model, options })
-    selectCliAgentModel.mockResolvedValue({ agent: "kimi", selected: options[1].model, active: options[0].model, options })
-    render(<CliModelSelector agent="kimi" busy={false} />)
+    getCliAgentModel.mockResolvedValue({ agent: "qwen", selected: options[0].model, active: options[0].model, options })
+    selectCliAgentModel.mockResolvedValue({ agent: "qwen", selected: options[1].model, active: options[0].model, options })
+    render(<CliModelSelector agent="qwen" busy={false} />)
     fireEvent.change(await screen.findByLabelText("Modelo do agente"), { target: { value: options[1].model } })
-    await waitFor(() => expect(selectCliAgentModel).toHaveBeenCalledWith("kimi", options[1].model))
+    await waitFor(() => expect(selectCliAgentModel).toHaveBeenCalledWith("qwen", options[1].model))
+    expect(screen.getByRole("option", { name: /US\$ 0.68\/US\$ 3.4 por 1M/ })).toBeInTheDocument()
     expect(await screen.findByText(/próximo Ligar/)).toBeInTheDocument()
+  })
+
+  it("marks output prices at or above the threshold as expensive", async () => {
+    const options = [{ model: "vendor/caro", label: "Modelo caro", input_cost_per_million: 2, output_cost_per_million: 10, expensive: true }]
+    getCliAgentModel.mockResolvedValue({ agent: "qwen", selected: options[0].model, active: null, options })
+    render(<CliModelSelector agent="qwen" busy={false} />)
+    expect(await screen.findByRole("option", { name: /CARO/ })).toBeInTheDocument()
   })
 })

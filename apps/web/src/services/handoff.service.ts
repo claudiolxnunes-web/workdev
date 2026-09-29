@@ -17,12 +17,18 @@ export type AgentName = CliAgentName | RuntimeAgentName
 export const CLI_AGENTS: CliAgentName[] = ["codex", "claude", "kimi", "qwen", "gemini"]
 export const RUNTIME_AGENTS: RuntimeAgentName[] = ["local-code", "gpu-hostinger", "gpu-runpod"]
 
-export type SelectableCliAgent = "codex" | "claude" | "kimi" | "gemini"
+export type SelectableCliAgent = "codex" | "claude" | "kimi" | "qwen" | "gemini"
 export interface CliAgentModelInfo {
   agent: SelectableCliAgent
   selected: string
   active: string | null
-  options: Array<{ model: string; label: string }>
+  options: Array<{
+    model: string
+    label: string
+    input_cost_per_million: number | null
+    output_cost_per_million: number | null
+    expensive: boolean
+  }>
 }
 
 export function getCliAgentModel(agent: SelectableCliAgent): Promise<CliAgentModelInfo> {
@@ -54,7 +60,7 @@ export const agentLabels: Record<AgentName, string> = {
   claude: "Claude Code",
   codex: "Codex",
   kimi: "Kimi Code",
-  qwen: "Qwen Code",
+  qwen: "OpenRouter Agente",
   gemini: "Gemini",
   "local-code": "Ollama local (VPS)",
   "gpu-hostinger": "GPU Hostinger",
