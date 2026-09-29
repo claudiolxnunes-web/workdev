@@ -12,6 +12,7 @@ const updatePlan = vi.fn()
 const sendToBuild = vi.fn()
 const getPlanRecommendation = vi.fn()
 const getAgentRuntimes = vi.fn()
+const getCliAgentModel = vi.fn()
 
 vi.mock("@/services/handoff.service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/handoff.service")>()),
@@ -21,6 +22,7 @@ vi.mock("@/services/handoff.service", async (importOriginal) => ({
   sendToBuild: (...args: unknown[]) => sendToBuild(...args),
   getPlanRecommendation: (...args: unknown[]) => getPlanRecommendation(...args),
   getAgentRuntimes: (...args: unknown[]) => getAgentRuntimes(...args),
+  getCliAgentModel: (...args: unknown[]) => getCliAgentModel(...args),
   subscribeToHandoffs: () => () => undefined,
 }))
 
@@ -137,12 +139,13 @@ function renderPanel() {
 describe("PlanningPanel", () => {
   beforeEach(() => {
     getPlans.mockReset(); updatePlan.mockReset(); sendToBuild.mockReset()
-    getPlanRecommendation.mockReset(); getAgentRuntimes.mockReset()
+    getPlanRecommendation.mockReset(); getAgentRuntimes.mockReset(); getCliAgentModel.mockReset()
     getPlans.mockResolvedValue([basePlan])
     updatePlan.mockResolvedValue(basePlan)
     sendToBuild.mockResolvedValue({})
     getPlanRecommendation.mockResolvedValue(baseRecommendation)
     getAgentRuntimes.mockResolvedValue([])
+    getCliAgentModel.mockResolvedValue({ selected: "qwen/qwen3.5-397b-a17b" })
     vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ ok: true, json: async () =>
       url.includes("review-policy") ? { state: "recommended" } : { models: [{ provider: "anthropic", model: "review-model", agent: "claude", label: "Review Model", review_capable: true }], local_error: null },
     })))
@@ -553,6 +556,37 @@ describe("PlanningPanel", () => {
 
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
       "plan-1", "claude", "gemini", false, undefined,
+    ))
+  })
+
+  it("envia ao Build o modelo persistido no seletor OpenRouter", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    getCliAgentModel.mockResolvedValue({ selected: "x-ai/grok-4.7" })
+    renderPanel()
+
+    await escolherPapeis("qwen")
+    enviar()
+
+    await waitFor(() => expect(getCliAgentModel).toHaveBeenCalledWith("qwen"))
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
+      "plan-1", "claude", "qwen", false, "x-ai/grok-4.7",
+    ))
+  })
+
+  it("não aplica a escolha do cartão Codex ao OpenRouter Agente", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    getPlanRecommendation.mockResolvedValue(twoModelRecommendation)
+    getCliAgentModel.mockResolvedValue({ selected: "moonshotai/kimi-k2.6" })
+    renderPanel()
+
+    fireEvent.change(await screen.findByLabelText("Modelo"), {
+      target: { value: "gpt-5.6-terra" },
+    })
+    await escolherPapeis("qwen")
+    enviar()
+
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
+      "plan-1", "claude", "qwen", false, "moonshotai/kimi-k2.6",
     ))
   })
 })

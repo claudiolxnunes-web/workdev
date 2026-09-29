@@ -420,6 +420,10 @@ def _start_agent_runtime(
 
 
 def start_agent_runtime(agent, prompt, timeout_seconds=15.0, model=None, run_id=None):
+    if run_id is not None and agent == 'qwen' and model is None:
+        # Runs anteriores ao seletor não têm modelo gravado. Elas continuam
+        # usando o Qwen histórico mesmo se a preferência global mudar.
+        model = cli_agent_models.DEFAULTS['qwen']
     if agent == 'local-code' and run_id is not None:
         raise RuntimeError('local-code usa a fila persistente; sessão AUTO recusada')
     if agent == 'gemini' and run_id is not None:

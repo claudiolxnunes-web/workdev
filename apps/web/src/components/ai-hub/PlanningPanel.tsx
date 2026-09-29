@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { getExecutionModels, type ExecutionModel } from "@/services/settings.service"
 import {
-  agentLabels, approvePlan, getAgentRuntimes, getPlanRecommendation, getPlans,
+  agentLabels, approvePlan, getAgentRuntimes, getCliAgentModel, getPlanRecommendation, getPlans,
   sendToBuild, subscribeToHandoffs, updatePlan, CLI_AGENTS, HandoffApiError,
   RECOMMENDED_REVIEWERS,
   type AgentName, type AgentRuntime, type ExecutionPlan,
@@ -335,8 +335,14 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
     }
     setBusy(plan.id); setError(""); setMessage("")
     try {
-      if (agent && requested === undefined && !reviewerModel) await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, chosenModel(plan, agent))
-      else await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, chosenModel(plan, agent), !agent, requested, reviewerModel)
+      let model = chosenModel(plan, agent)
+      const choiceForQwen = recommendations[recommendationKey(plan)]?.recommended.agent === "qwen"
+        && Boolean(modelChoice[plan.id])
+      if (agent === "qwen" && !choiceForQwen) {
+        model = (await getCliAgentModel("qwen")).selected
+      }
+      if (agent && requested === undefined && !reviewerModel) await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, model)
+      else await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, model, !agent, requested, reviewerModel)
       setPremiumTarget(null)
       setMessage(
         agent
