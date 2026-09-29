@@ -11,8 +11,8 @@
   },
   "agents": {
     "executor": {
-      "provider": "ollama",
-      "model": "workdev-qwen27b",
+      "provider": "openrouter",
+      "model": "deepseek/deepseek-v4-flash",
       "runtime_id": "local-code"
     },
     "adaptive_supervision": {
