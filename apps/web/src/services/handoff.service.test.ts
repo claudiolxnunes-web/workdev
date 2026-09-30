@@ -34,4 +34,18 @@ describe("handoff service errors", () => {
       detail: { code: "premium_confirmation_required", message: "Autorize o custo premium" },
     })
   })
+
+  it("envia escolha opcional do Observer junto ao Build", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "run-1" }),
+      { status: 200, headers: { "Content-Type": "application/json" } }))
+    vi.stubGlobal("fetch", fetchMock)
+    await sendToBuild("plan-1", "claude", "codex", false, undefined,
+      false, undefined, undefined,
+      { enabled: true, selection: { provider: "openai", model: "observer-model" } })
+    const [, options] = fetchMock.mock.calls[0]
+    expect(JSON.parse(options.body)).toMatchObject({
+      agent: "codex", reviewer: "claude", observer_enabled: true,
+      observer_selection: { provider: "openai", model: "observer-model" },
+    })
+  })
 })

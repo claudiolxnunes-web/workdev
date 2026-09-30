@@ -172,6 +172,22 @@ describe("PlanningPanel", () => {
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, "claude", undefined, false, undefined, true, true, { provider: "anthropic", model: "review-model" }))
   })
 
+  it("permite Observer opcional com modelo independente", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    renderPanel()
+    const no = await screen.findByRole("button", { name: "Não" })
+    await waitFor(() => expect(no).toBeEnabled())
+    fireEvent.click(no)
+    fireEvent.click(screen.getByLabelText(/Observer \(opcional/))
+    fireEvent.change(screen.getByLabelText("Fonte do Observer"), { target: { value: "anthropic" } })
+    await screen.findByRole("option", { name: "Review Model" })
+    fireEvent.change(screen.getByLabelText("Modelo do Observer"), { target: { value: "review-model" } })
+    enviar()
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null,
+      undefined, false, undefined, true, false, undefined,
+      { enabled: true, selection: { provider: "anthropic", model: "review-model" } }))
+  })
+
   it("impede recusa quando a política exige revisão", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ state: "required", models: [], local_error: null }) })))

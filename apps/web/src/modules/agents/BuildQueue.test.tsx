@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
 
 import { BuildQueue } from "./BuildQueue"
@@ -8,12 +8,14 @@ import { HandoffApiError, type AgentRun } from "@/services/handoff.service"
 const getRuns = vi.fn()
 const getRunContext = vi.fn()
 const dispatchRun = vi.fn()
+const configureRunObserver = vi.fn()
 
 vi.mock("@/services/handoff.service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/handoff.service")>()),
   getRuns: (...args: unknown[]) => getRuns(...args),
   getRunContext: (...args: unknown[]) => getRunContext(...args),
   dispatchRun: (...args: unknown[]) => dispatchRun(...args),
+  configureRunObserver: (...args: unknown[]) => configureRunObserver(...args),
   subscribeToHandoffs: () => () => {},
 }))
 
@@ -37,9 +39,25 @@ const contexto = {
 }
 
 describe("BuildQueue — despacho para CLI local", () => {
+  afterEach(() => vi.unstubAllGlobals())
   beforeEach(() => {
-    getRuns.mockReset(); getRunContext.mockReset(); dispatchRun.mockReset()
+    getRuns.mockReset(); getRunContext.mockReset(); dispatchRun.mockReset(); configureRunObserver.mockReset()
     getRunContext.mockResolvedValue(contexto)
+    configureRunObserver.mockResolvedValue(run())
+  })
+
+  it("liga Observer em uma Run com modelo escolhido pelo operador", async () => {
+    getRuns.mockResolvedValue([run({ observer: null })])
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ models: [
+      { provider: "openai", model: "observer-model", label: "Observer Model", agent: "codex", review_capable: true },
+    ], local_error: null }), { status: 200, headers: { "Content-Type": "application/json" } })))
+    render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
+    fireEvent.click(await screen.findByRole("button", { name: "Ligar Observer" }))
+    fireEvent.change(await screen.findByLabelText("Modelo do Observer na Run"),
+      { target: { value: "openai:observer-model:" } })
+    fireEvent.click(screen.getByRole("button", { name: "Salvar Observer" }))
+    await waitFor(() => expect(configureRunObserver).toHaveBeenCalledWith("run-1", true,
+      { provider: "openai", model: "observer-model" }))
   })
 
   it("oferece entrega à CLI e acesso à sessão canônica", async () => {

@@ -31,6 +31,8 @@ from app.schemas.handoff import (
     SubtaskProgress,
 )
 from app.services import agent_runtimes, build_jobs, context_egress
+from app.services.observer_selection import current as observer_current
+from app.services.run_pause import active_pause
 from app.services.build_executor import build_enabled
 from app.services.agent_runtimes import is_ollama_agent
 from app.services.build_rag import augment_prompt
@@ -208,6 +210,8 @@ def _run_out(
         "dispatch_state": run.dispatch_state or "idle",
         "dispatch_attempts": run.dispatch_attempts or 0,
         "last_dispatch_at": run.last_dispatch_at,
+        "observer": observer_current(db, run.id),
+        "pause": active_pause(db, run.id),
     }
 
 
@@ -871,6 +875,14 @@ def send_to_build(
             raise HTTPException(409, "Fonte e modelo não pertencem ao revisor informado")
         payload.reviewer = reviewer_selection["agent"]
 
+    observer_selection = None
+    if payload.observer_enabled:
+        from app.services.agent_router import resolve_execution_selection
+        try:
+            observer_selection = resolve_execution_selection(db, payload.observer_selection)
+        except AgentRoutingError as exc:
+            raise HTTPException(409, {'code': exc.code, 'message': exc.message}) from exc
+
     if payload.routing_mode == "manual" and model:
         # O usuário escolhe o modelo, mas só entre os permitidos do agente.
         # O catálogo inteiro nunca é opção de envio.
@@ -982,6 +994,8 @@ def send_to_build(
             ),
             **({"review_requested": payload.review_requested} if payload.review_requested is not None else {}),
             **({"reviewer_selection": reviewer_selection} if reviewer_selection else {}),
+            **({'observer_enabled': True, 'observer_selection': observer_selection}
+              if payload.observer_enabled else {}),
         )
     except HandoffError as error:
         raise HTTPException(
@@ -1069,6 +1083,71 @@ def get_agent_run(
     )
 
 
+class RunResume(BaseModel):
+    reason: str
+
+
+@router.post('/runs/{run_id}/resume')
+def resume_observer_pause(run_id: UUID, payload: RunResume,
+                          db: Session = Depends(get_db)):
+    """Explicit authenticated operator action; never triggered by the worker."""
+    from app.services.run_pause import resume_paused_run, RunPaused
+    if not payload.reason.strip():
+        raise HTTPException(422, 'Motivo da retomada é obrigatório')
+    try:
+        run = resume_paused_run(db, run_id, actor='authenticated_operator',
+                                reason=payload.reason.strip())
+    except RunPaused as error:
+        raise HTTPException(409, str(error)) from error
+    from app.services.build_worker import continue_paused_outcome
+    try:
+        continue_paused_outcome(db, run)
+    except HandoffError as error:
+        raise HTTPException(409, str(error)) from error
+    if run.agent == 'local-code':
+        from app.services.local_code_build import continue_paused_delivery
+        try:
+            continue_paused_delivery(db, run)
+        except HandoffError as error:
+            raise HTTPException(409, str(error)) from error
+    return _run_out(db, run)
+
+
+class RunObserverChoice(BaseModel):
+    enabled: bool
+    selection: dict[str, str] | None = None
+
+
+@router.put('/runs/{run_id}/observer')
+def configure_run_observer(run_id: UUID, payload: RunObserverChoice,
+                           background: BackgroundTasks, db: Session = Depends(get_db)):
+    """An explicit operator choice changes observation, never resumes a PAUSE."""
+    run = _get_run(db, run_id)
+    if run.status not in {'queued', 'running', 'blocked'}:
+        raise HTTPException(409, 'Observer só pode ser alterado durante Run ativa')
+    selected = None
+    if payload.enabled:
+        if not payload.selection:
+            raise HTTPException(422, 'Fonte e modelo do Observer são obrigatórios')
+        from app.services.agent_router import resolve_execution_selection
+        try:
+            selected = resolve_execution_selection(db, payload.selection)
+        except AgentRoutingError as error:
+            raise HTTPException(409, {'code': error.code, 'message': error.message}) from error
+    event = add_run_event(db, run, 'observer.configured',
+        'Observer ligado' if payload.enabled else 'Observer desligado',
+        {'enabled': payload.enabled,
+         'provider': selected.get('provider') if selected else None,
+         'model': selected.get('model') if selected else None,
+         'runtime_id': selected.get('runtime_id') if selected else None})
+    if payload.enabled:
+        from app.services.observer_workspace import baseline
+        baseline(db, run)
+    db.commit()
+    _sync_run(background, db, run, event)
+    return _run_out(db, run)
+
+
 @router.get("/runs/{run_id}/context")
 def get_agent_context(
     run_id: UUID,
@@ -1094,6 +1173,11 @@ def start_workspace_run(run_id: UUID, background: BackgroundTasks, db: Session =
     from app.services.agent_workspace import audit
     from app.routers.terminal import STANDBY_COMMANDS
     run = _get_run(db, run_id)
+    from app.services.run_pause import assert_run_can_continue, RunPaused
+    try:
+        assert_run_can_continue(db, run_id)
+    except RunPaused as error:
+        raise HTTPException(409, str(error)) from error
     if run.status != 'queued' or run.agent not in STANDBY_COMMANDS:
         raise HTTPException(409, 'Somente Run CLI aguardando pode iniciar sessão isolada')
     if run.agent == 'local-code':
@@ -1340,6 +1424,12 @@ async def _consume_dispatch_job(
         job = db.query(AgentBuildJob).filter(AgentBuildJob.id == job_id).first()
         if job is None or job.state != "queued" or job.runtime_id == "local-code":
             return
+        from app.services.run_pause import assert_run_can_continue, RunPaused
+        try:
+            assert_run_can_continue(db, run_id)
+        except RunPaused:
+            db.rollback()
+            return
         build_jobs.start_job(db, job)
         db.commit()
         runtime_id = job.runtime_id
@@ -1353,6 +1443,8 @@ async def _consume_dispatch_job(
     # isolado: duas cópias divergiriam, e é justamente o parcial que sobra
     # quando a geração morre no meio.
     try:
+        with SessionLocal() as checkpoint_db:
+            assert_run_can_continue(checkpoint_db, run_id)
         result = await dispatch_to_ollama(
             runtime_id,
             prompt,
@@ -1361,6 +1453,13 @@ async def _consume_dispatch_job(
         )
     except OllamaDispatchError as falha:
         erro = falha
+    except RunPaused:
+        with SessionLocal() as checkpoint_db:
+            queued = checkpoint_db.get(AgentBuildJob, job_id)
+            if queued and queued.state == 'running':
+                queued.state = 'queued'
+                checkpoint_db.commit()
+        return
 
     db = SessionLocal()
     try:
@@ -1458,6 +1557,11 @@ def dispatch_run_to_ollama(
     vivo, e a recusa vem do índice parcial do banco, não de um `if` daqui.
     """
     run = _get_run(db, run_id)
+    from app.services.run_pause import assert_run_can_continue, RunPaused
+    try:
+        assert_run_can_continue(db, run_id)
+    except RunPaused as error:
+        raise HTTPException(409, str(error)) from error
 
     if run.agent == 'local-code':
         from app.services.local_code_build import enqueue
@@ -1854,6 +1958,11 @@ def update_run_subtask(
         db,
         run_id,
     )
+    from app.services.run_pause import assert_run_can_continue, RunPaused
+    try:
+        assert_run_can_continue(db, run_id)
+    except RunPaused as error:
+        raise HTTPException(409, str(error)) from error
 
     subtask = db.query(
         BacklogSubtask

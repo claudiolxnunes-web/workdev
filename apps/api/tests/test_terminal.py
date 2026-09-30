@@ -265,12 +265,27 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
         with patch('app.routers.terminal.agent_lifecycle.run_lock', return_value=nullcontext()), \
              patch('app.routers.terminal.agent_lifecycle.agent_lock', return_value=nullcontext()), \
              patch('app.routers.terminal.agent_lifecycle.run_binding', return_value=None), \
+             patch('app.services.run_pause.checked_work_unit', return_value=nullcontext()), \
              patch('app.routers.terminal.agent_lifecycle.bind_run') as bind:
             result = start_agent_runtime("codex", "prompt", timeout_seconds=1, run_id="run-1")
             bind.assert_called_once_with('codex', 'run-1', 'auto-codex-run-1')
         start_session.assert_called_once_with("codex", "auto-codex-run-1", None)
         send_text.assert_called_once_with("auto-codex-run-1", "prompt")
         self.assertEqual(result["session"], "auto-codex-run-1")
+
+    def test_paused_run_does_not_send_next_cli_prompt(self):
+        from contextlib import nullcontext
+        from app.services.run_pause import RunPaused
+        with patch('app.routers.terminal.agent_lifecycle.run_lock', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.agent_lock', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.run_binding', return_value=None), \
+             patch('app.services.run_pause.checked_work_unit', side_effect=RunPaused('paused')), \
+             patch('app.routers.terminal._start_standby_session') as start, \
+             patch('app.routers.terminal._send_text') as send:
+            with self.assertRaises(RunPaused):
+                start_agent_runtime('codex', 'next prompt', run_id='run-1')
+            start.assert_not_called()
+            send.assert_not_called()
     @patch("app.routers.terminal._stop_standby_session", return_value=True)
     def test_stop_auto_runtime_uses_run_scoped_session(self, stop_session):
         result = stop_agent_runtime("codex", "run-1")

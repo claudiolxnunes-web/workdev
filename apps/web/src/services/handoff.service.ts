@@ -245,6 +245,8 @@ export interface AgentRun {
   dispatch_state: DispatchState
   dispatch_attempts: number
   last_dispatch_at?: string
+  observer?: { enabled: boolean; provider: string | null; model: string | null; runtime_id: string | null; configured_at: string } | null
+  pause?: { reason: string; evidence: Record<string, unknown>; event_id: string; created_at: string } | null
 }
 
 export type DispatchState =
@@ -384,6 +386,7 @@ export async function sendToBuild(
   useDefaultExecutor = false,
   reviewRequested?: boolean,
   reviewerSelection?: { provider: string; model: string },
+  observer?: { enabled: boolean; selection?: { provider: string; model: string; runtime_id?: string } },
 ): Promise<AgentRun> {
   if (agent && agent === reviewer) {
     throw new HandoffApiError(
@@ -397,7 +400,22 @@ export async function sendToBuild(
     : { routing_mode: "auto", reviewer, premium_confirmed: premiumConfirmed, ...(reviewRequested !== undefined ? { review_requested: reviewRequested } : {}) }
 
   return read(fetch(`/api/handoffs/plans/${id}/build`, {
-    method: "POST", headers, body: JSON.stringify({ ...body, ...(reviewerSelection ? { reviewer_selection: reviewerSelection } : {}) }),
+    method: "POST", headers, body: JSON.stringify({ ...body, ...(reviewerSelection ? { reviewer_selection: reviewerSelection } : {}),
+      observer_enabled: observer?.enabled ?? false,
+      ...(observer?.enabled && observer.selection ? { observer_selection: observer.selection } : {}) }),
+  }))
+}
+
+export function resumeObserverPause(runId: string, reason: string): Promise<AgentRun> {
+  return read(fetch(`/api/handoffs/runs/${runId}/resume`, {
+    method: "POST", headers, body: JSON.stringify({ reason }),
+  }))
+}
+
+export function configureRunObserver(runId: string, enabled: boolean,
+  selection?: { provider: string; model: string; runtime_id?: string }): Promise<AgentRun> {
+  return read(fetch(`/api/handoffs/runs/${runId}/observer`, {
+    method: "PUT", headers, body: JSON.stringify({ enabled, ...(selection ? { selection } : {}) }),
   }))
 }
 

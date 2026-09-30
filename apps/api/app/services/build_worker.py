@@ -38,6 +38,7 @@ from app.services.handoff import (
     update_run,
 )
 from app.services import agent_runtimes
+from app.services.run_pause import assert_run_can_continue, is_paused, run_checkpoint, RunPaused
 from app.services.llamacpp_driver import dispatch as dispatch_to_llamacpp
 from app.services.ollama_driver import OllamaDispatchError
 from app.services.ollama_driver import dispatch as dispatch_to_ollama
@@ -87,14 +88,15 @@ def claim_next_job(db: Session) -> AgentBuildJob | None:
     linha = db.execute(
         text(
             """
-            SELECT id FROM agent_build_jobs
-            WHERE state = 'queued'
-              AND (:http_enabled OR runtime_id = 'local-code')
-              AND (runtime_id != 'local-code' OR (:local_ready AND NOT EXISTS (
+            SELECT job.id FROM agent_build_jobs job
+            JOIN agent_runs run ON run.id = job.run_id
+            WHERE job.state = 'queued' AND run.status IN ('queued', 'running')
+              AND (:http_enabled OR job.runtime_id = 'local-code')
+              AND (job.runtime_id != 'local-code' OR (:local_ready AND NOT EXISTS (
                   SELECT 1 FROM agent_build_jobs busy
                   WHERE busy.runtime_id = 'local-code' AND busy.state = 'running'
               )))
-            ORDER BY created_at
+            ORDER BY job.created_at
             FOR UPDATE SKIP LOCKED
             LIMIT 1
             """
@@ -129,6 +131,18 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
         build_jobs.fail_job(db, job, error="Execução não existe mais")
         db.commit()
         return None
+
+    try:
+        assert_run_can_continue(db, run.id)
+    except RunPaused:
+        db.rollback()
+        return None
+
+    held_response = (job.payload or {}).get('held_response')
+    if held_response is not None:
+        build_jobs.start_job(db, job)
+        db.commit()
+        return _apply_response(db, run, job, held_response)
 
     if job.runtime_id == "local-code":
         from app.services import local_code_build
@@ -194,6 +208,7 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
     db.commit()
 
     try:
+        assert_run_can_continue(db, run.id)
         runtime = agent_runtimes.get_runtime(job.runtime_id)
 
         if runtime is None:
@@ -221,15 +236,46 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
             db, run, job, "build.dispatch_failed", error.message,
             {"code": error.code, **error.details},
         )
+    except RunPaused:
+        job.state = 'queued'
+        db.commit()
+        return None
 
-    outcome = execute_build(
-        run,
-        resultado.get("response") or "",
-        attempt=job.attempt,
-    )
+    response_text = resultado.get('response') or ''
+    job.payload = {**(job.payload or {}), 'held_response': response_text}
+    db.commit()
+    return _apply_response(db, run, job, response_text)
 
+
+def _apply_response(db: Session, run: AgentRun, job: AgentBuildJob,
+                    response_text: str) -> BuildOutcome | None:
+    try:
+        assert_run_can_continue(db, run.id)
+    except RunPaused:
+        job.state = 'queued'
+        db.commit()
+        return None
+
+    try:
+        outcome = execute_build(run, response_text, attempt=job.attempt,
+                                checkpoint=lambda: run_checkpoint(run.id))
+    except RunPaused:
+        job.state = 'queued'
+        db.commit()
+        return None
+
+    # The physical build is one already-started unit. PAUSE may be recorded
+    # during its gate or commit; finish its receipt while keeping the Run blocked.
+    db.refresh(run, with_for_update=True)
+    paused = is_paused(db, run.id)
     if not outcome.ok:
         esgotou = (run.dispatch_attempts or 0) >= max_attempts()
+        if paused and esgotou:
+            job.payload = {**(job.payload or {}), 'deferred_transition': 'blocked'}
+            add_run_event(db, run, 'build.transition_deferred',
+                'Resultado do build aguardando retomada explícita após PAUSE',
+                {'job_id': str(job.id), 'target': 'blocked'})
+        job.payload = {k: v for k, v in (job.payload or {}).items() if k != 'held_response'}
 
         _falhar(
             db,
@@ -238,7 +284,7 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
             "build.envelope_rejected",
             outcome.message,
             outcome_payload(outcome),
-            transicionar=esgotou,
+            transicionar=esgotou and not paused,
         )
         return outcome
 
@@ -252,12 +298,38 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
         outcome_payload(outcome),
     )
 
+    job.payload = {k: v for k, v in (job.payload or {}).items() if k != 'held_response'}
+    if paused:
+        job.payload = {**job.payload, 'deferred_transition': outcome.next_status}
+        add_run_event(db, run, 'build.transition_deferred',
+            'Resultado do build aguardando retomada explícita após PAUSE',
+            {'job_id': str(job.id), 'target': outcome.next_status})
     build_jobs.finish_job(db, job, payload=outcome_payload(outcome))
 
-    _transicionar(db, run, outcome)
+    if not paused:
+        _transicionar(db, run, outcome)
     db.commit()
 
     return outcome
+
+
+def continue_paused_outcome(db: Session, run: AgentRun) -> bool:
+    """Apply a finished worker transition only after explicit operator resume."""
+    job = (db.query(AgentBuildJob).filter(AgentBuildJob.run_id == run.id)
+           .order_by(AgentBuildJob.created_at.desc()).first())
+    target = (job.payload or {}).get('deferred_transition') if job else None
+    if not target:
+        return False
+    assert_run_can_continue(db, run.id)
+    update_run(db, run, {'status': target,
+                         'message': 'Resultado do build aplicado após retomada explícita'})
+    job.payload = {k: v for k, v in (job.payload or {}).items()
+                   if k != 'deferred_transition'}
+    add_run_event(db, run, 'build.transition_resumed',
+        'Resultado pendente aplicado após retomada explícita',
+        {'job_id': str(job.id), 'target': target})
+    db.commit()
+    return True
 
 
 def _transicionar(db: Session, run: AgentRun, outcome: BuildOutcome) -> None:

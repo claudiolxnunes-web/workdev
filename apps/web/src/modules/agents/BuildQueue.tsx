@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { getExecutionModels, type ExecutionModel } from "@/services/settings.service"
 import {
   getRunContext, getRuns, subscribeToHandoffs, transferRun, updateRun,
+  resumeObserverPause,
+  configureRunObserver,
   updateRunSubtask, agentLabels, dispatchRun, getDispatchJob, HandoffApiError,
   RUNTIME_AGENTS,
   type AgentContext, type AgentName, type AgentRun, type DispatchJob,
@@ -53,6 +56,9 @@ export function BuildQueue({
   // o aviso de despacho já ativo carrega informação acionável (qual job está
   // vivo) que não pode sumir sozinha antes de o operador ler.
   const [dispatchNotice, setDispatchNotice] = useState("")
+  const [observerEditorOpen, setObserverEditorOpen] = useState(false)
+  const [observerModels, setObserverModels] = useState<ExecutionModel[]>([])
+  const [observerModelKey, setObserverModelKey] = useState("")
 
   const loadRuns = useCallback(async () => {
     if (runsInFlight.current) return
@@ -106,6 +112,7 @@ export function BuildQueue({
     contextGeneration.current += 1
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setContext(null); setJob(null); setDispatchNotice("")
+    setObserverEditorOpen(false); setObserverModelKey("")
     if (selectedId) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadContext(selectedId)
@@ -183,6 +190,39 @@ export function BuildQueue({
       setSelectedId(null)
       await loadRuns()
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao transferir") }
+    finally { setBusy(false) }
+  }
+
+  async function resumePause() {
+    if (!selectedId || !selected?.pause) return
+    const reason = window.prompt("Motivo da retomada explícita da Run:")?.trim()
+    if (!reason) return
+    setBusy(true); setError("")
+    try { await resumeObserverPause(selectedId, reason); await loadRuns() }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao retomar") }
+    finally { setBusy(false) }
+  }
+
+  async function openObserverEditor() {
+    setObserverEditorOpen(true); setError("")
+    try { setObserverModels((await getExecutionModels()).models) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Catálogo do Observer indisponível") }
+  }
+
+  async function changeObserver(enabled: boolean) {
+    if (!selectedId) return
+    const selectedModel = observerModels.find(row =>
+      `${row.provider}:${row.model}:${row.runtime_id ?? ""}` === observerModelKey)
+    if (enabled && !selectedModel) { setError("Escolha o modelo do Observer"); return }
+    setBusy(true); setError("")
+    try {
+      await configureRunObserver(selectedId, enabled, selectedModel && enabled
+        ? { provider: selectedModel.provider, model: selectedModel.model,
+            ...(selectedModel.runtime_id ? { runtime_id: selectedModel.runtime_id } : {}) }
+        : undefined)
+      setObserverEditorOpen(false)
+      await loadRuns()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao configurar Observer") }
     finally { setBusy(false) }
   }
 
@@ -268,6 +308,31 @@ export function BuildQueue({
         </div>
         {runs.some(run => ["completed", "failed", "cancelled"].includes(run.status)) && <button className="px-3 py-2 text-xs text-slate-400 hover:text-sky-300" aria-expanded={showHistory} onClick={() => setShowHistory(value => !value)}>{showHistory ? "Ocultar histórico" : "Mostrar tarefas encerradas"}</button>}
         {selected && context && <div className="space-y-3 p-3 text-sm">
+          <p className="text-xs text-slate-400">Observer: {selected.observer?.enabled
+            ? `${selected.observer.provider} / ${selected.observer.model} · verifica a cada 30 s`
+            : "desligado"}</p>
+          {['queued', 'running', 'blocked'].includes(selected.status) && <div className="flex flex-wrap items-center gap-2 text-xs">
+            <button type="button" disabled={busy} onClick={() => void openObserverEditor()}
+              className="rounded border border-slate-700 px-2 py-1 text-sky-300">{selected.observer?.enabled ? 'Trocar modelo' : 'Ligar Observer'}</button>
+            {selected.observer?.enabled && <button type="button" disabled={busy}
+              onClick={() => void changeObserver(false)} className="rounded border border-slate-700 px-2 py-1">Desligar Observer</button>}
+            {observerEditorOpen && <div className="w-full rounded border border-slate-700 p-2">
+              <label>Modelo do Observer
+                <select aria-label="Modelo do Observer na Run" value={observerModelKey}
+                  onChange={e => setObserverModelKey(e.target.value)} className="ml-2 rounded bg-slate-900 p-1">
+                  <option value="">Selecione…</option>
+                  {observerModels.map(row => <option key={`${row.provider}:${row.model}:${row.runtime_id ?? ""}`}
+                    value={`${row.provider}:${row.model}:${row.runtime_id ?? ""}`}>{row.provider} / {row.label}</option>)}
+                </select>
+              </label>
+              <button type="button" disabled={busy || !observerModelKey}
+                onClick={() => void changeObserver(true)} className="ml-2 rounded bg-sky-700 px-2 py-1">Salvar Observer</button>
+            </div>}
+          </div>}
+          {selected.pause && <div role="alert" className="rounded border border-amber-700 bg-amber-950/40 p-2 text-xs text-amber-200">
+            <strong>PAUSE do Observer</strong><p>{selected.pause.reason}</p>
+            <details><summary>Evidências</summary><pre className="whitespace-pre-wrap">{JSON.stringify(selected.pause.evidence, null, 2)}</pre></details>
+          </div>}
           {context.subtasks.length > 0 && <div><p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">Subtarefas</p>{context.subtasks.map((item) => <label key={item.id} className="flex cursor-pointer gap-2 py-1 text-xs text-slate-300"><input type="checkbox" disabled={busy} checked={item.status === "done"} onChange={() => void toggleSubtask(item.id, item.status)} /><span className={item.status === "done" ? "text-slate-500 line-through" : ""}>{item.order}. {item.title}</span></label>)}</div>}
           <details><summary className="cursor-pointer text-xs text-slate-400">Objetivo e contexto da tarefa</summary><p className="mt-2 text-slate-300">{context.plan.objective}</p></details>
           <button onClick={() => void copyPrompt()} className="w-full rounded-lg bg-sky-600 px-3 py-2 font-medium hover:bg-sky-500">{copied ? "Contexto copiado" : "Copiar contexto para o Agent"}</button>
@@ -281,7 +346,7 @@ export function BuildQueue({
           </a>
           <div className="flex flex-wrap gap-2">
             {selected.status === "queued" && !RUNTIME_AGENTS.includes(selected.agent as typeof RUNTIME_AGENTS[number]) && <button disabled={busy} onClick={() => void move("running")} className="rounded bg-emerald-700 px-2 py-1 text-xs">Iniciar</button>}
-            {selected.status === "blocked" && <button disabled={busy} onClick={() => void move("running")} className="rounded bg-sky-700 px-2 py-1 text-xs">Retomar</button>}
+            {selected.status === "blocked" && <button disabled={busy} onClick={() => void (selected.pause ? resumePause() : move("running"))} className="rounded bg-sky-700 px-2 py-1 text-xs">Retomar</button>}
             {["running", "review"].includes(selected.status) && <button disabled={busy} onClick={() => void move("blocked")} className="rounded bg-red-800 px-2 py-1 text-xs">Bloquear</button>}
             {selected.status === "running" && <button disabled={busy} onClick={() => void move("review")} className="rounded bg-violet-700 px-2 py-1 text-xs">Enviar à revisão</button>}
             {["running", "review"].includes(selected.status) && <button disabled={busy} onClick={() => void move("completed")} className="rounded bg-emerald-700 px-2 py-1 text-xs">Concluir</button>}

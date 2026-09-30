@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import Column, DateTime, String, JSON, Table, create_engine
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import registry, sessionmaker
-from app.services import adaptive_config, adaptive_review, observer_events, run_observer
+from app.services import adaptive_config, adaptive_review, observer_events, run_observer, run_pause, observer_selection, observer_workspace
 from app.services import adaptive_ai
 from app.services.review_policy import decide
 from tests.test_adaptive_supervision import decision
@@ -25,7 +25,8 @@ def inbox(tmp_path, monkeypatch):
     mapping.map_imperatively(Run,Table('agent_runs',mapping.metadata,
         Column('id',UUID(as_uuid=True),primary_key=True),Column('plan_id',UUID(as_uuid=True)),
         Column('backlog_id',UUID(as_uuid=True)),Column('agent',String),Column('reviewer_agent',String),
-        Column('complexity',String),Column('status',String),Column('commit_sha',String),Column('result',String)))
+        Column('complexity',String),Column('status',String),Column('commit_sha',String),Column('result',String),
+        Column('error',String),Column('updated_at',DateTime)))
     mapping.map_imperatively(Event,Table('agent_run_events',mapping.metadata,
         Column('id',UUID(as_uuid=True),primary_key=True,default=uuid4),Column('run_id',UUID(as_uuid=True)),
         Column('event_type',String),Column('message',String),Column('payload',JSON),
@@ -34,7 +35,8 @@ def inbox(tmp_path, monkeypatch):
         Column('id',UUID(as_uuid=True),primary_key=True),Column('objective',String),Column('scope',String),
         Column('acceptance_criteria',String),Column('status',String),Column('approved_at',DateTime)))
     mapping.map_imperatively(Task,Table('backlog',mapping.metadata,
-        Column('id',UUID(as_uuid=True),primary_key=True),Column('project_id',UUID(as_uuid=True))))
+        Column('id',UUID(as_uuid=True),primary_key=True),Column('project_id',UUID(as_uuid=True)),
+        Column('status',String),Column('updated_at',DateTime)))
     engine=create_engine(f'sqlite:///{tmp_path}/inbox.db')
     mapping.metadata.create_all(engine)
     factory=sessionmaker(engine,expire_on_commit=False)
@@ -43,6 +45,12 @@ def inbox(tmp_path, monkeypatch):
         monkeypatch.setattr(module,'ExecutionPlan',Plan)
     monkeypatch.setattr(observer_events,'AgentRun',Run)
     monkeypatch.setattr(observer_events,'BacklogItem',Task)
+    monkeypatch.setattr(run_pause,'AgentRun',Run)
+    monkeypatch.setattr(run_pause,'AgentRunEvent',Event)
+    monkeypatch.setattr(run_pause,'BacklogItem',Task)
+    monkeypatch.setattr(observer_selection,'AgentRunEvent',Event)
+    monkeypatch.setattr(observer_workspace,'AgentRun',Run)
+    monkeypatch.setattr(observer_workspace,'AgentRunEvent',Event)
     monkeypatch.setattr('app.services.agent_lifecycle.GROUPS_FILE',tmp_path/'groups.json')
     monkeypatch.setattr(adaptive_config,'load',lambda:adaptive_config.AdaptiveConfig(enabled=True))
     def update(db, run, payload):
@@ -89,6 +97,53 @@ def test_only_committed_relevant_events_are_observed_once(inbox,monkeypatch):
     call.assert_called_once()
 
 
+def test_per_run_observer_off_and_on_without_change_use_no_llm(inbox,monkeypatch):
+    monkeypatch.setattr(adaptive_config,'load',lambda:adaptive_config.AdaptiveConfig(enabled=False))
+    call=Mock(return_value=({'text':json.dumps(OK),'model':'test-model'},'correlation'))
+    monkeypatch.setattr(adaptive_ai,'call',call)
+    inbox.emit('observer.configured',{'enabled':False})
+    inbox.emit('file_changed',{'file':'app/endpoint.py'})
+    with inbox.factory() as db:
+        assert not observer_events.consume_one(db)
+    call.assert_not_called()
+    inbox.emit('observer.configured',{'enabled':True,'provider':'openai','model':'test-model'})
+    with inbox.factory() as db:
+        assert not observer_events.consume_one(db)
+    call.assert_not_called()
+    inbox.emit('file_changed',{'file':'app/endpoint.py'})
+    with inbox.factory() as db:
+        assert observer_events.consume_one(db)
+        assert not observer_events.consume_one(db)
+    call.assert_called_once()
+
+
+def test_observer_off_does_not_pause_on_failure_event(inbox, monkeypatch):
+    call = Mock(side_effect=AssertionError('AI forbidden'))
+    monkeypatch.setattr(adaptive_ai, 'call', call)
+    inbox.emit('observer.configured', {'enabled': False})
+    inbox.emit('build.tests_failed', {'git_commit_sha': 'a'*40})
+    with inbox.factory() as db:
+        assert observer_events.consume_one(db)
+        assert db.query(inbox.Event).filter_by(event_type='observer.pause').count() == 0
+        receipt = db.query(inbox.Event).filter_by(event_type='observer.analyzed').one()
+        assert receipt.payload['call']['skipped_by_user']
+    call.assert_not_called()
+
+
+def test_30_second_workspace_check_emits_only_on_relevant_change(inbox,monkeypatch):
+    inbox.emit('observer.configured',{'enabled':True,'provider':'openai','model':'test-model'})
+    inbox.emit('observer.workspace_snapshot',{'fingerprint':'same'})
+    values=iter([{'fingerprint':'same','paths':[]},
+                 {'fingerprint':'changed','paths':['app/endpoint.py']}])
+    monkeypatch.setattr(observer_workspace,'snapshot',lambda:next(values))
+    with inbox.factory() as db:
+        observer_workspace.poll(db)
+        assert db.query(inbox.Event).filter_by(event_type='file_changed').count()==0
+        observer_workspace.poll(db)
+        event=db.query(inbox.Event).filter_by(event_type='file_changed').one()
+        assert event.payload['paths']==['app/endpoint.py']
+
+
 def test_failure_bypasses_model_and_remains_auditable(inbox,monkeypatch):
     inbox.emit('build.tests_failed',{'git_commit_sha':'a'*40})
     inbox.emit('file_changed')
@@ -99,7 +154,54 @@ def test_failure_bypasses_model_and_remains_auditable(inbox,monkeypatch):
         assert observer_events.consume_one(db)
         assert db.query(inbox.Event).filter_by(event_type='observer.escalation_requested').count()==2
         assert db.get(inbox.Run,inbox.run_id).status=='blocked'
+        pause=db.query(inbox.Event).filter_by(event_type='observer.pause').one()
+        assert pause.payload['action']=='PAUSE'
+        assert pause.payload['evidence']['category']=='gate_failure'
+        assert run_pause.is_paused(db,inbox.run_id)
     call.assert_not_called()
+
+
+def test_pause_requires_explicit_resume_and_restores_previous_status(inbox):
+    with inbox.factory() as db:
+        run_pause.request_pause(db,inbox.run_id,reason='Risco simulado',
+                                evidence={'source_event_id':'test'})
+        with pytest.raises(run_pause.RunPaused):
+            run_pause.assert_run_can_continue(db,inbox.run_id)
+        assert db.get(inbox.Run,inbox.run_id).status=='blocked'
+        assert db.query(inbox.Event).filter_by(event_type='observer.resumed').count()==0
+    with inbox.factory() as db:
+        run_pause.resume_paused_run(db,inbox.run_id,actor='operator',reason='Revisado')
+        assert run_pause.assert_run_can_continue(db,inbox.run_id).status=='running'
+        assert not run_pause.is_paused(db,inbox.run_id)
+        assert db.query(inbox.Event).filter_by(event_type='observer.resumed').count()==1
+
+
+def test_paused_run_refuses_next_controlled_send(inbox, monkeypatch):
+    monkeypatch.setattr('app.database.SessionLocal', inbox.factory)
+    with inbox.factory() as db:
+        run_pause.request_pause(db, inbox.run_id, reason='Risco simulado', evidence={'test': True})
+    sent = []
+    with pytest.raises(run_pause.RunPaused):
+        with run_pause.checked_work_unit(inbox.run_id):
+            sent.append('next prompt')
+    assert sent == []
+    with inbox.factory() as db:
+        run_pause.resume_paused_run(db, inbox.run_id, actor='operator', reason='Revisado')
+    with run_pause.checked_work_unit(inbox.run_id):
+        sent.append('next prompt')
+    assert sent == ['next prompt']
+
+
+def test_pause_persists_while_current_long_stage_finishes(inbox, monkeypatch):
+    monkeypatch.setattr('app.database.SessionLocal', inbox.factory)
+    with run_pause.run_checkpoint(inbox.run_id):
+        with inbox.factory() as db:
+            run_pause.request_pause(db, inbox.run_id, reason='Risco durante o gate',
+                                    evidence={'stage': 'gate'})
+        # The stage already started and may finish; the next one is refused.
+    with pytest.raises(run_pause.RunPaused):
+        with run_pause.run_checkpoint(inbox.run_id):
+            pytest.fail('New stage started after PAUSE')
 
 
 def test_worker_restart_after_attempt_never_replays_paid_inference(inbox,monkeypatch):

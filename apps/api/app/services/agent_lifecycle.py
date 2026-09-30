@@ -911,6 +911,21 @@ def active_work(db, agent: str) -> dict | None:
     if run is not None:
         return {"run_id": str(run.id), "status": run.status, "reason": "run_running"}
 
+    # PAUSE cooperativo não mata o turno já iniciado. Enquanto o processo
+    # vinculado continua vivo, impedir que o lifecycle o desligue só porque
+    # a Run saiu de `running` para `blocked`.
+    from sqlalchemy.orm import Session
+    if isinstance(db, Session):
+        from app.services.run_pause import is_paused
+        paused_runs = (db.query(AgentRun).filter(AgentRun.agent == agent,
+            AgentRun.status == 'blocked').order_by(AgentRun.created_at.desc()).limit(20).all())
+        for paused in paused_runs:
+            if not is_paused(db, paused.id):
+                continue
+            binding = run_binding(agent, paused.id)
+            if binding and not binding.get('stopped') and process_starttime(binding['pid']) == binding['starttime']:
+                return {'run_id': str(paused.id), 'status': 'blocked', 'reason': 'observer_pause_current_turn'}
+
     job = (
         db.query(AgentBuildJob)
         .join(AgentRun, AgentRun.id == AgentBuildJob.run_id)

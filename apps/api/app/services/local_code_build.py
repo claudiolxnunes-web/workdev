@@ -6,6 +6,7 @@ from app.models.handoff import AgentBuildJob, AgentRun
 from app.services import agent_lifecycle as lifecycle, build_jobs, local_code_channel as channel
 from app.services import local_model
 from app.services.handoff import add_run_event, build_context, update_run, HandoffError
+from app.services.run_pause import RunPaused
 
 
 def enqueue(db, run):
@@ -34,6 +35,8 @@ def dispatch(db, job, run):
                 build_jobs.fail_job(db, job, error='Run não está aguardando; entrega recusada')
                 db.commit()
                 return None
+            from app.services.run_pause import assert_run_can_continue
+            assert_run_can_continue(db, run.id)
             binding = lifecycle.run_binding(channel.AGENT, run.id)
             if binding:
                 # Crash before DB commit: durable intent is enough to refuse replay.
@@ -59,8 +62,17 @@ def dispatch(db, job, run):
                           _event_payload(job, data))
             db.commit()  # Audit is durable BEFORE any terminal input.
             try:
-                channel.send_marker(data)
+                from app.services.run_pause import checked_work_unit
+                with checked_work_unit(run.id):
+                    channel.send_marker(data)
                 channel.wait_ack(run.id)
+            except RunPaused:
+                job.payload = {**(job.payload or {}), 'paused_before_delivery': True}
+                add_run_event(db, run, 'build.cli_paused_before_delivery',
+                              'PAUSE persistido antes do envio à CLI; entrega aguardando retomada explícita',
+                              _event_payload(job, data))
+                db.commit()
+                return None
             except (lifecycle.LifecycleError, OSError, TimeoutError, subprocess.SubprocessError) as error:
                 job.error = f'Entrega incerta: {type(error).__name__}; sem reenvio automático'
                 add_run_event(db, run, 'build.cli_delivery_uncertain', job.error, _event_payload(job, data))
@@ -71,6 +83,34 @@ def dispatch(db, job, run):
     except BlockingIOError:
         db.rollback()
     return None
+
+
+def continue_paused_delivery(db, run):
+    """Send a marker known never to have been sent, only after explicit resume."""
+    from app.services.run_pause import checked_work_unit
+    with lifecycle.agent_lock(channel.AGENT):
+        job = build_jobs.active_job(db, run.id)
+        if not job or not (job.payload or {}).get('paused_before_delivery'):
+            return False
+        data = channel.read()
+        if (data.get('run_id') != str(run.id) or data.get('job_id') != str(job.id)
+                or data.get('phase') != 'reserved' or data.get('acknowledged')):
+            raise HandoffError('Reserva da CLI mudou; entrega precisa de reconciliação')
+        db.commit()
+        with checked_work_unit(run.id):
+            channel.send_marker(data)
+        try:
+            channel.wait_ack(run.id)
+        except (lifecycle.LifecycleError, OSError, TimeoutError, subprocess.SubprocessError) as error:
+            job.error = f'Entrega após PAUSE incerta: {type(error).__name__}; sem reenvio automático'
+            add_run_event(db, run, 'build.cli_delivery_uncertain', job.error, _event_payload(job, data))
+            db.commit()
+            return False
+        job.payload = {key: value for key, value in (job.payload or {}).items()
+                       if key != 'paused_before_delivery'}
+        _ack(db, job, run, data)
+        db.commit()
+        return True
 
 
 def _ack(db, job, run, data):

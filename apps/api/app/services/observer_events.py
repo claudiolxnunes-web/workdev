@@ -5,14 +5,14 @@ Nenhum event bus, watcher, fila/tabela paralela ou processo executor é introduz
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
-from sqlalchemy import String, cast, exists, func
+from sqlalchemy import String, cast, exists, func, or_
 from sqlalchemy.orm import aliased
 from app.models.handoff import AgentRun, AgentRunEvent, ExecutionPlan
 from app.models.backlog import BacklogItem
 from app.services import adaptive_config, adaptive_review, run_observer
 
 
-def pending_query(db):
+def pending_query(db, *, include_legacy=True):
     receipt = aliased(AgentRunEvent)
     received = exists().where(receipt.run_id == AgentRunEvent.run_id,
         receipt.event_type == 'observer.analyzed',
@@ -20,8 +20,14 @@ def pending_query(db):
     configured = aliased(AgentRunEvent)
     has_policy = exists().where(configured.run_id == AgentRunEvent.run_id,
         configured.event_type == 'routing.jev_decision')
+    selected = aliased(AgentRunEvent)
+    enabled = exists().where(selected.run_id == AgentRunEvent.run_id,
+        selected.event_type == 'observer.configured',
+        selected.payload['enabled'].as_boolean().is_(True),
+        selected.created_at <= AgentRunEvent.created_at)
     return db.query(AgentRunEvent).filter(AgentRunEvent.event_type.in_(run_observer.RELEVANT),
-        ~received, has_policy).order_by(AgentRunEvent.created_at, AgentRunEvent.id)
+        ~received, or_(enabled, has_policy) if include_legacy else enabled).order_by(
+            AgentRunEvent.created_at, AgentRunEvent.id)
 
 
 def aggregate(db, run, source):
@@ -35,12 +41,28 @@ def aggregate(db, run, source):
 
 
 def _consume(db, config):
-    source = pending_query(db).with_for_update(skip_locked=True).first()
+    source = pending_query(db, include_legacy=config.enabled).with_for_update(skip_locked=True).first()
     if source is None:
         return recover_review(db)
     run = db.get(AgentRun, source.run_id)
-    policy = adaptive_review.policy_for_run(db, run)
-    if not policy:
+    from app.services.observer_selection import current
+    selected = current(db, run.id)
+    if selected and not selected['enabled']:
+        db.add(AgentRunEvent(run_id=run.id, event_type='observer.analyzed',
+            message='Observer desligado pelo operador',
+            payload={'source_event_id': source.id.hex,
+                     'finding': run_observer.ObserverFinding(
+                         status='ok', severity='none', scope='within',
+                         evidence_quality='good', escalate=False).model_dump(mode='json'),
+                     'call': {'skipped_by_user': True}}))
+        db.commit()
+        return True
+    if selected and selected['enabled']:
+        choice = adaptive_config.ObserverModel(provider=selected['provider'],
+            model=selected['model'], runtime_id=selected['runtime_id'])
+        config = config.model_copy(update={'enabled': True, 'primary': choice, 'fallback': None})
+    policy = adaptive_review.policy_for_run(db, run) if not selected else None
+    if not selected and not policy:
         db.rollback()
         return False
     plan = db.get(ExecutionPlan, run.plan_id)
@@ -57,18 +79,13 @@ def _consume(db, config):
         'message':source.message, 'payload':source.payload,
         'gate_passed':bool(gate and gate.passed),
         'gate_failed':bool(latest_gate and latest_gate.event_type == 'build.tests_failed')}
-    if snapshot['gate_failed'] and run.status in {'running', 'review'}:
-        from app.services.handoff import update_run
-        update_run(db, run, {'status': 'blocked', 'error': 'Gate físico reprovado; devolvido ao executor sem IA',
-                            'message': 'Falha de gate determinístico bloqueia conclusão adaptativa'})
-        db.commit()
     if (source.payload or {}).get('diff_truncated'):
         finding, metadata = run_observer.alert('missing_evidence', 'Diff excede o contexto limitado do observer; revisão obrigatória.'), {'deterministic':True}
     elif source.event_type in run_observer.FAILURES or snapshot['gate_failed']:
         finding, metadata = run_observer.alert('gate_failure', 'Falha física; sem chamada de IA.'), {'deterministic':True}
     elif source.event_type in run_observer.PASSIVE:
         finding, metadata = run_observer.ObserverFinding(status='ok', severity='none', scope='within', evidence_quality='good', escalate=False), {'deterministic':True}
-    elif not policy.observer_required:
+    elif policy and not policy.observer_required:
         finding, metadata = run_observer.ObserverFinding(status='ok', severity='none', scope='within', evidence_quality='good', escalate=False), {'skipped_by_policy':True}
     else:
         # Inclui todos os custos de forma conservadora, mesmo cobranças
@@ -94,6 +111,16 @@ def _consume(db, config):
                  'timestamp':datetime.now(timezone.utc).isoformat()})
     db.add(receipt)
     db.commit()
+    # PAUSE é uma decisão de estado do WorkDev. O Observer apenas devolve um
+    # achado; não recebe ferramentas para editar o workspace ou comandar CLI.
+    if finding.escalate and run.status in {'queued', 'running'}:
+        from app.services.run_pause import request_pause
+        request_pause(db, run.id, reason=finding.finding or 'Risco observado',
+                      evidence={'source_event_id': source.id.hex,
+                                'receipt_event_id': str(receipt.id),
+                                'category': finding.category,
+                                'severity': finding.severity,
+                                'evidence': finding.evidence})
     # Um achado pede revisão; nunca aprova uma run nem dispensa gates.
     if finding.escalate:
         db.add(AgentRunEvent(run_id=run.id, event_type='observer.escalation_requested',
@@ -129,8 +156,6 @@ def recover_review(db):
 
 def consume_one(db):
     config = adaptive_config.load()
-    if not config.enabled:
-        return False
     from app.services.agent_snapshot import file_lock
     from app.services.agent_lifecycle import GROUPS_FILE
     # Separado dos locks de run/agente do lifecycle: inferência não pode travar ação de CLI.

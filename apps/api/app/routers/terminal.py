@@ -137,7 +137,17 @@ async def agent_send(agent: str, payload: AgentSendRequest, db: Session = Depend
         raise HTTPException(status_code=404, detail="Agente inválido")
     session = _live_session(agent, standby, db)
     try:
-        await asyncio.to_thread(_send_text, session, payload.text)
+        from app.services.run_pause import checked_work_unit, RunPaused
+        work = agent_lifecycle.active_work(db, agent)
+        if work and work.get('run_id'):
+            def _checked_send():
+                with checked_work_unit(work['run_id']):
+                    _send_text(session, payload.text)
+            await asyncio.to_thread(_checked_send)
+        else:
+            await asyncio.to_thread(_send_text, session, payload.text)
+    except RunPaused as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return {"agent": agent, "sent": True}
@@ -264,8 +274,10 @@ def _start_gemini_headless_runtime(
         with agent_lifecycle.run_lock(run_id), agent_lifecycle.agent_lock(agent):
             if agent_lifecycle.run_binding(agent, run_id):
                 raise RuntimeError('Run já possui execução; não reenviar prompt')
-            process = subprocess.Popen(command, cwd='/opt/workdev', stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE, text=True, start_new_session=True)
+            from app.services.run_pause import checked_work_unit
+            with checked_work_unit(run_id):
+                process = subprocess.Popen(command, cwd='/opt/workdev', stdout=subprocess.PIPE,
+                                           stderr=subprocess.PIPE, text=True, start_new_session=True)
             try:
                 agent_lifecycle.bind_run_process(agent, run_id, process.pid)
             except Exception:
@@ -438,7 +450,9 @@ def start_agent_runtime(agent, prompt, timeout_seconds=15.0, model=None, run_id=
             if agent_lifecycle.process_starttime(binding['pid']) != binding['starttime']:
                 raise RuntimeError('Identidade da Run indisponível; relançamento recusado')
             return {'agent': agent, 'session': binding['session'], 'started': False}
-        return _start_agent_runtime(agent, prompt, timeout_seconds, model, run_id)
+        from app.services.run_pause import checked_work_unit
+        with checked_work_unit(run_id):
+            return _start_agent_runtime(agent, prompt, timeout_seconds, model, run_id)
 
 
 def stop_agent_runtime(agent: str, run_id) -> bool:
@@ -731,7 +745,9 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Agente inválido")
         return
     with SessionLocal() as db:
+        work = agent_lifecycle.active_work(db, agent)
         session = _live_session(agent, session, db)
+        bound_run_id = (work or {}).get('run_id') if work and session == agent_snapshot.auto_session_name(agent, work['run_id']) else None
     if not await _claim(session):
         # After authentication, complete the handshake so browsers receive
         # the close code/reason instead of an opaque HTTP 403 / code 1006.
@@ -772,12 +788,25 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         slave_fd = -1
         output_task = asyncio.create_task(_send_output(websocket, master_fd))
 
+        async def write_input(data: bytes):
+            if bound_run_id:
+                from app.services.run_pause import checked_work_unit, RunPaused
+                def checked_write():
+                    with checked_work_unit(bound_run_id):
+                        os.write(master_fd, data)
+                try:
+                    await asyncio.to_thread(checked_write)
+                except RunPaused:
+                    await websocket.send_text(json.dumps({'type':'pause', 'run_id':bound_run_id}))
+            else:
+                os.write(master_fd, data)
+
         while True:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
                 break
             if message.get("bytes") is not None:
-                os.write(master_fd, message["bytes"])
+                await write_input(message["bytes"])
                 continue
             text = message.get("text")
             if not text:
@@ -787,7 +816,7 @@ async def agent_terminal(websocket: WebSocket, agent: str):
             except json.JSONDecodeError:
                 continue
             if payload.get("type") == "input" and isinstance(payload.get("data"), str):
-                os.write(master_fd, payload["data"].encode())
+                await write_input(payload["data"].encode())
             elif payload.get("type") == "resize":
                 _resize(master_fd, int(payload.get("rows", 24)), int(payload.get("cols", 80)))
     except WebSocketDisconnect:

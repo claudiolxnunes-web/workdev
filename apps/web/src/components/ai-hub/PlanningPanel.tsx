@@ -220,6 +220,8 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
   const [reviewChoice, setReviewChoice] = useState<Record<string, boolean>>({})
   const [reviewState, setReviewState] = useState<Record<string, string>>({})
   const [reviewModels, setReviewModels] = useState<ExecutionModel[]>([])
+  const [observerModels, setObserverModels] = useState<ExecutionModel[]>([])
+  const [observerChoice, setObserverChoice] = useState<Record<string, { enabled: boolean; provider?: string; model?: string; runtime_id?: string }>>({})
   const [reviewModelsError, setReviewModelsError] = useState("")
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const requestedRecommendations = useRef<Set<string>>(new Set())
@@ -229,7 +231,10 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
 
   useEffect(() => {
     let active = true
-    getExecutionModels().then(data => { if (active) setReviewModels(data.models.filter(row => row.review_capable)) })
+    getExecutionModels().then(data => { if (active) {
+      setReviewModels(data.models.filter(row => row.review_capable))
+      setObserverModels(data.models)
+    } })
       .catch(() => { if (active) setReviewModelsError("Catálogo de revisão indisponível. Tente reabrir o painel.") })
     return () => { active = false }
   }, [])
@@ -329,6 +334,14 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
     const reviewer = requested === false ? null : roles[plan.id]?.reviewer
     const reviewerModel = requested !== false && roles[plan.id]?.reviewerModel
       ? { provider: roles[plan.id].reviewerProvider!, model: roles[plan.id].reviewerModel! } : undefined
+    const observer = observerChoice[plan.id]
+    if (observer?.enabled && (!observer.provider || !observer.model)) {
+      setError("Escolha a fonte e o modelo do Observer antes de enviar ao Build.")
+      return
+    }
+    const observerConfig = { enabled: Boolean(observer?.enabled),
+      ...(observer?.enabled ? { selection: { provider: observer.provider!, model: observer.model!,
+        ...(observer.runtime_id ? { runtime_id: observer.runtime_id } : {}) } } : {}) }
     if (!reviewer && requested !== false) {
       setError("Escolha o revisor independente antes de enviar ao Build.")
       return
@@ -341,8 +354,15 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
       if (agent === "qwen" && !choiceForQwen) {
         model = (await getCliAgentModel("qwen")).selected
       }
-      if (agent && requested === undefined && !reviewerModel) await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, model)
-      else await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, model, !agent, requested, reviewerModel)
+      if (observer?.enabled) {
+        await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, model,
+          !agent, requested, reviewerModel, observerConfig)
+      } else if (agent && requested === undefined && !reviewerModel) {
+        await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, model)
+      } else {
+        await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, model,
+          !agent, requested, reviewerModel)
+      }
       setPremiumTarget(null)
       setMessage(
         agent
@@ -598,6 +618,41 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                       disabled={busy === plan.id}
                       onChange={(agent) => setRole(plan.id, "reviewer", agent)}
                     /></details></div>}
+                  </div>
+                  <div className="mt-3 rounded border border-slate-700 p-3 text-sm">
+                    <label className="flex items-center gap-2">
+                      <input type="checkbox" checked={Boolean(observerChoice[plan.id]?.enabled)}
+                        onChange={e => setObserverChoice(current => ({ ...current,
+                          [plan.id]: { enabled: e.target.checked } }))} />
+                      Observer (opcional, independente do executor e revisor)
+                    </label>
+                    {observerChoice[plan.id]?.enabled && <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <label className="text-xs text-slate-400">Fonte do Observer
+                        <select aria-label="Fonte do Observer" value={observerChoice[plan.id]?.provider ?? ""}
+                          onChange={e => setObserverChoice(current => ({ ...current,
+                            [plan.id]: { enabled: true, provider: e.target.value } }))}
+                          className="mt-1 block w-full rounded bg-slate-900 p-2">
+                          <option value="">Selecione…</option>
+                          {[...new Set(observerModels.map(row => row.provider))].map(provider =>
+                            <option key={provider} value={provider}>{provider}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-xs text-slate-400">Modelo do Observer
+                        <select aria-label="Modelo do Observer"
+                          value={observerChoice[plan.id]?.model ?? ""}
+                          onChange={e => {
+                            const selected = observerModels.find(row => row.provider === observerChoice[plan.id]?.provider
+                              && row.model === e.target.value)
+                            setObserverChoice(current => ({ ...current, [plan.id]: {
+                              enabled: true, provider: selected?.provider,
+                              model: selected?.model, runtime_id: selected?.runtime_id } }))
+                          }} className="mt-1 block w-full rounded bg-slate-900 p-2">
+                          <option value="">Selecione…</option>
+                          {observerModels.filter(row => row.provider === observerChoice[plan.id]?.provider)
+                            .map(row => <option key={`${row.provider}:${row.model}:${row.runtime_id ?? ""}`} value={row.model}>{row.label}</option>)}
+                        </select>
+                      </label>
+                    </div>}
                   </div>
                   {roles[plan.id]?.executor
                     && roles[plan.id]?.executor === roles[plan.id]?.reviewer && (

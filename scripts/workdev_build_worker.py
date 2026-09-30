@@ -18,6 +18,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "apps" / "api"))
@@ -37,11 +38,38 @@ logging.basicConfig(
 log = logging.getLogger("build-worker")
 
 _parar = asyncio.Event()
+_parar_observer = threading.Event()
 
 
 def _encerrar(*_args) -> None:
     log.info("sinal recebido; encerrando após o job atual")
     _parar.set()
+    _parar_observer.set()
+
+
+def _observer_cycle() -> None:
+    """Poll independently of a Build job that may occupy the worker loop."""
+    db = SessionLocal()
+    try:
+        from app.services.observer_workspace import poll as poll_workspace
+        from app.services.observer_events import consume_one
+        poll_workspace(db)
+        # Bound each cycle so a large inbox cannot monopolize this thread.
+        for _ in range(10):
+            if not consume_one(db):
+                break
+        db.commit()
+    except Exception:
+        db.rollback()
+        log.exception("falha no ciclo do Observer")
+    finally:
+        db.close()
+
+
+def _observer_loop() -> None:
+    while not _parar_observer.is_set():
+        _observer_cycle()
+        _parar_observer.wait(30)
 
 
 async def _ciclo() -> bool:
@@ -51,14 +79,11 @@ async def _ciclo() -> bool:
         from app.services.local_code_build import reconcile
         reconcile(db)
         db.commit()
-        from app.services.observer_events import consume_one
-        observed = consume_one(db)
-        db.commit()
         job = build_worker.claim_next_job(db)
 
         if job is None:
             db.commit()
-            return observed
+            return False
 
         log.info("job %s (run %s, runtime %s)", job.id, job.run_id, job.runtime_id)
 
@@ -100,6 +125,11 @@ async def main() -> int:
         signal.signal(sinal, _encerrar)
 
     log.info("worker de build iniciado (intervalo %.1fs)", args.interval)
+
+    if args.once:
+        _observer_cycle()
+    else:
+        threading.Thread(target=_observer_loop, name='workdev-observer', daemon=True).start()
 
     while not _parar.is_set():
         processou = await _ciclo()

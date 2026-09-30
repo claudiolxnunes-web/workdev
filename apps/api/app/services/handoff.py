@@ -488,6 +488,8 @@ def queue_build(
     routing_reason: str | None = None,
     review_requested: bool | None = None,
     reviewer_selection: dict | None = None,
+    observer_enabled: bool = False,
+    observer_selection: dict | None = None,
 ) -> tuple[AgentRun, AgentRunEvent]:
     if plan.status != "approved":
         raise HandoffError(
@@ -592,6 +594,15 @@ def queue_build(
     if reviewer_selection:
         add_run_event(db, run, "build.reviewer_configuration", "Fonte e modelo escolhidos para a revisão",
                       {key: reviewer_selection[key] for key in ("provider", "model", "agent")})
+    add_run_event(db, run, 'observer.configured',
+                  'Observer ligado' if observer_enabled else 'Observer desligado',
+                  {'enabled': observer_enabled,
+                   'provider': observer_selection.get('provider') if observer_selection else None,
+                   'model': observer_selection.get('model') if observer_selection else None,
+                   'runtime_id': observer_selection.get('runtime_id') if observer_selection else None})
+    if observer_enabled:
+        from app.services.observer_workspace import baseline
+        baseline(db, run)
 
     task = db.query(BacklogItem).filter(
         BacklogItem.id == plan.backlog_id
@@ -626,6 +637,10 @@ def update_run(
     event = None
 
     if next_status and next_status != run.status:
+        if run.status == 'blocked' and next_status == 'running':
+            from app.services.run_pause import is_paused
+            if is_paused(db, run.id):
+                raise HandoffError('PAUSE do Observer exige retomada explícita', 'run_paused')
         allowed = RUN_TRANSITIONS.get(run.status, set())
 
         if next_status not in allowed:
@@ -771,6 +786,9 @@ def transfer_run(
     reason: str,
     new_reviewer: str | None = None,
 ) -> tuple[AgentRun, AgentRun]:
+    from app.services.run_pause import is_paused
+    if is_paused(db, run.id):
+        raise HandoffError('PAUSE do Observer exige retomada explícita antes do handoff', 'run_paused')
     if new_agent not in SUPPORTED_AGENTS:
         raise HandoffError(
             "Agente inválido; escolha um dos agentes suportados: "

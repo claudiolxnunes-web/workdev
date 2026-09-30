@@ -114,6 +114,8 @@ class BuildRequest(BaseModel):
     use_default_executor: bool = False
     review_requested: bool | None = None
     reviewer_selection: dict[str, str] | None = None
+    observer_enabled: bool = False
+    observer_selection: dict[str, str] | None = None
     agent: AgentName | None = None
     reviewer: AgentName | None = None
     model: str | None = Field(
@@ -129,6 +131,8 @@ class BuildRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_manual_agent(self):
+        if self.observer_enabled and not self.observer_selection:
+            raise ValueError('Observer ligado exige fonte e modelo')
         if self.routing_mode == "manual" and self.agent is None and not self.use_default_executor:
             raise ValueError(
                 "agent é obrigatório quando routing_mode=manual"

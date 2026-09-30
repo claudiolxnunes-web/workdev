@@ -87,6 +87,16 @@ def _create_unlocked(run_id: str):
     with SessionLocal() as db:
         manager = TerminalSessionManager(db)
         run = db.get(AgentRun, UUID(run_id))
+        from app.services.run_pause import assert_run_can_continue, RunPaused
+        try:
+            existing = manager._session(run_id)
+        except TerminalSessionError:
+            existing = None
+        if existing is None or existing.state == 'CLOSED':
+            try:
+                assert_run_can_continue(db, run_id)
+            except RunPaused as error:
+                raise TerminalSessionError(str(error)) from error
         if run and getattr(run, 'status', None) in {'cancelled', 'completed', 'failed'}:
             raise TerminalSessionError('Execução encerrada; novo terminal recusado')
         agent = getattr(run, 'agent', None)
@@ -166,8 +176,23 @@ def _audit_reconnect(run_id):
 
 
 def _write(run_id: str, text: str) -> None:
-    with SessionLocal() as db:
-        TerminalSessionManager(db).write(run_id, text)
+    from app.services.run_pause import assert_run_can_continue, RunPaused
+    try:
+        with SessionLocal() as db:
+            manager = TerminalSessionManager(db)
+            item = manager.health(run_id)
+            if item.state != 'RUNNING':
+                raise TerminalSessionError(f'Terminal is {item.state}')
+            if not isinstance(text, str) or len(text.encode()) > 4096:
+                raise TerminalSessionError('Write limited to 4096 bytes')
+            run = db.query(AgentRun).filter(AgentRun.id == UUID(run_id)).with_for_update().one_or_none()
+            if run is None:
+                raise RunPaused('Run não encontrada; escrita recusada')
+            assert_run_can_continue(db, run_id)
+            manager._request(item, 'write', text=text)
+            db.commit()
+    except RunPaused as error:
+        raise TerminalSessionError(str(error)) from error
 
 
 def _resize(run_id: str, rows: int, cols: int) -> None:
