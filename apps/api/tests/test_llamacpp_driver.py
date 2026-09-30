@@ -76,7 +76,7 @@ def test_dispatch_llamacpp_stream_and_thinking_disabled(monkeypatch):
     body = FakeClient.last_request["json"]
 
     assert FakeClient.last_request["url"].endswith("/v1/chat/completions")
-    assert body["model"] == "workdev-qwen27b"
+    assert body["model"] == "workdev-qwen"
     assert body["stream"] is True
     assert body["temperature"] == 0
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
