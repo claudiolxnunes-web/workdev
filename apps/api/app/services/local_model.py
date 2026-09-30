@@ -1,6 +1,6 @@
-"""Troca do modelo servido pelo local-code (Fast / Q4 / Q2).
+"""Troca do modelo WorkDev Qwen servido pelo local-code (14B / 7B / 4B).
 
-Existe um único llama-server na porta 8080, com alias fixo `workdev-qwen27b`.
+Existe um único llama-server na porta 8080, com alias fixo `workdev-qwen`.
 Trocar de modelo é gravar a chave em KEY_FILE e reiniciar o serviço: a
 identidade `local-code`, a sessão tmux, os hooks do Qwen e a fila persistente
 não mudam.
@@ -24,10 +24,12 @@ AGENT = "local-code"
 KEY_FILE = Path("/var/lib/workdev-llama/model")
 
 MODELS = {
-    "fast": "WorkDev Local Fast V2 — Qwen3.8 4B (padrão)",
-    "q4": "Qwen 27B Q4_K_S (secundário)",
-    "q2": "Qwen 27B Q2_K (secundário)",
+    "prod": "WorkDev Qwen 14B Production",
+    "dev": "WorkDev Qwen 7B Dev",
+    "fast": "WorkDev Qwen 4B 70/30 Fast",
 }
+
+DEFAULT_MODEL = "prod"
 
 IDLE_PHASES = {None, "idle", "offline"}
 
@@ -40,15 +42,15 @@ class SwitchError(RuntimeError):
 
 
 def current() -> str | None:
-    """Modelo configurado, com a mesma regra do wrapper (desconhecido = fast)."""
+    """Modelo configurado, com a mesma regra do wrapper (desconhecido = prod)."""
     try:
         bruto = KEY_FILE.read_bytes()[:32].decode("ascii", "ignore")
     except FileNotFoundError:
-        return "fast"
+        return DEFAULT_MODEL
     except OSError:
         return None
     chave = "".join(c for c in bruto if c.isascii() and (c.islower() or c.isdigit()))
-    return chave if chave in MODELS else "fast"
+    return chave if chave in MODELS else DEFAULT_MODEL
 
 
 def options() -> list[dict]:

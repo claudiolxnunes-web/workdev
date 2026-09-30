@@ -28,7 +28,7 @@ export function LocalModelSelector({ runtimeState }: { runtimeState: RuntimeStat
       const result = await switchLocalModel(key)
       setInfo({ ...info, current: result.model })
       setNotice(result.restarted
-        ? "Trocando modelo. Leva de ~30s (Q4) a ~3 min (Q2); o local-code fica indisponível até terminar."
+        ? "Trocando modelo. O carregamento pode levar alguns minutos; o local-code fica indisponível até terminar."
         : "Modelo definido. Vale no próximo Ligar.")
       window.dispatchEvent(new Event("agent-runtime-refresh"))
     } catch (err) {

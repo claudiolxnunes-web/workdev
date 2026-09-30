@@ -12,7 +12,7 @@ import { getAgentRuntimes, agentLabels, type AgentName, type AgentRuntime, type 
 
 const AGENTS: Array<{ id: AgentName; label: string }> = [
   { id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" },
-  { id: "local-code", label: "Qwen 27B · Local" }, { id: "gemini", label: "Gemini" },
+  { id: "local-code", label: "WorkDev Qwen · Local" }, { id: "gemini", label: "Gemini" },
   { id: "kimi", label: "Kimi Code" }, { id: "qwen", label: "OpenRouter Agente" },
 ]
 const configuredStatusPollMs = Number(import.meta.env.VITE_AGENTS_STATUS_POLL_MS)

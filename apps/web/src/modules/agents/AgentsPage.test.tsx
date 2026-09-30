@@ -45,7 +45,7 @@ describe("Agents workspace", () => {
   })
   it("mostra Gemini, Qwen e Kimi diretamente e seleciona suas sessões", async () => {
     render(<AgentsPage />)
-    expect(await screen.findByRole("tab", { name: /Qwen 27B · Local/ })).toBeInTheDocument()
+    expect(await screen.findByRole("tab", { name: /WorkDev Qwen · Local/ })).toBeInTheDocument()
     for (const [label, id] of [["Gemini", "gemini"], ["Kimi Code", "kimi"], ["OpenRouter Agente", "qwen"]]) {
       fireEvent.click(screen.getByRole("tab", { name: label }))
       expect(screen.getByText(`terminal:${id}:`)).toBeInTheDocument()
@@ -57,7 +57,7 @@ describe("Agents workspace", () => {
   it("seleção local muda terminal, fila e tarefa ativa juntos", async () => {
     render(<AgentsPage />)
     await screen.findByText("APROVAR")
-    fireEvent.click(screen.getByRole("tab", { name: "Qwen 27B · Local" }))
+    fireEvent.click(screen.getByRole("tab", { name: "WorkDev Qwen · Local" }))
     expect(screen.getByText("queue:local-code")).toBeInTheDocument()
     expect(screen.getByText("terminal:local-code:executing")).toBeInTheDocument()
     expect(screen.getByText("Tarefa local")).toBeInTheDocument()
@@ -68,7 +68,7 @@ describe("Agents workspace", () => {
   it("reabre a mesma seleção local após remontar sem iniciar sessão", async () => {
     const view = render(<AgentsPage />)
     await screen.findByText("APROVAR")
-    fireEvent.click(screen.getByRole("tab", { name: "Qwen 27B · Local" }))
+    fireEvent.click(screen.getByRole("tab", { name: "WorkDev Qwen · Local" }))
     view.unmount()
     render(<AgentsPage />)
     expect(await screen.findByText("terminal:local-code:executing")).toBeInTheDocument()

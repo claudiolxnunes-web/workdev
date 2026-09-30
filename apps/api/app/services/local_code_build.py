@@ -46,8 +46,8 @@ def dispatch(db, job, run):
             prompt = build_context(db, run)['prompt']
             from app.services.review_scope import capture_start_base
             capture_start_base(db, run)
-            # Modelo físico real servido agora pelo llama.cpp (q4/q2/bonsai).
-            # O alias estável workdev-qwen27b em run.model não muda; esta chave
+            # Modelo físico real servido agora pelo llama.cpp (prod/dev/fast).
+            # O alias estável workdev-qwen em run.model não muda; esta chave
             # registra qual peso respondeu a execução.
             run.local_model_key = local_model.current()
             data = channel.reserve(run.id, job.id, prompt)

@@ -30,7 +30,7 @@ from app.routers.ai import COMPAT_PROVIDERS
 
 router = APIRouter()
 
-# Contexto efetivo do modelo local (llama.cpp workdev-qwen27b roda com 16k).
+# Contexto efetivo do modelo local servido pelo llama.cpp via alias workdev-qwen.
 # Usado para o aviso de ~80% e para o truncamento do histórico antigo.
 LOCAL_FALLBACK_CONTEXT = int(os.getenv("CHAT_LIVRE_LOCAL_CONTEXT", "16384"))
 CONTEXT_WARN_RATIO = 0.8

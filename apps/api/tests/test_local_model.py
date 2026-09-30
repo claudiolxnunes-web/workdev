@@ -13,15 +13,24 @@ from app.services import local_model, local_code_channel, agent_lifecycle
 
 ROOT = Path(__file__).resolve().parents[3]
 PATHS = {
-    'fast': '/opt/workdev/models/workdev-local-fast/workdev-local-fast-v2-Q4_K_M.gguf',
-    'q4': '/opt/models/qwen27b/workdev-qwen3.6-27b-v4.1-Q4_K_S.gguf',
-    'q2': '/opt/models/qwen27b/workdev-qwen3.6-27b-v4.1-Q2_K.gguf',
+    'prod': '/opt/workdev/models/workdev-14b-codigo-q4_k_m.gguf',
+    'dev': '/opt/workdev/models/workdev-7b-q4_k_m.gguf',
+    'fast': '/opt/workdev/models/workdev-4b-code70-fidelity30-v1-q4_k_m.gguf',
 }
 
 
-@pytest.mark.parametrize('raw,expected', [(None, 'fast'), ('', 'fast'), ('fast\n', 'fast'),
-    ('q4\n', 'q4'), ('q2\n', 'q2'), ('bonsai\n', 'fast'), ('unknown', 'fast'),
-    ('Q4', 'fast'), ('q4' + ' ' * 40 + 'q2', 'q4')])
+@pytest.mark.parametrize('raw,expected', [
+    (None, 'prod'),
+    ('', 'prod'),
+    ('prod\n', 'prod'),
+    ('dev\n', 'dev'),
+    ('fast\n', 'fast'),
+    ('q4\n', 'prod'),
+    ('q2\n', 'prod'),
+    ('bonsai\n', 'prod'),
+    ('unknown', 'prod'),
+    ('PROD', 'prod'),
+])
 def test_python_and_wrapper_resolve_same_model(tmp_path, monkeypatch, raw, expected):
     key = tmp_path / 'model'
     if raw is not None:
@@ -38,7 +47,7 @@ def test_python_and_wrapper_resolve_same_model(tmp_path, monkeypatch, raw, expec
     script.write_text(wrapper)
     args = json.loads(subprocess.check_output(['sh', str(script)], text=True))
     assert args[args.index('-m') + 1] == PATHS[expected]
-    assert args[args.index('-a') + 1] == 'workdev-qwen27b'
+    assert args[args.index('-a') + 1] == 'workdev-qwen'
     assert args[args.index('--port') + 1] == '8080'
     assert args[args.index('-c') + 1] == '32768'
     if expected == 'fast':
@@ -47,7 +56,7 @@ def test_python_and_wrapper_resolve_same_model(tmp_path, monkeypatch, raw, expec
         assert '--chat-template-kwargs' not in args
 
 
-def test_endpoint_lists_fast_first_and_preserves_27b(tmp_path, monkeypatch):
+def test_endpoint_lists_workdev_qwen_models(tmp_path, monkeypatch):
     from app.routers.terminal import router
     monkeypatch.setattr(local_model, 'KEY_FILE', tmp_path / 'absent')
     app = FastAPI()
@@ -55,14 +64,14 @@ def test_endpoint_lists_fast_first_and_preserves_27b(tmp_path, monkeypatch):
     with TestClient(app) as client:
         response = client.get('/api/agents/local-code/model')
     assert response.status_code == 200
-    assert response.json()['current'] == 'fast'
-    assert [row['key'] for row in response.json()['options']] == ['fast', 'q4', 'q2']
+    assert response.json()['current'] == 'prod'
+    assert [row['key'] for row in response.json()['options']] == ['prod', 'dev', 'fast']
 
 
 @pytest.mark.parametrize('busy', [True, False])
 def test_fast_switch_respects_busy_and_offline_state(tmp_path, monkeypatch, busy):
     key = tmp_path / 'model'
-    key.write_text('q4\n')
+    key.write_text('dev\n')
     monkeypatch.setattr(local_model, 'KEY_FILE', key)
     monkeypatch.setattr(agent_lifecycle, 'agent_lock', lambda *a, **k: nullcontext())
     monkeypatch.setattr(agent_lifecycle, 'active_work', lambda *a: {'run_id': 'busy'} if busy else None)
@@ -72,7 +81,7 @@ def test_fast_switch_respects_busy_and_offline_state(tmp_path, monkeypatch, busy
     if busy:
         with pytest.raises(local_model.SwitchError, match='trabalho ativo'):
             local_model.switch('fast', Mock())
-        assert key.read_text() == 'q4\n'
+        assert key.read_text() == 'dev\n'
         service.assert_not_called()
     else:
         assert local_model.switch('fast', Mock()) == {'model': 'fast', 'switched': True, 'restarted': False}

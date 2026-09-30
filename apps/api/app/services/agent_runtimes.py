@@ -61,7 +61,7 @@ class OllamaRuntime:
 RUNTIMES: tuple[OllamaRuntime, ...] = (
     OllamaRuntime(
         id="local-code",
-        label="Local Code — Qwen 27B",
+        label="Local Code — WorkDev Qwen",
         kind=KIND_LOCAL,
         persistence=PERSISTENCE_LOCAL,
         base_url_env="WORKDEV_LOCAL_CODE_URL",
@@ -69,7 +69,7 @@ RUNTIMES: tuple[OllamaRuntime, ...] = (
         model_env="WORKDEV_LOCAL_CODE_MODEL",
         # Runtime local canônico servido por llama.cpp. O alias público do
         # modelo é estável e não expõe o caminho do GGUF no filesystem.
-        default_model="workdev-qwen27b",
+        default_model="workdev-qwen",
         api_key_env=None,
         notes=(
             "Executor local na VPS do WorkDev, servido por llama.cpp. "
@@ -543,7 +543,7 @@ def local_chat_models() -> list[dict]:
                             "runtime_id": runtime.id,
                         }
                         if runtime.id == "local-code":
-                            # Alias de inferencia (name) e estavel de proposito (workdev-qwen27b,
+                            # Alias de inferencia (name) e estavel de proposito (workdev-qwen,
                             # ver migracao 9f2b4d6a8c10) -- o rotulo exibido deve refletir o peso
                             # REAL carregado agora (fast/q4/q2), senao o seletor "Modelo do
                             # executor" so mostra o 27B (achado 26/set/2026).

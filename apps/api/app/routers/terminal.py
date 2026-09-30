@@ -854,7 +854,7 @@ router.include_router(_agent_runtimes_router)
 
 
 # --------------------------------------------------------------------------
-# Modelo do local-code (Q4 / Q2 / Bonsai): mesma sessão, outro GGUF
+# Modelo do local-code (Production / Dev / Fast): mesma sessão, outro GGUF
 # --------------------------------------------------------------------------
 
 class LocalModelSwitch(BaseModel):

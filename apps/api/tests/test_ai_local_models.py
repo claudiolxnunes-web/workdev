@@ -41,9 +41,9 @@ def test_inventory_dynamic_local_only(inventory, monkeypatch):
     # local-code e o unico runtime local aqui; seu rotulo agora reflete o
     # peso REAL carregado (local_model.current()), nao o alias cru do
     # /v1/models (achado 26/set/2026 -- "so aparece o 27B").
-    monkeypatch.setattr(runtimes.local_model, "current", lambda: "q4")
+    monkeypatch.setattr(runtimes.local_model, "current", lambda: "prod")
     assert runtimes.local_chat_models() == [
-        {"provider": "ollama", "model": "installed:v1", "label": runtimes.local_model.MODELS["q4"], "runtime_id": "local-code"}]
+        {"provider": "ollama", "model": "installed:v1", "label": runtimes.local_model.MODELS["prod"], "runtime_id": "local-code"}]
     inventory["data"].append({"id": "newly-installed:v2"})
     assert len(runtimes.local_chat_models()) == 2
     inventory["data"] = []

@@ -6,7 +6,7 @@ Requires=workdev-api.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/workdev/apps/api/venv/bin/python /opt/workdev/scripts/refresh_dora_views.py
+ExecStart=/opt/workdev/scripts/refresh_dora_views.sh
 WorkingDirectory=/opt/workdev
 User=workdev
 Group=workdev
