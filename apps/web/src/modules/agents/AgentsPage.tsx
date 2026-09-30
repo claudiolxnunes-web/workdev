@@ -174,9 +174,9 @@ export default function AgentsPage() {
           </button>
         })}
       </nav>
-      {agent === "local-code" && <LocalModelSelector />}
+      {agent === "local-code" && <LocalModelSelector runtimeState={state ?? "ERROR"} />}
       {(agent === "gemini" || agent === "claude" || agent === "codex" || agent === "kimi" || agent === "qwen") &&
-        <CliModelSelector agent={agent} busy={selectedHealth?.activity_state === "BUSY"} />}
+        <CliModelSelector agent={agent} busy={selectedHealth?.activity_state === "BUSY"} runtimeState={state ?? "ERROR"} />}
       <ExecutorDefaults />
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <RuntimeControls key={agent} agent={agent} runtimeState={state} activityState={selectedHealth?.activity_state} persistent={selectedHealth?.persistent} checkedAt={selectedHealth?.checked_at} />

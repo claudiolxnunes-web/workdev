@@ -272,7 +272,7 @@ export function AgentTerminal({
         <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 py-1 text-sm sm:px-4">
           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${active ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-red-400"}`} />
           <span className="truncate">
-          {status === "connecting" ? "Conectando…" : status === "busy" ? "Aberto em outra aba" : active ? "Conectado" : "Desconectado"}
+          {status === "connecting" ? "Conectando terminal…" : status === "busy" ? "Terminal aberto em outra aba" : active ? "Terminal conectado" : "Terminal desconectado"}
             </span>
            {active && (
             <span className="truncate text-slate-500" title={processName || undefined}>

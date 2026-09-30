@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
-import { getLocalModel, switchLocalModel, type LocalModelInfo } from "@/services/handoff.service"
+import { getLocalModel, switchLocalModel, type LocalModelInfo, type RuntimeState } from "@/services/handoff.service"
 
-export function LocalModelSelector() {
+export function LocalModelSelector({ runtimeState }: { runtimeState: RuntimeState }) {
   const [info, setInfo] = useState<LocalModelInfo | null>(null)
   const [pending, setPending] = useState(false)
   const [notice, setNotice] = useState("")
@@ -47,6 +47,9 @@ export function LocalModelSelector() {
         {info.current === null && <option value="" disabled>Desconhecido</option>}
         {info.options.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
       </select>
+      {runtimeState !== "ONLINE" && <span className="text-amber-300">
+        {runtimeState === "ERROR" ? "Modelo configurado, mas a CLI está indisponível." : "Modelo configurado para o próximo Ligar; agente desligado."}
+      </span>}
       {pending && <span className="text-slate-400">Enviando…</span>}
       {notice && <span role="status" className="text-sky-300">{notice}</span>}
       {error && <span role="alert" className="text-red-300">{error}</span>}

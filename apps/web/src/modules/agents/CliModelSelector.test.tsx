@@ -15,7 +15,7 @@ describe("CliModelSelector", () => {
     ]
     getCliAgentModel.mockResolvedValue({ agent: "qwen", selected: options[0].model, active: options[0].model, options })
     selectCliAgentModel.mockResolvedValue({ agent: "qwen", selected: options[1].model, active: options[0].model, options })
-    render(<CliModelSelector agent="qwen" busy={false} />)
+    render(<CliModelSelector agent="qwen" busy={false} runtimeState="ONLINE" />)
     fireEvent.change(await screen.findByLabelText("Modelo do agente"), { target: { value: options[1].model } })
     await waitFor(() => expect(selectCliAgentModel).toHaveBeenCalledWith("qwen", options[1].model))
     expect(screen.getByRole("option", { name: /US\$ 0.68\/US\$ 3.4 por 1M/ })).toBeInTheDocument()
@@ -25,7 +25,14 @@ describe("CliModelSelector", () => {
   it("marks output prices at or above the threshold as expensive", async () => {
     const options = [{ model: "vendor/caro", label: "Modelo caro", input_cost_per_million: 2, output_cost_per_million: 10, expensive: true }]
     getCliAgentModel.mockResolvedValue({ agent: "qwen", selected: options[0].model, active: null, options })
-    render(<CliModelSelector agent="qwen" busy={false} />)
+    render(<CliModelSelector agent="qwen" busy={false} runtimeState="ONLINE" />)
     expect(await screen.findByRole("option", { name: /CARO/ })).toBeInTheDocument()
+  })
+
+  it("does not present a saved model as a running agent", async () => {
+    const options = [{ model: "kimi-model", label: "Kimi", expensive: false }]
+    getCliAgentModel.mockResolvedValue({ agent: "kimi", selected: "kimi-model", active: "kimi-model", options })
+    render(<CliModelSelector agent="kimi" busy={false} runtimeState="OFFLINE" />)
+    expect(await screen.findByText(/Agente desligado; este modelo está selecionado/)).toBeInTheDocument()
   })
 })

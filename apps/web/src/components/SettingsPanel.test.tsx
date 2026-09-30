@@ -86,4 +86,26 @@ describe('SettingsPanel', () => {
     ));
     expect(screen.queryByText('chave-ultrassecreta')).not.toBeInTheDocument();
   });
+
+  it('separates stored credentials from the physical state of agents', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/ai/providers') return Promise.resolve(jsonResponse({
+        providers: [{ provider: 'moonshot', label: 'Moonshot', connected: true }],
+        connected: 1, total: 1,
+      }));
+      if (url === '/api/agents/status') return Promise.resolve(jsonResponse({ agents: [
+        { agent: 'kimi', runtime_state: 'OFFLINE', activity_state: 'IDLE', checked_at: '2026-09-30T04:00:00Z' },
+        { agent: 'local-code', runtime_state: 'ERROR', activity_state: 'IDLE', checked_at: '2026-09-30T04:00:00Z', health_reason: 'runtime_inconsistent' },
+      ] }));
+      return Promise.resolve(jsonResponse(healthPayload));
+    });
+    render(<SettingsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: /ai providers/i }));
+    expect(await screen.findByText('Chave cadastrada')).toBeInTheDocument();
+    const agents = await screen.findByRole('list', { name: 'Estado real dos agentes' });
+    expect(agents).toHaveTextContent('Kimi');
+    expect(agents).toHaveTextContent('Desligado');
+    expect(agents).toHaveTextContent('Local Code');
+    expect(agents).toHaveTextContent('sessão do agente não está ativa');
+  });
 });

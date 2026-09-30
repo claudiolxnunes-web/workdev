@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react"
-import { getCliAgentModel, selectCliAgentModel, type CliAgentModelInfo, type SelectableCliAgent } from "@/services/handoff.service"
+import { getCliAgentModel, selectCliAgentModel, type CliAgentModelInfo, type SelectableCliAgent, type RuntimeState } from "@/services/handoff.service"
 
-export function CliModelSelector({ agent, busy }: { agent: SelectableCliAgent; busy: boolean }) {
-  return <CliModelSelectorAgent key={agent} agent={agent} busy={busy} />
+export function CliModelSelector({ agent, busy, runtimeState }: { agent: SelectableCliAgent; busy: boolean; runtimeState: RuntimeState }) {
+  return <CliModelSelectorAgent key={agent} agent={agent} busy={busy} runtimeState={runtimeState} />
 }
 
-function CliModelSelectorAgent({ agent, busy }: { agent: SelectableCliAgent; busy: boolean }) {
+function CliModelSelectorAgent({ agent, busy, runtimeState }: { agent: SelectableCliAgent; busy: boolean; runtimeState: RuntimeState }) {
   const [info, setInfo] = useState<CliAgentModelInfo | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState("")
@@ -46,9 +46,11 @@ function CliModelSelectorAgent({ agent, busy }: { agent: SelectableCliAgent; bus
       {!info && <option value="">Carregando…</option>}
       {info?.options.map(option => <option key={option.model} value={option.model}>{optionLabel(option)}</option>)}
     </select>
-    {info && <span className="text-slate-400">{info.active === info.selected
-      ? "Último modelo iniciado; confirme no terminal se a sessão foi alterada manualmente."
-      : "Seleção para o próximo Ligar; a sessão atual não muda."}</span>}
+    {info && <span className="text-slate-400">{runtimeState !== "ONLINE"
+      ? `Agente ${runtimeState === "OFFLINE" ? "desligado" : "indisponível"}; este modelo está selecionado para o próximo Ligar.`
+      : info.active === info.selected
+        ? "Último modelo iniciado; confirme no terminal se a sessão foi alterada manualmente."
+        : "Seleção para o próximo Ligar; a sessão atual não muda."}</span>}
     {error && <span role="alert" className="text-red-300">{error}</span>}
   </div>
 }
