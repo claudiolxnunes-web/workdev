@@ -41,6 +41,18 @@ def queue_db(tmp_path, monkeypatch):
         monkeypatch.setattr(module, 'AgentRun', Run)
         monkeypatch.setattr(module, 'AgentBuildJob', Job)
     monkeypatch.setattr(handoff, 'AgentRunEvent', Event)
+    # O checkpoint de PAUSE importa o AgentRun real (com plan_id) e
+    # checked_work_unit abre uma sessão na DB real (onde a run de teste não
+    # existe). Estes testes cobrem o dispatch local-code, não a pausa — o gate
+    # canônico fica neutro, usando o factory SQLite do fixture.
+    from app.services import run_pause
+    monkeypatch.setattr(run_pause, 'AgentRun', Run)
+    monkeypatch.setattr(run_pause, 'is_paused', lambda db, run_id: False)
+    from contextlib import contextmanager
+    @contextmanager
+    def _neutral_work_unit(run_id):
+        yield
+    monkeypatch.setattr(run_pause, 'checked_work_unit', _neutral_work_unit)
     monkeypatch.setattr(build, 'build_context', lambda db, run: {'prompt': f'Plano aprovado {run.id}'})
     def update(db, run, data):
         run.status = data['status']

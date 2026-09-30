@@ -125,6 +125,7 @@ def test_legacy_run_without_model_starts_with_historical_qwen_default():
         with patch.object(terminal.agent_lifecycle, "run_lock", return_value=nullcontext()), \
              patch.object(terminal.agent_lifecycle, "agent_lock", return_value=nullcontext()), \
              patch.object(terminal.agent_lifecycle, "run_binding", return_value=None), \
+             patch("app.services.run_pause.checked_work_unit", return_value=nullcontext()), \
              patch.object(terminal, "_start_agent_runtime") as started:
             terminal.start_agent_runtime("qwen", "prompt", model=None, run_id="old-run")
         assert started.call_args.args[3] == "qwen/qwen3.5-397b-a17b"

@@ -216,7 +216,7 @@ async def create_run_terminal(run_id: str):
         return await asyncio.to_thread(_create, run_id)
     except TerminalSessionError as error:
         detail = str(error)
-        code = 404 if "Run not found" in detail else 409
+        code = 404 if "Run not found" in detail or "Run não encontrada" in detail else 409
         raise HTTPException(status_code=code, detail=detail) from error
 
 

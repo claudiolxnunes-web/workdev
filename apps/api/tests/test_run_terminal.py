@@ -33,6 +33,12 @@ def api_terminal(tmp_path, monkeypatch):
     mapping.map_imperatively(Run, table)
     monkeypatch.setattr(service, 'AgentRun', Run)
     monkeypatch.setattr(run_terminal, 'AgentRun', Run)
+    # O checkpoint de PAUSE importa o AgentRun real (com plan_id) e consulta
+    # agent_run_events; este fixture só modela o stub de 2 colunas e não cobre
+    # pausa. Neutro aqui: o gate canônico é testado em test_run_pause.py.
+    import app.services.run_pause as run_pause
+    monkeypatch.setattr(run_pause, 'AgentRun', Run)
+    monkeypatch.setattr(run_pause, 'is_paused', lambda db, run_id: False)
     metadata = MetaData()
     table.to_metadata(metadata)
     TerminalSession.__table__.to_metadata(metadata)
