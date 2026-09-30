@@ -428,15 +428,23 @@ def _llama_service(action: str) -> bool:
 
 
 def session_exists(session: str) -> bool:
-    return _run(["tmux", "has-session", "-t", f"={session}"], 5).returncode == 0
+    try:
+        return _run(["tmux", "has-session", "-t", f"={session}"], 5).returncode == 0
+    except subprocess.TimeoutExpired:
+        # Servidor tmux lento não é ausência de sessão; tratar como offline
+        # aqui apagaria da interface um agente vivo (achado 29/set/2026).
+        return True
 
 
 def pane_pid(session: str) -> int | None:
     """PID do processo do painel. É a raiz do que pertence a este agente."""
-    resultado = _run(
-        ["tmux", "display-message", "-p", "-t", f"={session}:", "#{pane_pid}"],
-        5,
-    )
+    try:
+        resultado = _run(
+            ["tmux", "display-message", "-p", "-t", f"={session}:", "#{pane_pid}"],
+            5,
+        )
+    except subprocess.TimeoutExpired:
+        return None
 
     if resultado.returncode != 0:
         return None
@@ -447,13 +455,16 @@ def pane_pid(session: str) -> int | None:
 
 
 def current_process(session: str) -> str:
-    resultado = _run(
-        [
-            "tmux", "display-message", "-p", "-t", f"={session}:",
-            "#{pane_current_command}",
-        ],
-        5,
-    )
+    try:
+        resultado = _run(
+            [
+                "tmux", "display-message", "-p", "-t", f"={session}:",
+                "#{pane_current_command}",
+            ],
+            5,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
     return resultado.stdout.strip() if resultado.returncode == 0 else ""
 
 

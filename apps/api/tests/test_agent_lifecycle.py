@@ -1585,4 +1585,47 @@ class TestLlamacppHibrido:
         assert runtime.events == ["is-active", "start", "stop"]
 
 
+class TestTimeoutTmuxNaoViraErro:
+    """Achado 29/set/2026: tmux lento após restart da API derrubava o Qwen.
+
+    `subprocess.run(timeout=5)` sem captura de `TimeoutExpired` fazia a
+    exceção subir até o healthcheck, que publicava ERROR com
+    `reason=TimeoutExpired` para um agente vivo. Estas leituras degradam para
+    o valor conservador em vez de explodir.
+    """
+
+    def _explode(self, monkeypatch):
+        import subprocess
+
+        def timeout(*_a, **_k):
+            raise subprocess.TimeoutExpired("tmux", 5)
+
+        monkeypatch.setattr(agent_lifecycle, "_run", timeout)
+
+    def test_session_exists_timeout_nao_nega_sessao(self, monkeypatch):
+        self._explode(monkeypatch)
+
+        assert agent_lifecycle.session_exists("qwen") is True
+
+    def test_pane_pid_timeout_devolve_none(self, monkeypatch):
+        self._explode(monkeypatch)
+
+        assert agent_lifecycle.pane_pid("qwen") is None
+
+    def test_current_process_timeout_devolve_vazio(self, monkeypatch):
+        self._explode(monkeypatch)
+
+        assert agent_lifecycle.current_process("qwen") == ""
+
+    def test_read_state_com_tmux_lento_nao_e_offline(self, monkeypatch):
+        """Sessão presumida viva sem PID conhecido: ignorância, não OFFLINE."""
+        self._explode(monkeypatch)
+
+        estado = agent_lifecycle.read_state("qwen", "qwen")
+
+        assert estado.session_exists is True
+        assert estado.pane_pid is None
+        assert estado.offline is False
+
+
 from tests.test_runtime_state_audit import audit_store  # noqa: F401 -- isolated audit database fixture
