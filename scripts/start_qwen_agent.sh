@@ -41,7 +41,10 @@ use_dashscope() {
 }
 
 use_openrouter() {
-  # Modelo principal do Qwen Code, igual ao vinculado ao agente no catálogo.
+  # Modelo escolhido na UI ou default histórico. O catálogo em
+  # qwen-agent-settings.json é reescrito com esse modelo para garantir que a
+  # seleção seja efetiva, já que o Qwen Code pode dar precedência a
+  # model.name do system settings sobre o argumento --model.
   selected_model="${QWEN_MODEL:-qwen/qwen3.5-397b-a17b}"
 }
 
@@ -79,9 +82,22 @@ case "$qwen_provider" in
     ;;
 esac
 
+# Gera system settings efêmero com model.name sincronizado com a seleção da UI.
+# Isso torna a escolha efetiva mesmo quando a CLI prioriza o settings file.
+QWEN_EFFECTIVE_SETTINGS_FILE="$(mktemp -t qwen-settings-XXXXXX.json)"
+python3 - "$QWEN_SETTINGS_FILE" "$selected_model" "$QWEN_EFFECTIVE_SETTINGS_FILE" <<'PYEOF'
+import json, sys
+src, model, dst = sys.argv[1:4]
+with open(src, "r") as handle:
+    settings = json.load(handle)
+settings["model"] = {"name": model}
+with open(dst, "w") as handle:
+    json.dump(settings, handle)
+PYEOF
+
 unset dashscope_key openrouter_key qwen_provider
 unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL
-export QWEN_CODE_SYSTEM_SETTINGS_PATH="$QWEN_SETTINGS_FILE"
+export QWEN_CODE_SYSTEM_SETTINGS_PATH="$QWEN_EFFECTIVE_SETTINGS_FILE"
 export QWEN_CODE_SKIP_UPDATE_CHECK_ONCE="true"
 export NO_UPDATE_NOTIFIER="1"
 

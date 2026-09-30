@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from contextlib import nullcontext
@@ -133,7 +134,7 @@ def test_legacy_run_without_model_starts_with_historical_qwen_default():
 
 def test_qwen_launcher_passes_exact_model_to_cli(tmp_path):
     executable = tmp_path / "fake-qwen"
-    executable.write_text('#!/usr/bin/env sh\nprintf "%s\\n" "$@"\n')
+    executable.write_text('#!/usr/bin/env sh\nprintf "%s\\n" "$@"\nprintf "SETTINGS_PATH=%s\\n" "$QWEN_CODE_SYSTEM_SETTINGS_PATH"\n')
     executable.chmod(0o755)
     fake_env = tmp_path / "agent.env"
     fake_env.write_text("OPENROUTER_API_KEY=test-only\n")
@@ -145,4 +146,9 @@ def test_qwen_launcher_passes_exact_model_to_cli(tmp_path):
         capture_output=True, text=True, timeout=5, check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == ["--model", "x-ai/grok-4.7"]
+    lines = result.stdout.splitlines()
+    assert lines[:2] == ["--model", "x-ai/grok-4.7"]
+    settings_path = lines[2].split("=", 1)[1]
+    settings = json.loads(Path(settings_path).read_text())
+    assert settings["model"]["name"] == "x-ai/grok-4.7"
+    assert any(entry["id"] == "x-ai/grok-4.7" for entry in settings["modelProviders"]["openai"])
