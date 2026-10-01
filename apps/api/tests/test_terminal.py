@@ -58,7 +58,7 @@ class TerminalBusyHandshakeTest(unittest.TestCase):
         app = FastAPI()
         app.include_router(router)
         with patch('app.routers.terminal.websocket_is_authenticated', return_value=True), \
-             patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=False), \
+             patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=(False, None)), \
              patch('app.routers.terminal.agent_lifecycle.active_work', return_value=None), \
              patch('app.routers.terminal.subprocess.Popen') as process, \
              TestClient(app) as client:
@@ -68,6 +68,27 @@ class TerminalBusyHandshakeTest(unittest.TestCase):
                     'reason': 'Terminal já está em uso',
                 })
             process.assert_not_called()
+
+
+class TerminalTakeoverHandshakeTest(unittest.TestCase):
+    def test_takeover_closes_previous_tab_with_dedicated_code(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from unittest.mock import AsyncMock
+        from app.routers.terminal import router, TAKEN_OVER_CODE
+
+        previous = AsyncMock()
+        app = FastAPI()
+        app.include_router(router)
+        with patch('app.routers.terminal.websocket_is_authenticated', return_value=True), \
+             patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=(False, previous)) as claim, \
+             patch('app.routers.terminal.agent_lifecycle.active_work', return_value=None), \
+             patch('app.routers.terminal.subprocess.Popen'), \
+             TestClient(app) as client:
+            with client.websocket_connect('/ws/agents/codex?takeover=1') as socket:
+                socket.receive()
+        self.assertTrue(claim.call_args.args[2])
+        previous.close.assert_awaited_once_with(code=TAKEN_OVER_CODE, reason="Terminal assumido por outra aba")
 
 
 class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
@@ -125,14 +146,26 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_connection_claim_can_be_released(self):
         session = "test-terminal-lifecycle"
-        await _release(session)
+        first, second = object(), object()
 
-        self.assertTrue(await _claim(session))
-        self.assertFalse(await _claim(session))
+        self.assertEqual(await _claim(session, first), (True, None))
+        self.assertEqual(await _claim(session, second), (False, None))
 
-        await _release(session)
-        self.assertTrue(await _claim(session))
-        await _release(session)
+        await _release(session, first)
+        self.assertEqual(await _claim(session, second), (True, None))
+        await _release(session, second)
+
+    async def test_takeover_hands_over_and_old_tab_cannot_release_new(self):
+        """Aba nova assume o terminal; a antiga, ao cair, não apaga o registro novo."""
+        session = "test-terminal-takeover"
+        old, new = object(), object()
+        self.assertEqual(await _claim(session, old), (True, None))
+        self.assertEqual(await _claim(session, new, takeover=True), (True, old))
+        await _release(session, old)
+        self.assertEqual(await _claim(session, object()), (False, None))
+        await _release(session, new)
+        self.assertEqual(await _claim(session, old), (True, None))
+        await _release(session, old)
 
     @patch("app.routers.terminal.subprocess.run")
     async def test_history_uses_tmux_capture_pane_without_shell(self, run):

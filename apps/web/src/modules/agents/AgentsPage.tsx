@@ -36,6 +36,8 @@ export default function AgentsPage() {
   const [workspaceRuns, setWorkspaceRuns] = useState<WorkspaceRun[]>([])
   const [actionError, setActionError] = useState("")
   const [terminalOpen, setTerminalOpen] = useState(true)
+  // "Trazer terminal para cá" assume o terminal da outra aba na primeira conexão.
+  const [bringBack, setBringBack] = useState(false)
   const [terminalCollapsed, setTerminalCollapsed] = useState(() => localStorage.getItem("workdev_terminal_collapsed") === "1")
   const [otherAgents, setOtherAgents] = useState(false)
   useEffect(() => {
@@ -138,6 +140,7 @@ export default function AgentsPage() {
     sessionStorage.setItem("workdev_selected_agent", id)
     setActionError("")
     setTerminalOpen(true)
+    setBringBack(false)
   }
   function toggleTerminalCollapsed() {
     setTerminalCollapsed(value => {
@@ -181,7 +184,7 @@ export default function AgentsPage() {
         {!remote && <div className="flex flex-wrap gap-1 text-xs">
           <button onClick={detachTerminal} className="rounded bg-sky-950 px-3 py-2 text-sky-200 hover:bg-sky-900">Abrir em nova aba</button>
           <button className="hidden rounded px-3 py-2 text-slate-300 hover:bg-slate-800 md:block" aria-expanded={!terminalCollapsed} onClick={toggleTerminalCollapsed}>{terminalCollapsed ? "Expandir terminal" : "Recolher terminal"}</button>
-          {!terminalOpen && <button className="rounded px-3 py-2 text-sky-300" onClick={() => { setTerminalOpen(true); setTerminalCollapsed(false) }}>Trazer terminal para cá</button>}
+          {!terminalOpen && <button className="rounded px-3 py-2 text-sky-300" onClick={() => { setBringBack(true); setTerminalOpen(true); setTerminalCollapsed(false) }}>Trazer terminal para cá</button>}
         </div>}
       </div>
       {queuedRuns.length > 0 && <p className="text-xs text-amber-300" role="status">QUEUED · {queuedRuns.length} tarefa(s) aguardando</p>}
@@ -200,9 +203,9 @@ export default function AgentsPage() {
         </div>
         <div data-testid="terminal-panel" className={`${mobilePanel === "terminal" ? "flex" : "hidden"} ${terminalCollapsed && !remote ? "md:hidden" : "md:flex"} min-h-[480px] min-w-0 flex-1 flex-col md:min-h-0`}>
           {remote && selectedRuntime ? <RuntimePanel runtime={selectedRuntime} showControls={false} />
-            : !terminalOpen ? <div className="rounded-lg border border-slate-800 p-6 text-sm text-slate-400">Terminal aberto em outra aba. Feche essa aba antes de trazê-lo para cá.</div>
+            : !terminalOpen ? <div className="rounded-lg border border-slate-800 p-6 text-sm text-slate-400">Terminal aberto em outra aba. Use "Trazer terminal para cá" para assumi-lo aqui; não é preciso fechar a outra aba.</div>
             : state === "OFFLINE" ? <div className="rounded-lg border border-slate-800 p-6 text-sm text-slate-400">{agentLabels[agent]} está desligado. Use Ligar para iniciar e abrir o terminal.</div>
-            : <AgentTerminal key={agent} agent={agent} awaitingApproval={Boolean(awaitingApproval[agent])} operationalStatus={operations[agent]?.status} />}
+            : <AgentTerminal key={agent} agent={agent} awaitingApproval={Boolean(awaitingApproval[agent])} operationalStatus={operations[agent]?.status} takeOver={bringBack} />}
         </div>
         {terminalCollapsed && !remote && <button className="hidden self-start rounded border border-slate-800 px-4 py-3 text-sm text-sky-300 md:block" onClick={toggleTerminalCollapsed}>Terminal recolhido · Expandir</button>}
       </div>

@@ -14,6 +14,7 @@ export default function AgentTerminalPage() {
       <h1 className="font-semibold">{agentLabels[agent]} · Terminal</h1>
       <a href="/agents" className="rounded px-3 py-2 text-sky-300 hover:bg-slate-800">Voltar aos agentes</a>
     </header>
-    <AgentTerminal agent={agent} />
+    {/* Abrir o terminal numa aba própria é pedido explícito: assume o da aba anterior. */}
+    <AgentTerminal agent={agent} takeOver />
   </main>
 }

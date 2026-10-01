@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { AgentTerminal } from "./AgentTerminal"
@@ -106,5 +106,25 @@ describe("AgentTerminal", () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(screen.queryByRole("button", { name: "Desconectar" })).not.toBeInTheDocument()
     expect(screen.getByText("Sessão tmux persistente")).toBeInTheDocument()
+    expect(mocks.sockets[0].url).not.toContain("takeover=1")
+    expect(mocks.sockets[1].url).toContain("takeover=1")
+  })
+
+  it("aba que perdeu o terminal não reconecta sozinha e pode assumir de volta", async () => {
+    render(<AgentTerminal agent="qwen" />)
+    await waitFor(() => expect(mocks.sockets).toHaveLength(1))
+    act(() => { mocks.sockets[0].onclose?.({ code: 4000, reason: "Terminal assumido por outra aba", wasClean: true } as CloseEvent) })
+    expect(await screen.findByText("Este terminal está aberto em outra aba.")).toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 1100))
+    expect(mocks.sockets).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: "Assumir aqui" }))
+    await waitFor(() => expect(mocks.sockets).toHaveLength(2))
+    expect(mocks.sockets[1].url).toContain("takeover=1")
+  })
+
+  it("terminal aberto em aba própria assume na primeira conexão", async () => {
+    render(<AgentTerminal agent="qwen" takeOver />)
+    await waitFor(() => expect(mocks.sockets).toHaveLength(1))
+    expect(mocks.sockets[0].url).toContain("takeover=1")
   })
 })

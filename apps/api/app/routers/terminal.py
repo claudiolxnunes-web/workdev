@@ -75,7 +75,9 @@ def select_cli_agent_model(agent: str, payload: CliModelSelection):
         return cli_agent_models.describe(agent)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-_active_connections: set[str] = set()
+_active_connections: dict[str, WebSocket] = {}
+# Fechamento enviado à aba que perdeu o terminal: ela não reconecta sozinha.
+TAKEN_OVER_CODE = 4000
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
 _PROCESS_LABELS = {"qwen": "qwen-code", "grok": "qwen-code", "deepseek": "qwen-code", "openrouter": "qwen-code"}
@@ -202,17 +204,22 @@ def _requested_terminal_size(websocket: WebSocket) -> tuple[int, int]:
     return max(5, min(rows, 300)), max(10, min(cols, 500))
 
 
-async def _claim(session: str) -> bool:
+async def _claim(session: str, websocket: WebSocket | None = None,
+                 takeover: bool = False) -> tuple[bool, WebSocket | None]:
+    """Um visualizador por sessão. Com takeover, a aba nova assume e devolve a antiga."""
     async with _connections_lock:
-        if session in _active_connections:
-            return False
-        _active_connections.add(session)
-        return True
+        previous = _active_connections.get(session)
+        if previous is not None and not takeover:
+            return False, None
+        _active_connections[session] = websocket
+        return True, previous
 
 
-async def _release(session: str) -> None:
+async def _release(session: str, websocket: WebSocket | None = None) -> None:
     async with _connections_lock:
-        _active_connections.discard(session)
+        # Quem foi assumido não pode apagar o registro de quem assumiu.
+        if _active_connections.get(session) is websocket:
+            del _active_connections[session]
 
 
 async def _read_pty(master_fd: int) -> bytes:
@@ -752,7 +759,12 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         work = agent_lifecycle.active_work(db, agent)
         session = _live_session(agent, session, db)
         bound_run_id = (work or {}).get('run_id') if work and session == agent_snapshot.auto_session_name(agent, work['run_id']) else None
-    if not await _claim(session):
+    takeover = websocket.query_params.get("takeover") == "1"
+    claimed, previous = await _claim(session, websocket, takeover)
+    if previous is not None:
+        with suppress(Exception):
+            await previous.close(code=TAKEN_OVER_CODE, reason="Terminal assumido por outra aba")
+    if not claimed:
         # After authentication, complete the handshake so browsers receive
         # the close code/reason instead of an opaque HTTP 403 / code 1006.
         await websocket.accept()
@@ -846,7 +858,7 @@ async def agent_terminal(websocket: WebSocket, agent: str):
                 with suppress(OSError):
                     os.close(slave_fd)
         finally:
-            await _release(session)
+            await _release(session, websocket)
 
 
 # Runtimes Ollama locais/GPU ficam no mesmo router de agentes (`/api/agents*`,

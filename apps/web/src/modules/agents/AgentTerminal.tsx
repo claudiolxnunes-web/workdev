@@ -19,12 +19,18 @@ const OPERATION_STYLE: Record<OperationalStatus, string> = {
   error: "bg-red-900 text-red-200",
 }
 
+// Fechamento enviado pelo backend à aba cujo terminal foi assumido por outra.
+const TAKEN_OVER_CODE = 4000
+
 export function AgentTerminal({
-  agent, awaitingApproval = false, operationalStatus = "standby",
+  agent, awaitingApproval = false, operationalStatus = "standby", takeOver = false,
 }: {
   agent: AgentName; awaitingApproval?: boolean; operationalStatus?: OperationalStatus
+  /** Primeira conexão assume o terminal de outra aba (pedido explícito do usuário). */
+  takeOver?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const takeOverRef = useRef(takeOver)
   const terminalRef = useRef<Terminal | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
   const historyRef = useRef<HTMLTextAreaElement>(null)
@@ -91,6 +97,9 @@ export function AgentTerminal({
       try { fitAddon.fit() } catch { /* layout ainda não disponível */ }
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
       const size = new URLSearchParams({ cols: String(terminal.cols), rows: String(terminal.rows) })
+      // Só um pedido explícito assume; a reconexão automática nunca rouba outra aba.
+      if (takeOverRef.current) size.set("takeover", "1")
+      takeOverRef.current = false
       const socket = new WebSocket(`${protocol}//${window.location.host}/ws/agents/${agent}?${size}`)
       socketRef.current = socket
       socket.binaryType = "arraybuffer"
@@ -120,7 +129,7 @@ export function AgentTerminal({
       socket.onclose = (event) => {
         if (socket !== socketRef.current || disposed) return
         socketRef.current = null
-        if (event.code === 1008 && event.reason.includes("uso")) {
+        if ((event.code === 1008 && event.reason.includes("uso")) || event.code === TAKEN_OVER_CODE) {
           setStatus("busy")
           return
         }
@@ -252,6 +261,8 @@ export function AgentTerminal({
   }
 
   async function reconnect() {
+    // Reconectar é pedido do usuário: assume o terminal se ele estiver em outra aba.
+    takeOverRef.current = true
     socketRef.current?.close(1000, "Reconexão solicitada")
     setGeneration((value) => value + 1)
   }
@@ -320,7 +331,10 @@ export function AgentTerminal({
           <p className="mt-1 text-xs font-medium">Confira as opções no terminal abaixo e responda pelo campo de mensagem. Atalhos numéricos foram removidos para evitar aprovação permanente acidental.</p>
         </div>
       )}
-      {status === "busy" && <p role="status" className="shrink-0 px-3 py-2 text-xs text-amber-300">Feche o terminal na outra aba e use Reconectar navegador.</p>}
+      {status === "busy" && <div role="status" className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2 text-xs text-amber-300">
+        <span>Este terminal está aberto em outra aba.</span>
+        <button type="button" onClick={() => void reconnect()} className="rounded bg-amber-400 px-2 py-1 font-medium text-slate-950 hover:bg-amber-300">Assumir aqui</button>
+      </div>}
       <div ref={containerRef} className="agent-terminal min-h-0 min-w-0 max-w-full flex-1 overflow-hidden p-2 sm:p-3" />
       <div className="flex shrink-0 flex-col gap-1 border-t border-slate-800 bg-slate-950 p-2 sm:p-3">
         <div className="flex items-end gap-2">
