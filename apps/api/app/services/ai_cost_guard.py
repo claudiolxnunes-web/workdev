@@ -61,11 +61,35 @@ MODEL_POLICIES: dict[tuple[str, str], ModelPolicy] = {
     ),
     ("openrouter", "moonshotai/kimi-k2.7-code"): ModelPolicy(
         "openrouter", "moonshotai/kimi-k2.7-code", "economic",
-        Decimal("0.71"), Decimal("3.50"),
+        Decimal("0.6712"), Decimal("3.35"),
+    ),
+    ("openrouter", "moonshotai/kimi-k2.6"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k2.6", "economic",
+        Decimal("0.65"), Decimal("3.41"),
+    ),
+    ("openrouter", "moonshotai/kimi-k2.5"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k2.5", "economic",
+        Decimal("0.45"), Decimal("2.25"),
+    ),
+    ("openrouter", "moonshotai/kimi-k2-thinking"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k2-thinking", "economic",
+        Decimal("0.60"), Decimal("2.50"),
+    ),
+    ("openrouter", "moonshotai/kimi-k2-0905"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k2-0905", "economic",
+        Decimal("0.60"), Decimal("2.50"),
+    ),
+    ("openrouter", "moonshotai/kimi-k2"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k2", "economic",
+        Decimal("0.57"), Decimal("2.30"),
     ),
     ("openrouter", "moonshotai/kimi-k3"): ModelPolicy(
         "openrouter", "moonshotai/kimi-k3", "premium",
-        Decimal("3.00"), Decimal("15.00"), requires_confirmation=True,
+        Decimal("0.677"), Decimal("10.00"), requires_confirmation=True,
+    ),
+    ("openrouter", "moonshotai/kimi-k3:batch"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k3:batch", "premium",
+        Decimal("2.28"), Decimal("11.40"), requires_confirmation=True,
     ),
     ("anthropic", "claude-sonnet-5"): ModelPolicy(
         "anthropic", "claude-sonnet-5", "premium",

@@ -55,6 +55,11 @@ case "$KIMI_PROVIDER" in
         export KIMI_MODEL_DISPLAY_NAME="Kimi K3 (OpenRouter)"
         model_context_size="1048576"
         ;;
+      k3:batch|kimi-k3:batch|moonshotai/kimi-k3:batch)
+        export KIMI_MODEL_NAME="moonshotai/kimi-k3:batch"
+        export KIMI_MODEL_DISPLAY_NAME="Kimi K3 Batch (OpenRouter)"
+        model_context_size="1048576"
+        ;;
       k2.7|kimi-k2.7|moonshotai/kimi-k2.7-code)
         export KIMI_MODEL_NAME="moonshotai/kimi-k2.7-code"
         export KIMI_MODEL_DISPLAY_NAME="Kimi K2.7 Code (OpenRouter)"
@@ -65,8 +70,28 @@ case "$KIMI_PROVIDER" in
         export KIMI_MODEL_DISPLAY_NAME="Kimi K2.6 (OpenRouter)"
         model_context_size="262144"
         ;;
+      k2.5|kimi-k2.5|moonshotai/kimi-k2.5)
+        export KIMI_MODEL_NAME="moonshotai/kimi-k2.5"
+        export KIMI_MODEL_DISPLAY_NAME="Kimi K2.5 (OpenRouter)"
+        model_context_size="262144"
+        ;;
+      k2-thinking|kimi-k2-thinking|moonshotai/kimi-k2-thinking)
+        export KIMI_MODEL_NAME="moonshotai/kimi-k2-thinking"
+        export KIMI_MODEL_DISPLAY_NAME="Kimi K2 Thinking (OpenRouter)"
+        model_context_size="262144"
+        ;;
+      k2-0905|kimi-k2-0905|moonshotai/kimi-k2-0905)
+        export KIMI_MODEL_NAME="moonshotai/kimi-k2-0905"
+        export KIMI_MODEL_DISPLAY_NAME="Kimi K2 0905 (OpenRouter)"
+        model_context_size="262144"
+        ;;
+      k2|kimi-k2|moonshotai/kimi-k2)
+        export KIMI_MODEL_NAME="moonshotai/kimi-k2"
+        export KIMI_MODEL_DISPLAY_NAME="Kimi K2 (OpenRouter)"
+        model_context_size="131072"
+        ;;
       *)
-        echo "Kimi Agent: KIMI_MODEL inválido ('$KIMI_MODEL'); use k3, k2.7 ou k2.6" >&2
+        echo "Kimi Agent: KIMI_MODEL inválido ('$KIMI_MODEL'); use k3, k3:batch, k2.7, k2.6, k2.5, k2-thinking, k2-0905 ou k2" >&2
         exit 1
         ;;
     esac

@@ -20,8 +20,13 @@ MODELS = {
     "codex": (("gpt-5.6-sol", "Codex Sol"), ("gpt-5.6-terra", "Codex Terra"),
               ("gpt-5.6-luna", "Codex Luna")),
     "kimi": (("moonshotai/kimi-k3", "Kimi K3"),
+             ("moonshotai/kimi-k3:batch", "Kimi K3 (Batch)"),
              ("moonshotai/kimi-k2.7-code", "Kimi K2.7 Code"),
-             ("moonshotai/kimi-k2.6", "Kimi K2.6")),
+             ("moonshotai/kimi-k2.6", "Kimi K2.6"),
+             ("moonshotai/kimi-k2.5", "Kimi K2.5"),
+             ("moonshotai/kimi-k2-thinking", "Kimi K2 Thinking"),
+             ("moonshotai/kimi-k2-0905", "Kimi K2 0905"),
+             ("moonshotai/kimi-k2", "Kimi K2")),
     "openrouter": (("qwen/qwen3.5-397b-a17b", "Qwen Coder (Qwen 3.5)"),
              ("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash"),
              ("x-ai/grok-4.7", "Grok 4.7")),
@@ -31,13 +36,18 @@ DEFAULTS = {"gemini": "gemini-3.5-flash", "claude": "claude-opus-5",
             "openrouter": "qwen/qwen3.5-397b-a17b"}
 
 # USD por 1M tokens, conferidos no catálogo público da OpenRouter em
-# 2026-09-28. O frontend deriva ``expensive`` do threshold aprovado de output.
+# 2026-10-01. O frontend deriva ``expensive`` do threshold aprovado de output.
 OPENROUTER_PRICING = {
     "qwen/qwen3.5-397b-a17b": (0.39, 2.34),
     "deepseek/deepseek-v4-flash": (0.0679, 0.168),
-    "moonshotai/kimi-k3": (3.00, 15.00),
-    "moonshotai/kimi-k2.7-code": (0.68, 3.40),
-    "moonshotai/kimi-k2.6": (0.58, 3.40),
+    "moonshotai/kimi-k3": (0.677, 10.00),
+    "moonshotai/kimi-k3:batch": (2.28, 11.40),
+    "moonshotai/kimi-k2.7-code": (0.6712, 3.35),
+    "moonshotai/kimi-k2.6": (0.65, 3.41),
+    "moonshotai/kimi-k2.5": (0.45, 2.25),
+    "moonshotai/kimi-k2-thinking": (0.60, 2.50),
+    "moonshotai/kimi-k2-0905": (0.60, 2.50),
+    "moonshotai/kimi-k2": (0.57, 2.30),
     "x-ai/grok-4.7": (1.60, 4.80),
 }
 

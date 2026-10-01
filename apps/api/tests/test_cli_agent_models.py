@@ -38,12 +38,17 @@ def test_openrouter_catalog_has_three_priced_models_and_expensive_flag():
     assert all(row["expensive"] == (row["output_cost_per_million"] >= 10) for row in options)
 
 
-def test_kimi_agent_has_three_models_and_pricing():
+def test_kimi_agent_has_all_models_and_pricing():
     options = models.describe("kimi")["options"]
     assert [row["model"] for row in options] == [
         "moonshotai/kimi-k3",
+        "moonshotai/kimi-k3:batch",
         "moonshotai/kimi-k2.7-code",
         "moonshotai/kimi-k2.6",
+        "moonshotai/kimi-k2.5",
+        "moonshotai/kimi-k2-thinking",
+        "moonshotai/kimi-k2-0905",
+        "moonshotai/kimi-k2",
     ]
     assert all(row["input_cost_per_million"] is not None for row in options)
     assert all(row["output_cost_per_million"] is not None for row in options)
