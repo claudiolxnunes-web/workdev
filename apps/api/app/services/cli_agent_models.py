@@ -29,7 +29,7 @@ MODELS = {
              ("moonshotai/kimi-k2", "Kimi K2")),
     # qwen, grok e deepseek: mesma CLI qwen, via OpenRouter (OPENROUTER_API_KEY).
     "qwen": (("qwen/qwen3.5-397b-a17b", "Qwen Coder (Qwen 3.5)"),
-             ("qwen/qwen3-coder-plus", "Qwen3 Coder Plus"),
+             ("qwen/qwen3-coder-flash", "Qwen3 Coder Flash"),
              ("qwen/qwen3-coder-next", "Qwen3 Coder Next")),
     "grok": (("x-ai/grok-4.7", "Grok 4.7 (premium)"),
              ("x-ai/grok-4.3", "Grok 4.3 (médio)"),
@@ -60,7 +60,7 @@ PRICING: dict[str, tuple[float, float]] = {
     "gpt-5.6-terra": (2.00, 12.00),
     "gpt-5.6-luna": (0.20, 1.20),
     "qwen/qwen3.5-397b-a17b": (0.55, 3.50),
-    "qwen/qwen3-coder-plus": (0.65, 3.25),
+    "qwen/qwen3-coder-flash": (0.195, 0.975),
     "qwen/qwen3-coder-next": (0.12, 0.80),
     "x-ai/grok-4.7": (2.00, 6.00),
     "x-ai/grok-4.3": (1.25, 2.50),

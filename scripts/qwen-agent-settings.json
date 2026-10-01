@@ -31,9 +31,9 @@
         "envKey": "DASHSCOPE_API_KEY"
       },
       {
-        "id": "qwen/qwen3-coder-plus",
-        "name": "Qwen3 Coder Plus — OpenRouter",
-        "description": "Rota alternativa pelo OpenRouter",
+        "id": "qwen/qwen3-coder-flash",
+        "name": "Qwen3 Coder Flash — OpenRouter",
+        "description": "Qwen3 Coder rápido e barato (o Coder Plus sai da OpenRouter em 09/10/2026)",
         "baseUrl": "https://openrouter.ai/api/v1",
         "envKey": "OPENROUTER_API_KEY"
       },
