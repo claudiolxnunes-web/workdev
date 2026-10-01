@@ -13,26 +13,24 @@ def test_selection_is_persisted_and_launcher_uses_exact_model():
         os.environ, {"WORKDEV_CLI_AGENT_MODELS_FILE": str(Path(directory) / "models.json")}
     ):
         assert models.selected("qwen") == "qwen/qwen3.5-397b-a17b"
-        models.choose("qwen", "moonshotai/kimi-k2.7-code")
-        assert models.describe("qwen")["selected"] == "moonshotai/kimi-k2.7-code"
+        models.choose("qwen", "x-ai/grok-4.7")
+        assert models.describe("qwen")["selected"] == "x-ai/grok-4.7"
         assert models.describe("qwen")["active"] is None
         assert models.launcher("qwen", ["/opt/workdev/scripts/start_qwen_agent.sh"]) == [
-            "env", "QWEN_PROVIDER=openrouter", "QWEN_MODEL=moonshotai/kimi-k2.7-code",
+            "env", "QWEN_PROVIDER=openrouter", "QWEN_MODEL=x-ai/grok-4.7",
             "/opt/workdev/scripts/start_qwen_agent.sh",
         ]
-        models.record_active("qwen", "moonshotai/kimi-k2.7-code")
-        assert models.describe("qwen")["active"] == "moonshotai/kimi-k2.7-code"
-        models.choose("qwen", "x-ai/grok-4.7")
-        assert models.describe("qwen")["active"] == "moonshotai/kimi-k2.7-code"
+        models.record_active("qwen", "x-ai/grok-4.7")
+        assert models.describe("qwen")["active"] == "x-ai/grok-4.7"
+        models.choose("qwen", "deepseek/deepseek-v4-flash")
+        assert models.describe("qwen")["active"] == "x-ai/grok-4.7"
 
 
-def test_openrouter_catalog_has_five_priced_models_and_expensive_flag():
+def test_openrouter_catalog_has_three_priced_models_and_expensive_flag():
     options = models.describe("qwen")["options"]
     assert [row["model"] for row in options] == [
         "qwen/qwen3.5-397b-a17b",
         "deepseek/deepseek-v4-flash",
-        "moonshotai/kimi-k2.7-code",
-        "moonshotai/kimi-k2.6",
         "x-ai/grok-4.7",
     ]
     assert all(row["input_cost_per_million"] is not None for row in options)
@@ -40,14 +38,18 @@ def test_openrouter_catalog_has_five_priced_models_and_expensive_flag():
     assert all(row["expensive"] == (row["output_cost_per_million"] >= 10) for row in options)
 
 
-def test_kimi_agent_is_exclusive_to_kimi_3():
-    assert models.describe("kimi")["options"] == [{
-        "model": "moonshotai/kimi-k3", "label": "Kimi K3",
-        "input_cost_per_million": None, "output_cost_per_million": None,
-        "expensive": False,
-    }]
-    with pytest.raises(ValueError):
-        models.choose("kimi", "moonshotai/kimi-k2.7-code")
+def test_kimi_agent_has_three_models_and_pricing():
+    options = models.describe("kimi")["options"]
+    assert [row["model"] for row in options] == [
+        "moonshotai/kimi-k3",
+        "moonshotai/kimi-k2.7-code",
+        "moonshotai/kimi-k2.6",
+    ]
+    assert all(row["input_cost_per_million"] is not None for row in options)
+    assert all(row["output_cost_per_million"] is not None for row in options)
+    assert models.launcher("kimi", ["/script"], "moonshotai/kimi-k2.7-code") == [
+        "env", "KIMI_PROVIDER=openrouter", "KIMI_MODEL=moonshotai/kimi-k2.7-code", "/script",
+    ]
 
 
 @pytest.mark.parametrize("agent, model, expected", [

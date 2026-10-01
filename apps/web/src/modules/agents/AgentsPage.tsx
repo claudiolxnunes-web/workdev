@@ -13,7 +13,7 @@ import { getAgentRuntimes, agentLabels, type AgentName, type AgentRuntime, type 
 const AGENTS: Array<{ id: AgentName; label: string }> = [
   { id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" },
   { id: "local-code", label: "WorkDev Qwen · Local" }, { id: "gemini", label: "Gemini" },
-  { id: "kimi", label: "Kimi Code" }, { id: "qwen", label: "OpenRouter Agente" },
+  { id: "kimi", label: "Kimi Code" }, { id: "qwen", label: "OpenRouter (Qwen / DeepSeek / Grok)" },
 ]
 const configuredStatusPollMs = Number(import.meta.env.VITE_AGENTS_STATUS_POLL_MS)
 const STATUS_POLL_MS = Number.isFinite(configuredStatusPollMs) ? Math.min(10000, Math.max(5000, configuredStatusPollMs)) : 5000

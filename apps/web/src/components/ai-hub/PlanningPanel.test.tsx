@@ -592,7 +592,7 @@ describe("PlanningPanel", () => {
   it("não aplica a escolha do cartão Codex ao OpenRouter Agente", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     getPlanRecommendation.mockResolvedValue(twoModelRecommendation)
-    getCliAgentModel.mockResolvedValue({ selected: "moonshotai/kimi-k2.6" })
+    getCliAgentModel.mockResolvedValue({ selected: "deepseek/deepseek-v4-flash" })
     renderPanel()
 
     fireEvent.change(await screen.findByLabelText("Modelo"), {
@@ -602,7 +602,7 @@ describe("PlanningPanel", () => {
     enviar()
 
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "claude", "qwen", false, "moonshotai/kimi-k2.6",
+      "plan-1", "claude", "qwen", false, "deepseek/deepseek-v4-flash",
     ))
   })
 })

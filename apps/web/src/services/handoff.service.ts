@@ -60,7 +60,7 @@ export const agentLabels: Record<AgentName, string> = {
   claude: "Claude Code",
   codex: "Codex",
   kimi: "Kimi Code",
-  qwen: "OpenRouter Agente",
+  qwen: "OpenRouter (Qwen / DeepSeek / Grok)",
   gemini: "Gemini",
   "local-code": "Ollama local (VPS)",
   "gpu-hostinger": "GPU Hostinger",

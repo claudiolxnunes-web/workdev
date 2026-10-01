@@ -67,7 +67,7 @@ def test_selected_model_is_fixed_on_new_run_and_reaches_runtime_launcher():
         "app.routers.terminal.agent_snapshot.read_snapshot",
         return_value={"agents": [{"activity_state": "IDLE"}]},
     ):
-        select_cli_agent_model("qwen", CliModelSelection(model="moonshotai/kimi-k2.7-code"))
+        select_cli_agent_model("qwen", CliModelSelection(model="x-ai/grok-4.7"))
         plan = SimpleNamespace(id="plan-1", backlog_id="task-1", status="approved")
         run = SimpleNamespace(
             id="run-1", plan_id=plan.id, backlog_id=plan.backlog_id,
@@ -80,7 +80,7 @@ def test_selected_model_is_fixed_on_new_run_and_reaches_runtime_launcher():
 
         with patch("app.routers.handoffs._get_plan", return_value=plan), \
              patch("app.routers.handoffs.allowed_models_for_agent", return_value=[
-                 SimpleNamespace(provider_model_id="moonshotai/kimi-k2.7-code")
+                 SimpleNamespace(provider_model_id="x-ai/grok-4.7")
              ]), \
              patch("app.routers.handoffs.queue_build", side_effect=persist_run), \
              patch("app.routers.handoffs._sync_run"), \
@@ -89,12 +89,12 @@ def test_selected_model_is_fixed_on_new_run_and_reaches_runtime_launcher():
                 plan.id, BuildRequest(agent="qwen", reviewer="codex"), Mock(), Mock()
             )
 
-        assert result["model"] == "moonshotai/kimi-k2.7-code"
+        assert result["model"] == "x-ai/grok-4.7"
         # O start de uma run recebe run.model, não a seleção global posterior.
-        cli_agent_models.choose("qwen", "x-ai/grok-4.7")
+        cli_agent_models.choose("qwen", "deepseek/deepseek-v4-flash")
         assert cli_agent_models.launcher(
             "qwen", ["/opt/workdev/scripts/start_qwen_agent.sh"], run.model
-        )[2] == "QWEN_MODEL=moonshotai/kimi-k2.7-code"
+        )[2] == "QWEN_MODEL=x-ai/grok-4.7"
 
 
 def test_explicit_run_model_is_not_replaced_by_global_selection():

@@ -55,8 +55,18 @@ case "$KIMI_PROVIDER" in
         export KIMI_MODEL_DISPLAY_NAME="Kimi K3 (OpenRouter)"
         model_context_size="1048576"
         ;;
+      k2.7|kimi-k2.7|moonshotai/kimi-k2.7-code)
+        export KIMI_MODEL_NAME="moonshotai/kimi-k2.7-code"
+        export KIMI_MODEL_DISPLAY_NAME="Kimi K2.7 Code (OpenRouter)"
+        model_context_size="262144"
+        ;;
+      k2.6|kimi-k2.6|moonshotai/kimi-k2.6)
+        export KIMI_MODEL_NAME="moonshotai/kimi-k2.6"
+        export KIMI_MODEL_DISPLAY_NAME="Kimi K2.6 (OpenRouter)"
+        model_context_size="262144"
+        ;;
       *)
-        echo "Kimi Agent: KIMI_MODEL inválido ('$KIMI_MODEL'); use k3" >&2
+        echo "Kimi Agent: KIMI_MODEL inválido ('$KIMI_MODEL'); use k3, k2.7 ou k2.6" >&2
         exit 1
         ;;
     esac

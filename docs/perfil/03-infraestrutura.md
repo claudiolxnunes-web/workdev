@@ -57,7 +57,7 @@ tabela `heartbeat` e RLS anônima, para evitar pausa automática.
   SPF e DKIM no GoDaddy. `send_delay_ms` ajustado de 200 para 600 por causa do
   limite padrão de 2 envios por segundo.
 - **IA:** Anthropic (`claude-opus-5`), Google Gemini pelo endpoint compatível com
-  OpenAI, OpenAI, OpenRouter (Qwen), Moonshot (Kimi K2.7).
+  OpenAI, OpenAI, OpenRouter (Qwen / DeepSeek / Grok), Moonshot (Kimi K3 / K2.7 / K2.6).
 - **Busca web:** Tavily, plano Researcher.
 - **Pagamento:** Paddle (Seller ID 340394), Pix manual, Asaas planejado.
 - **Observabilidade:** Sentry hospedado para os apps de produção; GlitchTip na
