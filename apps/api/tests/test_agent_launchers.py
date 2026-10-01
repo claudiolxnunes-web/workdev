@@ -87,7 +87,8 @@ def test_grok_and_deepseek_delegate_to_qwen_cli_over_openrouter():
         content = launcher(agent)
         assert "export QWEN_PROVIDER=openrouter" in content
         assert f'export QWEN_MODEL="${{{model_env}:-' in content
-        assert 'exec "$(dirname "$(realpath "$0")")/start_qwen_agent.sh" "$@"' in content
+        assert ('exec "$(dirname "$(realpath "$0")")/start_qwen_agent.sh" '
+                '--append-system-prompt "$IDENTITY" "$@"') in content
         assert "read -r -p" not in content
     assert not (SCRIPTS / "start_groq_agent.sh").exists()
 

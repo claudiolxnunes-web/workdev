@@ -180,6 +180,12 @@ def test_openrouter_launchers_pass_exact_model_to_qwen_cli(tmp_path, script, mod
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
     assert lines[:2] == ["--model", model]
+    if script != "start_qwen_agent.sh":
+        # Grok e DeepSeek corrigem a identidade "Qwen Code" injetada pela CLI.
+        assert lines[2] == "--append-system-prompt"
+        nome = "Grok" if script == "start_grok_agent.sh" else "DeepSeek"
+        assert f"você é o {nome}" in lines[3] and model in lines[3]
+        lines = lines[:2] + lines[4:]
     settings_path = lines[2].split("=", 1)[1]
     settings = json.loads(Path(settings_path).read_text())
     assert settings["model"]["name"] == model
