@@ -42,10 +42,10 @@ def list_agent_runtimes(refresh: bool = False):
     # Compatibility for older clients: refresh rereads the consolidated file.
     # Physical probes belong exclusively to the central collector.
     from app.services.agent_snapshot import read_snapshot
-    snapshot = read_snapshot([runtime.id for runtime in agent_runtimes.RUNTIMES])
+    snapshot = read_snapshot([runtime.id for runtime in agent_runtimes.AGENT_RUNTIMES])
     rows = {row['agent']: row for row in snapshot['agents']}
     runtimes = []
-    for runtime in agent_runtimes.RUNTIMES:
+    for runtime in agent_runtimes.AGENT_RUNTIMES:
         row = rows[runtime.id]
         physical = row.get('lifecycle') or {}
         payload = agent_runtimes.describe(runtime)

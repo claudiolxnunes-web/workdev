@@ -107,10 +107,10 @@ def test_exit_code_marks_unhealthy_always_on(runtime, expected):
 
 
 def test_persistence_matches_runtime_policy():
-    for agent in ('codex', 'claude', 'local-code'):
+    for agent in ('codex', 'claude'):
         assert snapshot.is_persistent(agent, agent)
         assert not snapshot.is_persistent(agent, f'auto-{agent}-run')
-    for agent in ('kimi', 'openrouter', 'gemini'):
+    for agent in ('kimi', 'openrouter', 'gemini', 'local-code'):
         assert not snapshot.is_persistent(agent, agent)
 
 
@@ -184,7 +184,7 @@ def test_terminal_text_does_not_override_physical_availability(fake_processes, m
 
 def test_slow_probe_does_not_delay_healthy_publication_and_has_budget(monkeypatch):
     monkeypatch.setattr(health, 'AGENTS', {'codex': ('codex', []), 'openrouter': ('openrouter', [])})
-    monkeypatch.setattr(health.agent_runtimes, 'RUNTIMES', [])
+    monkeypatch.setattr(health.agent_runtimes, 'AGENT_RUNTIMES', [])
     published = []
     def collect(agent, *_):
         if agent == 'openrouter':

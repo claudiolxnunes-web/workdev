@@ -56,16 +56,13 @@ def test_python_and_wrapper_resolve_same_model(tmp_path, monkeypatch, raw, expec
         assert '--chat-template-kwargs' not in args
 
 
-def test_endpoint_lists_workdev_qwen_models(tmp_path, monkeypatch):
+def test_local_model_endpoints_were_removed():
     from app.routers.terminal import router
-    monkeypatch.setattr(local_model, 'KEY_FILE', tmp_path / 'absent')
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as client:
-        response = client.get('/api/agents/local-code/model')
-    assert response.status_code == 200
-    assert response.json()['current'] == 'prod'
-    assert [row['key'] for row in response.json()['options']] == ['prod', 'dev', 'fast']
+        assert client.get('/api/agents/local-code/model').status_code == 404
+        assert client.post('/api/agents/local-code/model', json={'model': 'dev'}).status_code in {404, 405}
 
 
 @pytest.mark.parametrize('busy', [True, False])

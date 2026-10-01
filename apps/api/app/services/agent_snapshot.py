@@ -15,7 +15,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
-PERSISTENT_AGENTS = frozenset({'claude', 'codex', 'local-code'})
+PERSISTENT_AGENTS = frozenset({'claude', 'codex'})
 
 
 def is_persistent(agent: str, session: str | None) -> bool:

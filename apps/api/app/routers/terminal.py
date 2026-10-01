@@ -38,7 +38,6 @@ ALLOWED_SESSIONS = {
     "grok": "grok",
     "deepseek": "deepseek",
     "gemini": "gemini",
-    "local-code": "local-code",
 }
 STANDBY_COMMANDS = {
     "claude": ["/opt/workdev/scripts/start_claude_agent.sh"],
@@ -48,7 +47,6 @@ STANDBY_COMMANDS = {
     "grok": ["/opt/workdev/scripts/start_grok_agent.sh"],
     "deepseek": ["/opt/workdev/scripts/start_deepseek_agent.sh"],
     "gemini": ["/opt/workdev/scripts/start_gemini_agent.sh"],
-    "local-code": ["/opt/workdev/scripts/start_local_agent.sh"],
 }
 
 
@@ -80,7 +78,7 @@ def select_cli_agent_model(agent: str, payload: CliModelSelection):
 _active_connections: set[str] = set()
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
-_PROCESS_LABELS = {"qwen": "qwen-code", "grok": "qwen-code", "deepseek": "qwen-code", "openrouter": "qwen-code", "local-code": "qwen-code"}
+_PROCESS_LABELS = {"qwen": "qwen-code", "grok": "qwen-code", "deepseek": "qwen-code", "openrouter": "qwen-code"}
 _HEALTH_STATE_FILE = Path(os.getenv("AGENTS_HEALTH_STATE", "/var/lib/agents-healthcheck/status.json"))
 
 
@@ -858,40 +856,3 @@ from app.routers.agent_runtimes import router as _agent_runtimes_router  # noqa:
 
 router.include_router(_agent_runtimes_router)
 
-
-# --------------------------------------------------------------------------
-# Modelo do local-code (Production / Dev / Fast): mesma sessão, outro GGUF
-# --------------------------------------------------------------------------
-
-class LocalModelSwitch(BaseModel):
-    model: str
-
-
-@router.get("/api/agents/local-code/model")
-async def get_local_code_model():
-    from app.services import local_model
-
-    return {"current": local_model.current(), "options": local_model.options()}
-
-
-@router.post("/api/agents/local-code/model", status_code=202)
-async def switch_local_code_model(payload: LocalModelSwitch):
-    from app.services import local_model
-    from app.services.agent_workspace import audit
-
-    def executar():
-        with SessionLocal() as db:
-            return local_model.switch(payload.model, db)
-
-    await asyncio.to_thread(audit, "switch_local_model", agent="local-code")
-    try:
-        resultado = await asyncio.to_thread(executar)
-    except local_model.SwitchError as error:
-        await asyncio.to_thread(audit, "switch_local_model", agent="local-code",
-                                result="failed", code=error.code)
-        raise HTTPException(
-            status_code=503 if error.code == "switch_failed" else 409,
-            detail={"code": error.code, "message": error.message},
-        ) from error
-    await asyncio.to_thread(audit, "switch_local_model", agent="local-code", result="succeeded")
-    return resultado

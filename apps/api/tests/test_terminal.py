@@ -73,13 +73,11 @@ class TerminalBusyHandshakeTest(unittest.TestCase):
 class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
     @patch("app.services.agent_workspace.audit")
     @patch("app.routers.terminal.agent_lifecycle.start")
-    async def test_local_code_passa_sessao_e_launcher_ao_lifecycle(self, start, audit):
-        start.return_value = {"started": True, "already_running": False}
-        result = await start_agent_lifecycle("local-code")
-        start.assert_called_once_with(
-            "local-code", "local-code", ["/opt/workdev/scripts/start_local_agent.sh"],
-        )
-        self.assertEqual(result, start.return_value)
+    async def test_local_code_removido_nao_religa_sessao(self, start, audit):
+        with self.assertRaises(HTTPException) as ctx:
+            await start_agent_lifecycle("local-code")
+        self.assertEqual(ctx.exception.status_code, 404)
+        start.assert_not_called()
 
     async def test_tmux_targets_require_exact_session_name(self):
         self.assertEqual(_session_target("code"), "=code")
@@ -96,7 +94,6 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 "grok": "grok",
                 "deepseek": "deepseek",
                 "gemini": "gemini",
-                "local-code": "local-code",
             },
         )
 
@@ -467,7 +464,8 @@ class AgentStatusTest(unittest.IsolatedAsyncioTestCase):
     def test_status_endpoint_returns_snapshot_directly(self, read):
         read.return_value = {'agents': []}
         self.assertEqual(agents_status(), {'agents': []})
-        self.assertIn('local-code', read.call_args.args[0])
+        self.assertNotIn('local-code', read.call_args.args[0])
+        self.assertIn('gpu-runpod', read.call_args.args[0])
 
 
 class SupervisorHealthStateTest(unittest.TestCase):

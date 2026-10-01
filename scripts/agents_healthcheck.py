@@ -35,10 +35,9 @@ AGENTS = {
     "qwen": ("qwen", [str(WORKDEV_DIR / "scripts/start_qwen_agent.sh")]),
     "grok": ("grok", [str(WORKDEV_DIR / "scripts/start_grok_agent.sh")]),
     "deepseek": ("deepseek", [str(WORKDEV_DIR / "scripts/start_deepseek_agent.sh")]),
-    "local-code": ("local-code", [str(WORKDEV_DIR / "scripts/start_local_agent.sh")]),
     "gemini": ("gemini", [str(WORKDEV_DIR / "scripts/start_gemini_agent.sh")]),
 }
-ALWAYS_ON_AGENTS = agent_snapshot.PERSISTENT_AGENTS - {"local-code"}
+ALWAYS_ON_AGENTS = agent_snapshot.PERSISTENT_AGENTS
 
 SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
 BLOCKED_PATTERNS = (
@@ -177,7 +176,7 @@ def load_run_context(db):
 def collect_snapshot(db, allow_restart=False, *, publish_rows=None, budget=25):
     statuses, work = load_run_context(db) if db is not None else ({}, {})
     entities = {agent: session for agent, (session, _) in AGENTS.items()}
-    for runtime in agent_runtimes.RUNTIMES:
+    for runtime in agent_runtimes.AGENT_RUNTIMES:
         entities.setdefault(runtime.id, None)
     rows = []
     # Parallel probes within the sole collector; no background loop or RAM cache.
