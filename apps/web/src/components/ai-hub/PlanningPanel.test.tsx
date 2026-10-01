@@ -161,12 +161,12 @@ describe("PlanningPanel", () => {
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null, undefined, false, undefined, true, false, undefined))
   })
 
-  it("envia fonte e modelo escolhidos para o revisor", async () => {
+  it("envia agente e modelo escolhidos para o revisor", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     renderPanel()
     fireEvent.click(await screen.findByRole("button", { name: "Sim" }))
-    await screen.findByRole("option", { name: "Anthropic / Claude" })
-    fireEvent.change(screen.getByLabelText("Fonte do revisor"), { target: { value: "anthropic" } })
+    fireEvent.change(screen.getByLabelText("Revisor independente"), { target: { value: "claude" } })
+    await screen.findByRole("option", { name: /Review Model/ })
     fireEvent.change(screen.getByLabelText("Modelo do revisor"), { target: { value: "review-model" } })
     enviar()
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, "claude", undefined, false, undefined, true, true, { provider: "anthropic", model: "review-model" }))
@@ -179,8 +179,8 @@ describe("PlanningPanel", () => {
     await waitFor(() => expect(no).toBeEnabled())
     fireEvent.click(no)
     fireEvent.click(screen.getByLabelText(/Observer \(opcional/))
-    fireEvent.change(screen.getByLabelText("Fonte do Observer"), { target: { value: "anthropic" } })
-    await screen.findByRole("option", { name: "Review Model" })
+    fireEvent.change(screen.getByLabelText("Agente do Observer"), { target: { value: "claude" } })
+    await screen.findByRole("option", { name: /Review Model/ })
     fireEvent.change(screen.getByLabelText("Modelo do Observer"), { target: { value: "review-model" } })
     enviar()
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null,
@@ -188,12 +188,38 @@ describe("PlanningPanel", () => {
       { enabled: true, selection: { provider: "anthropic", model: "review-model" } }))
   })
 
-  it("impede recusa quando a política exige revisão", async () => {
+  it("revisão de risco alto é só recomendação: o operador pode recusar", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ state: "required", models: [], local_error: null }) })))
     renderPanel()
-    await screen.findByText("Esta task exige revisão independente.")
-    expect(screen.getByRole("button", { name: "Não" })).toBeDisabled()
+    await screen.findByText(/fortemente recomendada \(risco alto\)\. Você decide\./)
+    const no = screen.getByRole("button", { name: "Não" })
+    expect(no).toBeEnabled()
+    fireEvent.click(no)
+    enviar()
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null, undefined, false, undefined, true, false, undefined))
+  })
+
+  it("executor também escolhe o modelo, com preço do catálogo", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ ok: true, json: async () =>
+      url.includes("review-policy") ? { state: "recommended" } : { models: [
+        { provider: "openrouter", model: "x-ai/grok-4.3", agent: "grok", label: "Grok 4.3", review_capable: true,
+          input_cost_per_million: 1.25, output_cost_per_million: 2.5, rank: 2 },
+        { provider: "openrouter", model: "x-ai/grok-4.7", agent: "grok", label: "Grok 4.7", review_capable: true,
+          input_cost_per_million: 2, output_cost_per_million: 6, rank: 1 },
+      ], local_error: null } })))
+    renderPanel()
+    fireEvent.change(await screen.findByLabelText("Executor"), { target: { value: "grok" } })
+    const modelo = await screen.findByLabelText("Modelo do executor")
+    const opcoes = Array.from(modelo.querySelectorAll("option")).map((o) => o.textContent)
+    expect(opcoes).toEqual(["Modelo padrão do agente",
+      "Grok 4.7 — US$ 2/US$ 6 por 1M", "Grok 4.3 — US$ 1.25/US$ 2.5 por 1M"])
+    fireEvent.change(modelo, { target: { value: "x-ai/grok-4.3" } })
+    fireEvent.click(screen.getByRole("button", { name: "Não" }))
+    enviar()
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
+      basePlan.id, null, "grok", false, "x-ai/grok-4.3", false, false, undefined))
   })
 
   it("filtra os planos pela task vinculada à conversa", async () => {

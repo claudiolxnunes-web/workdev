@@ -136,6 +136,10 @@ def _agent_for_model(
     )
 
 
+def _as_float(value) -> float | None:
+    return float(value) if value is not None else None
+
+
 def configured_execution_models(db: Session) -> list[dict]:
     """Somente vínculos administrados e executáveis; catálogo de chat não é CLI."""
     from app.services.handoff import CLI_AGENTS, AGENTS_WITH_REVIEW_CHANNEL
@@ -147,7 +151,11 @@ def configured_execution_models(db: Session) -> list[dict]:
             continue
         result.append({"provider": row.provider, "model": row.provider_model_id,
                        "label": row.display_name, "agent": agent,
-                       "review_capable": agent in AGENTS_WITH_REVIEW_CHANNEL})
+                       "review_capable": agent in AGENTS_WITH_REVIEW_CHANNEL,
+                       # Preço do catálogo (OpenRouter) e ordem do agente para o seletor.
+                       "input_cost_per_million": _as_float(row.input_cost_per_million),
+                       "output_cost_per_million": _as_float(row.output_cost_per_million),
+                       "rank": getattr(row, "agent_preference_rank", None)})
     return sorted(result, key=lambda row: (row["provider"], row["label"]))
 
 

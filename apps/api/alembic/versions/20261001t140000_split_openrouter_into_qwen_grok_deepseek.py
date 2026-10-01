@@ -71,6 +71,18 @@ PREVIOUS = (
     ("x-ai/grok-4.7", 3, 1.60, 4.80),
 )
 
+# Preços dos demais agentes alinhados à OpenRouter (2026-10-01), para todo
+# seletor mostrar o mesmo preço. Codex deixa de aparecer sem preço.
+PRICE_SYNC = (
+    # provider, provider model id, (input, output) anterior, (input, output) novo
+    ("anthropic", "claude-sonnet-5", (3.00, 15.00), (2.00, 10.00)),
+    ("openai", "gpt-5.6-sol", (None, None), (2.00, 10.00)),
+    ("openai", "gpt-5.6-terra", (None, None), (2.00, 12.00)),
+    ("gemini", "gemini-3.5-flash", (2.70, 16.20), (1.50, 9.00)),
+    ("openrouter", "moonshotai/kimi-k3", (0.677, 10.00), (0.6635, 10.00)),
+    ("openrouter", "moonshotai/kimi-k2.6", (0.65, 3.41), (0.4341, 1.828)),
+)
+
 # Tier pedido pelo operador: Grok 4.7 premium, 4.3 médio, Build 0.1 barato.
 PREMIUM = {"x-ai/grok-4.7": "premium"}
 
@@ -124,6 +136,8 @@ def upgrade() -> None:
             category=category,
         ))
 
+    _sync_prices(new=True)
+
     op.execute(sa.text("""
         UPDATE agent_runs
            SET agent = CASE
@@ -144,7 +158,24 @@ def upgrade() -> None:
     """))
 
 
+def _sync_prices(*, new: bool) -> None:
+    for provider, model_id, previous, current in PRICE_SYNC:
+        input_cost, output_cost = current if new else previous
+        op.execute(sa.text("""
+            UPDATE ai_model_catalog
+               SET input_cost_per_million = :input_cost,
+                   output_cost_per_million = :output_cost,
+                   pricing_updated_at = CASE WHEN :new THEN TIMESTAMPTZ '2026-10-01T00:00:00Z'
+                                             ELSE pricing_updated_at END,
+                   updated_at = now()
+             WHERE provider = :provider AND provider_model_id = :model_id
+        """).bindparams(provider=provider, model_id=model_id, input_cost=input_cost,
+                        output_cost=output_cost, new=new))
+
+
 def downgrade() -> None:
+    _sync_prices(new=False)
+
     # Volta a um único agente 'openrouter'. Perde a distinção qwen/grok/deepseek
     # e também converte reviewer 'qwen' anterior à cdf620c7a45a, como ela fazia.
     op.execute(sa.text("""
