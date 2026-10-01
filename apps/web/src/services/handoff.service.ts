@@ -11,11 +11,11 @@ export type RunStatus = "queued" | "running" | "blocked" | "review" | "completed
 /** Agentes com CLI e sessão tmux própria na VPS. */
 export type CliAgentName = "codex" | "claude" | "kimi" | "qwen" | "grok" | "deepseek" | "gemini"
 /** Identidades de runtime Ollama — estáveis, independentes do modelo carregado. */
-export type RuntimeAgentName = "local-code" | "gpu-hostinger" | "gpu-runpod"
+export type RuntimeAgentName = "gpu-hostinger" | "gpu-runpod"
 export type AgentName = CliAgentName | RuntimeAgentName
 
 export const CLI_AGENTS: CliAgentName[] = ["codex", "claude", "kimi", "qwen", "grok", "deepseek", "gemini"]
-export const RUNTIME_AGENTS: RuntimeAgentName[] = ["local-code", "gpu-hostinger", "gpu-runpod"]
+export const RUNTIME_AGENTS: RuntimeAgentName[] = ["gpu-hostinger", "gpu-runpod"]
 
 export type SelectableCliAgent = "codex" | "claude" | "kimi" | "qwen" | "grok" | "deepseek" | "gemini"
 export interface CliAgentModelInfo {
@@ -65,7 +65,6 @@ export const agentLabels: Record<AgentName, string> = {
   grok: "Grok",
   deepseek: "DeepSeek",
   gemini: "Gemini",
-  "local-code": "Ollama local (VPS)",
   "gpu-hostinger": "GPU Hostinger",
   "gpu-runpod": "GPU RunPod",
 }

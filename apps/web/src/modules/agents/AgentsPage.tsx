@@ -6,13 +6,12 @@ import { BuildQueue } from "./BuildQueue"
 import { RuntimeControls } from "./RuntimeControls"
 import { RuntimePanel } from "./RuntimePanel"
 import { ExecutorDefaults } from "./ExecutorDefaults"
-import { LocalModelSelector } from "./LocalModelSelector"
 import { CliModelSelector } from "./CliModelSelector"
 import { getAgentRuntimes, agentLabels, type AgentName, type AgentRuntime, type RuntimeState, type ActivityState } from "@/services/handoff.service"
 
 const AGENTS: Array<{ id: AgentName; label: string }> = [
   { id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" },
-  { id: "local-code", label: "WorkDev Qwen · Local" }, { id: "gemini", label: "Gemini" },
+  { id: "gemini", label: "Gemini" },
   { id: "kimi", label: "Kimi Code" }, { id: "qwen", label: "Qwen Code" },
   { id: "grok", label: "Grok" },
   { id: "deepseek", label: "DeepSeek" },
@@ -176,7 +175,6 @@ export default function AgentsPage() {
           </button>
         })}
       </nav>
-      {agent === "local-code" && <LocalModelSelector runtimeState={state ?? "ERROR"} />}
       {(agent === "gemini" || agent === "claude" || agent === "codex" || agent === "kimi" || agent === "qwen" || agent === "grok" || agent === "deepseek") &&
         <CliModelSelector agent={agent} busy={selectedHealth?.activity_state === "BUSY"} runtimeState={state ?? "ERROR"} />}
       <ExecutorDefaults />
@@ -193,7 +191,7 @@ export default function AgentsPage() {
       {health[agent]?.health_reason && <details className="shrink-0 text-xs text-amber-300"><summary className="cursor-pointer">Detalhes do estado do agente</summary><p className="mt-1">{health[agent]?.health_reason}</p></details>}
       {activeRun && <div className="flex shrink-0 items-center gap-2 rounded-lg border border-sky-900 bg-sky-950/40 px-3 py-2 text-sm">
         <span className="shrink-0 text-sky-300">Em execução</span><strong className="min-w-0 flex-1 truncate">{activeRun.task_title}</strong>
-        <a href={agent === "local-code" ? "/agents/local-code/terminal" : `/runs/${encodeURIComponent(activeRun.id)}/terminal?compact=1`} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs text-sky-300">Terminal da tarefa ↗</a>
+        <a href={`/runs/${encodeURIComponent(activeRun.id)}/terminal?compact=1`} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs text-sky-300">Terminal da tarefa ↗</a>
       </div>}
       <div className="flex shrink-0 gap-1 rounded-lg bg-slate-900 p-1 md:hidden" role="tablist" aria-label="Painel">
         {(["terminal", "queue"] as const).map(panel => <button key={panel} role="tab" aria-selected={mobilePanel === panel} onClick={() => setMobilePanel(panel)} className={`min-h-10 flex-1 rounded text-sm ${mobilePanel === panel ? "bg-sky-700" : "text-slate-300"}`}>{panel === "terminal" ? "Terminal" : "Tarefas e subtarefas"}</button>)}

@@ -5,7 +5,7 @@ import { CLI_AGENTS, agentLabels, type AgentName } from "@/services/handoff.serv
 /** Attach to the existing agent session; never create or restart an agent here. */
 export default function AgentTerminalPage() {
   const { agentId } = useParams()
-  if (!agentId || ![...CLI_AGENTS, "local-code"].includes(agentId)) {
+  if (!agentId || !(CLI_AGENTS as string[]).includes(agentId)) {
     return <div className="p-6 text-slate-300">Agente sem terminal disponível. <a href="/agents" className="text-sky-300">Voltar aos agentes</a></div>
   }
   const agent = agentId as AgentName

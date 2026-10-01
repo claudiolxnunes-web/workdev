@@ -95,7 +95,8 @@ describe('SettingsPanel', () => {
       }));
       if (url === '/api/agents/status') return Promise.resolve(jsonResponse({ agents: [
         { agent: 'kimi', runtime_state: 'OFFLINE', activity_state: 'IDLE', checked_at: '2026-09-30T04:00:00Z' },
-        { agent: 'local-code', runtime_state: 'ERROR', activity_state: 'IDLE', checked_at: '2026-09-30T04:00:00Z', health_reason: 'runtime_inconsistent' },
+        { agent: 'codex', runtime_state: 'ERROR', activity_state: 'IDLE', checked_at: '2026-09-30T04:00:00Z', health_reason: 'runtime_inconsistent' },
+        { agent: 'local-code', runtime_state: 'ERROR', activity_state: 'IDLE', checked_at: '2026-09-30T04:00:00Z' },
       ] }));
       return Promise.resolve(jsonResponse(healthPayload));
     });
@@ -105,7 +106,9 @@ describe('SettingsPanel', () => {
     const agents = await screen.findByRole('list', { name: 'Estado real dos agentes' });
     expect(agents).toHaveTextContent('Kimi');
     expect(agents).toHaveTextContent('Desligado');
-    expect(agents).toHaveTextContent('Local Code');
+    expect(agents).toHaveTextContent('Codex');
+    expect(agents).not.toHaveTextContent('Local Code');
+    expect(agents).not.toHaveTextContent('local-code');
     expect(agents).toHaveTextContent('sessão do agente não está ativa');
   });
 });

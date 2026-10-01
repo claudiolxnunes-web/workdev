@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
 
 import { BuildQueue } from "./BuildQueue"
-import { HandoffApiError, type AgentRun } from "@/services/handoff.service"
+import { HandoffApiError, type AgentName, type AgentRun } from "@/services/handoff.service"
 
 const getRuns = vi.fn()
 const getRunContext = vi.fn()
@@ -22,7 +22,7 @@ vi.mock("@/services/handoff.service", async (importOriginal) => ({
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
   return {
     id: "run-1", plan_id: "plan-1", backlog_id: "task-1",
-    agent: "local-code", reviewer_agent: "kimi", review_attempts: 0,
+    agent: "gpu-runpod", reviewer_agent: "kimi", review_attempts: 0,
     status: "running", created_at: "2026-09-09T00:00:00Z",
     updated_at: "2026-09-09T00:00:00Z", task_title: "Formulário Knowledge",
     project_id: "p1", project_name: "WorkDev Core", plan_version: 1,
@@ -32,13 +32,13 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
 }
 
 const contexto = {
-  run: { id: "run-1", agent: "local-code" as const, status: "running" as const },
+  run: { id: "run-1", agent: "gpu-runpod" as const, status: "running" as const },
   project: {}, task: {},
   plan: { id: "plan-1", objective: "Liberar categorias" },
   subtasks: [], events: [], prompt: "prompt",
 }
 
-describe("BuildQueue — despacho para CLI local", () => {
+describe("BuildQueue — despacho para runtime", () => {
   afterEach(() => vi.unstubAllGlobals())
   beforeEach(() => {
     getRuns.mockReset(); getRunContext.mockReset(); dispatchRun.mockReset(); configureRunObserver.mockReset()
@@ -51,7 +51,7 @@ describe("BuildQueue — despacho para CLI local", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ models: [
       { provider: "openai", model: "observer-model", label: "Observer Model", agent: "codex", review_capable: true },
     ], local_error: null }), { status: 200, headers: { "Content-Type": "application/json" } })))
-    render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
+    render(<MemoryRouter><BuildQueue agent="gpu-runpod" /></MemoryRouter>)
     fireEvent.click(await screen.findByRole("button", { name: "Ligar Observer" }))
     fireEvent.change(await screen.findByLabelText("Modelo do Observer na Run"),
       { target: { value: "openai:observer-model:" } })
@@ -60,14 +60,24 @@ describe("BuildQueue — despacho para CLI local", () => {
       { provider: "openai", model: "observer-model" }))
   })
 
-  it("oferece entrega à CLI e acesso à sessão canônica", async () => {
+  it("oferece despacho ao runtime e o terminal da execução", async () => {
     getRuns.mockResolvedValue([run()])
-    render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
+    render(<MemoryRouter><BuildQueue agent="gpu-runpod" /></MemoryRouter>)
 
-    const botao = await screen.findByRole("button", { name: "Entregar à CLI local" })
+    const botao = await screen.findByRole("button", { name: "Despachar para o runtime" })
     expect(botao).toBeEnabled()
-    expect(screen.getByRole("link", { name: /Abrir terminal da execução/ })).toHaveAttribute("href", "/agents/local-code/terminal")
+    expect(screen.getByRole("link", { name: /Abrir terminal da execução/ })).toHaveAttribute("href", "/runs/run-1/terminal?compact=1")
     expect(screen.getByText(/Acompanhe abaixo/)).toBeInTheDocument()
+  })
+
+  it("run histórica do local-code removido só pode ser parada, sem despacho", async () => {
+    getRuns.mockResolvedValue([run({ agent: "local-code" as AgentName })])
+    getRunContext.mockResolvedValue({ ...contexto, run: { ...contexto.run, agent: "local-code" as AgentName } })
+    render(<MemoryRouter><BuildQueue agent="gpu-runpod" /></MemoryRouter>)
+
+    expect(await screen.findByRole("button", { name: "Parar Run" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /Despachar|Entregar à CLI local/ })).not.toBeInTheDocument()
+    expect(screen.getByRole("link", { name: /Abrir terminal da execução/ })).toHaveAttribute("href", "/runs/run-1/terminal?compact=1")
   })
 
   it("não oferece despacho para agente de CLI", async () => {
@@ -80,7 +90,7 @@ describe("BuildQueue — despacho para CLI local", () => {
 
   it("com despacho em curso o botão não convida a duplicar", async () => {
     getRuns.mockResolvedValue([run({ dispatch_state: "dispatching", dispatch_attempts: 1 })])
-    render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
+    render(<MemoryRouter><BuildQueue agent="gpu-runpod" /></MemoryRouter>)
 
     const botao = await screen.findByRole("button", { name: "Despacho em curso…" })
     expect(botao).toBeDisabled()
@@ -93,7 +103,7 @@ describe("BuildQueue — despacho para CLI local", () => {
         message: "Já existe um despacho ativo para esta execução",
         code: "dispatch_already_active",
         details: {
-          job_id: "job-9", run_id: "run-1", runtime_id: "local-code",
+          job_id: "job-9", run_id: "run-1", runtime_id: "gpu-runpod",
           model: "qwen2.5-coder:14b", state: "running", attempt: 1,
           prompt_sha256: null, error: null, created_at: null,
           started_at: null, finished_at: null,
@@ -101,9 +111,9 @@ describe("BuildQueue — despacho para CLI local", () => {
       },
       409,
     ))
-    render(<MemoryRouter><BuildQueue agent="local-code" /></MemoryRouter>)
+    render(<MemoryRouter><BuildQueue agent="gpu-runpod" /></MemoryRouter>)
 
-    fireEvent.click(await screen.findByRole("button", { name: "Entregar à CLI local" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Despachar para o runtime" }))
 
     await waitFor(() => {
       expect(screen.getByText(/Já existe um despacho ativo/)).toBeInTheDocument()

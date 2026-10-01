@@ -10,7 +10,7 @@ vi.mock("./AgentTerminal", () => ({ AgentTerminal: ({ agent, operationalStatus }
 vi.mock("./BuildQueue", () => ({ BuildQueue: ({ agent }: { agent: string }) => <div>queue:{agent}</div> }))
 vi.mock("./ExecutorDefaults", () => ({ ExecutorDefaults: () => <div>modelos</div> }))
 const fetchMock = vi.fn()
-const local = { id: "local-code", label: "Local", runtime_state: "ONLINE", activity_state: "IDLE", status: "online", models: [], reprovision: { steps: [] } }
+const local = { id: "gpu-runpod", label: "GPU RunPod", runtime_state: "ONLINE", activity_state: "IDLE", status: "online", models: [], reprovision: { steps: [] } }
 afterEach(() => vi.useRealTimers())
 
 beforeEach(() => {
@@ -22,7 +22,7 @@ beforeEach(() => {
       output_cost_per_million: null, expensive: false }] }))
   fetchMock.mockResolvedValue({ ok: true, json: async () => ({ agents: [
     { agent: "claude", runtime_state: "ONLINE", activity_state: "IDLE", health: "idle", awaiting_approval: true, operational_status: "awaiting_approval", runs: [] },
-    { agent: "local-code", runtime_state: "ONLINE", activity_state: "BUSY", health: "busy", operational_status: "executing", runs: [{ id: "local-run", agent: "local-code", status: "running", task_title: "Tarefa local" }] },
+    { agent: "kimi", runtime_state: "ONLINE", activity_state: "BUSY", health: "busy", operational_status: "executing", runs: [{ id: "kimi-run", agent: "kimi", status: "running", task_title: "Tarefa kimi" }] },
   ] }) })
   vi.stubGlobal("fetch", fetchMock)
 })
@@ -45,33 +45,34 @@ describe("Agents workspace", () => {
   })
   it("mostra Gemini, Qwen e Kimi diretamente e seleciona suas sessões", async () => {
     render(<AgentsPage />)
-    expect(await screen.findByRole("tab", { name: /WorkDev Qwen · Local/ })).toBeInTheDocument()
+    expect(await screen.findByRole("tab", { name: "Gemini" })).toBeInTheDocument()
+    expect(screen.queryByRole("tab", { name: /WorkDev Qwen · Local/ })).not.toBeInTheDocument()
     for (const [label, id] of [["Gemini", "gemini"], ["Kimi Code", "kimi"], ["Qwen Code", "qwen"], ["Grok", "grok"], ["DeepSeek", "deepseek"]]) {
       fireEvent.click(screen.getByRole("tab", { name: label }))
-      expect(screen.getByText(`terminal:${id}:`)).toBeInTheDocument()
+      expect(screen.getByText(new RegExp(`^terminal:${id}:`))).toBeInTheDocument()
       expect(screen.getByText(`queue:${id}`)).toBeInTheDocument()
     }
     expect(await screen.findByText("APROVAR")).toBeInTheDocument()
     expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true)
   })
-  it("seleção local muda terminal, fila e tarefa ativa juntos", async () => {
+  it("seleção muda terminal, fila e tarefa ativa juntos", async () => {
     render(<AgentsPage />)
     await screen.findByText("APROVAR")
-    fireEvent.click(screen.getByRole("tab", { name: "WorkDev Qwen · Local" }))
-    expect(screen.getByText("queue:local-code")).toBeInTheDocument()
-    expect(screen.getByText("terminal:local-code:executing")).toBeInTheDocument()
-    expect(screen.getByText("Tarefa local")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: /Terminal da tarefa/ })).toHaveAttribute("href", "/agents/local-code/terminal")
+    fireEvent.click(screen.getByRole("tab", { name: "Kimi Code" }))
+    expect(screen.getByText("queue:kimi")).toBeInTheDocument()
+    expect(screen.getByText("terminal:kimi:executing")).toBeInTheDocument()
+    expect(screen.getByText("Tarefa kimi")).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: /Terminal da tarefa/ })).toHaveAttribute("href", "/runs/kimi-run/terminal?compact=1")
     expect(screen.getByRole("link", { name: /Terminal da tarefa/ })).toHaveAttribute("target", "_blank")
     expect(screen.queryByText("queue:claude")).not.toBeInTheDocument()
   })
-  it("reabre a mesma seleção local após remontar sem iniciar sessão", async () => {
+  it("reabre a mesma seleção após remontar sem iniciar sessão", async () => {
     const view = render(<AgentsPage />)
     await screen.findByText("APROVAR")
-    fireEvent.click(screen.getByRole("tab", { name: "WorkDev Qwen · Local" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Kimi Code" }))
     view.unmount()
     render(<AgentsPage />)
-    expect(await screen.findByText("terminal:local-code:executing")).toBeInTheDocument()
+    expect(await screen.findByText("terminal:kimi:executing")).toBeInTheDocument()
     expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true)
   })
   it("recolher só afeta desktop e mantém terminal montado", async () => {

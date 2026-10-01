@@ -10,7 +10,7 @@ describe("handoff service errors", () => {
       options.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
     }))
     vi.stubGlobal('fetch', fetchMock)
-    const result = expect(setAgentConnection('local-code', true)).rejects.toThrow('pode continuar no servidor')
+    const result = expect(setAgentConnection('gpu-runpod', true)).rejects.toThrow('pode continuar no servidor')
     await vi.advanceTimersByTimeAsync(30000)
     await result
     expect(fetchMock).toHaveBeenCalledTimes(1)

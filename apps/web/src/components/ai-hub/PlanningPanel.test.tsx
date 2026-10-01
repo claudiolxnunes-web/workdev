@@ -28,7 +28,7 @@ vi.mock("@/services/handoff.service", async (importOriginal) => ({
 
 function runtime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
   return {
-    id: "local-code", label: "Ollama local (VPS)", kind: "local",
+    id: "gpu-runpod", label: "GPU RunPod", kind: "gpu",
     provider: "ollama", persistence: "local_na_vps", auto_eligible: false,
     configured: true, model: "qwen2.5-coder:7b", source_of_truth: false,
     notes: "Roda na própria VPS.",
@@ -428,7 +428,8 @@ describe("PlanningPanel", () => {
     const executor = await screen.findByLabelText("Executor")
     await waitFor(() => {
       const opcoes = Array.from(executor.querySelectorAll("option"))
-      expect(opcoes.some((o) => o.value === "local-code" && !o.disabled)).toBe(true)
+      expect(opcoes.some((o) => o.value === "gpu-runpod" && !o.disabled)).toBe(true)
+      expect(opcoes.some((o) => o.value === "local-code")).toBe(false)
       expect(opcoes.some((o) => o.value === "gpu-hostinger" && o.disabled)).toBe(true)
     })
   })
@@ -445,7 +446,7 @@ describe("PlanningPanel", () => {
     const revisor = await screen.findByLabelText("Revisor independente")
     await waitFor(() => {
       const opcao = Array.from(revisor.querySelectorAll("option"))
-        .find((o) => o.value === "local-code")
+        .find((o) => o.value === "gpu-runpod")
       expect(opcao).toBeDefined()
       expect(opcao?.disabled).toBe(true)
       expect(opcao?.textContent).toContain("sem canal de veredito")
@@ -482,7 +483,7 @@ describe("PlanningPanel", () => {
     const executor = await screen.findByLabelText("Executor")
     await waitFor(() => {
       const opcao = Array.from(executor.querySelectorAll("option"))
-        .find((o) => o.value === "local-code")
+        .find((o) => o.value === "gpu-runpod")
       expect(opcao?.textContent).toContain("executor isolado")
     })
   })
