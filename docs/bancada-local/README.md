@@ -26,6 +26,28 @@ python3 scripts/bancada_local.py resumo
 - Para trocar de modelo use o fluxo normal (seletor/`local_model.switch`); a bancada
   não troca nem reinicia o servidor.
 
+## Checagens, observer e comparativo
+
+```
+python3 scripts/bancada_local.py rodar tarefas.json --stream        # token a token + vigia de símbolos
+python3 scripts/bancada_local.py broker "Onde current() é chamado?"   # local pede LER/PROCURAR; broker só lê
+python3 scripts/bancada_local.py verificar --caso minimo_dev         # checagens mecânicas, sem LLM
+python3 scripts/bancada_local.py observar minimo_dev --observer deepseek/deepseek-v4-flash
+python3 scripts/bancada_local.py comparar                            # todos os observers no corpus
+```
+
+- `verificar` é a verdade de referência: extrai a base da tarefa com `git archive` para
+  `tmp/bancada/_base/<commit>/`, roda `git apply --check` numa cópia em `tmp/bancada/_trabalho/`
+  (nunca no repo de trabalho), confere a função do `@@`, imports, símbolos, constantes,
+  compilação, escopo e o que o enunciado exige (`exige`, expressões regulares).
+- `observar` manda proposta + trechos reais + checagens para um observer na OpenRouter e
+  mostra o parecer e um prompt de correção. **Nunca reenvia ao modelo local**: quem decide é o
+  operador. O veredito vai para `registro.jsonl` com `origem: observer`.
+- `rodar --stream` interrompe se a resposta usar import, `objeto.metodo()` ou constante que não
+  aparece nos trechos e reenvia **uma** vez com o aviso.
+- Corpus do comparativo: `corpus-observers.json` (propostas em `tmp/`, não versionadas).
+  Resultado: `comparativo-observers.md`.
+
 ## Formato das tarefas
 
 ```json

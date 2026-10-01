@@ -1,0 +1,147 @@
+{
+  "descricao": "Corpus do comparativo de observers. As propostas ficam em tmp/ (não versionado); a verdade de referência é o resultado de `bancada_local.py verificar`. Base e66f298: o código que os modelos viram quando geraram as propostas.",
+  "tarefas": {
+    "dryrun_local_model_key": {
+      "instrucao": "Você é um engenheiro Python/FastAPI revisando uma mudança pequena no WorkDev. Responda em português.\n\nContexto: a tabela agent_runs já tem a coluna local_model_key (String(32), nullable). A migration 9f2b4d6a8c10 e a declaração no modelo AgentRun já existem e estão commitadas. NÃO crie migration e NÃO altere o modelo. O que falta é gravar a coluna ao criar a run em handoff.py.\n\nTarefa: usando SOMENTE os trechos reais abaixo, proponha a alteração em handoff.py para que, ao criar o AgentRun, local_model_key receba local_model.current() quando agent == \"local-code\" e None nos demais agentes.\n\nRegras:\n- Mostre a mudança como diff unificado mínimo (só as linhas que mudam, com 2 a 3 linhas de contexto).\n- Diga onde vai o import e avalie se há risco de import circular (local_model importa agent_lifecycle).\n- Não invente funções, nomes ou linhas que não estejam nos trechos. Se faltar informação, diga exatamente o que falta.\n- No fim, liste no máximo 3 riscos.\n- Isto é só uma proposta: nada será aplicado.",
+      "trechos": [
+        [
+          "apps/api/app/services/handoff.py",
+          1,
+          40
+        ],
+        [
+          "apps/api/app/services/handoff.py",
+          477,
+          620
+        ],
+        [
+          "apps/api/app/services/local_model.py",
+          1,
+          60
+        ]
+      ],
+      "base": "e66f298",
+      "escopo": [
+        "apps/api/app/services/handoff.py"
+      ],
+      "espera_diff": true,
+      "exige": {
+        "current\\(\\)": "gravar local_model.current() ao criar o AgentRun"
+      }
+    },
+    "minimo_local_model_key": {
+      "instrucao": "Na criacao do AgentRun falta gravar a coluna local_model_key. Escreva SOMENTE: a linha de argumento a acrescentar dentro de AgentRun(...) para que local_model_key receba local_model.current() quando agent for igual a local-code, e None nos outros casos; e a linha de import, feita dentro da funcao, logo antes de run = AgentRun(, no mesmo estilo dos outros imports locais do arquivo. Nao reescreva o bloco inteiro.",
+      "trechos": [
+        [
+          "apps/api/app/services/handoff.py",
+          515,
+          560
+        ],
+        [
+          "apps/api/app/services/local_model.py",
+          1,
+          103
+        ]
+      ],
+      "base": "e66f298",
+      "escopo": [
+        "apps/api/app/services/handoff.py"
+      ],
+      "espera_diff": false,
+      "exige": {
+        "local_model_key\\s*=": "o argumento local_model_key=",
+        "current\\(\\)": "chamar current() de local_model"
+      }
+    },
+    "controle_duas_linhas": {
+      "instrucao": "Edição mínima de controle: troque o valor de DEFAULT_MODEL de \"prod\" para \"dev\" e, na primeira linha do docstring do módulo, troque \"(14B / 7B / 4B)\" por \"(14B / 7B / 4B, padrão 7B)\". Nada além dessas duas linhas. Saída: diff unificado contra apps/api/app/services/local_model.py e nada mais.",
+      "trechos": [
+        [
+          "apps/api/app/services/local_model.py",
+          1,
+          3
+        ],
+        [
+          "apps/api/app/services/local_model.py",
+          26,
+          33
+        ]
+      ],
+      "base": "e66f298",
+      "escopo": [
+        "apps/api/app/services/local_model.py"
+      ],
+      "espera_diff": true,
+      "exige": {
+        "DEFAULT_MODEL = \"dev\"": "DEFAULT_MODEL = \"dev\"",
+        "padrão 7B": "o docstring com (… , padrão 7B)"
+      }
+    }
+  },
+  "casos": [
+    {
+      "id": "dryrun_oldq4",
+      "modelo": "oldq4",
+      "proposta": "tmp/resultado_dryrun_oldq4.txt",
+      "tarefa": "dryrun_local_model_key",
+      "esperado": "descartada",
+      "nota": "27B ignorou o enunciado: parâmetro novo em vez de local_model.current(); função build_task inventada no @@"
+    },
+    {
+      "id": "dryrun_oldfast",
+      "modelo": "oldfast",
+      "proposta": "tmp/resultado_dryrun_oldfast.txt",
+      "tarefa": "dryrun_local_model_key",
+      "esperado": "correcao_pequena",
+      "nota": "create_build_run inventada no @@; import dentro do if gera NameError"
+    },
+    {
+      "id": "dryrun_dev",
+      "modelo": "dev",
+      "proposta": "tmp/resultado_dryrun_dev.txt",
+      "tarefa": "dryrun_local_model_key",
+      "esperado": "descartada",
+      "nota": "diff sem cabeçalho que só remove um import"
+    },
+    {
+      "id": "minimo_coder",
+      "modelo": "coder",
+      "proposta": "tmp/resultado_minimo_coder.txt",
+      "tarefa": "minimo_local_model_key",
+      "esperado": "descartada",
+      "nota": "agent.current() não existe"
+    },
+    {
+      "id": "minimo_dev",
+      "modelo": "dev",
+      "proposta": "tmp/resultado_minimo_dev.txt",
+      "tarefa": "minimo_local_model_key",
+      "esperado": "correcao_pequena",
+      "nota": "import current as local_model e depois local_model.current()"
+    },
+    {
+      "id": "minimo_oldfast",
+      "modelo": "oldfast",
+      "proposta": "tmp/resultado_minimo_oldfast.txt",
+      "tarefa": "minimo_local_model_key",
+      "esperado": "aproveitada",
+      "nota": "controle bom"
+    },
+    {
+      "id": "minimo_oldq4",
+      "modelo": "oldq4",
+      "proposta": "tmp/resultado_minimo_oldq4.txt",
+      "tarefa": "minimo_local_model_key",
+      "esperado": "aproveitada",
+      "nota": "controle bom (sem a vírgula final)"
+    },
+    {
+      "id": "controle_duas_linhas",
+      "modelo": "oldq4",
+      "proposta": "tmp/bancada/oldq4/controle_duas_linhas.txt",
+      "tarefa": "controle_duas_linhas",
+      "esperado": "correcao_pequena",
+      "nota": "conteúdo certo, mas o 1º hunk inventa uma linha de contexto em branco: git apply recusa"
+    }
+  ]
+}
