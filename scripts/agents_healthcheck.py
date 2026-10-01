@@ -90,6 +90,8 @@ def collect_agent(agent: str, session: str | None, db, allow_restart=False, work
     try:
         state = agent_lifecycle.read_state(agent, session, db=db)
         if allow_restart and state.offline and not state.session_exists:
+            # try_recover -> start -> ensure_tmux_server: se faltar o servidor, quem
+            # o recria é o workdev-agents.service, nunca este oneshot.
             recovery = agent_lifecycle.try_recover(agent, session, AGENTS[agent][1])
             if recovery is not None:
                 state = agent_lifecycle.read_state(agent, session, db=db)

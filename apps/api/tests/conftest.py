@@ -22,3 +22,20 @@ def _isolate_cli_model_selection(tmp_path, monkeypatch):
     gate de deploy (que roda esta suíte) sobrescrevia o modelo ativo de
     produção, e uma rodada como root deixava o arquivo ilegível para a API."""
     monkeypatch.setenv('WORKDEV_CLI_AGENT_MODELS_FILE', str(tmp_path / 'cli-models.json'))
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "tmux_ensure_real: usa o ensure_tmux_server real (com _run simulado)")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tmux_server_ensure(request, monkeypatch):
+    """Testes nunca acionam o workdev-agents-ensure de verdade.
+
+    O start de agentes chama ensure_tmux_server(), que sem servidor pediria ao
+    systemd a unidade real. Nos testes ela vira no-op, exceto onde o próprio
+    teste exercita a função (marcador tmux_ensure_real) com _run simulado."""
+    if request.node.get_closest_marker("tmux_ensure_real"):
+        return
+    from app.services import agent_lifecycle
+    monkeypatch.setattr(agent_lifecycle, "ensure_tmux_server", lambda: None)

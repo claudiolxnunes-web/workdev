@@ -322,6 +322,7 @@ def _start_standby_session(agent: str, session: str, model: str | None = None) -
             timeout=3,
             check=False,
         )
+    agent_lifecycle.ensure_tmux_server()  # servidor tmux só no workdev-agents.service
     result = subprocess.run(
         [
             "tmux", "new-session", "-d", "-s", session,

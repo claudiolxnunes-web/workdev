@@ -405,6 +405,39 @@ def _run(args: list[str], timeout: int = CMD_TIMEOUT_SECONDS):
 
 
 LLAMA_CTL = "/usr/local/libexec/workdev-llama-ctl"
+AGENTS_CTL = "/usr/local/libexec/workdev-agents-ctl"
+TMUX_SERVER_TIMEOUT_SECONDS = 10
+
+
+def ensure_tmux_server() -> None:
+    """O servidor tmux só nasce dentro do workdev-agents.service.
+
+    Um `tmux new-session` sem servidor criaria um servidor novo no cgroup de
+    quem chamou: a API (morre a cada deploy) ou o healthcheck (morre ao fim de
+    cada rodada oneshot). Sem servidor, o wrapper pede ao systemd a unidade
+    workdev-agents-ensure.service (polkit libera só esse "start"), que confere
+    de novo como root e recria o servidor no workdev-agents.service. Com
+    servidor vivo, nada é reiniciado.
+    """
+    if _run(["tmux", "list-sessions"], 5).returncode == 0:
+        return
+    resultado = _run([AGENTS_CTL, "ensure-server"], 95)
+    if resultado.returncode != 0:
+        raise LifecycleError(
+            "tmux_server_unavailable",
+            "Servidor tmux dos agentes ausente e o workdev-agents-ensure não o recriou: "
+            + (resultado.stderr.strip() or f"código {resultado.returncode}"),
+        )
+    prazo = time.monotonic() + TMUX_SERVER_TIMEOUT_SECONDS
+    while time.monotonic() < prazo:
+        if _run(["tmux", "list-sessions"], 5).returncode == 0:
+            return
+        time.sleep(0.5)
+    raise LifecycleError(
+        "tmux_server_unavailable",
+        f"workdev-agents-ensure terminou, mas o servidor tmux não respondeu em "
+        f"{TMUX_SERVER_TIMEOUT_SECONDS}s; confira 'systemctl status workdev-agents'",
+    )
 
 
 def _llama_service(action: str) -> bool:
@@ -1114,6 +1147,7 @@ def _start_cli(
     if antes.session_exists:
         _run(["tmux", "kill-session", "-t", f"={session}"], 5)
 
+    ensure_tmux_server()
     resultado = _run(
         [
             "tmux", "new-session", "-d", "-s", session,

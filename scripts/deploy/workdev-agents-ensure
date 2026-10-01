@@ -1,0 +1,39 @@
+#!/bin/sh
+# Instalado em /usr/local/libexec/workdev-agents-ensure (root:root 0755).
+# Executado só pelo workdev-agents-ensure.service (oneshot, root).
+#
+# Garante que o servidor tmux dos agentes exista DENTRO do workdev-agents.service.
+# Reinicia esse serviço apenas quando não há servidor: sem servidor não há
+# sessão viva para perder. Com servidor vivo, não faz nada.
+set -eu
+
+USUARIO=workdev
+SOCKET="/tmp/tmux-$(id -u "$USUARIO")/default"
+LOCK=/run/lock/workdev-agents-ensure.lock
+
+tem_servidor() {
+    # Mesmo usuário e mesmo socket do workdev-agents.service.
+    runuser -u "$USUARIO" -- tmux -S "$SOCKET" list-sessions >/dev/null 2>&1
+}
+
+exec 9>"$LOCK"
+flock -w 60 9 || { echo "workdev-agents-ensure: lock ocupado" >&2; exit 1; }
+
+# Confirma a ausência duas vezes, com pequena espera, antes de reiniciar.
+if tem_servidor; then exit 0; fi
+sleep 1
+if tem_servidor; then exit 0; fi
+
+echo "workdev-agents-ensure: sem servidor tmux em $SOCKET; reiniciando workdev-agents.service"
+systemctl restart workdev-agents.service
+
+i=0
+until tem_servidor; do
+    i=$((i + 1))
+    if [ "$i" -ge 30 ]; then
+        echo "workdev-agents-ensure: servidor tmux não voltou em 30s" >&2
+        exit 1
+    fi
+    sleep 1
+done
+echo "workdev-agents-ensure: servidor tmux recriado dentro do workdev-agents.service"

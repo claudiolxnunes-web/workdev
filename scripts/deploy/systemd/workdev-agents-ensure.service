@@ -1,0 +1,10 @@
+[Unit]
+Description=WorkDev agents: garante o servidor tmux dentro do workdev-agents.service
+# Sem RemainAfterExit: cada "start" roda a checagem de novo. Pedidos
+# simultâneos viram um único job no systemd; o flock no script cobre o resto.
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/libexec/workdev-agents-ensure
+TimeoutStartSec=90
