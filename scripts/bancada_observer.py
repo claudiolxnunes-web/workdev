@@ -21,6 +21,11 @@ URL = "https://openrouter.ai/api/v1/chat/completions"
 ARQUIVOS_DE_CHAVE = (Path("/etc/workdev/workdev-api.env"),)
 VEREDITOS = ("aproveitada", "correcao_pequena", "descartada")
 
+# Observer padrão: GPT-5.6 Luna (melhor veredito e prompt no comparativo, 0 falhas).
+PADRAO = "openai/gpt-5.6-luna"
+# Saída generosa: modelos que raciocinam gastavam os 1500 tokens antes do JSON.
+MAX_TOKENS = 4000
+
 # Observers do comparativo (slugs e preços conferidos no catálogo em 2026-10-01).
 OBSERVERS = {
     "openai/gpt-5.6-luna": {"reasoning": {"effort": "medium"}},
@@ -100,8 +105,8 @@ def _json_da_resposta(texto: str) -> dict:
 def observar(modelo: str, mensagens: list[dict], timeout: float = 180) -> dict:
     """Uma chamada ao observer; no máximo 1 retentativa em falha de rede ou de JSON."""
     extra = OBSERVERS.get(modelo, {})
-    corpo = {"model": modelo, "messages": mensagens, "temperature": 0, "max_tokens": 1500,
-             "usage": {"include": True}, **extra}
+    corpo = {"model": modelo, "messages": mensagens, "temperature": 0, "max_tokens": MAX_TOKENS,
+             "usage": {"include": True}, "response_format": {"type": "json_object"}, **extra}
     falhas: list[str] = []
     custo = 0.0  # inclui tentativas pagas que vieram com JSON inválido
     for tentativa in (1, 2):
@@ -121,6 +126,9 @@ def observar(modelo: str, mensagens: list[dict], timeout: float = 180) -> dict:
         except urllib.error.HTTPError as erro:
             corpo_erro = erro.read().decode("utf-8", "replace")[:300]
             falhas.append(f"HTTP {erro.code}: {corpo_erro}")
+            if erro.code == 400 and "response_format" in corpo:
+                # Provedor sem modo JSON: a retentativa vai sem ele.
+                corpo = {k: v for k, v in corpo.items() if k != "response_format"}
         except (urllib.error.URLError, TimeoutError, ValueError, KeyError, ObserverFalhou) as erro:
             falhas.append(f"{type(erro).__name__}: {str(erro)[:300]}")
     return {"ok": False, "parecer": None, "segundos": None, "tentativas": 2,

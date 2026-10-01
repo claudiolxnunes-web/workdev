@@ -17,3 +17,4 @@ scripts/deploy/workdev-agents-ensure /usr/local/libexec/workdev-agents-ensure ro
 scripts/deploy/workdev-agents-ctl /usr/local/libexec/workdev-agents-ctl root:root:0755
 scripts/deploy/systemd/workdev-agents-ensure.service /etc/systemd/system/workdev-agents-ensure.service root:root:0644
 scripts/deploy/polkit/50-workdev-agents-ensure.rules /etc/polkit-1/rules.d/50-workdev-agents-ensure.rules root:root:0644
+scripts/deploy/systemd/workdev-api-bancada.conf /etc/systemd/system/workdev-api.service.d/30-bancada.conf root:root:0644
