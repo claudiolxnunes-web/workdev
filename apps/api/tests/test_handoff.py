@@ -17,7 +17,7 @@ class HandoffContractTest(unittest.TestCase):
             SUPPORTED_AGENTS,
             {
                 "codex", "claude", "kimi", "qwen", "grok", "deepseek", "gemini",
-                "local-code", "gpu-hostinger", "gpu-runpod",
+                "gpu-hostinger", "gpu-runpod",
             },
         )
 

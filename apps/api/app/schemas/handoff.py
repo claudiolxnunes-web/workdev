@@ -41,6 +41,8 @@ AgentName = Literal[
     "openrouter",
     "gemini",
     # Runtimes Ollama: identidade estável, independente do modelo carregado
+    # local-code: legado. Mantido só para ler runs históricas; criar run nova
+    # é recusado em queue_build (agente local removido; use a Bancada Local).
     "local-code",
     "gpu-hostinger",
     "gpu-runpod",

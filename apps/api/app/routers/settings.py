@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.routers.ai import get_db
 from app.services.agent_router import configured_execution_models
-from app.services.agent_runtimes import local_chat_models
+from app.services.agent_runtimes import RETIRED_AGENT_IDS, local_chat_models
 from app.api.endpoints import settings
 from app.routers.ai import AI_PROVIDER_KEYS
 
@@ -20,7 +20,8 @@ def agent_models(db: Session = Depends(get_db)):
     models = configured_execution_models(db)
     local_error = None
     try:
-        models += [{**row, "agent": row["runtime_id"], "review_capable": False} for row in local_chat_models()]
+        models += [{**row, "agent": row["runtime_id"], "review_capable": False} for row in local_chat_models()
+                   if row["runtime_id"] not in RETIRED_AGENT_IDS]
     except Exception:
         local_error = "Inventário local indisponível"
     return {"models": models, "local_error": local_error}

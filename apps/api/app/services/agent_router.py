@@ -5,12 +5,12 @@ from typing import Any, Iterable
 from sqlalchemy.orm import Session
 
 from app.models.ai_routing import AIModelCatalog
-from app.services.agent_runtimes import OLLAMA_AGENT_IDS
+from app.services.agent_runtimes import LOCAL_AGENT_REMOVED, OLLAMA_AGENT_IDS, RETIRED_AGENT_IDS
 from app.services.task_complexity import ComplexityAssessment
 
 
 # Agentes que o AUTO nunca escolhe sozinho nesta fase.
-AUTO_EXCLUDED_AGENTS = frozenset(OLLAMA_AGENT_IDS)
+AUTO_EXCLUDED_AGENTS = frozenset(OLLAMA_AGENT_IDS | RETIRED_AGENT_IDS)
 
 
 PROVIDER_TO_AGENT = {
@@ -157,10 +157,12 @@ def resolve_execution_selection(db: Session, selection: dict) -> dict:
     if not isinstance(selection, dict):
         raise AgentRoutingError("invalid_executor_selection", "Selecione fonte e modelo do executor")
     provider, model = selection.get("provider"), selection.get("model")
+    if selection.get("runtime_id") in RETIRED_AGENT_IDS:
+        raise AgentRoutingError("local_agent_removed", LOCAL_AGENT_REMOVED)
     if provider == "ollama":
         try:
             options = [{**row, "agent": row["runtime_id"], "review_capable": False}
-                       for row in local_chat_models()]
+                       for row in local_chat_models() if row["runtime_id"] not in RETIRED_AGENT_IDS]
         except Exception as exc:
             raise AgentRoutingError("local_runtime_unavailable", "Inventário local indisponível") from exc
     else:

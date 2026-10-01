@@ -106,7 +106,7 @@ class RuntimeIdentityIsAcceptedTest(unittest.TestCase):
     def test_handoff_accepts_the_ollama_identities(self):
         self.assertEqual(
             SUPPORTED_AGENTS,
-            CLI_AGENTS | {"local-code", "gpu-hostinger", "gpu-runpod"},
+            CLI_AGENTS | {"gpu-hostinger", "gpu-runpod"},
         )
 
     def test_api_schema_accepts_the_ollama_identities(self):
@@ -447,7 +447,7 @@ class OutOfAutoTest(unittest.TestCase):
             queue_build(
                 db,
                 plan,
-                "local-code",
+                "gpu-runpod",
                 reviewer="claude",
                 routing_mode="auto",
             )
@@ -471,13 +471,33 @@ class OutOfAutoTest(unittest.TestCase):
         run, _event = queue_build(
             db,
             plan,
-            "local-code",
+            "gpu-runpod",
             reviewer="claude",
             routing_mode="manual",
         )
 
-        self.assertEqual(run.agent, "local-code")
+        self.assertEqual(run.agent, "gpu-runpod")
         self.assertEqual(run.reviewer_agent, "claude")
+
+    def test_queue_build_refuses_removed_local_agent(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from app.services.handoff import HandoffError, queue_build
+
+        db = Mock()
+        plan = SimpleNamespace(id="plan-1", backlog_id="task-1", status="approved")
+
+        with self.assertRaises(HandoffError) as ctx:
+            queue_build(db, plan, "local-code", reviewer="claude", routing_mode="manual")
+
+        self.assertEqual(str(ctx.exception), "agente local removido; use a Bancada Local")
+        db.add.assert_not_called()
+
+    def test_local_code_stays_registered_only_for_local_chat(self):
+        self.assertIsNotNone(agent_runtimes.get_runtime("local-code"))
+        self.assertNotIn("local-code", agent_runtimes.OLLAMA_AGENT_IDS)
+        self.assertNotIn("local-code", {r.id for r in agent_runtimes.AGENT_RUNTIMES})
 
 
 if __name__ == "__main__":

@@ -117,7 +117,18 @@ REGISTRY: dict[str, OllamaRuntime] = {
     for runtime in RUNTIMES
 }
 
-OLLAMA_AGENT_IDS: frozenset[str] = frozenset(REGISTRY)
+# Runtimes cadastrados que deixaram de ser agente: sem despacho, lifecycle,
+# sessão tmux nem seletor de executor. local-code segue registrado só como
+# fonte do chat local do AI Hub; uso como executor foi substituído pela
+# Bancada Local (scripts/bancada_local.py). Runs históricas continuam legíveis.
+RETIRED_AGENT_IDS: frozenset[str] = frozenset({"local-code"})
+LOCAL_AGENT_REMOVED = "agente local removido; use a Bancada Local"
+
+AGENT_RUNTIMES: tuple[OllamaRuntime, ...] = tuple(
+    runtime for runtime in RUNTIMES if runtime.id not in RETIRED_AGENT_IDS
+)
+
+OLLAMA_AGENT_IDS: frozenset[str] = frozenset(REGISTRY) - RETIRED_AGENT_IDS
 
 
 def get_runtime(runtime_id: str) -> OllamaRuntime | None:

@@ -118,7 +118,7 @@ class ReviewPairValidationTest(unittest.TestCase):
         dispara `POST /runs/{id}/reviews` para essas identidades, então a run
         ficaria parada em `review` para sempre.
         """
-        for runtime_id in ("local-code", "gpu-hostinger", "gpu-runpod"):
+        for runtime_id in ("gpu-hostinger", "gpu-runpod"):
             with self.subTest(reviewer=runtime_id):
                 with self.assertRaises(HandoffError) as ctx:
                     validate_review_pair("claude", runtime_id)

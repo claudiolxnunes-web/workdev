@@ -34,7 +34,7 @@ from app.services import agent_runtimes, build_jobs, context_egress
 from app.services.observer_selection import current as observer_current
 from app.services.run_pause import active_pause
 from app.services.build_executor import build_enabled
-from app.services.agent_runtimes import is_ollama_agent
+from app.services.agent_runtimes import LOCAL_AGENT_REMOVED, RETIRED_AGENT_IDS, is_ollama_agent
 from app.services.build_rag import augment_prompt
 from app.services.plan_granularity import assess as assess_plan_granularity
 from app.services.engineering_graph import graph_sync
@@ -912,7 +912,7 @@ def send_to_build(
                 },
             )
 
-    if payload.routing_mode == "manual" and is_ollama_agent(agent) and agent != "local-code":
+    if payload.routing_mode == "manual" and is_ollama_agent(agent):
         # Endpoint indisponível não vira run pendurada: recusa antes de criar
         # qualquer estado. Os demais agentes seguem utilizáveis normalmente.
         try:
@@ -1563,16 +1563,9 @@ def dispatch_run_to_ollama(
     except RunPaused as error:
         raise HTTPException(409, str(error)) from error
 
-    if run.agent == 'local-code':
-        from app.services.local_code_build import enqueue
-        if run.status not in {'queued', 'running'}:
-            raise HTTPException(409, 'Run não aceita despacho')
-        try:
-            job = enqueue(db, run)
-        except HandoffError as error:
-            raise HTTPException(409, str(error)) from error
-        db.commit()
-        return {'run': _run_out(db, run), 'dispatch': build_jobs.job_out(job)}
+    if run.agent in RETIRED_AGENT_IDS:
+        # Runs antigas do local-code só aceitam continue e stop; envio novo não.
+        raise HTTPException(409, {'code': 'local_agent_removed', 'message': LOCAL_AGENT_REMOVED})
 
     if not is_ollama_agent(run.agent):
         raise HTTPException(

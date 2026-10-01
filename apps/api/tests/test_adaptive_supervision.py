@@ -83,7 +83,7 @@ def adaptive_build(tmp_path, monkeypatch):
         mapping.dispose()
 
 
-@pytest.mark.parametrize('agent', ['local-code', 'codex'])
+@pytest.mark.parametrize('agent', ['gpu-runpod', 'codex'])
 def test_build_calls_jev_for_internal_project_and_links_persisted_event(adaptive_build, agent):
     env = adaptive_build
     run, _ = env.handoff.queue_build(env.db, env.plan, agent, reviewer='gemini')
@@ -98,11 +98,9 @@ def test_build_calls_jev_for_internal_project_and_links_persisted_event(adaptive
         assert not event.payload['policy']['conservative_fallback']
         assert db.get(env.Run, run.id).status == 'queued'
         assert db.query(env.Log).one().success
-    if agent == 'local-code':
-        env.enqueue.assert_called_once_with(env.db, run)
 
 
-@pytest.mark.parametrize('agent', ['local-code', 'codex'])
+@pytest.mark.parametrize('agent', ['gpu-runpod', 'codex'])
 def test_build_disabled_never_calls_jev(adaptive_build, agent):
     env = adaptive_build
     env.config.enabled = False
@@ -121,7 +119,7 @@ def test_local_build_falls_back_and_audits_without_blocking_creation(adaptive_bu
         env.db.commit()
     else:
         env.client.post.side_effect = TimeoutError() if failure == 'timeout' else RuntimeError()
-    run, _ = env.handoff.queue_build(env.db, env.plan, 'local-code', reviewer='gemini')
+    run, _ = env.handoff.queue_build(env.db, env.plan, 'gpu-runpod', reviewer='gemini')
     assert run.status == 'queued' and run.complexity == 'high'
     assert run.agent != run.reviewer_agent
     with env.factory() as db:
@@ -147,9 +145,18 @@ def test_build_still_rejects_executor_as_reviewer_before_jev(adaptive_build):
     assert env.db.query(env.Run).count() == 0
 
 
+def test_removed_local_agent_is_refused_before_jev_and_run(adaptive_build):
+    env = adaptive_build
+    with pytest.raises(env.handoff.HandoffError, match='agente local removido; use a Bancada Local'):
+        env.handoff.queue_build(env.db, env.plan, 'local-code', reviewer='gemini')
+    env.classify.assert_not_called()
+    env.enqueue.assert_not_called()
+    assert env.db.query(env.Run).count() == 0
+
+
 def test_local_build_jev_cannot_lower_explicit_deterministic_floor(adaptive_build):
     env = adaptive_build
-    run, _ = env.handoff.queue_build(env.db, env.plan, 'local-code', reviewer='gemini',
+    run, _ = env.handoff.queue_build(env.db, env.plan, 'gpu-runpod', reviewer='gemini',
                                     complexity='critical')
     assert run.complexity == 'critical'
     assert env.classify.call_args.kwargs['mandatory_human']

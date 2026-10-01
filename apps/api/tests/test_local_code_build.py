@@ -180,20 +180,22 @@ def test_dispatch_records_physical_model_key(cli, queue_db, monkeypatch, physica
         assert run.model == 'workdev-qwen27b'  # alias estável inalterado
 
 
-def test_dispatch_route_queues_without_http_or_background(queue_db, monkeypatch):
+def test_dispatch_route_refuses_removed_local_agent(queue_db, monkeypatch):
     from unittest.mock import Mock
+    from fastapi import HTTPException
     from app.routers import handoffs
-    run_id, job_id = queue_db.new()
+    run_id, _job_id = queue_db.new()
     background = Mock()
     http = Mock(side_effect=AssertionError('HTTP path used'))
     monkeypatch.setattr(handoffs, 'ensure_dispatchable_blocking', http)
-    monkeypatch.setattr(handoffs, '_run_out', lambda db, run: {'id': str(run.id)})
-    monkeypatch.setattr(build_jobs, 'job_out', lambda job: {'id': str(job.id)})
     with queue_db.factory() as db:
         run = db.get(queue_db.Run, run_id)
         monkeypatch.setattr(handoffs, '_get_run', lambda db, key: run)
-        response = handoffs.dispatch_run_to_ollama(run_id, background, db)
-    assert response['dispatch']['id'] == str(job_id)
+        with pytest.raises(HTTPException) as error:
+            handoffs.dispatch_run_to_ollama(run_id, background, db)
+    assert error.value.status_code == 409
+    assert error.value.detail == {'code': 'local_agent_removed',
+                                  'message': 'agente local removido; use a Bancada Local'}
     background.add_task.assert_not_called()
     http.assert_not_called()
 

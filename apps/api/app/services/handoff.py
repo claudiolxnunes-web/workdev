@@ -23,7 +23,7 @@ from app.models.knowledge import KnowledgeEntry
 from app.models.project import Project
 from app.models.review_cycle import ReviewCycle
 from app.models.subtask import BacklogSubtask
-from app.services.agent_runtimes import OLLAMA_AGENT_IDS
+from app.services.agent_runtimes import LOCAL_AGENT_REMOVED, OLLAMA_AGENT_IDS, RETIRED_AGENT_IDS
 
 
 PLAN_EDITABLE = {"draft", "needs_revision"}
@@ -493,6 +493,9 @@ def queue_build(
     observer_enabled: bool = False,
     observer_selection: dict | None = None,
 ) -> tuple[AgentRun, AgentRunEvent]:
+    if agent in RETIRED_AGENT_IDS:
+        raise HandoffError(LOCAL_AGENT_REMOVED)
+
     if plan.status != "approved":
         raise HandoffError(
             "O plano precisa estar aprovado antes do Build"
@@ -613,10 +616,6 @@ def queue_build(
     if task:
         task.owner = agent
         task.updated_at = _now()
-
-    if agent == 'local-code':
-        from app.services.local_code_build import enqueue
-        enqueue(db, run)
 
     db.commit()
     db.refresh(run)
