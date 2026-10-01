@@ -8,7 +8,6 @@ vi.mock("@/services/handoff.service", async importOriginal => ({
 }))
 vi.mock("./AgentTerminal", () => ({ AgentTerminal: ({ agent, operationalStatus }: { agent: string; operationalStatus?: string }) => <div>terminal:{agent}:{operationalStatus}</div> }))
 vi.mock("./BuildQueue", () => ({ BuildQueue: ({ agent }: { agent: string }) => <div>queue:{agent}</div> }))
-vi.mock("./ExecutorDefaults", () => ({ ExecutorDefaults: () => <div>modelos</div> }))
 const fetchMock = vi.fn()
 const local = { id: "gpu-runpod", label: "GPU RunPod", runtime_state: "ONLINE", activity_state: "IDLE", status: "online", models: [], reprovision: { steps: [] } }
 afterEach(() => vi.useRealTimers())
@@ -74,6 +73,17 @@ describe("Agents workspace", () => {
     render(<AgentsPage />)
     expect(await screen.findByText("terminal:kimi:executing")).toBeInTheDocument()
     expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true)
+  })
+  it("não mostra o painel de executor padrão e mantém seletor, terminal e tarefas", async () => {
+    render(<AgentsPage />)
+    await screen.findByText("APROVAR")
+    fireEvent.click(screen.getByRole("tab", { name: "Kimi Code" }))
+    expect(screen.queryByText(/Modelos e executor padrão/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Fonte do executor|Salvar executor padrão|Remover padrão|Atualizar modelos/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Local \/ Ollama|Inventário local indisponível|Nenhum modelo disponível/)).not.toBeInTheDocument()
+    expect(await screen.findByLabelText("Modelo do agente")).toBeInTheDocument()
+    expect(screen.getByText("terminal:kimi:executing")).toBeInTheDocument()
+    expect(screen.getByText("queue:kimi")).toBeInTheDocument()
   })
   it("recolher só afeta desktop e mantém terminal montado", async () => {
     render(<AgentsPage />)

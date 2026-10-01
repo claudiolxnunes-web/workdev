@@ -5,7 +5,6 @@ import type { OperationalStatus } from "./AgentTerminal"
 import { BuildQueue } from "./BuildQueue"
 import { RuntimeControls } from "./RuntimeControls"
 import { RuntimePanel } from "./RuntimePanel"
-import { ExecutorDefaults } from "./ExecutorDefaults"
 import { CliModelSelector } from "./CliModelSelector"
 import { getAgentRuntimes, agentLabels, type AgentName, type AgentRuntime, type RuntimeState, type ActivityState } from "@/services/handoff.service"
 
@@ -177,7 +176,6 @@ export default function AgentsPage() {
       </nav>
       {(agent === "gemini" || agent === "claude" || agent === "codex" || agent === "kimi" || agent === "qwen" || agent === "grok" || agent === "deepseek") &&
         <CliModelSelector agent={agent} busy={selectedHealth?.activity_state === "BUSY"} runtimeState={state ?? "ERROR"} />}
-      <ExecutorDefaults />
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <RuntimeControls key={agent} agent={agent} runtimeState={state} activityState={selectedHealth?.activity_state} persistent={selectedHealth?.persistent} checkedAt={selectedHealth?.checked_at} />
         {!remote && <div className="flex flex-wrap gap-1 text-xs">
