@@ -15,7 +15,7 @@ type AgentStatus = {
 };
 
 const AGENT_NAMES: Record<string, string> = {
-  claude: "Claude", codex: "Codex", kimi: "Kimi", openrouter: "Qwen",
+  claude: "Claude", codex: "Codex", kimi: "Kimi", qwen: "Qwen", grok: "Grok", deepseek: "DeepSeek",
   gemini: "Gemini", "local-code": "Local Code",
 };
 

@@ -24,7 +24,7 @@ from app.services import agent_lifecycle, agent_snapshot
 RESET_REASON = "abortado por reset manual de sessões"
 ACTIVE_JOB_STATES = ("queued", "running")
 TOKEN_TTL_SECONDS = 300
-LOCAL_AGENTS = ("claude", "codex", "gemini", "kimi", "local-code", "openrouter")
+LOCAL_AGENTS = ("claude", "codex", "gemini", "kimi", "local-code", "openrouter", "qwen", "grok", "deepseek")
 LOCK_FILE = Path(os.getenv("WORKDEV_AGENT_RESET_LOCK", "/opt/workdev/.workdev/locks/agent-reset.lock"))
 
 

@@ -358,7 +358,7 @@ describe("PlanningPanel", () => {
     expect(card).toHaveTextContent("Alternativa: Claude Code")
   })
 
-  it("oferece os cinco agentes de CLI nos dois papéis e não expõe o envio em AUTO", async () => {
+  it("oferece os sete agentes de CLI nos dois papéis e não expõe o envio em AUTO", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     renderPanel()
 
@@ -367,7 +367,7 @@ describe("PlanningPanel", () => {
     for (const seletor of [executor, revisor]) {
       const valores = Array.from(seletor.querySelectorAll("option")).map((o) => o.value)
       expect(valores).toEqual(
-        expect.arrayContaining(["codex", "claude", "kimi", "openrouter", "gemini"]),
+        expect.arrayContaining(["codex", "claude", "kimi", "qwen", "grok", "deepseek", "gemini"]),
       )
     }
     expect(screen.queryByRole("button", { name: "Enviar em AUTO" })).not.toBeInTheDocument()
@@ -466,9 +466,9 @@ describe("PlanningPanel", () => {
       expect(opcao.textContent).toContain("recomendado")
     }
 
-    // openrouter é posicionado como executor, mas continua elegível como revisor:
+    // qwen é posicionado como executor, mas continua elegível como revisor:
     // recomendação é dica visual, nunca filtro.
-    const openrouter = opcoes.find((o) => o.value === "openrouter")
+    const openrouter = opcoes.find((o) => o.value === "qwen")
     expect(openrouter?.disabled).toBe(false)
     expect(openrouter?.textContent).not.toContain("recomendado")
   })
@@ -575,21 +575,21 @@ describe("PlanningPanel", () => {
     ))
   })
 
-  it("envia ao Build o modelo persistido no seletor OpenRouter", async () => {
+  it("envia ao Build o modelo persistido no seletor do agente Grok", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     getCliAgentModel.mockResolvedValue({ selected: "x-ai/grok-4.7" })
     renderPanel()
 
-    await escolherPapeis("openrouter")
+    await escolherPapeis("grok")
     enviar()
 
-    await waitFor(() => expect(getCliAgentModel).toHaveBeenCalledWith("openrouter"))
+    await waitFor(() => expect(getCliAgentModel).toHaveBeenCalledWith("grok"))
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "claude", "openrouter", false, "x-ai/grok-4.7",
+      "plan-1", "claude", "grok", false, "x-ai/grok-4.7",
     ))
   })
 
-  it("não aplica a escolha do cartão Codex ao OpenRouter Agente", async () => {
+  it("não aplica a escolha do cartão Codex ao agente DeepSeek", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     getPlanRecommendation.mockResolvedValue(twoModelRecommendation)
     getCliAgentModel.mockResolvedValue({ selected: "deepseek/deepseek-v4-flash" })
@@ -598,11 +598,11 @@ describe("PlanningPanel", () => {
     fireEvent.change(await screen.findByLabelText("Modelo"), {
       target: { value: "gpt-5.6-terra" },
     })
-    await escolherPapeis("openrouter")
+    await escolherPapeis("deepseek")
     enviar()
 
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "claude", "openrouter", false, "deepseek/deepseek-v4-flash",
+      "plan-1", "claude", "deepseek", false, "deepseek/deepseek-v4-flash",
     ))
   })
 })

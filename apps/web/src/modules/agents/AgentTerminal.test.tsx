@@ -98,7 +98,7 @@ describe("AgentTerminal", () => {
   })
 
   it("reconnects only the browser transport", async () => {
-    render(<AgentTerminal agent="openrouter" />)
+    render(<AgentTerminal agent="qwen" />)
     fireEvent.click(screen.getByText(/Ferramentas do terminal/))
     await waitFor(() => expect(mocks.sockets).toHaveLength(1))
     fireEvent.click(screen.getByRole("button", { name: "Reconectar navegador" }))

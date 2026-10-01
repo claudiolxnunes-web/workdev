@@ -138,13 +138,15 @@ class ReviewPairValidationTest(unittest.TestCase):
         )
 
     def test_every_cli_agent_has_a_review_channel(self):
-        """openrouter incluído: tem sessão tmux e CLI de veredito.
+        """qwen, grok e deepseek incluídos: têm sessão tmux e CLI de veredito.
 
         Posicioná-lo como executor é decisão de UI do operador; o backend não
         remove a capacidade que ele de fato tem.
         """
         self.assertEqual(AGENTS_WITH_REVIEW_CHANNEL, frozenset(CLI_AGENTS))
-        self.assertIn("openrouter", AGENTS_WITH_REVIEW_CHANNEL)
+        for agent in ("qwen", "grok", "deepseek"):
+            self.assertIn(agent, AGENTS_WITH_REVIEW_CHANNEL)
+        self.assertNotIn("openrouter", AGENTS_WITH_REVIEW_CHANNEL)
 
     def test_no_ollama_runtime_has_a_review_channel(self):
         self.assertEqual(

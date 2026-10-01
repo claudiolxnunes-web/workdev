@@ -142,7 +142,9 @@ CAMINHOS_EXECUTADOS = (
     "scripts/start_claude_agent.sh",
     "scripts/start_codex_agent.sh",
     "scripts/start_kimi_agent.sh",
-    "scripts/start_openrouter_agent.sh",
+    "scripts/start_qwen_agent.sh",
+    "scripts/start_grok_agent.sh",
+    "scripts/start_deepseek_agent.sh",
     "deploy.sh",
 )
 
@@ -183,7 +185,7 @@ AGENTS_STATUS_FILE = Path(
 
 # Política vigente. Kimi e Qwen offline são decisão, não incidente.
 AGENTES_SEMPRE_ATIVOS = ("claude", "codex")
-AGENTES_STANDBY_PERMITIDO = ("kimi", "openrouter")
+AGENTES_STANDBY_PERMITIDO = ("kimi", "qwen", "grok", "deepseek")
 
 # O healthcheck roda a cada 5 min. Estado mais velho que isto significa que
 # a supervisão parou — hoje o único sinal disso no sistema inteiro.

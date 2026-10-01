@@ -13,7 +13,9 @@ import { getAgentRuntimes, agentLabels, type AgentName, type AgentRuntime, type 
 const AGENTS: Array<{ id: AgentName; label: string }> = [
   { id: "claude", label: "Claude Code" }, { id: "codex", label: "Codex" },
   { id: "local-code", label: "WorkDev Qwen · Local" }, { id: "gemini", label: "Gemini" },
-  { id: "kimi", label: "Kimi Code" }, { id: "openrouter", label: "OpenRouter (Qwen / DeepSeek / Grok)" },
+  { id: "kimi", label: "Kimi Code" }, { id: "qwen", label: "Qwen Code" },
+  { id: "grok", label: "Grok" },
+  { id: "deepseek", label: "DeepSeek" },
 ]
 const configuredStatusPollMs = Number(import.meta.env.VITE_AGENTS_STATUS_POLL_MS)
 const STATUS_POLL_MS = Number.isFinite(configuredStatusPollMs) ? Math.min(10000, Math.max(5000, configuredStatusPollMs)) : 5000
@@ -175,7 +177,7 @@ export default function AgentsPage() {
         })}
       </nav>
       {agent === "local-code" && <LocalModelSelector runtimeState={state ?? "ERROR"} />}
-      {(agent === "gemini" || agent === "claude" || agent === "codex" || agent === "kimi" || agent === "openrouter") &&
+      {(agent === "gemini" || agent === "claude" || agent === "codex" || agent === "kimi" || agent === "qwen" || agent === "grok" || agent === "deepseek") &&
         <CliModelSelector agent={agent} busy={selectedHealth?.activity_state === "BUSY"} runtimeState={state ?? "ERROR"} />}
       <ExecutorDefaults />
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">

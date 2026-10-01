@@ -27,13 +27,24 @@ MODELS = {
              ("moonshotai/kimi-k2-thinking", "Kimi K2 Thinking"),
              ("moonshotai/kimi-k2-0905", "Kimi K2 0905"),
              ("moonshotai/kimi-k2", "Kimi K2")),
-    "openrouter": (("qwen/qwen3.5-397b-a17b", "Qwen Coder (Qwen 3.5)"),
-             ("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash"),
-             ("x-ai/grok-4.7", "Grok 4.7")),
+    # qwen, grok e deepseek: mesma CLI qwen, via OpenRouter (OPENROUTER_API_KEY).
+    "qwen": (("qwen/qwen3.5-397b-a17b", "Qwen Coder (Qwen 3.5)"),
+             ("qwen/qwen3-coder-plus", "Qwen3 Coder Plus"),
+             ("qwen/qwen3-coder-next", "Qwen3 Coder Next")),
+    "grok": (("x-ai/grok-4.7", "Grok 4.7 (premium)"),
+             ("x-ai/grok-4.3", "Grok 4.3 (médio)"),
+             ("x-ai/grok-build-0.1", "Grok Build 0.1 (barato, código)")),
+    "deepseek": (("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash"),
+                 ("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
+                 ("deepseek/deepseek-v4-pro-0813", "DeepSeek V4 Pro 0813")),
 }
+# Agentes CLI que rodam a CLI qwen contra a OpenRouter.
+OPENROUTER_CLI_AGENTS = ("qwen", "grok", "deepseek")
 DEFAULTS = {"gemini": "gemini-3.5-flash", "claude": "claude-opus-5",
             "codex": "gpt-5.6-sol", "kimi": "moonshotai/kimi-k3",
-            "openrouter": "qwen/qwen3.5-397b-a17b"}
+            "qwen": "qwen/qwen3.5-397b-a17b",
+            "grok": "x-ai/grok-4.7",
+            "deepseek": "deepseek/deepseek-v4-flash"}
 
 # USD por 1M tokens, conferidos no catálogo público da OpenRouter em
 # 2026-10-01. O frontend deriva ``expensive`` do threshold aprovado de output.
@@ -48,17 +59,23 @@ PRICING: dict[str, tuple[float, float]] = {
     "gpt-5.6-sol": (2.00, 10.00),
     "gpt-5.6-terra": (2.00, 12.00),
     "gpt-5.6-luna": (0.20, 1.20),
-    "qwen/qwen3.5-397b-a17b": (0.39, 2.34),
-    "deepseek/deepseek-v4-flash": (0.0679, 0.168),
-    "moonshotai/kimi-k3": (0.677, 10.00),
+    "qwen/qwen3.5-397b-a17b": (0.55, 3.50),
+    "qwen/qwen3-coder-plus": (0.65, 3.25),
+    "qwen/qwen3-coder-next": (0.12, 0.80),
+    "x-ai/grok-4.7": (2.00, 6.00),
+    "x-ai/grok-4.3": (1.25, 2.50),
+    "x-ai/grok-build-0.1": (1.00, 2.00),
+    "deepseek/deepseek-v4-flash": (0.0419, 0.0837),
+    "deepseek/deepseek-v4.1-flash": (0.03, 0.50),
+    "deepseek/deepseek-v4-pro-0813": (0.66, 1.98),
+    "moonshotai/kimi-k3": (0.6635, 10.00),
     "moonshotai/kimi-k3:batch": (2.28, 11.40),
     "moonshotai/kimi-k2.7-code": (0.6712, 3.35),
-    "moonshotai/kimi-k2.6": (0.65, 3.41),
+    "moonshotai/kimi-k2.6": (0.4341, 1.828),
     "moonshotai/kimi-k2.5": (0.45, 2.25),
     "moonshotai/kimi-k2-thinking": (0.60, 2.50),
     "moonshotai/kimi-k2-0905": (0.60, 2.50),
     "moonshotai/kimi-k2": (0.57, 2.30),
-    "x-ai/grok-4.7": (1.60, 4.80),
 }
 
 
@@ -148,6 +165,10 @@ def launcher(agent: str, command: list[str], model: str | None = None) -> list[s
         return ["env", f"GEMINI_MODEL={chosen}", *command]
     if agent == "kimi":
         return ["env", "KIMI_PROVIDER=openrouter", f"KIMI_MODEL={chosen}", *command]
-    if agent == "openrouter":
+    if agent == "qwen":
         return ["env", "QWEN_PROVIDER=openrouter", f"QWEN_MODEL={chosen}", *command]
+    if agent == "grok":
+        return ["env", f"GROK_MODEL={chosen}", *command]
+    if agent == "deepseek":
+        return ["env", f"DEEPSEEK_MODEL={chosen}", *command]
     return [*command, "--model", chosen]

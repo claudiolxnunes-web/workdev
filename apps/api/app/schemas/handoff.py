@@ -34,6 +34,10 @@ AgentName = Literal[
     "codex",
     "claude",
     "kimi",
+    "qwen",
+    "grok",
+    "deepseek",
+    # openrouter: legado, mantido para ler runs anteriores à separação.
     "openrouter",
     "gemini",
     # Runtimes Ollama: identidade estável, independente do modelo carregado

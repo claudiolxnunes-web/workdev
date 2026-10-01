@@ -9,15 +9,15 @@ export COLORTERM="${COLORTERM:-truecolor}"
 QWEN_PROVIDER="${QWEN_PROVIDER:-openrouter}"
 
 if [[ ! -r "$WORKDEV_ENV_FILE" ]]; then
-  echo "Qwen Agent: arquivo de configuração não encontrado" >&2
+  echo "Qwen Code Agent: arquivo de configuração não encontrado" >&2
   exit 1
 fi
 if [[ ! -x "$QWEN_EXECUTABLE" ]]; then
-  echo "Qwen Agent: CLI qwen não instalada" >&2
+  echo "Qwen Code Agent: CLI qwen não instalada" >&2
   exit 1
 fi
 if [[ ! -r "$QWEN_SETTINGS_FILE" ]]; then
-  echo "Qwen Agent: catálogo de providers não encontrado" >&2
+  echo "Qwen Code Agent: catálogo de providers não encontrado" >&2
   exit 1
 fi
 
@@ -54,14 +54,14 @@ use_openrouter() {
 case "$qwen_provider" in
   dashscope)
     if [[ -z "$dashscope_key" ]]; then
-      echo "Qwen Agent: DASHSCOPE_API_KEY não configurada" >&2
+      echo "Qwen Code Agent: DASHSCOPE_API_KEY não configurada" >&2
       exit 1
     fi
     use_dashscope
     ;;
   openrouter)
     if [[ -z "$openrouter_key" ]]; then
-      echo "Qwen Agent: OPENROUTER_API_KEY não configurada" >&2
+      echo "Qwen Code Agent: OPENROUTER_API_KEY não configurada" >&2
       exit 1
     fi
     use_openrouter
@@ -72,12 +72,12 @@ case "$qwen_provider" in
     elif [[ -n "$openrouter_key" ]]; then
       use_openrouter
     else
-      echo "Qwen Agent: configure DASHSCOPE_API_KEY ou OPENROUTER_API_KEY" >&2
+      echo "Qwen Code Agent: configure DASHSCOPE_API_KEY ou OPENROUTER_API_KEY" >&2
       exit 1
     fi
     ;;
   *)
-    echo "Qwen Agent: QWEN_PROVIDER inválido ('$qwen_provider')." >&2
+    echo "Qwen Code Agent: QWEN_PROVIDER inválido ('$qwen_provider')." >&2
     exit 1
     ;;
 esac

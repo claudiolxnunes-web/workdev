@@ -164,7 +164,7 @@ CATALOG = [
     ),
     catalog_row(
         catalog_id="qwen-coder",
-        agent_slug="openrouter",
+        agent_slug="qwen",
         display_name="Qwen3 Coder",
         provider="openrouter",
         provider_model_id="qwen/qwen3-coder",
@@ -173,6 +173,32 @@ CATALOG = [
         input_cost=0.30,
         output_cost=1.00,
         context_window=262144,
+    ),
+    # grok e deepseek rodam pela OpenRouter e sempre têm linha no catálogo
+    # (migração 20261001t140000); sem ela seriam tratados como CLI por assinatura.
+    catalog_row(
+        catalog_id="openrouter-grok-4-7",
+        agent_slug="grok",
+        display_name="Grok 4.7",
+        provider="openrouter",
+        provider_model_id="x-ai/grok-4.7",
+        category="premium",
+        capabilities=["code", "reasoning", "repository_analysis"],
+        input_cost=2.00,
+        output_cost=6.00,
+        context_window=500000,
+    ),
+    catalog_row(
+        catalog_id="openrouter-deepseek-v4-flash",
+        agent_slug="deepseek",
+        display_name="DeepSeek V4 Flash",
+        provider="openrouter",
+        provider_model_id="deepseek/deepseek-v4-flash",
+        category="economic",
+        capabilities=["code", "reasoning"],
+        input_cost=0.0419,
+        output_cost=0.0837,
+        context_window=1048576,
     ),
 ]
 
@@ -283,12 +309,12 @@ class RecommendationFitTest(unittest.TestCase):
         }
 
         self.assertEqual(result["complexity"], "critical")
-        self.assertNotEqual(recommended["agent"], "openrouter")
+        self.assertNotEqual(recommended["agent"], "qwen")
         self.assertTrue(recommended["capable"])
 
         # O modelo mais barato do catálogo não cobre auditoria/deep_reasoning:
         # ele não pode ser apresentado como adequado a uma task crítica.
-        self.assertFalse(by_agent["openrouter"]["capable"])
+        self.assertFalse(by_agent["qwen"]["capable"])
 
     def test_plan_arquitetural_pode_recomendar_claude_code(self):
         result = recommend_agents(
@@ -327,7 +353,7 @@ class RecommendationFitTest(unittest.TestCase):
 
         self.assertEqual(result["recommended"]["agent"], "gemini")
 
-    def test_usuario_continua_podendo_escolher_qualquer_um_dos_cinco(self):
+    def test_usuario_continua_podendo_escolher_qualquer_um_dos_sete(self):
         result = recommend_agents(
             catalog_db(CATALOG),
             IMPLEMENTATION_TASK,
@@ -339,7 +365,7 @@ class RecommendationFitTest(unittest.TestCase):
         agents = [option["agent"] for option in result["options"]]
 
         self.assertEqual(sorted(agents), sorted(SUPPORTED_AGENTS))
-        self.assertEqual(len(agents), 5)
+        self.assertEqual(len(agents), 7)
 
         for option in result["options"]:
             self.assertEqual(
@@ -458,7 +484,7 @@ class RecommendationAvailabilityTest(unittest.TestCase):
         rows = [
             catalog_row(
                 catalog_id="qwen-coder",
-                agent_slug="openrouter",
+                agent_slug="qwen",
                 display_name="Qwen3 Coder",
                 provider="openrouter",
                 provider_model_id="qwen/qwen3-coder",
@@ -482,7 +508,7 @@ class RecommendationAvailabilityTest(unittest.TestCase):
         openrouter = next(
             option
             for option in result["options"]
-            if option["agent"] == "openrouter"
+            if option["agent"] == "qwen"
         )
 
         self.assertEqual(openrouter["availability"], "unavailable")
@@ -493,7 +519,7 @@ class RecommendationAvailabilityTest(unittest.TestCase):
         self.assertIsNone(openrouter["model"])
         self.assertNotEqual(
             result["recommended"]["agent"],
-            "openrouter",
+            "qwen",
         )
 
     def test_sem_cota_conhecida_nao_inventa_saldo(self):
@@ -717,7 +743,7 @@ QWEN_MODEL = catalog_row(
     input_cost=0.39,
     output_cost=2.34,
     context_window=262144,
-    agent_slug="openrouter",
+    agent_slug="qwen",
     agent_preference_rank=1,
 )
 
@@ -828,7 +854,7 @@ class AgentAllowedModelsTest(unittest.TestCase):
 
     def test_qwen_usa_o_3_5_397b_pela_openrouter(self):
         openrouter = self.option(
-            "openrouter", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
+            "qwen", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
         )
 
         self.assertEqual(openrouter["provider"], "openrouter")
@@ -838,7 +864,7 @@ class AgentAllowedModelsTest(unittest.TestCase):
     def test_qwen3_coder_segue_no_catalogo_mas_fora_do_agente(self):
         """O modelo antigo continua servindo o AI Hub, não o agente."""
         openrouter = self.option(
-            "openrouter", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
+            "qwen", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
         )
 
         modelos = {model["model"] for model in openrouter["models"]}
@@ -848,7 +874,7 @@ class AgentAllowedModelsTest(unittest.TestCase):
 
     def test_qwen_com_um_modelo_so_nao_gera_seletor(self):
         openrouter = self.option(
-            "openrouter", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
+            "qwen", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
         )
 
         self.assertEqual(len(openrouter["models"]), 1)
@@ -978,3 +1004,16 @@ def row_price(catalog_id):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OpenRouterAgentWithoutCatalogTest(unittest.TestCase):
+    def test_agente_openrouter_sem_linha_no_catalogo_fica_indisponivel(self):
+        rows = [row for row in CATALOG if row.agent_slug not in {"grok", "deepseek"}]
+        result = recommend_agents(
+            catalog_db(rows), LARGE_CONTEXT_TASK, LARGE_CONTEXT_PLAN, [], runtime=runtime(),
+        )
+        by_agent = {option["agent"]: option for option in result["options"]}
+        for agent in ("grok", "deepseek"):
+            self.assertFalse(by_agent[agent]["capable"])
+            self.assertEqual(by_agent[agent]["availability"], "unavailable")
+        self.assertNotIn(result["recommended"]["agent"], {"grok", "deepseek"})

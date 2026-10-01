@@ -24,9 +24,9 @@ DECISIONS = ('NO_REVIEW_COMPLETE', 'REVISAR', 'NO_REVIEW_GATE_FAIL', 'BLOCKED_OP
 
 _CONFIG_PATH = Path(__file__).resolve().parents[4] / 'config' / 'review-policy.json'
 _DEFAULT_CONFIG = {
-    'trusted_agents': ['codex', 'claude', 'kimi', 'openrouter'],
+    'trusted_agents': ['codex', 'claude', 'kimi', 'qwen', 'grok', 'deepseek'],
     'tier_reviewers': {
-        'economic': ['openrouter'],
+        'economic': ['qwen', 'grok', 'deepseek'],
         'strong': ['codex', 'claude', 'kimi'],
     },
     'volume_medium_lines': 200,

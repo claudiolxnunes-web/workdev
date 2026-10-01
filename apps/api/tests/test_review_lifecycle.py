@@ -195,7 +195,7 @@ def test_economic_escalation_swaps_reviewer(lifecycle_api, monkeypatch):
     client, run_id, factory, Run, Event, Cycle = lifecycle_api
     monkeypatch.setattr(review_cycle, 'collect_diff_stats', lambda *_: (['alembic/versions/x.py'], 'migration'))
     with factory() as db:
-        db.query(Run).filter_by(id=run_id).update({'reviewer_agent': 'openrouter'})
+        db.query(Run).filter_by(id=run_id).update({'reviewer_agent': 'qwen'})
         db.commit()
         add_evidence(db, Run, Event, run_id, passed=True)
     response = client.patch(f'/api/handoffs/runs/{run_id}', json={'status': 'review'})
@@ -204,7 +204,7 @@ def test_economic_escalation_swaps_reviewer(lifecycle_api, monkeypatch):
         cycle = db.query(Cycle).one()
         assert cycle.tier == 'economic'
     verdict = client.post(f'/api/handoffs/runs/{run_id}/reviews',
-                          json={'reviewer': 'openrouter', 'verdict': 'rejected', 'feedback': 'ESCALATE: incerto'})
+                          json={'reviewer': 'qwen', 'verdict': 'rejected', 'feedback': 'ESCALATE: incerto'})
     assert verdict.status_code == 201, verdict.text
     with factory() as db:
         run = db.query(Run).one()

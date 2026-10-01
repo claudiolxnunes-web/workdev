@@ -36,6 +36,41 @@
         "description": "Rota alternativa pelo OpenRouter",
         "baseUrl": "https://openrouter.ai/api/v1",
         "envKey": "OPENROUTER_API_KEY"
+      },
+      {
+        "id": "qwen/qwen3-coder-next",
+        "name": "Qwen3 Coder Next — OpenRouter",
+        "description": "Qwen3 Coder barato para tarefas delimitadas",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
+      },
+      {
+        "id": "x-ai/grok-4.3",
+        "name": "Grok 4.3 — OpenRouter",
+        "description": "Grok intermediário, contexto de 1M tokens",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
+      },
+      {
+        "id": "x-ai/grok-build-0.1",
+        "name": "Grok Build 0.1 — OpenRouter",
+        "description": "Grok voltado a código e agentes",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash — OpenRouter",
+        "description": "DeepSeek rápido e econômico, versão 4.1",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
+      },
+      {
+        "id": "deepseek/deepseek-v4-pro-0813",
+        "name": "DeepSeek V4 Pro 0813 — OpenRouter",
+        "description": "DeepSeek Pro para código e raciocínio",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "envKey": "OPENROUTER_API_KEY"
       }
     ]
   },

@@ -229,7 +229,7 @@ def test_finalize_auto_detects_cli_that_died_during_restoration(monkeypatch):
     monkeypatch.setattr(lifecycle, 'try_recover', lambda *_: {'started': True})
     monkeypatch.setattr(terminal, '_current_process', lambda *_: 'bash')
     with pytest.raises(RuntimeError, match='não retornou ao standby'):
-        terminal.finalize_auto_runtime('openrouter', 'run-test')
+        terminal.finalize_auto_runtime('qwen', 'run-test')
 
 
 def test_collection_batches_run_context_and_keeps_dispatch_jobs():

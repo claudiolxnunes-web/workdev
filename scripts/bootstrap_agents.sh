@@ -27,7 +27,9 @@ declare -A AGENT_COMMANDS=(
   [code]="$WORKDEV_DIR/scripts/start_claude_agent.sh"
   [codex]="$WORKDEV_DIR/scripts/start_codex_agent.sh"
   [kimi]="$WORKDEV_DIR/scripts/start_kimi_agent.sh"
-  [openrouter]="$WORKDEV_DIR/scripts/start_openrouter_agent.sh"
+  [qwen]="$WORKDEV_DIR/scripts/start_qwen_agent.sh"
+  [grok]="$WORKDEV_DIR/scripts/start_grok_agent.sh"
+  [deepseek]="$WORKDEV_DIR/scripts/start_deepseek_agent.sh"
   [gemini]="$WORKDEV_DIR/scripts/start_gemini_agent.sh"
 )
 

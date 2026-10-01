@@ -32,7 +32,9 @@ AGENTS = {
     "claude": ("code", [str(WORKDEV_DIR / "scripts/start_claude_agent.sh")]),
     "codex": ("codex", [str(WORKDEV_DIR / "scripts/start_codex_agent.sh")]),
     "kimi": ("kimi", ["env", "KIMI_PROVIDER=openrouter", str(WORKDEV_DIR / "scripts/start_kimi_agent.sh")]),
-    "openrouter": ("qwen", [str(WORKDEV_DIR / "scripts/start_openrouter_agent.sh")]),
+    "qwen": ("qwen", [str(WORKDEV_DIR / "scripts/start_qwen_agent.sh")]),
+    "grok": ("grok", [str(WORKDEV_DIR / "scripts/start_grok_agent.sh")]),
+    "deepseek": ("deepseek", [str(WORKDEV_DIR / "scripts/start_deepseek_agent.sh")]),
     "local-code": ("local-code", [str(WORKDEV_DIR / "scripts/start_local_agent.sh")]),
     "gemini": ("gemini", [str(WORKDEV_DIR / "scripts/start_gemini_agent.sh")]),
 }

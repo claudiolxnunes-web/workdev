@@ -29,12 +29,13 @@ def test_launchers_disable_update_checks():
     assert "--disable in_app_updates" in launcher("codex")
     assert "check_for_update_on_startup=false" in launcher("codex")
     assert 'KIMI_CODE_NO_AUTO_UPDATE="1"' in launcher("kimi")
-    assert 'QWEN_CODE_SKIP_UPDATE_CHECK_ONCE="true"' in launcher("openrouter")
+    assert 'QWEN_CODE_SKIP_UPDATE_CHECK_ONCE="true"' in launcher("qwen")
     assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in launcher("gemini")
 
 
+# grok e deepseek delegam ao start_qwen_agent.sh e herdam cor e cwd dele.
 def test_all_launchers_advertise_truecolor_without_overriding_term():
-    for agent in ("claude", "codex", "kimi", "openrouter", "gemini"):
+    for agent in ("claude", "codex", "kimi", "qwen", "gemini"):
         content = launcher(agent)
         assert 'COLORTERM="${COLORTERM:-truecolor}"' in content
         assert "export TERM=" not in content
@@ -43,7 +44,7 @@ def test_all_launchers_advertise_truecolor_without_overriding_term():
 def test_all_launchers_honor_task_worktree_cwd():
     expected = 'cd "${WORKDEV_AGENT_CWD:-${WORKDEV_DIR:-/opt/workdev}}"'
 
-    for agent in ("claude", "codex", "kimi", "openrouter", "gemini"):
+    for agent in ("claude", "codex", "kimi", "qwen", "gemini"):
         content = launcher(agent)
         assert expected in content
         assert "cd /opt/workdev" not in content
@@ -75,10 +76,20 @@ def test_claude_launcher_enters_configured_task_worktree(tmp_path):
 
 
 def test_qwen_has_noninteractive_provider_default_and_no_read_prompt():
-    content = launcher("openrouter")
+    content = launcher("qwen")
 
     assert 'QWEN_PROVIDER="${QWEN_PROVIDER:-openrouter}"' in content
     assert "read -r -p" not in content
+
+
+def test_grok_and_deepseek_delegate_to_qwen_cli_over_openrouter():
+    for agent, model_env in (("grok", "GROK_MODEL"), ("deepseek", "DEEPSEEK_MODEL")):
+        content = launcher(agent)
+        assert "export QWEN_PROVIDER=openrouter" in content
+        assert f'export QWEN_MODEL="${{{model_env}:-' in content
+        assert 'exec "$(dirname "$(realpath "$0")")/start_qwen_agent.sh" "$@"' in content
+        assert "read -r -p" not in content
+    assert not (SCRIPTS / "start_groq_agent.sh").exists()
 
 
 def test_kimi_disables_update_and_telemetry_before_exec():

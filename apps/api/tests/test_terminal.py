@@ -92,7 +92,9 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 "claude": "code",
                 "codex": "codex",
                 "kimi": "kimi",
-                "openrouter": "openrouter",
+                "qwen": "qwen",
+                "grok": "grok",
+                "deepseek": "deepseek",
                 "gemini": "gemini",
                 "local-code": "local-code",
             },
@@ -387,9 +389,9 @@ class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
     @patch('app.routers.terminal.start_agent_lifecycle')
     async def test_start_endpoint_reconnects_through_lifecycle(self, start):
         start.return_value = {'started': True, 'state': {'agent_process_running': True}}
-        result = await start_agent_session('openrouter')
-        start.assert_awaited_once_with('openrouter')
-        self.assertEqual(result, {'agent': 'openrouter', 'running': True, 'started': True})
+        result = await start_agent_session('qwen')
+        start.assert_awaited_once_with('qwen')
+        self.assertEqual(result, {'agent': 'qwen', 'running': True, 'started': True})
 
     @patch('app.routers.terminal.stop_agent_lifecycle')
     async def test_confirmed_stop_uses_lifecycle(self, stop):

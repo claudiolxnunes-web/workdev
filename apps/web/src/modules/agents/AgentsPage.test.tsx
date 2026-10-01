@@ -46,7 +46,7 @@ describe("Agents workspace", () => {
   it("mostra Gemini, Qwen e Kimi diretamente e seleciona suas sessões", async () => {
     render(<AgentsPage />)
     expect(await screen.findByRole("tab", { name: /WorkDev Qwen · Local/ })).toBeInTheDocument()
-    for (const [label, id] of [["Gemini", "gemini"], ["Kimi Code", "kimi"], ["OpenRouter (Qwen / DeepSeek / Grok)", "openrouter"]]) {
+    for (const [label, id] of [["Gemini", "gemini"], ["Kimi Code", "kimi"], ["Qwen Code", "qwen"], ["Grok", "grok"], ["DeepSeek", "deepseek"]]) {
       fireEvent.click(screen.getByRole("tab", { name: label }))
       expect(screen.getByText(`terminal:${id}:`)).toBeInTheDocument()
       expect(screen.getByText(`queue:${id}`)).toBeInTheDocument()
