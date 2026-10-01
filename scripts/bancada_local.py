@@ -494,6 +494,27 @@ def registrar(linha: dict) -> None:
 # ---------------------------------------------------------------- corpus / verificar
 
 CORPUS_PADRAO = REPO / "docs" / "bancada-local" / "corpus-observers.json"
+# Lidos pela página Bancada Local (só GET): tudo o que ela mostra fica em tmp/bancada/.
+VERIFICACOES = SAIDA / "verificacoes"
+PARECERES = SAIDA / "pareceres"
+
+
+def _gravar_json(pasta: Path, nome: str, dados: dict) -> None:
+    pasta.mkdir(parents=True, exist_ok=True)
+    dados = {**dados, "data": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    (pasta / f"{nome}.json").write_text(json.dumps(dados, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def salvar_verificacao(caso: dict, tarefa_nome: str, proposta: str, resultado: dict) -> None:
+    _gravar_json(VERIFICACOES, caso["id"], {
+        "id": caso["id"], "modelo": caso.get("modelo", "desconhecido"), "tarefa": tarefa_nome,
+        "esperado": caso.get("esperado"), "proposta": proposta[:20000], **resultado})
+
+
+def salvar_parecer(caso: dict, observer: str, resultado: dict) -> None:
+    _gravar_json(PARECERES, f"{caso['id']}__{observer.replace('/', '--')}", {
+        "id": caso["id"], "modelo": caso.get("modelo", "desconhecido"), "observer": observer,
+        **resultado})
 
 
 def carregar_corpus(caminho: str | None) -> dict:
@@ -534,6 +555,10 @@ def cmd_verificar(args) -> int:
             print(f"caso {args.caso} não existe no corpus")
             return 1
         tarefa, proposta = corpus["tarefas"][caso["tarefa"]], ler_proposta(caso["proposta"])
+        resultado = checks.verificar(proposta, tarefa)
+        salvar_verificacao(caso, caso["tarefa"], proposta, resultado)
+        imprimir_checagens(resultado)
+        return 0 if resultado["aprovada"] else 3
     else:
         if not (args.proposta and args.tarefa):
             print("informe --caso, ou --proposta e --tarefa")
@@ -551,6 +576,7 @@ def _rodar_observer(caso: dict, tarefa: dict, observer: str, verdade: dict) -> d
     mensagens = obs.montar_mensagens(tarefa["instrucao"], trechos_da_base(tarefa),
                                      ler_proposta(caso["proposta"]), verdade)
     resultado = obs.observar(observer, mensagens)
+    salvar_parecer(caso, observer, resultado)
     registrar({"id": caso["id"], "modelo": caso.get("modelo", "desconhecido"), "origem": "observer",
                "observer": observer, "ok": resultado["ok"],
                "veredito": (resultado["parecer"] or {}).get("veredito", "falhou"),
@@ -568,7 +594,9 @@ def cmd_observar(args) -> int:
         print(f"caso {args.caso} não existe no corpus")
         return 1
     tarefa = corpus["tarefas"][caso["tarefa"]]
-    verdade = checks.verificar(ler_proposta(caso["proposta"]), tarefa)
+    proposta = ler_proposta(caso["proposta"])
+    verdade = checks.verificar(proposta, tarefa)
+    salvar_verificacao(caso, caso["tarefa"], proposta, verdade)
     print("Checagens mecânicas:")
     imprimir_checagens(verdade)
     resultado = _rodar_observer(caso, tarefa, args.observer, verdade)
@@ -601,8 +629,11 @@ def cmd_comparar(args) -> int:
     corpus = carregar_corpus(args.corpus)
     observers = args.observers or list(obs.OBSERVERS)
     casos = [c for c in corpus["casos"] if not args.so or c["id"] in args.so]
-    verdades = {c["id"]: checks.verificar(ler_proposta(c["proposta"]), corpus["tarefas"][c["tarefa"]])
-                for c in casos}
+    verdades = {}
+    for c in casos:
+        proposta = ler_proposta(c["proposta"])
+        verdades[c["id"]] = checks.verificar(proposta, corpus["tarefas"][c["tarefa"]])
+        salvar_verificacao(c, c["tarefa"], proposta, verdades[c["id"]])
     linhas, total = [], 0.0
     for observer in observers:
         m = {"observer": observer, "tp": 0, "fp": 0, "fn": 0, "veredito_exato": 0, "bom_ruim": 0,
@@ -633,9 +664,13 @@ def cmd_comparar(args) -> int:
             print(f"  {observer:<30} {caso['id']:<22} {parecer['veredito']:<17} "
                   f"US$ {r['custo_usd'] or 0:.5f}  {r['segundos']}s  (acumulado US$ {total:.4f})")
         linhas.append(m)
-    _escrever_comparativo(linhas, casos, verdades, total)
     print(f"\nCusto acumulado do comparativo: US$ {total:.4f}")
-    print(f"Tabela: {rel(REPO / 'docs' / 'bancada-local' / 'comparativo-observers.md')}")
+    # A tabela versionada só é regravada com o conjunto completo de observers e casos.
+    if args.observers or args.so:
+        print("Rodada parcial: tabela versionada não foi alterada (pareceres gravados em tmp/bancada/pareceres/).")
+    else:
+        _escrever_comparativo(linhas, casos, verdades, total)
+        print(f"Tabela: {rel(REPO / 'docs' / 'bancada-local' / 'comparativo-observers.md')}")
     return 0
 
 

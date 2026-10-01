@@ -20,6 +20,7 @@ const AgentTerminalPage = lazy(() => import("./modules/agents/AgentTerminalPage"
 const RunTerminalPage = lazy(() => import("./modules/agents/RunTerminalPage"))
 const AIHub = lazy(() => import("./pages/AIHub"))
 const ChatLivre = lazy(() => import("./pages/ChatLivre"))
+const BancadaLocal = lazy(() => import("./pages/BancadaLocal"))
 const AgentsPage = lazy(() =>
   import("./modules/agents").then((module) => ({ default: module.AgentsPage }))
 )
@@ -122,6 +123,15 @@ function App() {
             </NavLink>
 
             <NavLink
+              to="/bancada"
+              className={({ isActive }) =>
+                isActive ? activeMenuClass : menuClass
+              }
+            >
+              🧪 Bancada Local
+            </NavLink>
+
+            <NavLink
               to="/knowledge"
               className={({ isActive }) =>
                 isActive ? activeMenuClass : menuClass
@@ -193,6 +203,14 @@ function App() {
               }
             />
             <Route path="/knowledge" element={<Knowledge />} />
+            <Route
+              path="/bancada"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <BancadaLocal />
+                </Suspense>
+              }
+            />
             <Route
               path="/agents"
               element={
