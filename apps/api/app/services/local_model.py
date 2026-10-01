@@ -23,13 +23,18 @@ from app.services import agent_lifecycle
 AGENT = "local-code"
 KEY_FILE = Path("/var/lib/workdev-llama/model")
 
+# Mesmas chaves do wrapper scripts/deploy/workdev-llama-run.
 MODELS = {
-    "prod": "WorkDev Qwen 14B Production",
+    "moe": "Qwen3.8 35B A3B MoE",
+    "q27": "WorkDev Qwen 3.6 27B Q4",
     "dev": "WorkDev Qwen 7B Dev",
     "fast": "WorkDev Qwen 4B 70/30 Fast",
 }
 
-DEFAULT_MODEL = "prod"
+# Nomes antigos que o wrapper ainda aceita.
+ALIASES = {"oldfast": "moe", "oldq4": "q27"}
+
+DEFAULT_MODEL = "moe"
 
 IDLE_PHASES = {None, "idle", "offline"}
 
@@ -42,7 +47,7 @@ class SwitchError(RuntimeError):
 
 
 def current() -> str | None:
-    """Modelo configurado, com a mesma regra do wrapper (desconhecido = prod)."""
+    """Modelo configurado, com a mesma regra do wrapper (desconhecido = moe)."""
     try:
         bruto = KEY_FILE.read_bytes()[:32].decode("ascii", "ignore")
     except FileNotFoundError:
@@ -50,6 +55,7 @@ def current() -> str | None:
     except OSError:
         return None
     chave = "".join(c for c in bruto if c.isascii() and (c.islower() or c.isdigit()))
+    chave = ALIASES.get(chave, chave)
     return chave if chave in MODELS else DEFAULT_MODEL
 
 

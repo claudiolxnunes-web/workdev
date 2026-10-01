@@ -13,23 +13,26 @@ from app.services import local_model, local_code_channel, agent_lifecycle
 
 ROOT = Path(__file__).resolve().parents[3]
 PATHS = {
-    'prod': '/opt/workdev/models/workdev-14b-codigo-q4_k_m.gguf',
+    'moe': '/opt/models/qwen38-35b-a3b-distill/Qwen3.8-35B-A3B-Distill-IQ4_XS.gguf',
+    'q27': '/opt/models/qwen27b/workdev-qwen3.6-27b-v4.1-Q4_K_S.gguf',
     'dev': '/opt/workdev/models/workdev-7b-q4_k_m.gguf',
     'fast': '/opt/workdev/models/workdev-4b-code70-fidelity30-v1-q4_k_m.gguf',
 }
+CTX = {'moe': '32768', 'q27': '16384', 'dev': '12288', 'fast': '16000'}
 
 
 @pytest.mark.parametrize('raw,expected', [
-    (None, 'prod'),
-    ('', 'prod'),
-    ('prod\n', 'prod'),
+    (None, 'moe'),
+    ('', 'moe'),
+    ('moe\n', 'moe'),
+    ('oldfast\n', 'moe'),
+    ('q27\n', 'q27'),
+    ('oldq4\n', 'q27'),
     ('dev\n', 'dev'),
     ('fast\n', 'fast'),
-    ('q4\n', 'prod'),
-    ('q2\n', 'prod'),
-    ('bonsai\n', 'prod'),
-    ('unknown', 'prod'),
-    ('PROD', 'prod'),
+    ('prod\n', 'moe'),
+    ('unknown', 'moe'),
+    ('MOE', 'moe'),
 ])
 def test_python_and_wrapper_resolve_same_model(tmp_path, monkeypatch, raw, expected):
     key = tmp_path / 'model'
@@ -49,8 +52,8 @@ def test_python_and_wrapper_resolve_same_model(tmp_path, monkeypatch, raw, expec
     assert args[args.index('-m') + 1] == PATHS[expected]
     assert args[args.index('-a') + 1] == 'workdev-qwen'
     assert args[args.index('--port') + 1] == '8080'
-    assert args[args.index('-c') + 1] == '32768'
-    if expected == 'fast':
+    assert args[args.index('-c') + 1] == CTX[expected]
+    if expected in {'fast', 'moe'}:
         assert args[args.index('--chat-template-kwargs') + 1] == '{"enable_thinking":false}'
     else:
         assert '--chat-template-kwargs' not in args

@@ -1,54 +1,27 @@
 #!/bin/sh
 set -eu
-
 key="$(head -c 32 /var/lib/workdev-llama/model 2>/dev/null | tr -cd 'a-z0-9')"
 set --
 ctx=32768
 alias=workdev-qwen
-
 case "$key" in
-  prod)
-    model=/opt/workdev/models/workdev-14b-codigo-q4_k_m.gguf
-    ;;
   dev)
     model=/opt/workdev/models/workdev-7b-q4_k_m.gguf
+    ctx=12288
     ;;
   fast)
     model=/opt/workdev/models/workdev-4b-code70-fidelity30-v1-q4_k_m.gguf
+    ctx=16000
     set -- --chat-template-kwargs '{"enable_thinking":false}'
     ;;
-
-  # Legado: não aparece mais no seletor, mas permanece disponível
-  # temporariamente para rollback manual.
-  oldq2)
-    model=/opt/models/qwen27b/workdev-qwen3.6-27b-v4.1-Q2_K.gguf
-    ctx=65536
-    ;;
-  oldq4)
+  q27|oldq4)
     model=/opt/models/qwen27b/workdev-qwen3.6-27b-v4.1-Q4_K_S.gguf
+    ctx=16384
     ;;
-  oldfast)
+  moe|oldfast|*)
     model=/opt/models/qwen38-35b-a3b-distill/Qwen3.8-35B-A3B-Distill-IQ4_XS.gguf
-    ctx=65536
-    set -- \
-      --temp 0.6 \
-      --top-p 0.95 \
-      --top-k 20 \
-      --min-p 0 \
-      --chat-template-kwargs '{"enable_thinking":false}'
-    ;;
-  *)
-    model=/opt/workdev/models/workdev-14b-codigo-q4_k_m.gguf
+    ctx=32768
+    set -- --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --chat-template-kwargs '{"enable_thinking":false}'
     ;;
 esac
-
-exec /opt/llama.cpp/build/bin/llama-server \
-  -m "$model" \
-  -a "$alias" \
-  -c "$ctx" \
-  -t 8 \
-  -np 1 \
-  "$@" \
-  --no-reasoning-preserve \
-  --host 127.0.0.1 \
-  --port 8080
+exec /opt/llama.cpp/build/bin/llama-server -m "$model" -a "$alias" -c "$ctx" -t 8 -np 1 "$@" --no-reasoning-preserve --host 127.0.0.1 --port 8080
