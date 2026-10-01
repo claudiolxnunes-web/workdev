@@ -834,19 +834,6 @@ def send_to_build(
         "Seleção manual pelo usuário"
     )
 
-    if payload.use_default_executor and agent is None:
-        from app.services.config_service import config_service
-        from app.services.agent_router import resolve_execution_selection
-        preference = config_service.get_setting("agents.executor")
-        if not preference:
-            raise HTTPException(409, {"code": "executor_default_missing", "message": "Configure o Executor padrão na aba Agentes ou escolha um executor para esta execução"})
-        try:
-            selected = resolve_execution_selection(db, preference)
-        except AgentRoutingError as exc:
-            raise HTTPException(409, {"code": exc.code, "message": exc.message}) from exc
-        agent, model = selected["agent"], selected["model"]
-        routing_reason = "Executor padrão da aba Agentes (fonte e modelo validados no envio)"
-
     from app.services import cli_agent_models
     if payload.routing_mode == "manual" and agent in cli_agent_models.OPENROUTER_CLI_AGENTS and model is None:
         # O seletor da aba Agentes é persistente. Fixar sua escolha na run

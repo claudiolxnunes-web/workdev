@@ -385,7 +385,6 @@ export async function sendToBuild(
   agent?: AgentName,
   premiumConfirmed = false,
   model?: string,
-  useDefaultExecutor = false,
   reviewRequested?: boolean,
   reviewerSelection?: { provider: string; model: string },
   observer?: { enabled: boolean; selection?: { provider: string; model: string; runtime_id?: string } },
@@ -397,8 +396,8 @@ export async function sendToBuild(
     )
   }
 
-  const body = agent || useDefaultExecutor
-    ? { routing_mode: "manual", agent, reviewer, ...(useDefaultExecutor ? { use_default_executor: true } : {}), ...(model ? { model } : {}), ...(reviewRequested !== undefined ? { review_requested: reviewRequested } : {}) }
+  const body = agent
+    ? { routing_mode: "manual", agent, reviewer, ...(model ? { model } : {}), ...(reviewRequested !== undefined ? { review_requested: reviewRequested } : {}) }
     : { routing_mode: "auto", reviewer, premium_confirmed: premiumConfirmed, ...(reviewRequested !== undefined ? { review_requested: reviewRequested } : {}) }
 
   return read(fetch(`/api/handoffs/plans/${id}/build`, {

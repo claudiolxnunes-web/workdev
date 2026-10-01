@@ -40,7 +40,7 @@ describe("handoff service errors", () => {
       { status: 200, headers: { "Content-Type": "application/json" } }))
     vi.stubGlobal("fetch", fetchMock)
     await sendToBuild("plan-1", "claude", "codex", false, undefined,
-      false, undefined, undefined,
+      undefined, undefined,
       { enabled: true, selection: { provider: "openai", model: "observer-model" } })
     const [, options] = fetchMock.mock.calls[0]
     expect(JSON.parse(options.body)).toMatchObject({

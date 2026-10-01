@@ -103,7 +103,7 @@ function RoleSelect({
         onChange={(event) => onChange(event.target.value as AgentName)}
         className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100 disabled:opacity-50"
       >
-        <option value="">{titulo === "Executor" ? "Usar padrão da aba Agentes" : "Selecione…"}</option>
+        <option value="">Selecione…</option>
         {choices.map((choice) => (
           <option key={choice.name} value={choice.name} disabled={choice.disabled}>
             {choice.label}{choice.disabled && choice.hint ? ` — ${choice.hint}` : ""}
@@ -379,6 +379,10 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
     const observerConfig = { enabled: Boolean(observer?.enabled),
       ...(observer?.enabled ? { selection: { provider: observer.provider!, model: observer.model!,
         ...(observer.runtime_id ? { runtime_id: observer.runtime_id } : {}) } } : {}) }
+    if (!agent) {
+      setError("Escolha o executor antes de enviar ao Build.")
+      return
+    }
     if (!reviewer && requested !== false) {
       setError("Escolha o revisor independente antes de enviar ao Build.")
       return
@@ -395,19 +399,15 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
       }
       if (observer?.enabled) {
         await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, model,
-          !agent, requested, reviewerModel, observerConfig)
+          requested, reviewerModel, observerConfig)
       } else if (agent && requested === undefined && !reviewerModel) {
         await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, model)
       } else {
         await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, model,
-          !agent, requested, reviewerModel)
+          requested, reviewerModel)
       }
       setPremiumTarget(null)
-      setMessage(
-        agent
-          ? `Build enviado: ${agentLabel[agent]} executa${reviewer ? `, ${agentLabel[reviewer]} revisa` : "; escolha de revisão registrada"}.`
-          : "Build enviado com o executor padrão e a escolha de revisão registrada.",
-      )
+      setMessage(`Build enviado: ${agentLabel[agent]} executa${reviewer ? `, ${agentLabel[reviewer]} revisa` : "; escolha de revisão registrada"}.`)
       await load()
     } catch (cause) {
       if (cause instanceof HandoffApiError && cause.detail.code === "premium_confirmation_required") {
@@ -617,7 +617,7 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                   <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">
                     Quem executa e quem revisa
                   </p>
-                  <p className="mb-2 text-xs text-slate-400">O executor padrão é configurado na aba Agentes. Uma escolha abaixo vale apenas para esta execução.</p>
+                  <p className="mb-2 text-xs text-slate-400">Escolha quem executa e o modelo. A escolha vale só para este envio.</p>
                   <p className="my-2 text-sm">{reviewState[plan.id] === "required" ? "Revisão independente fortemente recomendada (risco alto). Você decide." : reviewState[plan.id] === "not_required" ? "Revisão independente não necessária inicialmente. Deseja configurar um revisor?" : "Esta task recomenda revisão. Deseja configurar um revisor?"}</p>
                   <div className="mb-3 flex gap-2">
                     <button type="button" aria-pressed={reviewChoice[plan.id] === true} onClick={() => setReviewChoice(current => ({ ...current, [plan.id]: true }))} className="rounded bg-slate-700 px-3 py-1">Sim</button>
@@ -705,6 +705,7 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                     type="button"
                     disabled={
                       busy === plan.id
+                      || !roles[plan.id]?.executor
                       || (reviewChoice[plan.id] !== false && !roles[plan.id]?.reviewer)
                       || (reviewChoice[plan.id] !== false && Boolean(roles[plan.id]?.executor) && roles[plan.id]?.executor === roles[plan.id]?.reviewer)
                     }

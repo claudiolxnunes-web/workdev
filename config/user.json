@@ -10,11 +10,6 @@
     "enableRealTimeSync": true
   },
   "agents": {
-    "executor": {
-      "provider": "ollama",
-      "model": "workdev-qwen",
-      "runtime_id": "local-code"
-    },
     "adaptive_supervision": {
       "enabled": true,
       "confidence_threshold": 0.35

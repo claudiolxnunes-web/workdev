@@ -151,14 +151,25 @@ describe("PlanningPanel", () => {
     })))
   })
 
-  it("envia com padrão e recusa explícita de revisão recomendada", async () => {
+  it("sem executor escolhido não envia: não existe executor padrão", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    renderPanel()
+    const executor = await screen.findByLabelText("Executor")
+    expect(Array.from(executor.querySelectorAll("option")).map((o) => o.textContent)).not.toContain("Usar padrão da aba Agentes")
+    fireEvent.click(screen.getByRole("button", { name: "Não" }))
+    expect(screen.getByRole("button", { name: "Enviar ao Build" })).toBeDisabled()
+    expect(sendToBuild).not.toHaveBeenCalled()
+  })
+
+  it("envia com executor escolhido e recusa explícita de revisão recomendada", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     renderPanel()
     const no = await screen.findByRole("button", { name: "Não" })
     await waitFor(() => expect(no).toBeEnabled())
     fireEvent.click(no)
+    fireEvent.change(screen.getByLabelText("Executor"), { target: { value: "codex" } })
     enviar()
-    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null, undefined, false, undefined, true, false, undefined))
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null, "codex", false, undefined, false, undefined))
   })
 
   it("envia agente e modelo escolhidos para o revisor", async () => {
@@ -168,8 +179,9 @@ describe("PlanningPanel", () => {
     fireEvent.change(screen.getByLabelText("Revisor independente"), { target: { value: "claude" } })
     await screen.findByRole("option", { name: /Review Model/ })
     fireEvent.change(screen.getByLabelText("Modelo do revisor"), { target: { value: "review-model" } })
+    fireEvent.change(screen.getByLabelText("Executor"), { target: { value: "codex" } })
     enviar()
-    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, "claude", undefined, false, undefined, true, true, { provider: "anthropic", model: "review-model" }))
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, "claude", "codex", false, undefined, true, { provider: "anthropic", model: "review-model" }))
   })
 
   it("permite Observer opcional com modelo independente", async () => {
@@ -182,9 +194,10 @@ describe("PlanningPanel", () => {
     fireEvent.change(screen.getByLabelText("Agente do Observer"), { target: { value: "claude" } })
     await screen.findByRole("option", { name: /Review Model/ })
     fireEvent.change(screen.getByLabelText("Modelo do Observer"), { target: { value: "review-model" } })
+    fireEvent.change(screen.getByLabelText("Executor"), { target: { value: "codex" } })
     enviar()
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null,
-      undefined, false, undefined, true, false, undefined,
+      "codex", false, undefined, false, undefined,
       { enabled: true, selection: { provider: "anthropic", model: "review-model" } }))
   })
 
@@ -196,8 +209,9 @@ describe("PlanningPanel", () => {
     const no = screen.getByRole("button", { name: "Não" })
     expect(no).toBeEnabled()
     fireEvent.click(no)
+    fireEvent.change(screen.getByLabelText("Executor"), { target: { value: "codex" } })
     enviar()
-    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null, undefined, false, undefined, true, false, undefined))
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null, "codex", false, undefined, false, undefined))
   })
 
   it("executor também escolhe o modelo, com preço do catálogo", async () => {
@@ -219,7 +233,7 @@ describe("PlanningPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Não" }))
     enviar()
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      basePlan.id, null, "grok", false, "x-ai/grok-4.3", false, false, undefined))
+      basePlan.id, null, "grok", false, "x-ai/grok-4.3", false, undefined))
   })
 
   it("filtra os planos pela task vinculada à conversa", async () => {

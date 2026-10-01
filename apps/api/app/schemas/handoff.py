@@ -117,7 +117,6 @@ class PlanOut(PlanCreate):
 class BuildRequest(BaseModel):
     routing_mode: RoutingMode = "manual"
     premium_confirmed: bool = False
-    use_default_executor: bool = False
     review_requested: bool | None = None
     reviewer_selection: dict[str, str] | None = None
     observer_enabled: bool = False
@@ -139,12 +138,13 @@ class BuildRequest(BaseModel):
     def validate_manual_agent(self):
         if self.observer_enabled and not self.observer_selection:
             raise ValueError('Observer ligado exige fonte e modelo')
-        if self.routing_mode == "manual" and self.agent is None and not self.use_default_executor:
+        # Não existe executor padrão: o operador escolhe o executor a cada envio.
+        if self.routing_mode == "manual" and self.agent is None:
             raise ValueError(
-                "agent é obrigatório quando routing_mode=manual"
+                "Escolha o executor: agent é obrigatório quando routing_mode=manual"
             )
         if self.routing_mode == "auto" and (
-            self.agent is not None or self.model is not None or self.use_default_executor
+            self.agent is not None or self.model is not None
         ):
             raise ValueError(
                 "AUTO seleciona agente e modelo automaticamente"

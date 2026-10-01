@@ -16,7 +16,6 @@ export async function getExecutionModels(): Promise<{ models: ExecutionModel[]; 
 }
 
 export interface AppSettings {
-  agents?: { executor?: ExecutorSelection | null };
   app: {
     name: string;
     version: string;
