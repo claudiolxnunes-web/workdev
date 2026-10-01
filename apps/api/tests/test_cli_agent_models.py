@@ -57,6 +57,13 @@ def test_kimi_agent_has_all_models_and_pricing():
     ]
 
 
+def test_all_agents_have_priced_models():
+    for agent in ("claude", "codex", "gemini", "kimi", "openrouter"):
+        options = models.describe(agent)["options"]
+        assert all(row["input_cost_per_million"] is not None for row in options), agent
+        assert all(row["output_cost_per_million"] is not None for row in options), agent
+
+
 @pytest.mark.parametrize("agent, model, expected", [
     ("gemini", "gemini-2.5-flash", ["env", "GEMINI_MODEL=gemini-2.5-flash", "/script"]),
     ("claude", "claude-opus-5-5", ["/script", "--model", "claude-opus-5-5"]),

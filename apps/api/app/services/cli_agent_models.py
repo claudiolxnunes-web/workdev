@@ -37,7 +37,17 @@ DEFAULTS = {"gemini": "gemini-3.5-flash", "claude": "claude-opus-5",
 
 # USD por 1M tokens, conferidos no catálogo público da OpenRouter em
 # 2026-10-01. O frontend deriva ``expensive`` do threshold aprovado de output.
-OPENROUTER_PRICING = {
+PRICING: dict[str, tuple[float, float]] = {
+    "gemini-3.5-flash": (1.50, 9.00),
+    "gemini-2.5-flash": (0.30, 2.50),
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-opus-5": (5.00, 25.00),
+    "claude-opus-4-8": (5.00, 25.00),
+    "claude-sonnet-5": (2.00, 10.00),
+    "claude-haiku-4-5": (1.00, 5.00),
+    "gpt-5.6-sol": (2.00, 10.00),
+    "gpt-5.6-terra": (2.00, 12.00),
+    "gpt-5.6-luna": (0.20, 1.20),
     "qwen/qwen3.5-397b-a17b": (0.39, 2.34),
     "deepseek/deepseek-v4-flash": (0.0679, 0.168),
     "moonshotai/kimi-k3": (0.677, 10.00),
@@ -83,7 +93,7 @@ def describe(agent: str) -> dict:
     active = data.get("active")
     options = []
     for model, label in MODELS[agent]:
-        pricing = OPENROUTER_PRICING.get(model)
+        pricing = PRICING.get(model)
         options.append({
             "model": model,
             "label": label,

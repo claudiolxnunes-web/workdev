@@ -95,9 +95,33 @@ MODEL_POLICIES: dict[tuple[str, str], ModelPolicy] = {
         "anthropic", "claude-sonnet-5", "premium",
         Decimal("2.00"), Decimal("10.00"), requires_confirmation=True,
     ),
+    ("anthropic", "claude-opus-5.5"): ModelPolicy(
+        "anthropic", "claude-opus-5.5", "premium",
+        Decimal("4.00"), Decimal("20.00"), requires_confirmation=True,
+    ),
     ("anthropic", "claude-opus-5"): ModelPolicy(
-        "anthropic", "claude-opus-5", "premium", None, None,
-        requires_confirmation=True,
+        "anthropic", "claude-opus-5", "premium",
+        Decimal("5.00"), Decimal("25.00"), requires_confirmation=True,
+    ),
+    ("anthropic", "claude-opus-4.8"): ModelPolicy(
+        "anthropic", "claude-opus-4.8", "premium",
+        Decimal("5.00"), Decimal("25.00"), requires_confirmation=True,
+    ),
+    ("anthropic", "claude-haiku-4.5"): ModelPolicy(
+        "anthropic", "claude-haiku-4.5", "economic",
+        Decimal("1.00"), Decimal("5.00"),
+    ),
+    ("openai", "gpt-5.6-sol"): ModelPolicy(
+        "openai", "gpt-5.6-sol", "premium",
+        Decimal("2.00"), Decimal("10.00"), requires_confirmation=True,
+    ),
+    ("openai", "gpt-5.6-terra"): ModelPolicy(
+        "openai", "gpt-5.6-terra", "premium",
+        Decimal("2.00"), Decimal("12.00"), requires_confirmation=True,
+    ),
+    ("openai", "gpt-5.6-luna"): ModelPolicy(
+        "openai", "gpt-5.6-luna", "economic",
+        Decimal("0.20"), Decimal("1.20"),
     ),
 }
 
