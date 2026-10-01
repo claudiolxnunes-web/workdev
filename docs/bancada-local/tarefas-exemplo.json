@@ -1,0 +1,38 @@
+[
+  {
+    "id": "resumo_local_model",
+    "instrucao": "Resuma em até 8 tópicos o que este módulo faz: o que é KEY_FILE, como current() decide o modelo e por que switch() recusa a troca em alguns casos. Cite só nomes que aparecem no trecho. Se faltar informação, diga exatamente o que falta.",
+    "trechos": [["apps/api/app/services/local_model.py", 1, 103]],
+    "max_tokens": 600
+  },
+  {
+    "id": "docstring_load_subtasks",
+    "instrucao": "Proponha uma docstring no estilo Google (Args/Returns) para load_subtasks, em português, sem mudar o código. Saída: diff unificado e nada mais. Não invente parâmetros.",
+    "trechos": [["apps/api/app/services/handoff.py", 1179, 1189]],
+    "max_tokens": 400
+  },
+  {
+    "id": "inconsistencias_modelos",
+    "instrucao": "Compare as chaves do dicionário MODELS (Python) com as chaves do case do script shell. Liste em JSON {\"so_no_python\": [...], \"so_no_shell\": [...], \"observacoes\": [...]}. Considere também o que acontece com uma chave desconhecida em cada lado. Não invente chaves.",
+    "trechos": [
+      ["apps/api/app/services/local_model.py", 26, 54],
+      ["scripts/deploy/workdev-llama-run", 1, 54]
+    ],
+    "max_tokens": 600
+  },
+  {
+    "id": "pytest_current",
+    "instrucao": "Escreva um arquivo pytest que testa local_model.current() usando monkeypatch para trocar local_model.KEY_FILE por um arquivo em tmp_path. Casos: arquivo ausente -> 'prod'; 'dev\\n' -> 'dev'; 'xyz' -> 'prod'; 'FaSt' com letras maiúsculas (leia o código e diga o resultado esperado). Importe com `from app.services import local_model`. Saída: só o código Python.",
+    "trechos": [["apps/api/app/services/local_model.py", 20, 54]],
+    "max_tokens": 900
+  },
+  {
+    "id": "controle_duas_linhas",
+    "instrucao": "Edição mínima de controle: troque o valor de DEFAULT_MODEL de \"prod\" para \"dev\" e, na primeira linha do docstring do módulo, troque \"(14B / 7B / 4B)\" por \"(14B / 7B / 4B, padrão 7B)\". Nada além dessas duas linhas. Saída: diff unificado contra apps/api/app/services/local_model.py e nada mais.",
+    "trechos": [
+      ["apps/api/app/services/local_model.py", 1, 3],
+      ["apps/api/app/services/local_model.py", 26, 33]
+    ],
+    "max_tokens": 300
+  }
+]
