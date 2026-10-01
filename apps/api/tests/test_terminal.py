@@ -358,7 +358,7 @@ class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
     def test_start_uses_the_approved_launcher(self, run, _current):
         run.return_value.returncode = 0
         run.return_value.stderr = ""
-        self.assertTrue(_start_standby_session("kimi", "kimi"))
+        self.assertTrue(_start_standby_session("kimi", "kimi", "moonshotai/kimi-k3"))
         self.assertEqual(run.call_args.args[0], [
             "tmux", "new-session", "-d", "-s", "kimi", "-c", "/opt/workdev",
             "env", "KIMI_PROVIDER=openrouter", "KIMI_MODEL=moonshotai/kimi-k3",
