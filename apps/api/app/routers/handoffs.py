@@ -857,10 +857,8 @@ def send_to_build(
         task, _project = _task_project(db, plan.backlog_id)
         assessment = classify_task(task, plan, load_subtasks(db, plan.backlog_id))
         complexity, complexity_score = assessment.level, assessment.score
-        from app.services.review_policy import classify_risk
-        risk = classify_risk([], "", complexity)
-        if payload.review_requested is False and risk.sensitive:
-            raise HTTPException(409, {"code": "review_required", "message": "A política canônica exige revisão independente para este escopo"})
+        # A recomendação de revisão é só recomendação: o operador decide em
+        # qualquer risco, e a escolha fica auditada em build.review_preference.
 
     reviewer_selection = None
     if payload.reviewer_selection:

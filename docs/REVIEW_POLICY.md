@@ -25,6 +25,25 @@ só é incluído mediante `?expand=diff`. Base e commit aparecem no pacote/event
 `context_bytes` e `tokens_estimate` descrevem o pacote mínimo gerado no ciclo;
 a estimativa não representa cobrança real do provedor.
 
+## Quem decide a revisão
+
+A política calcula o risco e **recomenda** (`required` = fortemente recomendada,
+`recommended`, `not_required`), mas quem decide é o operador, em qualquer risco
+(decisão de 2026-10-01). O botão "Não" fica sempre disponível no envio ao Build.
+
+Com "Não", a escolha fica em `build.review_preference` (`requested: false`,
+`operator_decides: true`) e a Run conclui com `NO_REVIEW_COMPLETE` mesmo em
+escopo sensível ou complexidade alta/crítica; a justificativa do ciclo registra
+o escopo sensível dispensado. O que continua valendo, sem exceção:
+
+- gates físicos: gate reprovado volta ao executor (`NO_REVIEW_GATE_FAIL`);
+- aprovação humana do plano, quando a supervisão adaptativa a exigir;
+- Observer ligado: a Run espera a observação antes de concluir, e o achado
+  entra na justificativa.
+
+Executor, revisor e Observer são escolhidos do mesmo jeito: agente e depois
+modelo, com o preço do catálogo (alinhado à OpenRouter).
+
 ## Falha e escalonamento
 
 Gate reprovado, inclusive na segunda leitura após entrar em review, devolve a
@@ -47,7 +66,7 @@ Risco médio com executor confiável usa revisão econômica e justificativa pr�
 
 `test_review_scope_e2e.py` exercita API ASGI, Git real e persistência SQLite em
 ambiente isolado: histórico sensível anterior não contamina mudança pequena;
-mudança sensível exige revisão; desaparecimento de gate retorna ao executor;
+mudança sensível recomenda revisão forte; desaparecimento de gate retorna ao executor;
 contexto mínimo não lê patch; base persiste no início e atravessa transferências.
 Esses testes não equivalem a deploy ou a uso em produção. Não alterar/aplicar
 migration ao corrigir essa política; a migration previamente entregue é aditiva

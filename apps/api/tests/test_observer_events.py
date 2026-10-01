@@ -258,3 +258,24 @@ def test_prior_finding_cannot_be_erased_by_later_ok(inbox):
     with inbox.factory() as db:
         result=observer_events.aggregate(db,db.get(inbox.Run,inbox.run_id),db.get(inbox.Event,last))
         assert result['escalate']
+
+
+@pytest.mark.parametrize('level',['HIGH','CRITICAL'])
+def test_operator_decline_wins_over_adaptive_review_after_observer(inbox,level):
+    """Revisão é recomendação: o "Não" do operador vale em qualquer risco."""
+    with inbox.factory() as db:
+        run=db.get(inbox.Run,inbox.run_id);run.complexity=level.lower()
+        policy=decide_supervision(decision(level),level)
+        event=db.query(inbox.Event).filter_by(event_type='routing.jev_decision').one()
+        event.payload={'policy':policy.model_dump(mode='json')}
+        db.add(inbox.Event(run_id=run.id,event_type='build.review_preference',payload={'requested':False}))
+        db.commit()
+        legacy=decide('high','trusted','pass',executor='codex')
+        # Observer ligado e pendente: ainda espera a observação.
+        assert adaptive_review.apply(db,run,legacy,pending=True).decision=='REVISAR'
+        result=adaptive_review.apply(db,run,legacy,finding={'escalate':True,'severity':'high'})
+        assert result.decision=='NO_REVIEW_COMPLETE'
+        assert 'dispensada pelo operador' in result.justification
+        assert 'high' in result.justification
+        # Gate reprovado nunca é dispensado.
+        assert adaptive_review.apply(db,run,decide('high','trusted','fail'),finding=OK).decision=='NO_REVIEW_GATE_FAIL'

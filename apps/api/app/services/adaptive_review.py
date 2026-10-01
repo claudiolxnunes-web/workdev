@@ -11,6 +11,16 @@ def policy_for_run(db, run):
     return SupervisionPolicy.model_validate(event.payload['policy'])
 
 
+def operator_declined_review(db, run):
+    """Última escolha do operador no envio: requested=False dispensa a revisão.
+
+    A revisão é recomendação; quem decide é o operador, em qualquer risco. Gates
+    físicos, aprovação humana do plano e Observer ligado continuam valendo."""
+    preference = db.query(AgentRunEvent).filter_by(run_id=run.id, event_type='build.review_preference').order_by(AgentRunEvent.created_at.desc()).first()
+    return bool(preference and isinstance(preference.payload, dict)
+                and preference.payload.get('requested') is False)
+
+
 def apply(db, run, decision, *, finding=None, pending=False):
     """Roda depois da política legada/preferência do usuário. Não pode enfraquecer regra soberana."""
     policy = policy_for_run(db, run)
@@ -27,6 +37,10 @@ def apply(db, run, decision, *, finding=None, pending=False):
     if policy.observer_required and (pending or finding is None):
         return replace(decision, decision='REVISAR', justification='Observer pendente; sem dispensa de revisão',
                        tier=decision.tier if decision.tier != 'none' else 'economic')
+    if operator_declined_review(db, run):
+        note = f"; achado do Observer: {finding.get('severity')}" if finding else ''
+        return replace(decision, decision='NO_REVIEW_COMPLETE', tier='none', reviewer_candidates=[],
+                       justification='Revisão dispensada pelo operador; gates físicos verdes' + note)
     if required or (finding and finding.get('escalate')):
         from app.services.review_policy import decide
         return decide('high' if required or finding.get('severity') in ('high','critical') else 'medium',
@@ -57,12 +71,13 @@ def request_observation(db, run, decision, diff):
 
 def exemption_current(db, run):
     """Revalida na conclusão: decisões antigas não podem esconder eventos pendentes novos."""
-    if str(run.complexity).lower() in ('high', 'critical'):
+    declined = operator_declined_review(db, run)
+    if str(run.complexity).lower() in ('high', 'critical') and not declined:
         return False
     policy = policy_for_run(db, run)
     if policy is None:
         return True
-    if policy.review_required:
+    if policy.review_required and not declined:
         return False
     if policy.human_approval_required:
         plan = db.get(ExecutionPlan, run.plan_id)

@@ -86,7 +86,12 @@ def test_request_requires_explicit_decline_and_rejects_self_review():
         BuildRequest(agent="codex", reviewer="claude", review_requested=False)
 
 
-@pytest.mark.parametrize("sensitive,requested,expected", [(False, False, "completed"), (False, True, "review"), (True, False, "review")])
+@pytest.mark.parametrize("sensitive,requested,expected", [
+    (False, False, "completed"), (False, True, "review"),
+    # O operador decide em qualquer risco: escopo sensível + "Não" conclui,
+    # com a dispensa registrada; escopo sensível + "Sim" vai para revisão.
+    (True, False, "completed"), (True, True, "review"),
+])
 def test_review_choice_rechecked_against_diff_and_persisted(lifecycle_api, monkeypatch, sensitive, requested, expected):
     client, run_id, factory, Run, Event, Cycle = lifecycle_api
     monkeypatch.setattr(review_cycle, "collect_diff_stats", lambda *_: (["app/auth.py"] if sensitive else ["readme.md"], "+changed"))
@@ -100,9 +105,15 @@ def test_review_choice_rechecked_against_diff_and_persisted(lifecycle_api, monke
     with factory() as db:
         assert db.get(Run, run_id).status == expected
         assert db.query(Event).filter_by(event_type="build.review_preference").one().payload["requested"] is requested
-        if sensitive:
+        if sensitive and requested:
             assert db.query(Cycle).one().decision == "REVISAR"
-    if sensitive:
+        if sensitive and not requested:
+            cycle = db.query(Cycle).one()
+            assert cycle.decision == "NO_REVIEW_COMPLETE"
+            assert cycle.sensitive
+            assert "dispensada pelo operador" in cycle.justification
+            assert "escopo sensível" in cycle.justification
+    if sensitive and requested:
         refused = client.patch(f"/api/handoffs/runs/{run_id}", json={"status": "completed"})
         assert refused.status_code == 409
 

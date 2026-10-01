@@ -595,7 +595,7 @@ def queue_build(
     if review_requested is not None:
         add_run_event(db, run, "build.review_preference", "Revisão solicitada pelo usuário" if review_requested else "Revisão recomendada recusada pelo usuário",
                       {"requested": review_requested, "actor": "user", "reviewer": reviewer,
-                       "mandatory_policy_preserved": True})
+                       "operator_decides": True})
     if reviewer_selection:
         add_run_event(db, run, "build.reviewer_configuration", "Fonte e modelo escolhidos para a revisão",
                       {key: reviewer_selection[key] for key in ("provider", "model", "agent")})
@@ -675,7 +675,9 @@ def update_run(
                                    and current_sha and (review.payload or {}).get("commit_sha") == current_sha)
                 decision_event = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run.id,
                     AgentRunEvent.event_type == "build.review_decision").order_by(AgentRunEvent.created_at.desc()).first()
-                waived = bool(cycle and cycle.decision == "NO_REVIEW_COMPLETE" and cycle.gate_result == "pass" and not cycle.sensitive
+                from app.services.adaptive_review import operator_declined_review
+                waived = bool(cycle and cycle.decision == "NO_REVIEW_COMPLETE" and cycle.gate_result == "pass"
+                              and (not cycle.sensitive or operator_declined_review(db, run))
                               and decision_event and current_sha
                               and (decision_event.payload or {}).get("commit_sha") == current_sha
                               and (decision_event.payload or {}).get("decision") == "NO_REVIEW_COMPLETE")
