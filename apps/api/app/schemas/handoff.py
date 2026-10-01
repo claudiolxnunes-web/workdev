@@ -34,7 +34,7 @@ AgentName = Literal[
     "codex",
     "claude",
     "kimi",
-    "qwen",
+    "openrouter",
     "gemini",
     # Runtimes Ollama: identidade estável, independente do modelo carregado
     "local-code",

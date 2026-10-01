@@ -105,7 +105,7 @@ a cada 5 min (`workdev-agents-health.timer`), com
 `always_on = {claude, codex}`.
 
 Estado em 2026-08-16T03:57Z: `claude=idle`, `codex=idle`, `kimi=offline`,
-`qwen=offline`. Os dois offline são **intencionais** (standby) — a versão
+`openrouter=offline`. Os dois offline são **intencionais** (standby) — a versão
 não-commitada do `bootstrap_agents.sh` já removeu kimi/qwen do boot.
 
 ### 1.5 O que já existe de monitoramento
@@ -393,7 +393,7 @@ Política em `config.py`:
 
 ```python
 SEMPRE_ATIVOS = {"claude", "codex"}
-STANDBY_PERMITIDO = {"kimi", "qwen"}
+STANDBY_PERMITIDO = {"kimi", "openrouter"}
 IDADE_MAXIMA_ESTADO_MIN = 20     # timer roda a cada 5
 ```
 
@@ -409,7 +409,7 @@ Dispara em quatro situações e só nelas:
    `queued`/`running` há mais de 6h → `high`, subcheck `fila_parada`. Hoje não
    dispararia (fila vazia) — correto.
 
-`kimi=offline` e `qwen=offline` **não geram achado**. Está na política.
+`kimi=offline` e `openrouter=offline` **não geram achado**. Está na política.
 
 ---
 
@@ -846,7 +846,7 @@ repetidos.
 9. As 11 métricas obrigatórias presentes em toda linha de `runs.jsonl`
    (lista em `config.METRICAS_OBRIGATORIAS`; `duration` do enunciado é
    registrado como `duration_seconds`).
-10. `kimi=offline` e `qwen=offline` não produzem nenhum achado.
+10. `kimi=offline` e `openrouter=offline` não produzem nenhum achado.
 11. Nenhuma escrita em `backlog`, `execution_plans`, `agent_runs`,
     `graph_nodes`, RAG, tmux ou MCP — verificado por revisão do diff e pelo
     teste (2).

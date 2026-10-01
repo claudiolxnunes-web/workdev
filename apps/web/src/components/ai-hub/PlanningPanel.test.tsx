@@ -367,7 +367,7 @@ describe("PlanningPanel", () => {
     for (const seletor of [executor, revisor]) {
       const valores = Array.from(seletor.querySelectorAll("option")).map((o) => o.value)
       expect(valores).toEqual(
-        expect.arrayContaining(["codex", "claude", "kimi", "qwen", "gemini"]),
+        expect.arrayContaining(["codex", "claude", "kimi", "openrouter", "gemini"]),
       )
     }
     expect(screen.queryByRole("button", { name: "Enviar em AUTO" })).not.toBeInTheDocument()
@@ -466,11 +466,11 @@ describe("PlanningPanel", () => {
       expect(opcao.textContent).toContain("recomendado")
     }
 
-    // qwen é posicionado como executor, mas continua elegível como revisor:
+    // openrouter é posicionado como executor, mas continua elegível como revisor:
     // recomendação é dica visual, nunca filtro.
-    const qwen = opcoes.find((o) => o.value === "qwen")
-    expect(qwen?.disabled).toBe(false)
-    expect(qwen?.textContent).not.toContain("recomendado")
+    const openrouter = opcoes.find((o) => o.value === "openrouter")
+    expect(openrouter?.disabled).toBe(false)
+    expect(openrouter?.textContent).not.toContain("recomendado")
   })
 
   it("rotula runtime Ollama como executor isolado no seletor de executor", async () => {
@@ -580,12 +580,12 @@ describe("PlanningPanel", () => {
     getCliAgentModel.mockResolvedValue({ selected: "x-ai/grok-4.7" })
     renderPanel()
 
-    await escolherPapeis("qwen")
+    await escolherPapeis("openrouter")
     enviar()
 
-    await waitFor(() => expect(getCliAgentModel).toHaveBeenCalledWith("qwen"))
+    await waitFor(() => expect(getCliAgentModel).toHaveBeenCalledWith("openrouter"))
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "claude", "qwen", false, "x-ai/grok-4.7",
+      "plan-1", "claude", "openrouter", false, "x-ai/grok-4.7",
     ))
   })
 
@@ -598,11 +598,11 @@ describe("PlanningPanel", () => {
     fireEvent.change(await screen.findByLabelText("Modelo"), {
       target: { value: "gpt-5.6-terra" },
     })
-    await escolherPapeis("qwen")
+    await escolherPapeis("openrouter")
     enviar()
 
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "claude", "qwen", false, "deepseek/deepseek-v4-flash",
+      "plan-1", "claude", "openrouter", false, "deepseek/deepseek-v4-flash",
     ))
   })
 })

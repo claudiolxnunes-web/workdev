@@ -1,7 +1,7 @@
 {
-  "trusted_agents": ["codex", "claude", "kimi", "qwen"],
+  "trusted_agents": ["codex", "claude", "kimi", "openrouter"],
   "tier_reviewers": {
-    "economic": ["qwen"],
+    "economic": ["openrouter"],
     "strong": ["codex", "claude", "kimi"]
   },
   "volume_medium_lines": 200,

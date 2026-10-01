@@ -17,7 +17,7 @@ SESSIONS = {
     "codex": "codex",
     "gemini": "gemini",
     "kimi": "kimi",
-    "qwen": "qwen",
+    "openrouter": "qwen",
 }
 
 

@@ -35,7 +35,7 @@ CLI_AGENTS = {
     "codex",
     "claude",
     "kimi",
-    "qwen",
+    "openrouter",
     "gemini",
 }
 

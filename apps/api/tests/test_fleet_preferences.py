@@ -19,7 +19,7 @@ def test_build_uses_saved_default_unless_execution_overrides(tmp_path, monkeypat
     assert config.update_user_config({"agents": {"executor": {"provider": "openrouter", "model": "vendor/new"}}})
     monkeypatch.setattr(config_service, "config_service", config)
     monkeypatch.setattr(agent_router, "configured_execution_models", lambda _: [
-        {"provider": "openrouter", "model": "vendor/new", "agent": "qwen", "label": "New", "review_capable": True}])
+        {"provider": "openrouter", "model": "vendor/new", "agent": "openrouter", "label": "New", "review_capable": True}])
     plan = SimpleNamespace(id="plan", backlog_id="task", status="approved")
     monkeypatch.setattr(handoffs, "_get_plan", lambda *_: plan)
     monkeypatch.setattr(handoffs, "allowed_models_for_agent", lambda *_: [])
@@ -30,7 +30,7 @@ def test_build_uses_saved_default_unless_execution_overrides(tmp_path, monkeypat
     payload = BuildRequest(use_default_executor=True, reviewer="claude",
                            agent="codex" if explicit else None, model="explicit-model" if explicit else None)
     handoffs.send_to_build("plan", payload, Mock(), Mock())
-    assert queued.call_args.args[2] == ("codex" if explicit else "qwen")
+    assert queued.call_args.args[2] == ("codex" if explicit else "openrouter")
     assert queued.call_args.kwargs["model"] == ("explicit-model" if explicit else "vendor/new")
 
 
@@ -61,17 +61,17 @@ def test_default_persists_across_instances_and_preserves_other_settings(tmp_path
 def test_catalog_binding_replaces_model_name_overrides():
     row = SimpleNamespace(provider="openrouter", provider_model_id="moonshotai/kimi-k3", agent_slug=None)
     assert _agent_for_model(row) is None
-    row.agent_slug = "qwen"
-    assert _agent_for_model(row) == "qwen"
+    row.agent_slug = "openrouter"
+    assert _agent_for_model(row) == "openrouter"
 
 
 def test_resolve_uses_active_bound_catalog_and_rejects_removed(monkeypatch):
     from app.services import agent_router
     monkeypatch.setattr(agent_router, "configured_execution_models", lambda _: [
-        {"provider": "openrouter", "model": "vendor/new", "agent": "qwen", "label": "New", "review_capable": True},
+        {"provider": "openrouter", "model": "vendor/new", "agent": "openrouter", "label": "New", "review_capable": True},
     ])
     selection = {"provider": "openrouter", "model": "vendor/new", "agent": "attacker"}
-    assert resolve_execution_selection(Mock(), selection)["agent"] == "qwen"
+    assert resolve_execution_selection(Mock(), selection)["agent"] == "openrouter"
     with pytest.raises(AgentRoutingError):
         resolve_execution_selection(Mock(), {**selection, "model": "removed"})
 

@@ -85,7 +85,7 @@ class TestModeloCompartilhado:
 
     def test_modelo_de_agente_cli_e_none(self):
         """Codex/Claude/Kimi falam com API remota; nada residente aqui."""
-        for agente in ("codex", "claude", "kimi", "qwen", "gemini"):
+        for agente in ("codex", "claude", "kimi", "openrouter", "gemini"):
             assert agent_lifecycle.model_for_agent(agente) is None
 
     def test_runtime_ollama_tem_modelo(self):
@@ -767,7 +767,7 @@ class TestSerializacao:
 
     def test_agentes_diferentes_nao_se_bloqueiam(self):
         with agent_lifecycle.agent_lock('kimi'):
-            with agent_lifecycle.agent_lock('qwen'):
+            with agent_lifecycle.agent_lock('openrouter'):
                 assert agent_lifecycle.GROUPS_FILE.parent.joinpath('lifecycle/kimi.lock').exists()
 
     def test_start_concorrente_cria_uma_sessao_so(self, monkeypatch):
@@ -1061,7 +1061,7 @@ class TestEscopoLocal:
         agent_lifecycle.ensure_local_scope("local-code")
 
     def test_agentes_cli_continuam_permitidos(self):
-        for agente in ("codex", "claude", "kimi", "qwen", "gemini"):
+        for agente in ("codex", "claude", "kimi", "openrouter", "gemini"):
             agent_lifecycle.ensure_local_scope(agente)
 
     def test_sondar_remoto_continua_liberado(self):
@@ -1605,23 +1605,23 @@ class TestTimeoutTmuxNaoViraErro:
     def test_session_exists_timeout_nao_nega_sessao(self, monkeypatch):
         self._explode(monkeypatch)
 
-        assert agent_lifecycle.session_exists("qwen") is True
+        assert agent_lifecycle.session_exists("openrouter") is True
 
     def test_pane_pid_timeout_devolve_none(self, monkeypatch):
         self._explode(monkeypatch)
 
-        assert agent_lifecycle.pane_pid("qwen") is None
+        assert agent_lifecycle.pane_pid("openrouter") is None
 
     def test_current_process_timeout_devolve_vazio(self, monkeypatch):
         self._explode(monkeypatch)
 
-        assert agent_lifecycle.current_process("qwen") == ""
+        assert agent_lifecycle.current_process("openrouter") == ""
 
     def test_read_state_com_tmux_lento_nao_e_offline(self, monkeypatch):
         """Sessão presumida viva sem PID conhecido: ignorância, não OFFLINE."""
         self._explode(monkeypatch)
 
-        estado = agent_lifecycle.read_state("qwen", "qwen")
+        estado = agent_lifecycle.read_state("openrouter", "openrouter")
 
         assert estado.session_exists is True
         assert estado.pane_pid is None

@@ -847,11 +847,11 @@ def send_to_build(
         agent, model = selected["agent"], selected["model"]
         routing_reason = "Executor padrão da aba Agentes (fonte e modelo validados no envio)"
 
-    if payload.routing_mode == "manual" and agent == "qwen" and model is None:
+    if payload.routing_mode == "manual" and agent == "openrouter" and model is None:
         # O seletor da aba Agentes é persistente. Fixar sua escolha na run
         # evita que uma troca posterior altere o modelo de execuções antigas.
         from app.services import cli_agent_models
-        model = cli_agent_models.selected("qwen")
+        model = cli_agent_models.selected("openrouter")
 
     if payload.review_requested is not None and payload.routing_mode == "manual":
         task, _project = _task_project(db, plan.backlog_id)

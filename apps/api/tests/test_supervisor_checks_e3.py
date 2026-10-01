@@ -370,7 +370,7 @@ def estado_agentes(atualizado=None, **agentes):
         "claude": {"status": "idle", "reason": None, "session": "code"},
         "codex": {"status": "idle", "reason": None, "session": "codex"},
         "kimi": {"status": "offline", "reason": "agent_process_missing", "session": "kimi"},
-        "qwen": {"status": "offline", "reason": "agent_process_missing", "session": "qwen"},
+        "openrouter": {"status": "offline", "reason": "agent_process_missing", "session": "openrouter"},
     }
     padrao.update(agentes)
     return {

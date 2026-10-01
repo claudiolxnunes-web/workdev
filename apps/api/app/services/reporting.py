@@ -200,7 +200,7 @@ def collect_weekly(start, end):
         gaps.extend(f'supervisor_{name}:{gap}' for gap in data['gaps'])
     from app.services.agent_snapshot import read_snapshot
     from app.services.agent_runtimes import RUNTIMES
-    snapshot = read_snapshot(sorted({'codex', 'claude', 'kimi', 'qwen', 'local-code', *(r.id for r in RUNTIMES)}))
+    snapshot = read_snapshot(sorted({'codex', 'claude', 'kimi', 'openrouter', 'local-code', *(r.id for r in RUNTIMES)}))
     agent_fields = ('agent', 'runtime_state', 'activity_state', 'checked_at', 'active_run_id', 'run_status')
     agents = [{k: row.get(k) for k in agent_fields} for row in snapshot['agents']]
     if any(row.get('reason') in ('snapshot_missing_or_invalid', 'snapshot_stale', 'agent_snapshot_invalid') for row in snapshot['agents']):

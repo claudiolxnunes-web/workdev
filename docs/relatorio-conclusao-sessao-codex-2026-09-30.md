@@ -32,7 +32,7 @@ Ao ser interrompida, a sessão tinha:
 | journald | Às 11:12:07 houve `systemctl restart workdev-api.service` (deploy); o healthcheck das 11:12:42 (1º após o restart) já marcou Qwen ERROR |
 | journald (kernel) | Sem OOM, sem kill, sem stop explícito contra o tmux do Qwen |
 | tmux | Servidor tmux não caiu (claude/codex/kimi ficaram ONLINE o tempo todo) |
-| quality-supervisor (`state.json`) | Finding persistente `31f3c892` desde 17/09, **1427 ocorrências**: `TimeoutExpired: tmux display-message -t qwen #{pane_current_command}` |
+| quality-supervisor (`state.json`) | Finding persistente `31f3c892` desde 17/09, **1427 ocorrências**: `TimeoutExpired: tmux display-message -t openrouter #{pane_current_command}` |
 | Auditoria 30/09 | Nenhum ERROR posterior; Qwen rodou BUSY das 02:53 às 03:41 (ações manuais de parar/ligar) |
 
 **Mecanismo raiz:**

@@ -120,7 +120,7 @@ Consequências no código:
 - Se um dia você quiser Ollama revisando, o que falta é a **fatia opcional B**
   (seção 4) — não é uma regra a derrubar.
 
-**Resolvido (Cláudio, 2026-09-09): `qwen` é executor.** Ele mantém sessão tmux e
+**Resolvido (Cláudio, 2026-09-09): `openrouter` é executor.** Ele mantém sessão tmux e
 canal de veredito, então continua tecnicamente elegível como revisor — o que muda é
 o posicionamento na UI: aparece entre os executores, fora do destaque de revisor
 recomendado. Não vira bloqueio de backend, porque não é ausência de capacidade.
@@ -482,7 +482,7 @@ Decisões tomadas (2026-09-09):
    deixa de bloquear: o router `agent_runtimes` pode migrar de `terminal.py`
    para `main.py`. A pendência geral de ownership de `/opt/workdev` continua
    aberta no `CLAUDE.md` e não foi tocada.
-5. ✅ **`qwen` é executor** (Cláudio, 2026-09-09) — ver seção 2.
+5. ✅ **`openrouter` é executor** (Cláudio, 2026-09-09) — ver seção 2.
 6. ✅ **Migrações aprovadas** pelo Cláudio em 2026-09-09 para aplicação.
 
 Pendências que continuam abertas:
@@ -503,7 +503,7 @@ Pendências que continuam abertas:
   status `proposed` e as 3 migrações escritas para revisão (não aplicadas).
   Nenhuma fatia de código implementada.
 - **2026-09-09, v4** — ADR 005 aprovado (`accepted`); ownership de `main.py`
-  destravado; `qwen` definido como executor; as 3 migrações **aplicadas** em
+  destravado; `openrouter` definido como executor; as 3 migrações **aplicadas** em
   produção (`alembic_version = d4a1c7e39b52`, verificado por consulta direta).
   Reafirmada como regra permanente a eleição manual de executor e revisor pelo
   operador. Continua sem nenhuma fatia de código implementada.

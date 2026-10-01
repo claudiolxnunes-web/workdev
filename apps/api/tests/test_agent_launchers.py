@@ -15,7 +15,7 @@ def test_bootstrap_starts_only_always_on_agents_and_uses_exact_tmux_targets():
     content = (SCRIPTS / "bootstrap_agents.sh").read_text(encoding="utf-8")
 
     assert "for session in code codex" in content
-    assert "for session in code codex kimi qwen gemini" not in content
+    assert "for session in code codex kimi openrouter gemini" not in content
     assert 'tmux has-session -t "=$session"' in content
     assert "tmux set-option -g extended-keys on" in content
     assert "tmux set-option -g history-limit 100000" in content
@@ -29,12 +29,12 @@ def test_launchers_disable_update_checks():
     assert "--disable in_app_updates" in launcher("codex")
     assert "check_for_update_on_startup=false" in launcher("codex")
     assert 'KIMI_CODE_NO_AUTO_UPDATE="1"' in launcher("kimi")
-    assert 'QWEN_CODE_SKIP_UPDATE_CHECK_ONCE="true"' in launcher("qwen")
+    assert 'QWEN_CODE_SKIP_UPDATE_CHECK_ONCE="true"' in launcher("openrouter")
     assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in launcher("gemini")
 
 
 def test_all_launchers_advertise_truecolor_without_overriding_term():
-    for agent in ("claude", "codex", "kimi", "qwen", "gemini"):
+    for agent in ("claude", "codex", "kimi", "openrouter", "gemini"):
         content = launcher(agent)
         assert 'COLORTERM="${COLORTERM:-truecolor}"' in content
         assert "export TERM=" not in content
@@ -43,7 +43,7 @@ def test_all_launchers_advertise_truecolor_without_overriding_term():
 def test_all_launchers_honor_task_worktree_cwd():
     expected = 'cd "${WORKDEV_AGENT_CWD:-${WORKDEV_DIR:-/opt/workdev}}"'
 
-    for agent in ("claude", "codex", "kimi", "qwen", "gemini"):
+    for agent in ("claude", "codex", "kimi", "openrouter", "gemini"):
         content = launcher(agent)
         assert expected in content
         assert "cd /opt/workdev" not in content
@@ -75,7 +75,7 @@ def test_claude_launcher_enters_configured_task_worktree(tmp_path):
 
 
 def test_qwen_has_noninteractive_provider_default_and_no_read_prompt():
-    content = launcher("qwen")
+    content = launcher("openrouter")
 
     assert 'QWEN_PROVIDER="${QWEN_PROVIDER:-openrouter}"' in content
     assert "read -r -p" not in content

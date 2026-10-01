@@ -22,13 +22,13 @@ MODELS = {
     "kimi": (("moonshotai/kimi-k3", "Kimi K3"),
              ("moonshotai/kimi-k2.7-code", "Kimi K2.7 Code"),
              ("moonshotai/kimi-k2.6", "Kimi K2.6")),
-    "qwen": (("qwen/qwen3.5-397b-a17b", "Qwen Coder (Qwen 3.5)"),
+    "openrouter": (("qwen/qwen3.5-397b-a17b", "Qwen Coder (Qwen 3.5)"),
              ("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash"),
              ("x-ai/grok-4.7", "Grok 4.7")),
 }
 DEFAULTS = {"gemini": "gemini-3.5-flash", "claude": "claude-opus-5",
             "codex": "gpt-5.6-sol", "kimi": "moonshotai/kimi-k3",
-            "qwen": "qwen/qwen3.5-397b-a17b"}
+            "openrouter": "qwen/qwen3.5-397b-a17b"}
 
 # USD por 1M tokens, conferidos no catálogo público da OpenRouter em
 # 2026-09-28. O frontend deriva ``expensive`` do threshold aprovado de output.
@@ -128,6 +128,6 @@ def launcher(agent: str, command: list[str], model: str | None = None) -> list[s
         return ["env", f"GEMINI_MODEL={chosen}", *command]
     if agent == "kimi":
         return ["env", "KIMI_PROVIDER=openrouter", f"KIMI_MODEL={chosen}", *command]
-    if agent == "qwen":
+    if agent == "openrouter":
         return ["env", "QWEN_PROVIDER=openrouter", f"QWEN_MODEL={chosen}", *command]
     return [*command, "--model", chosen]

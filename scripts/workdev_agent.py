@@ -63,7 +63,7 @@ def main() -> int:
     item.add_argument("result", nargs="?")
     item = sub.add_parser("transfer")
     item.add_argument("run_id")
-    item.add_argument("agent", choices=("codex", "claude", "kimi", "qwen"))
+    item.add_argument("agent", choices=("codex", "claude", "kimi", "openrouter"))
     item.add_argument("reason")
     # Veredito do revisor independente. Quem executou não usa isto: o executor
     # entrega com `review` e o revisor decide aqui, depois dos gates.

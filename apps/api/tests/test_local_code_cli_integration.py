@@ -28,7 +28,7 @@ def eventually(check, timeout=40):
 
 @pytest.fixture
 def real_qwen(tmp_path, monkeypatch):
-    assert shutil.which('qwen') and shutil.which('tmux')
+    assert shutil.which('openrouter') and shutil.which('tmux')
     requests = []
     hold = threading.Event()
     hold.set()

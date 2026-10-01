@@ -16,7 +16,7 @@ class HandoffContractTest(unittest.TestCase):
         self.assertEqual(
             SUPPORTED_AGENTS,
             {
-                "codex", "claude", "kimi", "qwen", "gemini",
+                "codex", "claude", "kimi", "openrouter", "gemini",
                 "local-code", "gpu-hostinger", "gpu-runpod",
             },
         )

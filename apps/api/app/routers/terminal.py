@@ -34,7 +34,7 @@ ALLOWED_SESSIONS = {
     "claude": "code",
     "codex": "codex",
     "kimi": "kimi",
-    "qwen": "qwen",
+    "openrouter": "openrouter",
     "gemini": "gemini",
     "local-code": "local-code",
 }
@@ -42,7 +42,7 @@ STANDBY_COMMANDS = {
     "claude": ["/opt/workdev/scripts/start_claude_agent.sh"],
     "codex": ["/opt/workdev/scripts/start_codex_agent.sh"],
     "kimi": ["/opt/workdev/scripts/start_kimi_agent.sh"],
-    "qwen": ["/opt/workdev/scripts/start_qwen_agent.sh"],
+    "openrouter": ["/opt/workdev/scripts/start_openrouter_agent.sh"],
     "gemini": ["/opt/workdev/scripts/start_gemini_agent.sh"],
     "local-code": ["/opt/workdev/scripts/start_local_agent.sh"],
 }
@@ -76,7 +76,7 @@ def select_cli_agent_model(agent: str, payload: CliModelSelection):
 _active_connections: set[str] = set()
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
-_PROCESS_LABELS = {"qwen": "qwen-code", "local-code": "qwen-code"}
+_PROCESS_LABELS = {"openrouter": "qwen-code", "local-code": "qwen-code"}
 _HEALTH_STATE_FILE = Path(os.getenv("AGENTS_HEALTH_STATE", "/var/lib/agents-healthcheck/status.json"))
 
 
@@ -432,10 +432,10 @@ def _start_agent_runtime(
 
 
 def start_agent_runtime(agent, prompt, timeout_seconds=15.0, model=None, run_id=None):
-    if run_id is not None and agent == 'qwen' and model is None:
+    if run_id is not None and agent == 'openrouter' and model is None:
         # Runs anteriores ao seletor não têm modelo gravado. Elas continuam
         # usando o Qwen histórico mesmo se a preferência global mudar.
-        model = cli_agent_models.DEFAULTS['qwen']
+        model = cli_agent_models.DEFAULTS['openrouter']
     if agent == 'local-code' and run_id is not None:
         raise RuntimeError('local-code usa a fila persistente; sessão AUTO recusada')
     if agent == 'gemini' and run_id is not None:
@@ -506,7 +506,7 @@ def _lifecycle_session(agent: str) -> str | None:
 
     Agente com sessão de terminal própria (ALLOWED_SESSIONS) usa essa sessão,
     mesmo que também conste no registro de runtimes Ollama/llama.cpp — é o
-    caso do local-code, que hoje tem sessão tmux real (CLI qwen apontado pro
+    caso do local-code, que hoje tem sessão tmux real (CLI openrouter apontado pro
     llama.cpp local), mas continua listado ali para health-check/AI Hub.
     Runtime puro (`gpu-*`) não tem sessão tmux: é um endpoint HTTP. Ligar/
     desligar ali é sobre o MODELO, não sobre processo — daí a sessão poder

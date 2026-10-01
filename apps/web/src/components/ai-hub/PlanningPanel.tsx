@@ -349,10 +349,10 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
     setBusy(plan.id); setError(""); setMessage("")
     try {
       let model = chosenModel(plan, agent)
-      const choiceForQwen = recommendations[recommendationKey(plan)]?.recommended.agent === "qwen"
+      const choiceForQwen = recommendations[recommendationKey(plan)]?.recommended.agent === "openrouter"
         && Boolean(modelChoice[plan.id])
-      if (agent === "qwen" && !choiceForQwen) {
-        model = (await getCliAgentModel("qwen")).selected
+      if (agent === "openrouter" && !choiceForQwen) {
+        model = (await getCliAgentModel("openrouter")).selected
       }
       if (observer?.enabled) {
         await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, model,

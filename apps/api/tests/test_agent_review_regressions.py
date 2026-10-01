@@ -110,7 +110,7 @@ def test_persistence_matches_runtime_policy():
     for agent in ('codex', 'claude', 'local-code'):
         assert snapshot.is_persistent(agent, agent)
         assert not snapshot.is_persistent(agent, f'auto-{agent}-run')
-    for agent in ('kimi', 'qwen', 'gemini'):
+    for agent in ('kimi', 'openrouter', 'gemini'):
         assert not snapshot.is_persistent(agent, agent)
 
 
@@ -139,9 +139,9 @@ def test_old_operation_error_reconciles_to_physical_state(fake_processes):
 
 
 def test_manual_start_after_completed_disconnect_is_online(fake_processes):
-    lifecycle.stop('qwen', 'qwen')
+    lifecycle.stop('openrouter', 'openrouter')
     fake_processes['alive'] = True
-    row = health.collect_agent('qwen', 'qwen', None)
+    row = health.collect_agent('openrouter', 'openrouter', None)
     assert row.runtime_state.value == 'ONLINE'
     assert row.reason is None
 
@@ -183,11 +183,11 @@ def test_terminal_text_does_not_override_physical_availability(fake_processes, m
 
 
 def test_slow_probe_does_not_delay_healthy_publication_and_has_budget(monkeypatch):
-    monkeypatch.setattr(health, 'AGENTS', {'codex': ('codex', []), 'qwen': ('qwen', [])})
+    monkeypatch.setattr(health, 'AGENTS', {'codex': ('codex', []), 'openrouter': ('openrouter', [])})
     monkeypatch.setattr(health.agent_runtimes, 'RUNTIMES', [])
     published = []
     def collect(agent, *_):
-        if agent == 'qwen':
+        if agent == 'openrouter':
             time.sleep(.15)
         return snapshot.AgentSnapshot(agent=agent, runtime_state='ONLINE', activity_state='IDLE', checked_at=snapshot.now())
     monkeypatch.setattr(health, 'collect_agent', collect)
@@ -195,7 +195,7 @@ def test_slow_probe_does_not_delay_healthy_publication_and_has_budget(monkeypatc
     rows = health.collect_snapshot(None, publish_rows=lambda rows: published.extend(rows), budget=.03)
     assert time.monotonic() - start < .12
     assert published[0].agent == 'codex'
-    assert next(row for row in rows if row.agent == 'qwen').reason == 'collection_timeout'
+    assert next(row for row in rows if row.agent == 'openrouter').reason == 'collection_timeout'
     time.sleep(.16)
     assert len(published) == 2  # No late publication from timed-out worker.
 
@@ -229,7 +229,7 @@ def test_finalize_auto_detects_cli_that_died_during_restoration(monkeypatch):
     monkeypatch.setattr(lifecycle, 'try_recover', lambda *_: {'started': True})
     monkeypatch.setattr(terminal, '_current_process', lambda *_: 'bash')
     with pytest.raises(RuntimeError, match='não retornou ao standby'):
-        terminal.finalize_auto_runtime('qwen', 'run-test')
+        terminal.finalize_auto_runtime('openrouter', 'run-test')
 
 
 def test_collection_batches_run_context_and_keeps_dispatch_jobs():
@@ -238,14 +238,14 @@ def test_collection_batches_run_context_and_keeps_dispatch_jobs():
     latest, running, jobs = MagicMock(), MagicMock(), MagicMock()
     db.query.side_effect = [latest, running, jobs]
     latest.distinct.return_value.order_by.return_value.all.return_value = [
-        SimpleNamespace(agent='qwen', status='blocked')]
+        SimpleNamespace(agent='openrouter', status='blocked')]
     running.filter.return_value.all.return_value = [SimpleNamespace(agent='codex', id='run1', status='running')]
     jobs.join.return_value.filter.return_value.all.return_value = [
-        (SimpleNamespace(run_id='run2', id='job', state='running'), 'qwen')]
+        (SimpleNamespace(run_id='run2', id='job', state='running'), 'openrouter')]
     statuses, work = health.load_run_context(db)
     assert db.query.call_count == 3
-    assert statuses['qwen'] == 'blocked'
-    assert work['qwen']['reason'] == 'dispatch_active'
+    assert statuses['openrouter'] == 'blocked'
+    assert work['openrouter']['reason'] == 'dispatch_active'
     assert work['codex']['reason'] == 'run_running'
 
 

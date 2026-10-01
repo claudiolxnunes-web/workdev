@@ -164,7 +164,7 @@ CATALOG = [
     ),
     catalog_row(
         catalog_id="qwen-coder",
-        agent_slug="qwen",
+        agent_slug="openrouter",
         display_name="Qwen3 Coder",
         provider="openrouter",
         provider_model_id="qwen/qwen3-coder",
@@ -283,12 +283,12 @@ class RecommendationFitTest(unittest.TestCase):
         }
 
         self.assertEqual(result["complexity"], "critical")
-        self.assertNotEqual(recommended["agent"], "qwen")
+        self.assertNotEqual(recommended["agent"], "openrouter")
         self.assertTrue(recommended["capable"])
 
         # O modelo mais barato do catálogo não cobre auditoria/deep_reasoning:
         # ele não pode ser apresentado como adequado a uma task crítica.
-        self.assertFalse(by_agent["qwen"]["capable"])
+        self.assertFalse(by_agent["openrouter"]["capable"])
 
     def test_plan_arquitetural_pode_recomendar_claude_code(self):
         result = recommend_agents(
@@ -458,7 +458,7 @@ class RecommendationAvailabilityTest(unittest.TestCase):
         rows = [
             catalog_row(
                 catalog_id="qwen-coder",
-                agent_slug="qwen",
+                agent_slug="openrouter",
                 display_name="Qwen3 Coder",
                 provider="openrouter",
                 provider_model_id="qwen/qwen3-coder",
@@ -479,21 +479,21 @@ class RecommendationAvailabilityTest(unittest.TestCase):
             runtime=runtime(),
         )
 
-        qwen = next(
+        openrouter = next(
             option
             for option in result["options"]
-            if option["agent"] == "qwen"
+            if option["agent"] == "openrouter"
         )
 
-        self.assertEqual(qwen["availability"], "unavailable")
+        self.assertEqual(openrouter["availability"], "unavailable")
         self.assertEqual(
-            qwen["availability_reason"],
+            openrouter["availability_reason"],
             "sem modelo ativo no catálogo",
         )
-        self.assertIsNone(qwen["model"])
+        self.assertIsNone(openrouter["model"])
         self.assertNotEqual(
             result["recommended"]["agent"],
-            "qwen",
+            "openrouter",
         )
 
     def test_sem_cota_conhecida_nao_inventa_saldo(self):
@@ -717,7 +717,7 @@ QWEN_MODEL = catalog_row(
     input_cost=0.39,
     output_cost=2.34,
     context_window=262144,
-    agent_slug="qwen",
+    agent_slug="openrouter",
     agent_preference_rank=1,
 )
 
@@ -827,32 +827,32 @@ class AgentAllowedModelsTest(unittest.TestCase):
         self.assertEqual(kimi["model"], "moonshotai/kimi-k2.7-code")
 
     def test_qwen_usa_o_3_5_397b_pela_openrouter(self):
-        qwen = self.option(
-            "qwen", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
+        openrouter = self.option(
+            "openrouter", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
         )
 
-        self.assertEqual(qwen["provider"], "openrouter")
-        self.assertEqual(qwen["model"], "qwen/qwen3.5-397b-a17b")
-        self.assertEqual(qwen["context_window"], 262144)
+        self.assertEqual(openrouter["provider"], "openrouter")
+        self.assertEqual(openrouter["model"], "qwen/qwen3.5-397b-a17b")
+        self.assertEqual(openrouter["context_window"], 262144)
 
     def test_qwen3_coder_segue_no_catalogo_mas_fora_do_agente(self):
         """O modelo antigo continua servindo o AI Hub, não o agente."""
-        qwen = self.option(
-            "qwen", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
+        openrouter = self.option(
+            "openrouter", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
         )
 
-        modelos = {model["model"] for model in qwen["models"]}
+        modelos = {model["model"] for model in openrouter["models"]}
 
         self.assertEqual(modelos, {"qwen/qwen3.5-397b-a17b"})
         self.assertNotIn("qwen/qwen3-coder", modelos)
 
     def test_qwen_com_um_modelo_so_nao_gera_seletor(self):
-        qwen = self.option(
-            "qwen", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
+        openrouter = self.option(
+            "openrouter", SIMPLE_CODE_TASK, SIMPLE_CODE_PLAN
         )
 
-        self.assertEqual(len(qwen["models"]), 1)
-        self.assertTrue(qwen["models"][0]["recommended"])
+        self.assertEqual(len(openrouter["models"]), 1)
+        self.assertTrue(openrouter["models"][0]["recommended"])
 
     def test_preco_do_seletor_vem_do_catalogo(self):
         claude = self.option(

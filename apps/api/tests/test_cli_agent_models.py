@@ -12,22 +12,22 @@ def test_selection_is_persisted_and_launcher_uses_exact_model():
     with TemporaryDirectory() as directory, patch.dict(
         os.environ, {"WORKDEV_CLI_AGENT_MODELS_FILE": str(Path(directory) / "models.json")}
     ):
-        assert models.selected("qwen") == "qwen/qwen3.5-397b-a17b"
-        models.choose("qwen", "x-ai/grok-4.7")
-        assert models.describe("qwen")["selected"] == "x-ai/grok-4.7"
-        assert models.describe("qwen")["active"] is None
-        assert models.launcher("qwen", ["/opt/workdev/scripts/start_qwen_agent.sh"]) == [
+        assert models.selected("openrouter") == "qwen/qwen3.5-397b-a17b"
+        models.choose("openrouter", "x-ai/grok-4.7")
+        assert models.describe("openrouter")["selected"] == "x-ai/grok-4.7"
+        assert models.describe("openrouter")["active"] is None
+        assert models.launcher("openrouter", ["/opt/workdev/scripts/start_openrouter_agent.sh"]) == [
             "env", "QWEN_PROVIDER=openrouter", "QWEN_MODEL=x-ai/grok-4.7",
-            "/opt/workdev/scripts/start_qwen_agent.sh",
+            "/opt/workdev/scripts/start_openrouter_agent.sh",
         ]
-        models.record_active("qwen", "x-ai/grok-4.7")
-        assert models.describe("qwen")["active"] == "x-ai/grok-4.7"
-        models.choose("qwen", "deepseek/deepseek-v4-flash")
-        assert models.describe("qwen")["active"] == "x-ai/grok-4.7"
+        models.record_active("openrouter", "x-ai/grok-4.7")
+        assert models.describe("openrouter")["active"] == "x-ai/grok-4.7"
+        models.choose("openrouter", "deepseek/deepseek-v4-flash")
+        assert models.describe("openrouter")["active"] == "x-ai/grok-4.7"
 
 
 def test_openrouter_catalog_has_three_priced_models_and_expensive_flag():
-    options = models.describe("qwen")["options"]
+    options = models.describe("openrouter")["options"]
     assert [row["model"] for row in options] == [
         "qwen/qwen3.5-397b-a17b",
         "deepseek/deepseek-v4-flash",
@@ -56,7 +56,7 @@ def test_kimi_agent_has_three_models_and_pricing():
     ("gemini", "gemini-2.5-flash", ["env", "GEMINI_MODEL=gemini-2.5-flash", "/script"]),
     ("claude", "claude-opus-5-5", ["/script", "--model", "claude-opus-5-5"]),
     ("codex", "gpt-5.6-terra", ["/script", "--model", "gpt-5.6-terra"]),
-    ("qwen", "deepseek/deepseek-v4-flash",
+    ("openrouter", "deepseek/deepseek-v4-flash",
      ["env", "QWEN_PROVIDER=openrouter", "QWEN_MODEL=deepseek/deepseek-v4-flash", "/script"]),
 ])
 def test_launchers_use_requested_model(agent, model, expected):

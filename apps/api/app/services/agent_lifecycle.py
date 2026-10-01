@@ -606,7 +606,7 @@ def model_is_loaded(model: str | None, endpoint: str | None, headers=None):
 def model_for_agent(agent: str) -> str | None:
     """Modelo Ollama do agente, quando ele for um runtime Ollama.
 
-    Agente CLI (codex, claude, kimi, qwen, gemini) fala com API remota e não
+    Agente CLI (codex, claude, kimi, openrouter, gemini) fala com API remota e não
     tem modelo residente aqui — devolve None, e nada é descarregado por ele.
     """
     from app.services import agent_runtimes

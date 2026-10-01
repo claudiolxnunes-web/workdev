@@ -98,7 +98,7 @@ def test_execute_cancels_without_restart_and_is_idempotent(reset_world):
 def test_execute_rejects_changed_impact(reset_world):
     db, sessions, _ = reset_world
     token = agent_reset.preview(db)["confirmation_token"]
-    sessions.add("qwen")
+    sessions.add("openrouter")
     with pytest.raises(agent_reset.ResetConflict, match="impacto mudou"):
         agent_reset.execute(db, token)
 

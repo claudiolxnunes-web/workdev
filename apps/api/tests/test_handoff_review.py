@@ -138,13 +138,13 @@ class ReviewPairValidationTest(unittest.TestCase):
         )
 
     def test_every_cli_agent_has_a_review_channel(self):
-        """qwen incluído: tem sessão tmux e CLI de veredito.
+        """openrouter incluído: tem sessão tmux e CLI de veredito.
 
         Posicioná-lo como executor é decisão de UI do operador; o backend não
         remove a capacidade que ele de fato tem.
         """
         self.assertEqual(AGENTS_WITH_REVIEW_CHANNEL, frozenset(CLI_AGENTS))
-        self.assertIn("qwen", AGENTS_WITH_REVIEW_CHANNEL)
+        self.assertIn("openrouter", AGENTS_WITH_REVIEW_CHANNEL)
 
     def test_no_ollama_runtime_has_a_review_channel(self):
         self.assertEqual(
@@ -167,8 +167,8 @@ class BuildRequestReviewerTest(unittest.TestCase):
         with self.assertRaises(pydantic.ValidationError) as ctx:
             BuildRequest(
                 routing_mode="manual",
-                agent="qwen",
-                reviewer="qwen",
+                agent="openrouter",
+                reviewer="openrouter",
             )
         self.assertIn("diferentes", str(ctx.exception))
 

@@ -83,7 +83,7 @@ def create_test_run(db: Session) -> AgentRun:
         id=uuid4(),
         plan_id=uuid4(),
         backlog_id=uuid4(),
-        agent="qwen",
+        agent="openrouter",
         status="running",
     )
     db.add(run)

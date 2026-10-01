@@ -45,7 +45,7 @@ SUPPORTED_AGENTS = (
     "codex",
     "claude",
     "kimi",
-    "qwen",
+    "openrouter",
     "gemini",
 )
 
@@ -54,7 +54,7 @@ AGENT_LABELS = {
     "codex": "Codex",
     "claude": "Claude Code",
     "kimi": "Kimi Code",
-    "qwen": "Qwen Code",
+    "openrouter": "Qwen Code",
     "gemini": "Gemini",
 }
 
@@ -102,7 +102,7 @@ AGENT_WORKLOAD_WEIGHTS: dict[str, dict[str, Decimal]] = {
         "documentation": Decimal("0.8"),
         "multimodal": Decimal("0.3"),
     },
-    "qwen": {
+    "openrouter": {
         "cost_sensitive": Decimal("3.0"),
         "implementation": Decimal("2.0"),
         "large_context": Decimal("0.5"),
@@ -119,7 +119,7 @@ AGENT_WORKLOAD_WEIGHTS: dict[str, dict[str, Decimal]] = {
 # não é o preço que decide uma tarefa difícil.
 COMPLEXITY_BIAS: dict[str, dict[str, Decimal]] = {
     "low": {
-        "qwen": Decimal("1.5"),
+        "openrouter": Decimal("1.5"),
         "kimi": Decimal("0.8"),
         "gemini": Decimal("0.5"),
         "codex": Decimal("0.3"),
@@ -128,7 +128,7 @@ COMPLEXITY_BIAS: dict[str, dict[str, Decimal]] = {
     "medium": {
         "codex": Decimal("0.5"),
         "kimi": Decimal("0.4"),
-        "qwen": Decimal("0.3"),
+        "openrouter": Decimal("0.3"),
         "gemini": Decimal("0.2"),
         "claude": Decimal("0.2"),
     },
@@ -137,14 +137,14 @@ COMPLEXITY_BIAS: dict[str, dict[str, Decimal]] = {
         "codex": Decimal("1.0"),
         "gemini": Decimal("0.5"),
         "kimi": Decimal("0.0"),
-        "qwen": Decimal("-1.5"),
+        "openrouter": Decimal("-1.5"),
     },
     "critical": {
         "claude": Decimal("2.5"),
         "codex": Decimal("1.5"),
         "gemini": Decimal("0.8"),
         "kimi": Decimal("-0.5"),
-        "qwen": Decimal("-3.0"),
+        "openrouter": Decimal("-3.0"),
     },
 }
 
@@ -153,7 +153,7 @@ AGENT_STRENGTHS = {
     "codex": "implementação, debugging e testes direto no repositório",
     "claude": "análise arquitetural extensa, revisão técnica e documentação complexa",
     "gemini": "contexto muito grande, síntese e comparação de grandes volumes",
-    "qwen": "implementação simples ou média bem delimitada, com custo baixo",
+    "openrouter": "implementação simples ou média bem delimitada, com custo baixo",
     "kimi": "implementação e análise intermediária com contexto extenso",
 }
 

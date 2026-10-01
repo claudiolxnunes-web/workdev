@@ -147,7 +147,7 @@ infere, sugere de forma vinculante ou sobrescreve qualquer um dos dois papéis:
 - A única recusa possível no backend é por **capacidade ausente**
   (`AGENTS_WITH_REVIEW_CHANNEL`): identidade sem canal de veredito deixaria a run
   parada em `review` para sempre. Isso é defeito, não gosto.
-- `qwen` é posicionado como **executor**, por decisão do operador em 2026-09-09.
+- `openrouter` é posicionado como **executor**, por decisão do operador em 2026-09-09.
   Mantém canal de veredito e continua elegível como revisor se o operador
   escolher — a decisão é de posicionamento na UI, não de bloqueio.
 

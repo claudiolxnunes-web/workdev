@@ -51,7 +51,7 @@ python3 scripts/checkpoint_24h.py
 ./scripts/create_task_worktree.sh <task-id> [agente]
 
 # Exemplo:
-./scripts/create_task_worktree.sh 339e074d-faa3-4062-a2a2-e114fd627454 qwen
+./scripts/create_task_worktree.sh 339e074d-faa3-4062-a2a2-e114fd627454 openrouter
 ```
 
 **Fluxo:**
@@ -196,7 +196,7 @@ python3 scripts/validate_task_for_review.py 339e074d-faa3-4062-a2a2-e114fd627454
 ### 1. Worktree
 ```bash
 # Criar worktree
-./scripts/create_task_worktree.sh test-123 qwen
+./scripts/create_task_worktree.sh test-123 openrouter
 
 # Verificar
 ls -la .workdev/worktrees/task-test-123
