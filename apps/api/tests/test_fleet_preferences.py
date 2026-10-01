@@ -137,3 +137,10 @@ def test_decline_does_not_bypass_failed_gate(lifecycle_api, monkeypatch):
     assert client.patch(f"/api/handoffs/runs/{run_id}", json={"status": "review"}).status_code == 409
     with factory() as db:
         assert db.get(Run, run_id).status != "completed"
+
+
+def test_saved_user_config_stays_readable_for_deploy(tmp_path, monkeypatch):
+    path = tmp_path / "user.json"
+    monkeypatch.setenv("WORKDEV_USER_CONFIG_FILE", str(path))
+    assert ConfigService().update_user_config({"app": {"name": "x"}})
+    assert path.stat().st_mode & 0o777 == 0o644
