@@ -21,6 +21,7 @@ const RunTerminalPage = lazy(() => import("./modules/agents/RunObserverStatus"))
 const AIHub = lazy(() => import("./pages/AIHub"))
 const ChatLivre = lazy(() => import("./pages/ChatLivre"))
 const BancadaLocal = lazy(() => import("./pages/BancadaLocal"))
+const Workspace = lazy(() => import("./pages/Workspace"))
 const AgentsPage = lazy(() =>
   import("./modules/agents").then((module) => ({ default: module.AgentsPage }))
 )
@@ -40,7 +41,7 @@ function App() {
       .then((d) => d?.app?.name && setAppName(d.app.name))
       .catch(() => {})
   }, [])
-  const agentsWorkspace = location.pathname === "/agents"
+  const agentsWorkspace = location.pathname === "/agents" || location.pathname === "/workspace"
   const menuClass =
     "block px-3 py-2 rounded-lg transition-colors hover:bg-slate-800"
 
@@ -132,6 +133,15 @@ function App() {
             </NavLink>
 
             <NavLink
+              to="/workspace"
+              className={({ isActive }) =>
+                isActive ? activeMenuClass : menuClass
+              }
+            >
+              🧩 Workspace Local
+            </NavLink>
+
+            <NavLink
               to="/knowledge"
               className={({ isActive }) =>
                 isActive ? activeMenuClass : menuClass
@@ -208,6 +218,14 @@ function App() {
               element={
                 <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
                   <BancadaLocal />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/workspace"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <Workspace />
                 </Suspense>
               }
             />

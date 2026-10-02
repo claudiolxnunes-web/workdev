@@ -318,4 +318,11 @@ def pedir_parecer(modelo: str, ident: str, pedido: PedidoParecer | None = None):
         resultado = runner.parecer(modelo, ident, pedido.observer if pedido else None)
     except runner.BancadaErro as erro:
         raise _erro(erro) from erro
-    return _mascarar({k: resultado[k] for k in ("ok", "parecer", "custo_usd", "segundos", "falhas")})
+    chaves = ("ok", "parecer", "custo_usd", "segundos", "falhas", "decidido_por", "etapas")
+    return _mascarar({k: resultado[k] for k in chaves if k in resultado})
+
+
+@router.get("/observers")
+def listar_observers():
+    """Observers aceitos no parecer, o padrão e o modo segunda opinião."""
+    return runner.observers()

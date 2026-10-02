@@ -151,8 +151,24 @@ export const reenviarProposta = (modelo: string, id: string, prompt: string, onE
   fluxo(`/propostas/${encodeURIComponent(modelo)}/${encodeURIComponent(id)}/reenviar`, { prompt }, onEvento)
 export const verificarProposta = (modelo: string, id: string) =>
   post<{ achados: Achado[]; erros: number; aprovada: boolean }>(`/propostas/${encodeURIComponent(modelo)}/${encodeURIComponent(id)}/verificar`)
+export interface Observers {
+  padrao: string
+  observers: string[]
+  segunda_opiniao: { id: string; primario: string; arbitro: string }
+}
+export const getObservers = () => get<Observers>("/observers")
+
+export interface ResultadoParecer {
+  ok: boolean
+  parecer: { veredito: Veredito } | null
+  custo_usd: number | null
+  falhas: string[]
+  /** Só no modo segunda opinião: quem deu a palavra final e por onde passou. */
+  decidido_por?: string | null
+  etapas?: Array<{ observer: string; ok: boolean; veredito: Veredito | null }>
+}
 export const pedirParecer = (modelo: string, id: string, observer?: string) =>
-  post<{ ok: boolean; parecer: { veredito: Veredito } | null; custo_usd: number | null; falhas: string[] }>(
+  post<ResultadoParecer>(
     `/propostas/${encodeURIComponent(modelo)}/${encodeURIComponent(id)}/parecer`, observer ? { observer } : {})
 
 /** Lote colado do AI Hub: lista de tarefas ou {"tarefas": [...]}. */

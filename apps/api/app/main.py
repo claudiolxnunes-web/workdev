@@ -9,6 +9,7 @@ from app.routers.backlog import router as backlog_router
 from app.routers.ai import router as ai_router
 from app.routers.busca_web import router as busca_web_router
 from app.routers.bancada import router as bancada_router
+from app.routers.workspace import router as workspace_router
 from app.routers.subtasks import router as subtasks_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.chat_sessions import router as chat_sessions_router
@@ -87,6 +88,8 @@ app.include_router(system_router, prefix="/api")
 app.include_router(busca_web_router, prefix="/api")
 # Bancada Local: só GET, lê apenas tmp/bancada (ver app/routers/bancada.py).
 app.include_router(bancada_router, prefix="/api")
+# Workspace: só GET, lista do git com bloqueios (ver app/services/workspace.py).
+app.include_router(workspace_router, prefix="/api")
 app.include_router(terminal_router)
 app.include_router(run_terminal_router)
 app.include_router(metrics_router, prefix="/api")

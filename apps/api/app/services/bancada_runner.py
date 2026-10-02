@@ -370,7 +370,19 @@ def verificar(modelo: str, ident: str) -> dict:
     return resultado
 
 
+SEGUNDA_OPINIAO = "segunda-opiniao"
+
+
+def observers() -> dict:
+    obs = _modulo("bancada_observer")
+    return {"padrao": obs.PADRAO, "observers": list(obs.OBSERVERS),
+            "segunda_opiniao": {"id": SEGUNDA_OPINIAO, "primario": obs.SEGUNDA_OPINIAO_PRIMARIO,
+                                "arbitro": obs.SEGUNDA_OPINIAO_ARBITRO}}
+
+
 def parecer(modelo: str, ident: str, observer: str | None = None) -> dict:
+    if observer == SEGUNDA_OPINIAO:
+        return segunda_opiniao(modelo, ident)
     meta, texto = _proposta(modelo, ident)
     obs = _modulo("bancada_observer")
     observer = observer or obs.PADRAO
@@ -389,6 +401,32 @@ def parecer(modelo: str, ident: str, observer: str | None = None) -> dict:
                "erros": [e.get("categoria") for e in (resultado["parecer"] or {}).get("erros", [])],
                "custo_usd": resultado["custo_usd"], "segundos": resultado["segundos"], "falhas": resultado["falhas"]})
     return resultado
+
+
+def segunda_opiniao(modelo: str, ident: str) -> dict:
+    """Primário decide sozinho quando diz "aproveitada"; senão o árbitro dá a palavra final.
+
+    Se o árbitro falhar, fica o veredito do primário. Cada parecer é gravado e
+    registrado normalmente; aqui só se soma custo/tempo e se diz quem decidiu.
+    """
+    obs = _modulo("bancada_observer")
+    primario, arbitro = obs.SEGUNDA_OPINIAO_PRIMARIO, obs.SEGUNDA_OPINIAO_ARBITRO
+    etapas = [parecer(modelo, ident, primario)]
+    veredito = (etapas[0]["parecer"] or {}).get("veredito")
+    decidido_por = primario
+    if etapas[0]["ok"] and veredito != "aproveitada":
+        etapas.append(parecer(modelo, ident, arbitro))
+        if etapas[1]["ok"]:
+            decidido_por = arbitro
+    elif not etapas[0]["ok"]:
+        etapas.append(parecer(modelo, ident, arbitro))
+        decidido_por = arbitro if etapas[1]["ok"] else None
+    final = next((e for e, nome in zip(etapas, (primario, arbitro)) if nome == decidido_por), etapas[-1])
+    return {**final, "custo_usd": round(sum(e["custo_usd"] or 0 for e in etapas), 6),
+            "segundos": round(sum(e["segundos"] or 0 for e in etapas), 1),
+            "decidido_por": decidido_por,
+            "etapas": [{"observer": nome, "ok": e["ok"], "veredito": (e["parecer"] or {}).get("veredito")}
+                       for e, nome in zip(etapas, (primario, arbitro))]}
 
 
 # ---------------------------------------------------------------- ligar / desligar

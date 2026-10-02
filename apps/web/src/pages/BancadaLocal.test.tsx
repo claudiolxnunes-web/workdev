@@ -25,6 +25,8 @@ const detalhe = {
     prompt_correcao: "Troque por from app.services import local_model", custo_usd: 0.00024, segundos: 2.9, falhas: [] }],
 }
 
+const observers = { padrao: "openai/gpt-5.6-luna", observers: ["openai/gpt-5.6-luna", "mistralai/codestral-2508"],
+  segunda_opiniao: { id: "segunda-opiniao", primario: "mistralai/codestral-2508", arbitro: "openai/gpt-5.6-luna" } }
 const posts: Array<{ url: string; corpo: unknown }> = []
 const sse = (eventos: object[]) => new Response(eventos.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""),
   { status: 200, headers: { "Content-Type": "text/event-stream" } })
@@ -44,6 +46,7 @@ const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url.endsWith("/parecer")) return json({ ok: true, parecer: { veredito: "aproveitada" }, custo_usd: 0.0009, falhas: [] })
     return json({ acao: "ligar", ok: true })
   }
+  if (url.endsWith("/observers")) return json(observers)
   const corpo = url.endsWith("/estado") ? estado : url.endsWith("/propostas") ? { propostas }
     : url.endsWith("/resumo") ? { linhas: resumo } : url.includes("/propostas/moe/") ? detalhePagina : detalhe
   return json(corpo)
@@ -123,7 +126,7 @@ describe("Bancada Local", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^t1/ }))
     fireEvent.click(await screen.findByRole("button", { name: "Verificar" }))
     await waitFor(() => expect(posts.map((p) => p.url)).toEqual(["/api/bancada/propostas/moe/t1/verificar"]))
-    fireEvent.click(await screen.findByRole("button", { name: "Pedir parecer (Luna)" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Pedir parecer" }))
     await waitFor(() => expect(posts).toHaveLength(2))
     const prompt = await screen.findByLabelText("Prompt de reenvio")
     expect(prompt).toHaveValue("Troque por from app.services import local_model")
@@ -136,5 +139,15 @@ describe("Bancada Local", () => {
     render(<BancadaLocal />)
     fireEvent.click(await screen.findByRole("button", { name: "Desligar" }))
     await waitFor(() => expect(posts.map((p) => p.url)).toEqual(["/api/bancada/modelo/desligar"]))
+  })
+
+  it("o parecer usa o observer escolhido, inclusive a segunda opinião", async () => {
+    render(<BancadaLocal />)
+    const seletor = await screen.findByLabelText("Observer do parecer")
+    expect(seletor).toHaveValue("openai/gpt-5.6-luna")
+    fireEvent.change(seletor, { target: { value: "segunda-opiniao" } })
+    fireEvent.click(screen.getByRole("button", { name: /^t1/ }))
+    fireEvent.click(await screen.findByRole("button", { name: "Pedir parecer" }))
+    await waitFor(() => expect(posts).toEqual([{ url: "/api/bancada/propostas/moe/t1/parecer", corpo: { observer: "segunda-opiniao" } }]))
   })
 })

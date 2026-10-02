@@ -3,26 +3,14 @@ import {
   getEstado, getProposta, getPropostas, getResumo, lerLote, ligarModelo, pedirParecer, reenviarProposta,
   rodarTarefa, verificarProposta,
   type EstadoBancada, type EventoBancada, type LinhaResumo, type NovaTarefa, type PropostaDetalhe,
-  type PropostaResumo, type Veredito,
+  type PropostaResumo,
 } from "@/services/bancada.service"
+import { Checagens, Pareceres, Selo } from "@/modules/bancada/Resultado"
+import { SeletorObserver } from "@/modules/bancada/SeletorObserver"
+import { ultimoPromptCorrecao } from "@/modules/bancada/proposta"
 
 // Bancada Local: o modelo local só propõe. Tudo aqui acontece por clique do
 // operador, uma execução por vez, e nada é aplicado ao repositório.
-
-const corVeredito: Record<string, string> = {
-  aproveitada: "bg-emerald-900 text-emerald-200",
-  correcao_pequena: "bg-amber-900 text-amber-200",
-  descartada: "bg-rose-900 text-rose-200",
-  falhou: "bg-slate-700 text-slate-300",
-}
-const rotuloVeredito: Record<string, string> = {
-  aproveitada: "aproveitada", correcao_pequena: "correção pequena", descartada: "descartada", falhou: "falhou",
-}
-
-function Selo({ veredito }: { veredito: Veredito | string | null | undefined }) {
-  if (!veredito) return null
-  return <span className={`rounded px-2 py-0.5 text-xs ${corVeredito[veredito] ?? "bg-slate-700"}`}>{rotuloVeredito[veredito] ?? veredito}</span>
-}
 
 function mb(valor: number | null | undefined) {
   if (valor == null) return "indisponível"
@@ -95,7 +83,7 @@ function Lote({ executando, onRodar, onParar }: {
         className="w-full rounded bg-slate-950 p-2 font-mono text-xs text-slate-200" />
       <label className="mt-2 flex items-center gap-2 text-xs text-slate-300">
         <input type="checkbox" checked={automatico} onChange={(e) => setAutomatico(e.target.checked)} />
-        Verificar e pedir parecer (Luna) após cada tarefa (~US$ 0,001 cada)
+        Verificar e pedir parecer (observer escolhido no topo) após cada tarefa (~US$ 0,001 cada)
       </label>
       {erro && <p role="alert" className="mt-1 text-xs text-rose-300">{erro}</p>}
       <div className="mt-2 flex gap-2">
@@ -126,14 +114,7 @@ function Detalhe({ detalhe, executando, onVerificar, onParecer, onReenviar }: {
   detalhe: PropostaDetalhe; executando: boolean
   onVerificar: () => void; onParecer: () => void; onReenviar: (prompt: string) => void
 }) {
-  const [copiado, setCopiado] = useState("")
-  const ultimoPrompt = [...detalhe.pareceres].reverse().find((p) => p.prompt_correcao)?.prompt_correcao ?? ""
-  const [reenvio, setReenvio] = useState(ultimoPrompt)
-  async function copiar(texto: string, observer: string) {
-    try { await navigator.clipboard.writeText(texto); setCopiado(observer) }
-    catch { setCopiado("") }
-  }
-  const achados = detalhe.verificacao?.achados ?? []
+  const [reenvio, setReenvio] = useState(ultimoPromptCorrecao(detalhe.pareceres))
   const daPagina = Boolean(detalhe.tarefa)
   return (
     <div className="flex flex-col gap-3">
@@ -144,38 +125,10 @@ function Detalhe({ detalhe, executando, onVerificar, onParecer, onReenviar }: {
       </div>
       {daPagina && <div className="flex flex-wrap gap-2">
         <button type="button" disabled={executando} onClick={onVerificar} className="rounded bg-slate-700 px-3 py-1 text-xs hover:bg-slate-600 disabled:opacity-50">Verificar</button>
-        <button type="button" disabled={executando} onClick={onParecer} className="rounded bg-violet-800 px-3 py-1 text-xs hover:bg-violet-700 disabled:opacity-50">Pedir parecer (Luna)</button>
+        <button type="button" disabled={executando} onClick={onParecer} className="rounded bg-violet-800 px-3 py-1 text-xs hover:bg-violet-700 disabled:opacity-50">Pedir parecer</button>
       </div>}
-      <div aria-label="Checagens mecânicas">
-        <h4 className="text-xs font-semibold uppercase text-slate-500">Checagens mecânicas</h4>
-        {!detalhe.verificacao ? <p className="text-sm text-slate-400">Ainda não verificada.</p> : (
-          <ul className="mt-1 space-y-1 text-sm">{achados.map((a, i) => (
-            <li key={i} className="flex gap-2">
-              <span className={`shrink-0 rounded px-1.5 text-xs ${a.severidade === "erro" ? "bg-rose-900 text-rose-200" : a.severidade === "aviso" ? "bg-amber-900 text-amber-200" : "bg-slate-800 text-slate-400"}`}>{a.severidade.toUpperCase()}</span>
-              <span className="text-slate-400">{a.categoria}</span><span>{a.mensagem}</span>
-            </li>))}</ul>)}
-      </div>
-      <div aria-label="Pareceres do observer">
-        <h4 className="text-xs font-semibold uppercase text-slate-500">Pareceres do observer</h4>
-        {detalhe.pareceres.length === 0 && <p className="text-sm text-slate-400">Sem parecer ainda.</p>}
-        {detalhe.pareceres.map((p) => (
-          <div key={p.observer} className="mt-2 rounded border border-slate-800 p-3 text-sm">
-            <div className="flex flex-wrap items-center gap-2">
-              <code className="text-xs text-slate-300">{p.observer}</code><Selo veredito={p.ok ? p.veredito : "falhou"} />
-              <span className="text-xs text-slate-500">{p.custo_usd != null ? `US$ ${p.custo_usd.toFixed(5)}` : ""}{p.segundos != null ? ` · ${p.segundos}s` : ""}</span>
-            </div>
-            {p.erros.length > 0 && <ul className="mt-1 list-disc pl-5 text-slate-300">{p.erros.map((e, i) => <li key={i}><span className="text-slate-500">{e.categoria}:</span> {e.descricao}</li>)}</ul>}
-            {!p.ok && p.falhas.length > 0 && <p className="mt-1 text-xs text-slate-400">{p.falhas.join(" | ")}</p>}
-            {p.prompt_correcao && (
-              <div className="mt-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-500">Prompt de correção sugerido</span>
-                  <button type="button" onClick={() => void copiar(p.prompt_correcao, p.observer)} className="rounded bg-sky-800 px-2 py-1 text-xs hover:bg-sky-700">{copiado === p.observer ? "Copiado" : "Copiar"}</button>
-                </div>
-                <pre className="mt-1 rounded bg-slate-950 p-2 text-xs whitespace-pre-wrap">{p.prompt_correcao}</pre>
-              </div>)}
-          </div>))}
-      </div>
+      <Checagens verificacao={detalhe.verificacao} />
+      <Pareceres pareceres={detalhe.pareceres} />
       {daPagina && <div aria-label="Reenvio">
         <h4 className="text-xs font-semibold uppercase text-slate-500">Reenviar ao modelo local</h4>
         <textarea aria-label="Prompt de reenvio" value={reenvio} onChange={(e) => setReenvio(e.target.value)} rows={3}
@@ -198,6 +151,7 @@ export default function BancadaLocal() {
   const [linhas, setLinhas] = useState<string[]>([])
   const [saida, setSaida] = useState("")
   const parar = useRef(false)
+  const [observer, setObserver] = useState<string | null>(null)
 
   const carregar = useCallback(async () => {
     setErro("")
@@ -239,8 +193,9 @@ export default function BancadaLocal() {
   async function verificarEParecer(modelo: string, id: string) {
     const v = await verificarProposta(modelo, id)
     log(`[checagens] ${id}: ${v.erros} erro(s) — ${v.aprovada ? "passa" : "não passa"}`)
-    const p = await pedirParecer(modelo, id)
-    log(p.ok ? `[parecer] ${id}: ${p.parecer?.veredito} · US$ ${(p.custo_usd ?? 0).toFixed(5)}` : `[parecer] ${id}: falhou (${p.falhas.join(" | ")})`)
+    const p = await pedirParecer(modelo, id, observer ?? undefined)
+    const quem = p.decidido_por ? ` · decidiu ${p.decidido_por}` : ""
+    log(p.ok ? `[parecer] ${id}: ${p.parecer?.veredito} · US$ ${(p.custo_usd ?? 0).toFixed(5)}${quem}` : `[parecer] ${id}: falhou (${p.falhas.join(" | ")})`)
   }
 
   async function rodarLote(tarefas: NovaTarefa[], automatico: boolean) {
@@ -293,7 +248,10 @@ export default function BancadaLocal() {
           <h1 className="text-xl font-semibold">Bancada Local</h1>
           <p className="text-xs text-slate-400">O modelo local só propõe. Rodar, verificar, pedir parecer e reenviar acontecem por clique, uma execução por vez. Nada é aplicado ao repositório.</p>
         </div>
-        <button type="button" onClick={() => void carregar()} className="rounded border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Atualizar</button>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1 text-xs text-slate-400">Observer <SeletorObserver valor={observer} onMudar={setObserver} desabilitado={executando} /></label>
+          <button type="button" onClick={() => void carregar()} className="rounded border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Atualizar</button>
+        </div>
       </header>
       {erro && <p role="alert" className="text-sm text-rose-300">{erro}</p>}
       <EstadoModelo estado={estado} onAcao={(a) => void modelo(a)} acaoEmCurso={acaoModelo || executando} />
@@ -326,7 +284,7 @@ export default function BancadaLocal() {
             : !detalhe ? <p className="text-sm text-slate-400">Carregando…</p>
             : <Detalhe key={`${detalhe.modelo}/${detalhe.id}`} detalhe={detalhe} executando={executando}
                 onVerificar={() => void acaoNoDetalhe(async () => { await verificarProposta(detalhe.modelo, detalhe.id) })}
-                onParecer={() => void acaoNoDetalhe(async () => { await pedirParecer(detalhe.modelo, detalhe.id) })}
+                onParecer={() => void acaoNoDetalhe(async () => { await pedirParecer(detalhe.modelo, detalhe.id, observer ?? undefined) })}
                 onReenviar={(prompt) => void reenviar(prompt)} />}
         </section>
       </div>

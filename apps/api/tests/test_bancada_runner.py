@@ -162,3 +162,49 @@ def test_exige_e_espera_diff_chegam_as_checagens(ambiente, monkeypatch):
 def test_exige_invalido_e_recusado(ambiente, exige, codigo):
     resposta = rodar(ambiente.cliente, exige=exige)
     assert resposta.status_code == 422 and resposta.json()["detail"]["code"] == codigo
+
+
+def _observador_falso(vereditos: dict):
+    """vereditos: observer -> veredito (None = falha do observer)."""
+    chamados = []
+
+    def observar(modelo, mensagens):
+        chamados.append(modelo)
+        veredito = vereditos[modelo]
+        if veredito is None:
+            return {"ok": False, "parecer": None, "custo_usd": 0.0001, "segundos": 1.0, "falhas": ["sem JSON"]}
+        return {"ok": True, "parecer": {"veredito": veredito, "erros": [], "prompt_correcao": ""},
+                "custo_usd": 0.001 if "luna" in modelo else 0.0002, "segundos": 2.0, "falhas": []}
+    modulo = SimpleNamespace(
+        PADRAO="openai/gpt-5.6-luna", OBSERVERS={"openai/gpt-5.6-luna": {}, "mistralai/codestral-2508": {}},
+        SEGUNDA_OPINIAO_PRIMARIO="mistralai/codestral-2508", SEGUNDA_OPINIAO_ARBITRO="openai/gpt-5.6-luna",
+        montar_mensagens=lambda *a: [{"role": "user", "content": "x"}], observar=observar)
+    return modulo, chamados
+
+
+@pytest.mark.parametrize("vereditos,chamados_esperados,final,decidido", [
+    ({"mistralai/codestral-2508": "aproveitada", "openai/gpt-5.6-luna": "descartada"},
+     ["mistralai/codestral-2508"], "aproveitada", "mistralai/codestral-2508"),
+    ({"mistralai/codestral-2508": "descartada", "openai/gpt-5.6-luna": "correcao_pequena"},
+     ["mistralai/codestral-2508", "openai/gpt-5.6-luna"], "correcao_pequena", "openai/gpt-5.6-luna"),
+    ({"mistralai/codestral-2508": "descartada", "openai/gpt-5.6-luna": None},
+     ["mistralai/codestral-2508", "openai/gpt-5.6-luna"], "descartada", "mistralai/codestral-2508"),
+])
+def test_segunda_opiniao_escala_so_quando_precisa(ambiente, monkeypatch, vereditos, chamados_esperados, final, decidido):
+    rodar(ambiente.cliente)
+    observador, chamados = _observador_falso(vereditos)
+    checks = SimpleNamespace(verificar=lambda texto, tarefa: {"achados": [], "erros": 0, "categorias_erro": [], "aprovada": True})
+    monkeypatch.setattr(runner, "_modulo", lambda nome: {"bancada_checks": checks, "bancada_observer": observador}[nome])
+    corpo = ambiente.cliente.post("/api/bancada/propostas/moe/t1/parecer", json={"observer": "segunda-opiniao"}).json()
+    assert chamados == chamados_esperados
+    assert corpo["parecer"]["veredito"] == final and corpo["decidido_por"] == decidido
+    assert [e["observer"] for e in corpo["etapas"]] == chamados_esperados
+    assert corpo["custo_usd"] == round(0.0002 + (0.001 if vereditos["openai/gpt-5.6-luna"] and len(chamados) > 1 else 0.0001 if len(chamados) > 1 else 0), 6)
+
+
+def test_lista_observers_e_segunda_opiniao(ambiente, monkeypatch):
+    observador, _ = _observador_falso({})
+    monkeypatch.setattr(runner, "_modulo", lambda nome: observador)
+    corpo = ambiente.cliente.get("/api/bancada/observers").json()
+    assert corpo["padrao"] == "openai/gpt-5.6-luna" and "mistralai/codestral-2508" in corpo["observers"]
+    assert corpo["segunda_opiniao"] == {"id": "segunda-opiniao", "primario": "mistralai/codestral-2508", "arbitro": "openai/gpt-5.6-luna"}
