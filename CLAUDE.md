@@ -238,8 +238,8 @@ Três etapas, nesta ordem:
 
 | Etapa | Comando | O que faz |
 |---|---|---|
-| 1 | `workdev-deployctl prepare` | roda o predeploy-gate, emite prova assinada com fingerprint de `apps/web/dist`, monta a release em `/opt/workdev-runtime`. Imprime o `proof_id`. TTL padrão 900s |
-| 2 | `workdev-deployctl approve <proof_id> --actor <nome>` | emite o approval assinado |
+| 1 | `/usr/local/sbin/workdev-deployctl prepare` | roda o predeploy-gate, emite prova assinada com fingerprint de `apps/web/dist`, monta a release em `/opt/workdev-runtime`. Imprime o `proof_id`. TTL padrão 900s |
+| 2 | `/usr/local/sbin/workdev-deployctl approve <proof_id> --actor <nome>` | emite o approval assinado |
 | 3 | `bash /opt/workdev/deploy.sh <proof_id>` | revalida o fingerprint, promove a release, reinicia a API, roda o postcheck; **rollback automático** se o postcheck falhar |
 
 - O **build tem que existir antes do `prepare`** — o fingerprint é tirado de

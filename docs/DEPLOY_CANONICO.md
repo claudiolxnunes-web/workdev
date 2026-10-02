@@ -11,11 +11,16 @@ NUNCA redescobrir o fluxo procurando scripts, salvo se este runbook estiver comp
 
 ## Fluxo oficial
 
+> ⚠️ **Sempre o caminho instalado, `/usr/local/sbin/workdev-deployctl`** (root:root 755).
+> Nunca `sh scripts/deploy/workdev-deployctl` do repositório: o checkout é do usuário
+> `workdev`, que pode alterar aquele arquivo — rodá-lo como root entregaria root a quem
+> controla o `workdev` (agentes inclusos). O `deploy.sh` já faz essa checagem de dono.
+> A cópia do repo é só a fonte versionada que `install-manifest.txt` instala.
+
 ### 1. Prepare
 
 ```bash
-cd /opt/workdev
-sh scripts/deploy/workdev-deployctl prepare
+/usr/local/sbin/workdev-deployctl prepare
 ```
 
 - Precisa rodar como `root` (o wrapper delega internamente pro usuário `workdev-deploy`).
@@ -26,7 +31,7 @@ sh scripts/deploy/workdev-deployctl prepare
 ### 2. Approve
 
 ```bash
-sh scripts/deploy/workdev-deployctl approve <proof_id> --actor "<seu nome>"
+/usr/local/sbin/workdev-deployctl approve <proof_id> --actor "<seu nome>"
 ```
 
 Esse é o ponto de aprovação humana explícita do pipeline — quem roda assume a responsabilidade pelo deploy.
@@ -34,8 +39,10 @@ Esse é o ponto de aprovação humana explícita do pipeline — quem roda assum
 ### 3. Deploy
 
 ```bash
-sh scripts/deploy/workdev-deployctl deploy <proof_id>
+bash /opt/workdev/deploy.sh <proof_id>
 ```
+
+(Equivale a `/usr/local/sbin/workdev-deployctl deploy <proof_id>`, mas antes confere que o controlador instalado é `root:root 755`.)
 
 Promove a release preparada pra `current` (symlink atômico), reinicia `workdev-api.service`, roda checagem pós-deploy, e faz rollback automático (volta pra release anterior + reinicia) se algo falhar.
 
@@ -52,7 +59,7 @@ Promove a release preparada pra `current` (symlink atômico), reinicia `workdev-
 
 ## Referência rápida dos scripts (só usar se este runbook estiver desatualizado)
 
-- `scripts/deploy/workdev-deployctl` — wrapper que exige root e delega pro broker como `workdev-deploy`.
+- `/usr/local/sbin/workdev-deployctl` — wrapper que exige root e delega pro broker como `workdev-deploy` (fonte versionada em `scripts/deploy/workdev-deployctl`; nunca executar a fonte como root).
 - `/usr/local/lib/workdev-deploy/deploy_broker.py` — CLI real: subcomandos `prepare`, `approve --actor`, `deploy`.
 - `/usr/local/libexec/workdev-predeploy-gate` — roda `verificar-deploy.sh --testes` como usuário `workdev`.
 - `/usr/local/lib/workdev-deploy/verificar-deploy.sh` — as 8 checagens (git, escopo, segredos, sintaxe Python/shell, build, porta 8000, testes).
