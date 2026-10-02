@@ -102,6 +102,12 @@ def test_alteracoes_e_diff_por_arquivo(cliente):
     assert cliente.get("/api/workspace/diff", params={"caminho": ".env"}).status_code == 403
 
 
+def test_arquivo_novo_grande_nao_e_lido_para_contar_linhas(cliente, monkeypatch):
+    monkeypatch.setattr(workspace, "LIMITE_ARQUIVO", 5)
+    itens = {i["caminho"]: i for i in cliente.get("/api/workspace/alteracoes").json()["itens"]}
+    assert itens["apps/api/novo.py"]["estado"] == "novo" and itens["apps/api/novo.py"]["mais"] is None
+
+
 def test_git_lento_ou_quebrado_vira_erro_claro(cliente, monkeypatch):
     def lento(*a, **k):
         raise subprocess.TimeoutExpired("git", 10)

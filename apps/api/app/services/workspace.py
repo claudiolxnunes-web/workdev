@@ -145,7 +145,10 @@ def alteracoes() -> dict:
         mais, menos = numstat.get(caminho, (None, None))
         if estado == "??":
             try:
-                mais = (REPO / caminho).read_text(encoding="utf-8", errors="replace").count("\n")
+                if (REPO / caminho).stat().st_size > LIMITE_ARQUIVO:
+                    mais = None
+                else:
+                    mais = (REPO / caminho).read_text(encoding="utf-8", errors="replace").count("\n")
             except OSError:
                 mais = None
             menos = 0
