@@ -43,7 +43,11 @@ const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
   throw new Error(`rota inesperada: ${metodo} ${url}`)
 })
 
+// O jsdom não tem ResizeObserver; os painéis redimensionáveis precisam dele.
+class ResizeObserverFalso { observe() {} unobserve() {} disconnect() {} }
+
 beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", ResizeObserverFalso)
   modeloLigado = true
   chamadas.length = 0
   fetchMock.mockClear()
@@ -108,8 +112,10 @@ describe("Workspace Local", () => {
     render(<Workspace />)
     await screen.findByRole("region", { name: "Alterações" })
     expect(screen.queryByText(/terminal de/)).not.toBeInTheDocument()
+    expect(screen.getAllByRole("separator")).toHaveLength(2)
     fireEvent.click(screen.getByRole("button", { name: "Abrir terminal" }))
     expect(screen.getByText("terminal de claude")).toBeInTheDocument()
+    expect(screen.getAllByRole("separator")).toHaveLength(3)
     for (const chamada of chamadas.filter((c) => c.url.startsWith("/api/workspace"))) expect(chamada.metodo).toBe("GET")
   })
 })

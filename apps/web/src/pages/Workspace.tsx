@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react"
+import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels"
 import { AgentTerminal } from "@/modules/agents/AgentTerminal"
 import { CLI_AGENTS, agentLabels, type AgentName } from "@/services/handoff.service"
 import { ChatLocal } from "@/modules/workspace/ChatLocal"
-import { Divisor } from "@/modules/workspace/Divisor"
 import { Editor } from "@/modules/workspace/Editor"
 import { Explorer } from "@/modules/workspace/Explorer"
 import { chaveAba, type AbaEditor, type Anexo } from "@/modules/workspace/tipos"
@@ -10,16 +10,13 @@ import { chaveAba, type AbaEditor, type Anexo } from "@/modules/workspace/tipos"
 // Workspace Local, no desenho do VS Code: Explorer | Editor (+ Terminal) | Chat do
 // modelo local. Só leitura do repositório; o modelo local só propõe.
 
-interface Tamanhos { explorer: number; chat: number; terminal: number }
-const PADRAO: Tamanhos = { explorer: 260, chat: 420, terminal: 260 }
-const CHAVE_TAMANHOS = "workdev.workspace.tamanhos"
 type Aba = "explorer" | "editor" | "chat" | "terminal"
 
-function lerTamanhos(): Tamanhos {
-  try {
-    const salvo = JSON.parse(localStorage.getItem(CHAVE_TAMANHOS) ?? "null")
-    return salvo ? { ...PADRAO, ...salvo } : PADRAO
-  } catch { return PADRAO }
+// localStorage pode lançar (janela privada, site data bloqueado): sem ele o
+// layout só não é lembrado.
+const armazenamento: LayoutStorage = {
+  getItem: (chave) => { try { return localStorage.getItem(chave) } catch { return null } },
+  setItem: (chave, valor) => { try { localStorage.setItem(chave, valor) } catch { /* não lembra */ } },
 }
 
 function useDesktop(): boolean {
@@ -33,10 +30,6 @@ function useDesktop(): boolean {
     return () => mq.removeEventListener?.("change", mudar)
   }, [])
   return desktop
-}
-
-function limitar(valor: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, valor))
 }
 
 function Terminal({ agente, onAgente }: { agente: AgentName; onAgente: (agente: AgentName) => void }) {
@@ -58,17 +51,14 @@ function Terminal({ agente, onAgente }: { agente: AgentName; onAgente: (agente: 
 
 export default function Workspace() {
   const desktop = useDesktop()
-  const [tamanhos, setTamanhos] = useState<Tamanhos>(lerTamanhos)
+  const colunas = useDefaultLayout({ id: "workdev-workspace-colunas", storage: armazenamento })
+  const centro = useDefaultLayout({ id: "workdev-workspace-centro", storage: armazenamento, panelIds: ["editor", "terminal"] })
   const [abas, setAbas] = useState<AbaEditor[]>([])
   const [ativa, setAtiva] = useState<string | null>(null)
   const [anexos, setAnexos] = useState<Anexo[]>([])
   const [terminalAberto, setTerminalAberto] = useState(false)
   const [agente, setAgente] = useState<AgentName>("claude")
   const [abaMovel, setAbaMovel] = useState<Aba>("explorer")
-
-  useEffect(() => {
-    try { localStorage.setItem(CHAVE_TAMANHOS, JSON.stringify(tamanhos)) } catch { /* sem storage: só não lembra */ }
-  }, [tamanhos])
 
   function abrir(aba: AbaEditor) {
     const chave = chaveAba(aba)
@@ -133,24 +123,30 @@ export default function Workspace() {
   return (
     <div className="flex h-[calc(100dvh-7rem)] min-h-[520px] flex-col">
       {cabecalho}
-      <div className="flex min-h-0 flex-1 overflow-hidden rounded border border-slate-800">
-        <section aria-label="Explorer" style={{ width: tamanhos.explorer }} className="min-h-0 shrink-0">{explorer}</section>
-        <Divisor orientacao="vertical" rotulo="Largura do Explorer" valor={tamanhos.explorer}
-          onMover={(d) => setTamanhos((t) => ({ ...t, explorer: limitar(t.explorer + d, 160, 600) }))} />
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <section aria-label="Editor" className="min-h-0 flex-1">{editor}</section>
-          {terminalAberto && <>
-            <Divisor orientacao="horizontal" rotulo="Altura do terminal" valor={tamanhos.terminal}
-              onMover={(d) => setTamanhos((t) => ({ ...t, terminal: limitar(t.terminal - d, 120, 700) }))} />
-            <section aria-label="Terminal" style={{ height: tamanhos.terminal }} className="min-h-0 shrink-0">
-              <Terminal agente={agente} onAgente={setAgente} />
-            </section>
-          </>}
-        </div>
-        <Divisor orientacao="vertical" rotulo="Largura do chat" valor={tamanhos.chat}
-          onMover={(d) => setTamanhos((t) => ({ ...t, chat: limitar(t.chat - d, 300, 800) }))} />
-        <section aria-label="Chat" style={{ width: tamanhos.chat }} className="min-h-0 shrink-0">{chat}</section>
-      </div>
+      <Group orientation="horizontal" id="workdev-workspace-colunas" defaultLayout={colunas.defaultLayout} onLayoutChanged={colunas.onLayoutChanged}
+        className="min-h-0 flex-1 overflow-hidden rounded border border-slate-800">
+        <Panel id="explorer" defaultSize="20%" minSize="160px" maxSize="45%" collapsible collapsedSize="0px">
+          <section aria-label="Explorer" className="h-full min-h-0">{explorer}</section>
+        </Panel>
+        <Separator aria-label="Largura do Explorer" className="w-1 bg-slate-800 transition-colors hover:bg-sky-700 focus:bg-sky-700 focus:outline-none data-[separator=active]:bg-sky-600" />
+        <Panel id="centro" minSize="25%">
+          <Group orientation="vertical" id="workdev-workspace-centro" defaultLayout={centro.defaultLayout} onLayoutChanged={centro.onLayoutChanged} className="h-full">
+            <Panel id="editor" minSize="20%">
+              <section aria-label="Editor" className="h-full min-h-0">{editor}</section>
+            </Panel>
+            {terminalAberto && <>
+              <Separator aria-label="Altura do terminal" className="h-1 bg-slate-800 transition-colors hover:bg-sky-700 focus:bg-sky-700 focus:outline-none data-[separator=active]:bg-sky-600" />
+              <Panel id="terminal" defaultSize="35%" minSize="120px">
+                <section aria-label="Terminal" className="h-full min-h-0"><Terminal agente={agente} onAgente={setAgente} /></section>
+              </Panel>
+            </>}
+          </Group>
+        </Panel>
+        <Separator aria-label="Largura do chat" className="w-1 bg-slate-800 transition-colors hover:bg-sky-700 focus:bg-sky-700 focus:outline-none data-[separator=active]:bg-sky-600" />
+        <Panel id="chat" defaultSize="32%" minSize="280px" maxSize="60%" collapsible collapsedSize="0px">
+          <section aria-label="Chat" className="h-full min-h-0">{chat}</section>
+        </Panel>
+      </Group>
     </div>
   )
 }
