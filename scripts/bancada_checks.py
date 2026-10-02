@@ -11,18 +11,20 @@ from __future__ import annotations
 
 import ast
 import io
+import os
 import py_compile
 import re
 import shutil
 import subprocess
-import os
 import tarfile
 import uuid
 from functools import lru_cache
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-BANCADA = REPO / "tmp" / "bancada"
+# A CLI roda do checkout (/opt/workdev); a API roda da release, sem .git: ela
+# aponta WORKDEV_BANCADA_REPO para o checkout e WORKDEV_BANCADA_DIR para a pasta.
+REPO = Path(os.environ.get("WORKDEV_BANCADA_REPO") or Path(__file__).resolve().parent.parent)
+BANCADA = Path(os.environ.get("WORKDEV_BANCADA_DIR") or REPO / "tmp" / "bancada")
 BASES = BANCADA / "_base"
 TRABALHO = BANCADA / "_trabalho"
 COMMIT_VALIDO = re.compile(r"^[0-9a-f]{7,40}$")

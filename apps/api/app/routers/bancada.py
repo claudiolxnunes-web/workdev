@@ -1,10 +1,12 @@
-"""Bancada Local — MVP somente leitura (só GET).
+"""Bancada Local.
 
-Lê apenas a pasta da Bancada (tmp/bancada/ do checkout, ou WORKDEV_BANCADA_DIR):
-propostas <modelo>/<id>.txt, _resumo.json, verificacoes/, pareceres/ e
-registro.jsonl. Nada aqui roda modelo, aplica patch, grava arquivo ou reenvia.
-Todo caminho é resolvido com realpath e precisa ficar dentro da pasta; as
-pastas internas da CLI (_base, _trabalho) nunca são lidas.
+GET (leitura): só a pasta da Bancada (tmp/bancada/ do checkout, ou
+WORKDEV_BANCADA_DIR) — propostas, _resumo.json, verificacoes/, pareceres/ e
+registro.jsonl. Todo caminho passa por realpath; _base e _trabalho nunca são lidos.
+
+POST (segunda etapa): rodar, verificar, pedir parecer, reenviar e ligar/desligar
+o modelo local — sempre por clique do operador, uma execução por vez. Nada é
+aplicado ao repositório; o resultado é só proposta (ver services/bancada_runner).
 """
 from __future__ import annotations
 
@@ -15,6 +17,10 @@ import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from app.services import bancada_runner as runner
 
 router = APIRouter(prefix="/bancada", tags=["bancada"])
 
@@ -146,7 +152,8 @@ def estado():
     except (OSError, ValueError, subprocess.SubprocessError):
         processo_mb = None
     return {"ativo": ativo, "chave": chave, "modelo": rotulo, "memoria": memoria,
-            "processo_mb": processo_mb, "pasta": str(raiz()), "pasta_existe": raiz().is_dir()}
+            "processo_mb": processo_mb, "pasta": str(raiz()), "pasta_existe": raiz().is_dir(),
+            "ocupado": runner.ocupado()}
 
 
 @router.get("/propostas")
@@ -165,7 +172,9 @@ def propostas():
                 continue
             verificacao = _ler_json(raiz() / "verificacoes" / f"{ident}.json")
             info = resumo.get(ident) or {}
-            itens.append({"id": ident, "modelo": modelo, "origem": "rodar",
+            meta = _ler_json(raiz() / "tarefas" / f"{ident}.json")
+            itens.append({"id": ident, "modelo": modelo, "origem": "pagina" if meta else "rodar",
+                          "origem_de": (meta or {}).get("origem_de"),
                           "segundos": info.get("segundos"), "tokens": info.get("tokens"),
                           "verificado": verificacao is not None,
                           "achados": _contagem(verificacao.get("achados", [])) if verificacao else None,
@@ -200,8 +209,11 @@ def proposta(modelo: str, ident: str):
         texto = str(verificacao.get("proposta") or "")[:LIMITE_TEXTO]
     if texto is None:
         raise HTTPException(404, "proposta não encontrada")
+    meta = _ler_json(_dentro("tarefas", f"{ident}.json")) if NOME_VALIDO.match(ident) else None
     return _mascarar({
         "id": ident, "modelo": modelo, "texto": texto,
+        "tarefa": {k: meta.get(k) for k in ("instrucao", "trechos", "base", "origem_de", "prompt_correcao")}
+        if meta and meta.get("modelo") == modelo else None,
         "verificacao": {"achados": verificacao.get("achados", []), "erros": verificacao.get("erros"),
                         "aprovada": verificacao.get("aprovada"), "tarefa": verificacao.get("tarefa"),
                         "esperado": verificacao.get("esperado"), "data": verificacao.get("data")}
@@ -228,3 +240,82 @@ def resumo():
                        "falhas": sum(r.get("veredito") == "falhou" for r in itens),
                        "tempo_medio_s": round(sum(segs) / len(segs), 1) if segs else None})
     return {"linhas": _mascarar(linhas)}
+
+
+# ---------------------------------------------------------------- segunda etapa (POST)
+
+class Execucao(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    instrucao: str = Field(min_length=1, max_length=runner.MAX_INSTRUCAO)
+    trechos: list[tuple[str, int, int]] = Field(default_factory=list, max_length=runner.MAX_TRECHOS)
+    max_tokens: int = Field(default=1024, ge=64, le=runner.MAX_TOKENS)
+    exige: dict[str, str] = Field(default_factory=dict)
+    espera_diff: bool = False
+
+
+class Reenvio(BaseModel):
+    prompt: str = Field(min_length=1, max_length=runner.MAX_PROMPT_REENVIO)
+
+
+class PedidoParecer(BaseModel):
+    observer: str | None = None
+
+
+def _erro(erro: "runner.BancadaErro") -> HTTPException:
+    return HTTPException(erro.status, {"code": erro.codigo, "message": erro.mensagem})
+
+
+def _fluxo(plano: dict) -> StreamingResponse:
+    if runner.ocupado():
+        raise HTTPException(409, {"code": "ocupado", "message": "já há uma execução da Bancada em andamento"})
+    return StreamingResponse(runner.executar(plano), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/modelo/{acao}")
+def modelo(acao: str):
+    if acao not in ("ligar", "desligar"):
+        raise HTTPException(404, "ação inválida")
+    try:
+        return runner.ligar_desligar(acao)
+    except runner.BancadaErro as erro:
+        raise _erro(erro) from erro
+
+
+@router.post("/rodar")
+def rodar(pedido: Execucao):
+    try:
+        plano = runner.preparar_execucao(pedido.id, pedido.instrucao, [list(t) for t in pedido.trechos],
+                                         pedido.max_tokens, pedido.exige, pedido.espera_diff)
+    except runner.BancadaErro as erro:
+        raise _erro(erro) from erro
+    return _fluxo(plano)
+
+
+@router.post("/propostas/{modelo}/{ident}/reenviar")
+def reenviar(modelo: str, ident: str, pedido: Reenvio):
+    _dentro(modelo, f"{ident}.txt")
+    try:
+        plano = runner.preparar_reenvio(modelo, ident, pedido.prompt)
+    except runner.BancadaErro as erro:
+        raise _erro(erro) from erro
+    return _fluxo(plano)
+
+
+@router.post("/propostas/{modelo}/{ident}/verificar")
+def verificar(modelo: str, ident: str):
+    _dentro(modelo, f"{ident}.txt")
+    try:
+        return _mascarar(runner.verificar(modelo, ident))
+    except runner.BancadaErro as erro:
+        raise _erro(erro) from erro
+
+
+@router.post("/propostas/{modelo}/{ident}/parecer")
+def pedir_parecer(modelo: str, ident: str, pedido: PedidoParecer | None = None):
+    _dentro(modelo, f"{ident}.txt")
+    try:
+        resultado = runner.parecer(modelo, ident, pedido.observer if pedido else None)
+    except runner.BancadaErro as erro:
+        raise _erro(erro) from erro
+    return _mascarar({k: resultado[k] for k in ("ok", "parecer", "custo_usd", "segundos", "falhas")})

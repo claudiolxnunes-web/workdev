@@ -13,6 +13,7 @@ const propostas = [
     observers: [{ observer: "deepseek/deepseek-v4-flash", veredito: "correcao_pequena" }] },
   { id: "minimo_oldq4", modelo: "oldq4", origem: "corpus", segundos: null, tokens: null, verificado: true,
     achados: { erro: 0, aviso: 0, info: 0 }, observers: [] },
+  { id: "t1", modelo: "moe", origem: "pagina", segundos: 4, tokens: 9, verificado: false, achados: null, observers: [] },
 ]
 const resumo = [{ modelo: "dev", avaliado_por: "deepseek/deepseek-v4-flash", tarefas: 2, aproveitada: 0,
   correcao_pequena: 50, descartada: 50, falhas: 0, tempo_medio_s: null }]
@@ -24,16 +25,35 @@ const detalhe = {
     prompt_correcao: "Troque por from app.services import local_model", custo_usd: 0.00024, segundos: 2.9, falhas: [] }],
 }
 
+const posts: Array<{ url: string; corpo: unknown }> = []
+const sse = (eventos: object[]) => new Response(eventos.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""),
+  { status: 200, headers: { "Content-Type": "text/event-stream" } })
+const json = (corpo: unknown) => new Response(JSON.stringify(corpo), { status: 200, headers: { "Content-Type": "application/json" } })
+
 const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-  if (init?.method && init.method !== "GET") throw new Error("a página não pode escrever")
+  if (init?.method === "POST") {
+    const corpo = JSON.parse(String(init.body ?? "{}"))
+    posts.push({ url, corpo })
+    if (url.endsWith("/rodar")) return sse([
+      { tipo: "inicio", id: corpo.id, modelo: "moe", base: "abc1234" },
+      { tipo: "token", texto: `saida de ${corpo.id}` },
+      { tipo: "fim", id: corpo.id, modelo: "moe", segundos: 4.2, tokens: 9 },
+    ])
+    if (url.endsWith("/reenviar")) return sse([{ tipo: "fim", id: "t1-r1", modelo: "moe", segundos: 1, tokens: 2 }])
+    if (url.endsWith("/verificar")) return json({ achados: [], erros: 0, aprovada: true })
+    if (url.endsWith("/parecer")) return json({ ok: true, parecer: { veredito: "aproveitada" }, custo_usd: 0.0009, falhas: [] })
+    return json({ acao: "ligar", ok: true })
+  }
   const corpo = url.endsWith("/estado") ? estado : url.endsWith("/propostas") ? { propostas }
-    : url.endsWith("/resumo") ? { linhas: resumo } : detalhe
-  return new Response(JSON.stringify(corpo), { status: 200, headers: { "Content-Type": "application/json" } })
+    : url.endsWith("/resumo") ? { linhas: resumo } : url.includes("/propostas/moe/") ? detalhePagina : detalhe
+  return json(corpo)
 })
+const detalhePagina = { ...detalhe, id: "t1", modelo: "moe",
+  tarefa: { instrucao: "Explique current().", trechos: [["apps/x.py", 1, 3]], base: "abc1234" } }
 const writeText = vi.fn().mockResolvedValue(undefined)
 
 beforeEach(() => {
-  fetchMock.mockClear(); writeText.mockClear()
+  fetchMock.mockClear(); writeText.mockClear(); posts.length = 0
   vi.stubGlobal("fetch", fetchMock)
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true })
 })
@@ -60,15 +80,61 @@ describe("Bancada Local", () => {
     expect(await screen.findByRole("button", { name: "Copiado" })).toBeInTheDocument()
   })
 
-  it("só faz GET em /api/bancada e não tem botão que execute algo", async () => {
+  it("proposta do corpus só lê: sem Verificar, Parecer nem Reenviar", async () => {
+    render(<BancadaLocal />)
+    fireEvent.click(await screen.findByRole("button", { name: /minimo_dev/ }))
+    await screen.findByText("local_model é a função current")
+    for (const [url] of fetchMock.mock.calls) expect(String(url)).toMatch(/^\/api\/bancada\//)
+    expect(posts).toHaveLength(0)
+    expect(screen.queryByRole("button", { name: /verificar|parecer|reenviar|aplicar/i })).not.toBeInTheDocument()
+  })
+
+  it("roda o lote colado em sequência, mostra o fluxo e verifica + pede parecer", async () => {
     render(<BancadaLocal />)
     await screen.findByText("Qwen3.8 35B A3B MoE")
-    fireEvent.click(screen.getByRole("button", { name: /minimo_dev/ }))
-    await screen.findByText("local_model é a função current")
-    for (const [url, init] of fetchMock.mock.calls) {
-      expect(String(url)).toMatch(/^\/api\/bancada\//)
-      expect(init?.method ?? "GET").toBe("GET")
-    }
-    expect(screen.queryByRole("button", { name: /rodar|aplicar|reenviar|ligar|desligar|trocar/i })).not.toBeInTheDocument()
+    const lote = { tarefas: [
+      { id: "t1", instrucao: "a", trechos: [["apps/x.py", 1, 3]], espera_diff: true, exige: { "x\\(": "usar x" } },
+      { id: "t2", instrucao: "b", trechos: [["apps/y.py", 1, 3]] },
+    ] }
+    fireEvent.change(screen.getByLabelText("JSON das tarefas"), { target: { value: JSON.stringify(lote) } })
+    fireEvent.click(screen.getByRole("button", { name: "Rodar lote" }))
+    await waitFor(() => expect(posts.filter((p) => p.url.endsWith("/parecer"))).toHaveLength(2))
+    expect(posts.map((p) => p.url.replace("/api/bancada", ""))).toEqual([
+      "/rodar", "/propostas/moe/t1/verificar", "/propostas/moe/t1/parecer",
+      "/rodar", "/propostas/moe/t2/verificar", "/propostas/moe/t2/parecer",
+    ])
+    expect(posts[0].corpo).toMatchObject({ id: "t1", espera_diff: true, exige: { "x\\(": "usar x" } })
+    const fluxo = screen.getByRole("region", { name: "Fluxo ao vivo" })
+    expect(fluxo).toHaveTextContent("saida de t2")
+    expect(fluxo).toHaveTextContent("[parecer] t1: aproveitada")
+  })
+
+  it("recusa JSON inválido sem chamar a API", async () => {
+    render(<BancadaLocal />)
+    await screen.findByText("Qwen3.8 35B A3B MoE")
+    fireEvent.change(screen.getByLabelText("JSON das tarefas"), { target: { value: "[{\"id\": 1}]" } })
+    fireEvent.click(screen.getByRole("button", { name: "Rodar lote" }))
+    expect(await screen.findByText(/precisa de id, instrucao e trechos/)).toBeInTheDocument()
+    expect(posts).toHaveLength(0)
+  })
+
+  it("proposta da página: verificar, parecer e reenviar com o prompt sugerido", async () => {
+    render(<BancadaLocal />)
+    fireEvent.click(await screen.findByRole("button", { name: /^t1/ }))
+    fireEvent.click(await screen.findByRole("button", { name: "Verificar" }))
+    await waitFor(() => expect(posts.map((p) => p.url)).toEqual(["/api/bancada/propostas/moe/t1/verificar"]))
+    fireEvent.click(await screen.findByRole("button", { name: "Pedir parecer (Luna)" }))
+    await waitFor(() => expect(posts).toHaveLength(2))
+    const prompt = await screen.findByLabelText("Prompt de reenvio")
+    expect(prompt).toHaveValue("Troque por from app.services import local_model")
+    fireEvent.change(prompt, { target: { value: "Use só current()." } })
+    fireEvent.click(screen.getByRole("button", { name: "Reenviar ao modelo local" }))
+    await waitFor(() => expect(posts[2]).toEqual({ url: "/api/bancada/propostas/moe/t1/reenviar", corpo: { prompt: "Use só current()." } }))
+  })
+
+  it("liga e desliga o modelo por clique", async () => {
+    render(<BancadaLocal />)
+    fireEvent.click(await screen.findByRole("button", { name: "Desligar" }))
+    await waitFor(() => expect(posts.map((p) => p.url)).toEqual(["/api/bancada/modelo/desligar"]))
   })
 })

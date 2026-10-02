@@ -809,7 +809,8 @@ def main() -> int:
 
     o = sub.add_parser("observar", help="checagens + parecer de um observer (não reenvia)")
     o.add_argument("caso")
-    o.add_argument("--observer", default="deepseek/deepseek-v4-flash")
+    o.add_argument("--observer", default="openai/gpt-5.6-luna",
+                   help="modelo do observer (padrão: openai/gpt-5.6-luna)")
     o.add_argument("--corpus")
     o.set_defaults(func=cmd_observar)
 
@@ -826,7 +827,28 @@ def main() -> int:
     b.set_defaults(func=cmd_broker)
 
     args = p.parse_args()
-    return args.func(args)
+    try:
+        return args.func(args)
+    finally:
+        _devolver_para_workdev()
+
+
+def _devolver_para_workdev() -> None:
+    """Como root (para ler a chave da OpenRouter), a CLI cria arquivos de root em
+    tmp/bancada; a página roda como workdev e precisa gravar lá também."""
+    if os.geteuid() != 0 or not SAIDA.exists():
+        return
+    import pwd
+    try:
+        dono = pwd.getpwnam("workdev")
+    except KeyError:
+        return
+    for raiz, pastas, arquivos in os.walk(SAIDA):
+        for nome in [raiz, *(os.path.join(raiz, n) for n in pastas + arquivos)]:
+            try:
+                os.lchown(nome, dono.pw_uid, dono.pw_gid)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
