@@ -49,21 +49,36 @@ def achado(categoria: str, severidade: str, mensagem: str) -> dict:
 
 # ---------------------------------------------------------------- base
 
-def base(commit: str) -> Path:
-    """Snapshot somente leitura de apps/api/app e scripts no commit informado."""
+def base(commit: str, extras: list[str] | tuple[str, ...] = ()) -> Path:
+    """Snapshot somente leitura de apps/api/app e scripts no commit informado.
+
+    `extras` são caminhos fora desse núcleo (ex.: o escopo de uma tarefa de
+    frontend); entram sob demanda, um a um, sem extrair o repositório inteiro.
+    Caminho inexistente no commit (arquivo novo do diff) é simplesmente ignorado.
+    """
     if not COMMIT_VALIDO.match(commit):
         raise ValueError(f"commit inválido: {commit!r}")
     destino = BASES / commit
-    if (destino / ".ok").exists():
-        return destino
-    destino.mkdir(parents=True, exist_ok=True)
-    dados = subprocess.run(
-        ["git", "-c", "safe.directory=*", "-C", str(REPO), "archive", commit, "apps/api/app", "scripts"],
-        capture_output=True, check=True, timeout=60).stdout
-    with tarfile.open(fileobj=io.BytesIO(dados)) as tar:
-        tar.extractall(destino, filter="data")
-    (destino / ".ok").write_text(commit)
+    if not (destino / ".ok").exists():
+        destino.mkdir(parents=True, exist_ok=True)
+        _extrair(commit, destino, ["apps/api/app", "scripts"], obrigatorio=True)
+        (destino / ".ok").write_text(commit)
+    for caminho in extras:
+        relativo = Path(caminho)
+        if relativo.is_absolute() or ".." in relativo.parts or (destino / relativo).exists():
+            continue
+        _extrair(commit, destino, [relativo.as_posix()], obrigatorio=False)
     return destino
+
+
+def _extrair(commit: str, destino: Path, caminhos: list[str], obrigatorio: bool) -> None:
+    saida = subprocess.run(
+        ["git", "-c", "safe.directory=*", "-C", str(REPO), "archive", commit, "--", *caminhos],
+        capture_output=True, check=obrigatorio, timeout=60)
+    if saida.returncode != 0:
+        return
+    with tarfile.open(fileobj=io.BytesIO(saida.stdout)) as tar:
+        tar.extractall(destino, filter="data")
 
 
 def ler_base(raiz: Path, caminho: str, inicio: int = 1, fim: int = 10**9) -> list[str]:
@@ -284,8 +299,8 @@ def _checar_simbolos(raiz: Path, codigo: list[str], escopo: list[str], modulos_t
 
 def verificar(texto: str, tarefa: dict) -> dict:
     """Roda as checagens de uma proposta contra a tarefa (trechos, base, escopo, exige)."""
-    raiz = base(tarefa["base"])
     escopo = list(tarefa.get("escopo") or [])
+    raiz = base(tarefa["base"], [c for c, *_ in tarefa.get("trechos") or []] + escopo)
     modulos = [str(Path(c).with_suffix("")).replace("apps/api/", "").replace("/", ".")
                for c, *_ in tarefa.get("trechos") or [] if c.endswith(".py")]
     achados: list[dict] = []

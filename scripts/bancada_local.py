@@ -524,7 +524,7 @@ def carregar_corpus(caminho: str | None) -> dict:
 def trechos_da_base(tarefa: dict) -> str:
     """Trechos reais no commit de base da tarefa, no mesmo formato do `rodar`."""
     import bancada_checks as checks
-    raiz = checks.base(tarefa["base"])
+    raiz = checks.base(tarefa["base"], [c for c, *_ in tarefa.get("trechos") or []])
     partes = []
     for caminho, ini, fim in tarefa.get("trechos") or []:
         linhas = checks.ler_base(raiz, caminho, ini, fim)

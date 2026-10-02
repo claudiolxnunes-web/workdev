@@ -48,11 +48,12 @@ Regras de cada micro-tarefa:
   algo, responda FALTA: <o que falta> em vez de inventar."
 - espera_diff: true quando a saída esperada é um diff. As checagens rodam
   `git apply --check` contra a base e acusam erro se não vier diff.
-- exige: até 5 pares {regex: explicação} com o essencial que a resposta TEM de
-  conter no código (ex.: {"current\\(\\)": "usar current() para ler a chave"}).
-  É expressão regular Python, procurada só nas linhas de código da resposta;
-  escape parênteses e pontos. Até 200 caracteres cada. Use só para o que é
-  inequívoco; omita se não houver.
+- exige: até 5 pares {regex: explicação} com o essencial que a resposta precisa
+  ACRESCENTAR (ex.: {"current\\(\\)": "usar current() para ler a chave"}).
+  É expressão regular Python, procurada só no código NOVO: linhas "+" do diff
+  (ou blocos de código, se não houver diff). Linha de contexto não conta — não use
+  exige para "manter X"; para remoções puras, omita. Escape parênteses e pontos.
+  Até 200 caracteres cada. Use só para o que é inequívoco.
 - max_tokens: o suficiente para a saída, entre 64 e 4000 (diff pequeno ~400-800,
   teste ~800-1500, resumo ~300-600).
 - id: único, só letras, números, _ e -, até 80 caracteres, descritivo
@@ -82,7 +83,7 @@ A Bancada aceita duas formas: uma lista de tarefas solta, ou um objeto
 | `trechos` | `[[caminho, ini, fim], …]` | sim | até 8; até 400 linhas cada; caminhos sensíveis recusados |
 | `max_tokens` | inteiro | não, padrão 1024 | 64 a 4000 |
 | `espera_diff` | booleano | não, padrão false | — |
-| `exige` | `{regex: explicação}` | não | até 5 itens; até 200 caracteres cada; regex precisa compilar |
+| `exige` | `{regex: explicação}` | não | até 5 itens; até 200 caracteres cada; regex precisa compilar; procurado só nas linhas acrescentadas |
 
 ## Exemplo
 
