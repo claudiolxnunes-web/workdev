@@ -407,6 +407,8 @@ def _run(args: list[str], timeout: int = CMD_TIMEOUT_SECONDS):
 LLAMA_CTL = "/usr/local/libexec/workdev-llama-ctl"
 AGENTS_CTL = "/usr/local/libexec/workdev-agents-ctl"
 TMUX_SERVER_TIMEOUT_SECONDS = 10
+# Maior que TimeoutStartSec=180 do workdev-agents-ensure.service.
+TMUX_ENSURE_TIMEOUT_SECONDS = 185
 
 
 def ensure_tmux_server() -> None:
@@ -421,7 +423,14 @@ def ensure_tmux_server() -> None:
     """
     if _run(["tmux", "list-sessions"], 5).returncode == 0:
         return
-    resultado = _run([AGENTS_CTL, "ensure-server"], 95)
+    try:
+        resultado = _run([AGENTS_CTL, "ensure-server"], TMUX_ENSURE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        raise LifecycleError(
+            "tmux_server_unavailable",
+            f"workdev-agents-ensure excedeu {TMUX_ENSURE_TIMEOUT_SECONDS}s; "
+            "confira o estado da unidade antes de tentar novamente",
+        ) from error
     if resultado.returncode != 0:
         raise LifecycleError(
             "tmux_server_unavailable",

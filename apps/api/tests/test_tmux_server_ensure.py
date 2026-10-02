@@ -80,3 +80,18 @@ def test_terminal_auto_garante_o_servidor_antes_de_criar_a_sessao():
     from app.routers import terminal
     fonte = inspect.getsource(terminal)
     assert fonte.index("agent_lifecycle.ensure_tmux_server()") < fonte.index('"tmux", "new-session", "-d", "-s", session,')
+
+
+def test_wrapper_lento_gera_erro_de_lifecycle_sem_repetir_restart(monkeypatch):
+    chamadas = []
+    def run(args, timeout=None):
+        chamadas.append(args)
+        if args[0] == agent_lifecycle.AGENTS_CTL:
+            assert timeout > 180
+            raise subprocess.TimeoutExpired(args, timeout)
+        return resultado(1)
+    monkeypatch.setattr(agent_lifecycle, "_run", run)
+    with pytest.raises(agent_lifecycle.LifecycleError, match="excedeu") as erro:
+        agent_lifecycle.ensure_tmux_server()
+    assert erro.value.code == "tmux_server_unavailable"
+    assert chamadas.count([agent_lifecycle.AGENTS_CTL, "ensure-server"]) == 1

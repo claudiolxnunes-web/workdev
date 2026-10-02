@@ -32,7 +32,8 @@ python3 scripts/bancada_local.py resumo
 python3 scripts/bancada_local.py rodar tarefas.json --stream        # token a token + vigia de símbolos
 python3 scripts/bancada_local.py broker "Onde current() é chamado?"   # local pede LER/PROCURAR; broker só lê
 python3 scripts/bancada_local.py verificar --caso minimo_dev         # checagens mecânicas, sem LLM
-python3 scripts/bancada_local.py observar minimo_dev --observer deepseek/deepseek-v4-flash
+python3 scripts/bancada_local.py observar minimo_dev                         # Luna (padrão)
+python3 scripts/bancada_local.py observar minimo_dev --observer deepseek/deepseek-v4-flash  # alternativa
 python3 scripts/bancada_local.py comparar                            # todos os observers no corpus
 ```
 
@@ -94,3 +95,7 @@ Regras:
 Prompts curtos e com trechos exatos rendem mais que contexto amplo: os 7B
 erram até edições de duas linhas, o MoE 35B e o 27B Q4 acertaram. Meça antes
 de confiar.
+
+## Contexto atualizado
+
+Veja [Terminal do Agente Local](terminal-agente-local.md) para o fluxo com MoE, Luna, broker, vigia e o estado das pendências.

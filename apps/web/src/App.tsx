@@ -17,7 +17,7 @@ const EngineeringPage = lazy(() =>
   import('./modules/engineering').then((m) => ({ default: m.EngineeringPage }))
 )
 const AgentTerminalPage = lazy(() => import("./modules/agents/AgentTerminalPage"))
-const RunTerminalPage = lazy(() => import("./modules/agents/RunTerminalPage"))
+const RunTerminalPage = lazy(() => import("./modules/agents/RunObserverStatus"))
 const AIHub = lazy(() => import("./pages/AIHub"))
 const ChatLivre = lazy(() => import("./pages/ChatLivre"))
 const BancadaLocal = lazy(() => import("./pages/BancadaLocal"))

@@ -299,7 +299,7 @@ export interface AgentContext {
   adrs: Array<{ id: string; title: string; decision: string; status: string }>
   knowledge: Array<{ id: string; title: string; category: string; content: string }>
   decisions: Array<{ id: string; title: string; description: string }>
-  events: Array<{ id: string; type: string; message?: string; created_at?: string }>
+  events: Array<{ id: string; type: string; message?: string; payload?: Record<string, unknown>; created_at?: string }>
   prompt: string
 }
 
@@ -481,6 +481,10 @@ export async function swapRunReviewer(
   return read(fetch(`/api/handoffs/runs/${runId}/reviewer`, {
     method: "POST", headers, body: JSON.stringify({ reviewer, reason }),
   }))
+}
+
+export async function getRun(id: string): Promise<AgentRun> {
+  return read(fetch(`/api/handoffs/runs/${id}`, { headers }))
 }
 
 export async function getRuns(agent?: AgentName): Promise<AgentRun[]> {

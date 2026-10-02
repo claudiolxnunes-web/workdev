@@ -25,7 +25,7 @@ sleep 1
 if tem_servidor; then exit 0; fi
 
 echo "workdev-agents-ensure: sem servidor tmux em $SOCKET; reiniciando workdev-agents.service"
-systemctl restart workdev-agents.service
+timeout --foreground 60s systemctl restart workdev-agents.service
 
 i=0
 until tem_servidor; do

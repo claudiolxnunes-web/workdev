@@ -7,4 +7,5 @@ Description=WorkDev agents: garante o servidor tmux dentro do workdev-agents.ser
 Type=oneshot
 User=root
 ExecStart=/usr/local/libexec/workdev-agents-ensure
-TimeoutStartSec=90
+# Orçamento: lock 60s + confirmação 1s + restart 60s + tmux 30s + margem.
+TimeoutStartSec=180
