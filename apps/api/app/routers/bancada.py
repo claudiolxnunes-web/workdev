@@ -261,6 +261,12 @@ class PedidoParecer(BaseModel):
     observer: str | None = None
 
 
+class PedidoPlanejar(BaseModel):
+    tarefa_id: str | None = Field(None, max_length=36)
+    prompt: str | None = Field(None, max_length=8000)
+    modelo: str = Field(default="deepseek/deepseek-v4-flash", max_length=100)
+
+
 def _erro(erro: "runner.BancadaErro") -> HTTPException:
     return HTTPException(erro.status, {"code": erro.codigo, "message": erro.mensagem})
 
@@ -326,3 +332,19 @@ def pedir_parecer(modelo: str, ident: str, pedido: PedidoParecer | None = None):
 def listar_observers():
     """Observers aceitos no parecer, o padrão e o modo segunda opinião."""
     return runner.observers()
+
+
+@router.post("/planejar")
+def planejar(pedido: PedidoPlanejar):
+    """Planeja um lote: lê contexto, chama OpenRouter, valida JSON.
+
+    Streaming SSE com eventos: contexto, token, validando, ok, erro.
+    """
+    if not pedido.tarefa_id and not pedido.prompt:
+        raise HTTPException(422, {"code": "entrada_vazia", "message": "forneça tarefa_id ou prompt"})
+    try:
+        plano = runner.preparar_planejamento(pedido.tarefa_id, pedido.prompt, pedido.modelo)
+        return StreamingResponse(runner.planejar_stream(plano), media_type="text/event-stream",
+                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    except runner.BancadaErro as erro:
+        raise _erro(erro) from erro

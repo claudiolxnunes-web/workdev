@@ -439,3 +439,49 @@ def ligar_desligar(acao: str) -> dict:
     if not ok:
         raise BancadaErro(502, "falha_servico", f"não foi possível {acao} o modelo local")
     return {"acao": acao, "ok": True}
+
+
+# ---------------------------------------------------------------- planejador
+
+def preparar_planejamento(tarefa_id: str | None, prompt: str | None, modelo: str) -> dict:
+    """Prepara um plano de tarefas via OpenRouter.
+
+    Retorna um dict com o plano para `planejar_stream()` consumir.
+    """
+    if not tarefa_id and not prompt:
+        raise BancadaErro(422, "entrada_vazia", "forneça task_id ou prompt")
+    return {"tipo": "planejar", "tarefa_id": tarefa_id, "prompt": prompt, "modelo": modelo}
+
+
+def planejar_stream(plano: dict) -> Iterator[str]:
+    """Gera eventos SSE para o planejamento.
+
+    Chama bancada_planner.planejar_stream() e traduz para SSE.
+    """
+    try:
+        yield from _planejar(plano)
+    except Exception as erro:
+        yield _sse({"tipo": "erro", "codigo": "erro_interno", "mensagem": str(erro)})
+
+
+def _planejar(plano: dict) -> Iterator[str]:
+    """Orquestra o planejamento com lock."""
+    planner = _modulo("bancada_planner")
+    with _lock_execucao():
+        for evento in planner.planejar_stream(plano["tarefa_id"], plano["prompt"], plano["modelo"]):
+            if evento["tipo"] == "erro":
+                yield _sse(evento)
+                return
+            elif evento["tipo"] == "ok":
+                tarefas = evento["tarefas"]
+                tokens = evento.get("tokens")
+                # Grava metadados das tarefas
+                ident_plano = f"plano-{int(time.time())}"
+                _gravar(pasta() / "planejamentos" / f"{ident_plano}.json", {
+                    "id": ident_plano, "tarefas": tarefas, "tokens": tokens,
+                    "modelo": plano["modelo"], "origem_tarefa": plano.get("tarefa_id"),
+                    "origem_prompt": (plano.get("prompt") or "")[:500], "data": _agora()
+                })
+                yield _sse({"tipo": "ok", "id": ident_plano, "tarefas": tarefas, "tokens": tokens})
+            else:
+                yield _sse(evento)

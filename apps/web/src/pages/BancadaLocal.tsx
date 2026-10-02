@@ -8,6 +8,7 @@ import {
 import { Checagens, Pareceres, Selo } from "@/modules/bancada/Resultado"
 import { SeletorObserver } from "@/modules/bancada/SeletorObserver"
 import { ultimoPromptCorrecao } from "@/modules/bancada/proposta"
+import { PlanejadorModal } from "@/components/bancada/PlanejadorModal"
 
 // Bancada Local: o modelo local só propõe. Tudo aqui acontece por clique do
 // operador, uma execução por vez, e nada é aplicado ao repositório.
@@ -65,10 +66,10 @@ function Aproveitamento({ linhas }: { linhas: LinhaResumo[] }) {
   )
 }
 
-function Lote({ executando, onRodar, onParar }: {
+function Lote({ executando, onRodar, onParar, onPlanejar, texto, setTexto }: {
   executando: boolean; onRodar: (tarefas: NovaTarefa[], automatico: boolean) => void; onParar: () => void
+  onPlanejar: () => void; texto: string; setTexto: (texto: string) => void
 }) {
-  const [texto, setTexto] = useState("")
   const [automatico, setAutomatico] = useState(true)
   const [erro, setErro] = useState("")
   function rodar() {
@@ -77,7 +78,10 @@ function Lote({ executando, onRodar, onParar }: {
   }
   return (
     <section aria-label="Lote de tarefas" className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-      <h2 className="mb-2 text-sm font-semibold text-slate-300">Lote de tarefas (JSON do AI Hub)</h2>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-slate-300">Lote de tarefas</h2>
+        <button type="button" disabled={executando} onClick={onPlanejar} className="rounded bg-violet-700 px-3 py-1 text-xs hover:bg-violet-600 disabled:opacity-50">Planejar Lote</button>
+      </div>
       <textarea aria-label="JSON das tarefas" value={texto} onChange={(e) => setTexto(e.target.value)} rows={7}
         placeholder='[{"id": "t1", "instrucao": "…", "trechos": [["apps/api/app/x.py", 10, 60]], "espera_diff": true}]'
         className="w-full rounded bg-slate-950 p-2 font-mono text-xs text-slate-200" />
@@ -152,6 +156,8 @@ export default function BancadaLocal() {
   const [saida, setSaida] = useState("")
   const parar = useRef(false)
   const [observer, setObserver] = useState<string | null>(null)
+  const [abertoPlanejador, setAbertoPlanejador] = useState(false)
+  const [textLote, setTextLote] = useState("")
 
   const carregar = useCallback(async () => {
     setErro("")
@@ -241,6 +247,12 @@ export default function BancadaLocal() {
     finally { setAcaoModelo(false); await carregar() }
   }
 
+  function handleUsarTarefas(tarefas: NovaTarefa[]) {
+    setTextLote(JSON.stringify(tarefas, null, 2))
+    setAbertoPlanejador(false)
+    log(`[planejador] ${tarefas.length} tarefa(s) carregada(s) no lote`)
+  }
+
   return (
     <div className="mx-auto flex max-w-screen-2xl flex-col gap-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
@@ -256,7 +268,8 @@ export default function BancadaLocal() {
       {erro && <p role="alert" className="text-sm text-rose-300">{erro}</p>}
       <EstadoModelo estado={estado} onAcao={(a) => void modelo(a)} acaoEmCurso={acaoModelo || executando} />
       <div className="grid gap-4 lg:grid-cols-2">
-        <Lote executando={executando} onRodar={(t, a) => void rodarLote(t, a)} onParar={() => { parar.current = true }} />
+        <Lote executando={executando} onRodar={(t, a) => void rodarLote(t, a)} onParar={() => { parar.current = true }}
+          onPlanejar={() => setAbertoPlanejador(true)} texto={textLote} setTexto={setTextLote} />
         <Fluxo linhas={linhas} saida={saida} />
       </div>
       <Aproveitamento linhas={resumo} />
@@ -288,6 +301,7 @@ export default function BancadaLocal() {
                 onReenviar={(prompt) => void reenviar(prompt)} />}
         </section>
       </div>
+      <PlanejadorModal aberto={abertoPlanejador} onClose={() => setAbertoPlanejador(false)} onUsarTarefas={handleUsarTarefas} />
     </div>
   )
 }
