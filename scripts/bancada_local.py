@@ -586,6 +586,18 @@ def _rodar_observer(caso: dict, tarefa: dict, observer: str, verdade: dict) -> d
     return resultado
 
 
+from bancada_observer import SEGUNDA_OPINIAO_ARBITRO, SEGUNDA_OPINIAO_PRIMARIO  # noqa: E402
+
+
+def _imprimir_parecer(observer: str, resultado: dict) -> None:
+    parecer = resultado["parecer"]
+    print(f"\nObserver {observer}: {parecer['veredito']}  ({resultado['segundos']}s, US$ {resultado['custo_usd']})")
+    for erro in parecer["erros"]:
+        print(f"  - {erro.get('categoria')}: {erro.get('descricao')}")
+    if parecer["prompt_correcao"]:
+        print(f"Prompt de correção sugerido (não enviado):\n{parecer['prompt_correcao']}")
+
+
 def cmd_observar(args) -> int:
     import bancada_checks as checks
     corpus = carregar_corpus(args.corpus)
@@ -599,16 +611,47 @@ def cmd_observar(args) -> int:
     salvar_verificacao(caso, caso["tarefa"], proposta, verdade)
     print("Checagens mecânicas:")
     imprimir_checagens(verdade)
-    resultado = _rodar_observer(caso, tarefa, args.observer, verdade)
-    if not resultado["ok"]:
-        print(f"\nObserver {args.observer} falhou: {' | '.join(resultado['falhas'])}")
+
+    if not getattr(args, "segunda_opiniao", False):
+        resultado = _rodar_observer(caso, tarefa, args.observer, verdade)
+        if not resultado["ok"]:
+            print(f"\nObserver {args.observer} falhou: {' | '.join(resultado['falhas'])}")
+            return 4
+        _imprimir_parecer(args.observer, resultado)
+        return 0
+
+    # Modo segunda opinião: primário barato decide os casos simples (aproveitada);
+    # nos demais, um árbitro mais calibrado dá a palavra final sobre a severidade.
+    # Escopo: só a bancada local (scripts/bancada_local.py) — não toca o fluxo de
+    # produção dos agentes (tmux code/codex/grok). Decisão de 02/out/2026.
+    primario = SEGUNDA_OPINIAO_PRIMARIO
+    arbitro = SEGUNDA_OPINIAO_ARBITRO
+    resultado_primario = _rodar_observer(caso, tarefa, primario, verdade)
+    if not resultado_primario["ok"]:
+        print(f"\nObserver {primario} (primário) falhou: {' | '.join(resultado_primario['falhas'])}")
         return 4
-    parecer = resultado["parecer"]
-    print(f"\nObserver {args.observer}: {parecer['veredito']}  ({resultado['segundos']}s, US$ {resultado['custo_usd']})")
-    for erro in parecer["erros"]:
-        print(f"  - {erro.get('categoria')}: {erro.get('descricao')}")
-    if parecer["prompt_correcao"]:
-        print(f"\nPrompt de correção sugerido (não enviado):\n{parecer['prompt_correcao']}")
+    _imprimir_parecer(primario, resultado_primario)
+
+    veredito_primario = resultado_primario["parecer"]["veredito"]
+    if veredito_primario == "aproveitada":
+        print(f"\n[segunda opinião] {primario} deu \"aproveitada\" — caso simples, não escalou para {arbitro}.")
+        return 0
+
+    print(f"\n[segunda opinião] {primario} apontou \"{veredito_primario}\" — escalando para {arbitro}...")
+    resultado_arbitro = _rodar_observer(caso, tarefa, arbitro, verdade)
+    if not resultado_arbitro["ok"]:
+        print(f"\nObserver {arbitro} (árbitro) falhou: {' | '.join(resultado_arbitro['falhas'])} — mantendo veredito do primário.")
+        return 0
+    _imprimir_parecer(arbitro, resultado_arbitro)
+
+    veredito_arbitro = resultado_arbitro["parecer"]["veredito"]
+    custo_total = resultado_primario["custo_usd"] + resultado_arbitro["custo_usd"]
+    if veredito_arbitro == veredito_primario:
+        print(f"\n[segunda opinião] concordam em \"{veredito_arbitro}\" — custo total US$ {custo_total:.5f}")
+    else:
+        print(f"\n[segunda opinião] divergência: {primario}=\"{veredito_primario}\" vs {arbitro}=\"{veredito_arbitro}\". "
+              f"{arbitro} decide (mais calibrado, dado de 02/out/2026). Veredito final: \"{veredito_arbitro}\" — "
+              f"custo total US$ {custo_total:.5f}")
     return 0
 
 
@@ -811,6 +854,9 @@ def main() -> int:
     o.add_argument("caso")
     o.add_argument("--observer", default="openai/gpt-5.6-luna",
                    help="modelo do observer (padrão: openai/gpt-5.6-luna)")
+    o.add_argument("--segunda-opiniao", action="store_true", dest="segunda_opiniao",
+                   help="escalona para um árbitro (openai/gpt-5.6-luna) quando o primário "
+                        "(mistralai/codestral-2508) não disser 'aproveitada'; ignora --observer")
     o.add_argument("--corpus")
     o.set_defaults(func=cmd_observar)
 

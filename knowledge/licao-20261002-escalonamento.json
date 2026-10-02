@@ -1,0 +1,17 @@
+{
+  "id": "licao-20261002-escalonamento",
+  "titulo": "Escalonamento de Observer: Codestral (rápido) → Luna (calibrado)",
+  "data": "2026-10-02",
+  "categoria": "licao",
+  "projeto": "workdev-core",
+  "problema": "Avaliar propostas com baixo custo sem perder qualidade de severidade.",
+  "solucao": "Escalonamento inteligente: Codestral avalia primeiro; se 'aproveitada', pronto; senão, escalona para Luna.",
+  "metricas": {
+    "custo_simples": "US$ 0,0002",
+    "custo_complexo": "US$ 0,001",
+    "economia": "95% em simples, 70% em complexos vs Luna sempre"
+  },
+  "regra": "Primário: Codestral. Se não aproveitada, árbitro: Luna. Desempate: Luna.",
+  "cli": "python3 scripts/bancada_local.py observar <caso> --segunda-opiniao",
+  "ui": "Seletor 'Observer do parecer' na /bancada e no chat do /workspace: opção 'segunda opinião' (API: observer=segunda-opiniao)"
+}

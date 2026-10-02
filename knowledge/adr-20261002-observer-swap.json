@@ -1,0 +1,15 @@
+{
+  "id": "adr-20261002-observer-swap",
+  "titulo": "Substituir Kimi-K2.6 por Codestral-2508 como Observer",
+  "data": "2026-10-02",
+  "categoria": "decisao-arquitetura",
+  "status": "aprovada",
+  "contexto": "Bancada Local necessita de Observer calibrado para avaliar propostas do modelo MoE 35B.",
+  "decisao": "Remover moonshotai/kimi-k2.6, adicionar mistralai/codestral-2508.",
+  "razoes": [
+    "Kimi falhou 1/8 casos, 8-30x mais lento",
+    "Codestral 47x mais barato, 10/10 erros detectados, 0 falsos positivos"
+  ],
+  "escopo": "Bancada Local (CLI, página /bancada e chat do /workspace). Agentes em produção: observer único, Luna padrão.",
+  "validacao": "Testado em 3 cenários com sucesso"
+}

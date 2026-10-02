@@ -31,8 +31,14 @@ OBSERVERS = {
     "openai/gpt-5.6-luna": {"reasoning": {"effort": "medium"}},
     "deepseek/deepseek-v4-flash": {},
     "qwen/qwen3-coder-next": {},
-    "moonshotai/kimi-k2.6": {},
+    "mistralai/codestral-2508": {},
 }
+
+
+# Segunda opinião: o primário (rápido e barato, rígido) decide quando diz
+# "aproveitada"; nos demais casos o árbitro (mais calibrado na severidade) decide.
+SEGUNDA_OPINIAO_PRIMARIO = "mistralai/codestral-2508"
+SEGUNDA_OPINIAO_ARBITRO = "openai/gpt-5.6-luna"
 
 
 class ObserverFalhou(RuntimeError):
