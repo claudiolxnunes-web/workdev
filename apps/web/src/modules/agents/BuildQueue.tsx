@@ -95,10 +95,6 @@ export function BuildQueue({
     // O reset deve preceder as respostas, sem uma transição adiada apagá-las.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setRuns([]); setSelectedId(null); setContext(null); setLoading(true)
-    // loadRuns() é reaproveitado por 3 gatilhos (mount, evento realtime,
-    // timer) — inline duplicaria a busca 3x; disable com escopo é mais
-    // seguro que reestruturar um fluxo com subscription+interval.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadRuns()
     const unsubscribe = subscribeToHandoffs(() => void loadRuns())
     const timer = window.setInterval(() => void loadRuns(), 10000)
@@ -114,7 +110,6 @@ export function BuildQueue({
     setContext(null); setJob(null); setDispatchNotice("")
     setObserverEditorOpen(false); setObserverModelKey("")
     if (selectedId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadContext(selectedId)
     }
     return () => { contextGeneration.current += 1 }
