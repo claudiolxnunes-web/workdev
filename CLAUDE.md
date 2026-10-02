@@ -169,18 +169,15 @@ WorkDev que mudou.
   testes, vitest.config.ts, scripts/setup-config.sh, docs/settings-system.md)
   — o backend já foi revisado e commitado (42ce003), falta essa parte.
 - Dar tools de grafo (`graph_nodes`/`graph_edges`) para o Fable no AI Hub.
-- **Ownership root residual em `/opt/workdev` (causa raiz, adiado em 2026-08-20).**
-  Depois do `7d14fab feat(agents): run workdev services unprivileged` os serviços
-  passaram a rodar como `workdev`, mas vários diretórios continuaram `root:root`,
-  criados quando tudo era root. Sintomas já vistos: `pnpm install` morre com
-  `EACCES rmdir` nos `node_modules`, `pytest` não escreve `.pytest_cache`, e o
-  `apps/api/.env` residual é `root:root 600`. Contornado na marra rodando
-  `pnpm install` com `sudo`, o que **recria `node_modules` como root e realimenta
-  o problema**. Correção de verdade: varrer o repo inteiro
-  (`sudo find /opt/workdev -user root -not -path '*/venv/*'`) e decidir caso a
-  caso o que passa para `workdev:workdev` — não sair dando `chown -R` no
-  `/opt/workdev` todo às cegas, porque `venv/` e os `.env` têm dono e modo
-  propositais.
+- ✅ **Ownership root residual em `/opt/workdev` — resolvido em 2026-10-02.** Arquivos
+  rastreados pelo git (170) e suas pastas passaram a `workdev:workdev-runtime`; os três
+  `node_modules` foram reinstalados como `workdev` com o store do pnpm em
+  `/home/workdev/.local/share/pnpm/store` (antes em `/root`, ilegível); caches
+  `__pycache__`/`.pytest_cache` root apagados. Ficaram root DE PROPÓSITO: `.env*`,
+  `deploy.sh` (root o executa), `models/`, `.backups/`, `.local/`, `.claude/`, venvs e
+  saídas ignoradas de `training/`. **Para não voltar:** `pnpm add/install/build` e
+  `pytest` sempre como `workdev` (`runuser -u workdev -- …`); edição de código por
+  sessão root deve terminar com `chown workdev:workdev-runtime` nos arquivos tocados.
 
 
 ## workdev-api.service
@@ -215,10 +212,10 @@ WorkDev que mudou.
   ```
   printf 'DATABASE_URL=postgresql+psycopg://u:p@127.0.0.1:5432/fake\n' > /tmp/test.env
   cd /opt/workdev/apps/api
-  WORKDEV_API_ENV_FILE=/tmp/test.env venv/bin/python -m pytest tests/ -q -p no:cacheprovider
+  WORKDEV_API_ENV_FILE=/tmp/test.env venv/bin/python -m pytest tests/ -q
   ```
-  (`-p no:cacheprovider` porque `.pytest_cache` também é root. DSN falso basta:
-  os testes não conectam, mas `app/database.py` cria o engine na importação.)
+  (DSN falso basta: os testes não conectam, mas `app/database.py` cria o engine na
+  importação. O `-p no:cacheprovider` não é mais necessário desde 2026-10-02.)
 - Teste de carga de uma variável (NÃO usar `/proc/PID/environ` — dá 0 mesmo funcionando):
   ```
   /opt/workdev/apps/api/venv/bin/python -c "from dotenv import load_dotenv; import os; load_dotenv('/etc/workdev/workdev-api.env'); v=os.getenv('VAR'); print('OK', len(v)) if v else print('AUSENTE')"
