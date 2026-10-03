@@ -317,8 +317,10 @@ def verificar(texto: str, tarefa: dict) -> dict:
     for original, apelido in re.findall(r"import\s+(\w+)\s+as\s+(\w+)", juntos):
         juntos += "\n" + re.sub(rf"\b{apelido}\(", f"{original}(", juntos)
     # "exige" são expressões regulares: o essencial do enunciado, não um texto exato.
+    # Se não há diff e nenhum bloco de código cercado por fence, procurar no texto completo.
+    contexto_exige = texto if (not extrair_diff(texto) and not FENCE.search(texto)) else juntos
     for exigido, explicacao in (tarefa.get("exige") or {}).items():
-        if not re.search(exigido, juntos):
+        if not re.search(exigido, contexto_exige):
             achados.append(achado("ignora_enunciado", "erro", f"a proposta não faz o pedido: {explicacao}"))
     erros = [a for a in achados if a["severidade"] == "erro"]
     return {"achados": achados, "erros": len(erros),

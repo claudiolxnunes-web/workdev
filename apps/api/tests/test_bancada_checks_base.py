@@ -55,3 +55,27 @@ def test_verificar_aplica_diff_de_frontend(checks):
     resultado = modulo.verificar(proposta, {"base": commit, "escopo": ["apps/web/src/A.tsx"],
                                             "trechos": [["apps/web/src/A.tsx", 1, 2]], "espera_diff": True})
     assert "diff_nao_aplica" not in resultado["categorias_erro"], resultado["achados"]
+
+
+def test_verificar_exige_em_texto_puro_sem_codigo(checks):
+    """Quando não há diff e nenhum bloco de código cercado, exige deve procurar no texto todo."""
+    modulo, commit = checks
+    proposta = "/**\n * texto sem parenteses\n */\n"
+    resultado = modulo.verificar(proposta, {
+        "base": commit, "escopo": [], "trechos": [],
+        "exige": {r"/\*\*": "abre JSDoc"}
+    })
+    assert resultado["aprovada"], f"Deveria passar, mas achados: {resultado['achados']}"
+    assert "ignora_enunciado" not in resultado["categorias_erro"]
+
+
+def test_verificar_exige_em_texto_puro_com_parentese(checks):
+    """Texto puro com parêntese não deve ser tratado como 'linha de código' para exige."""
+    modulo, commit = checks
+    proposta = "/**\n * Valida (título e conteúdo) antes de salvar.\n */\n"
+    resultado = modulo.verificar(proposta, {
+        "base": commit, "escopo": [], "trechos": [],
+        "exige": {r"/\*\*": "abre JSDoc"}
+    })
+    assert resultado["aprovada"], f"Deveria passar, mas achados: {resultado['achados']}"
+    assert "ignora_enunciado" not in resultado["categorias_erro"]
