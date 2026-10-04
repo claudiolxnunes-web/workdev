@@ -22,7 +22,7 @@ from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.ai_routing import AICallLog, AIModelCatalog
 from app.services import autoridade, context_engine, rag_search
-from app.services import ai_cost_guard, agent_runtimes
+from app.services import ai_cost_guard, agent_runtimes, bancada_runner
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
 
@@ -389,6 +389,30 @@ TOOLS = [
         },
     },
     {
+        "name": "ler_task",
+        "description": "Le uma task do backlog pelo id (uuid): titulo, descricao, projeto, status e subtasks. Somente leitura. Se a descricao estiver vazia, a resposta diz isso explicitamente (descricao_vazia=true); nesse caso nao invente contexto.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "id (uuid) da task"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "ler_trecho",
+        "description": "Le linhas reais de um arquivo do repositorio WorkDev (caminho relativo a raiz do repo, linhas inicio..fim inclusivas, a partir de 1). Somente leitura. No maximo 200 linhas por chamada; recusa caminho fora do repo, .env, .git, chaves, credenciais, node_modules, binarios e arquivos acima de 1 MB. Use para citar arquivo e linhas que existem de fato.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "caminho": {"type": "string", "description": "ex.: apps/api/app/routers/ai.py"},
+                "inicio": {"type": "integer", "description": "primeira linha, a partir de 1"},
+                "fim": {"type": "integer", "description": "ultima linha, inclusiva"},
+            },
+            "required": ["caminho", "inicio", "fim"],
+        },
+    },
+    {
         "name": "atualizar_task",
         "description": "Atualiza uma task do backlog: status (todo/doing/blocked/done), prioridade, titulo ou sprint. Use quando pedirem para marcar como concluida/done, mover para doing, mudar prioridade, renomear. Se houver mais de uma task com titulo parecido, a tool devolve a lista para voce pedir especificacao.",
         "input_schema": {
@@ -506,6 +530,86 @@ TOOLS = [
         },
     },
 ]
+
+
+# ler_trecho do AI Hub: wrapper fino sobre bancada_runner.ler_trecho, que já
+# valida realpath, raiz do repo e a lista de caminhos sensíveis. As travas
+# abaixo só existem porque aqui quem chama é o modelo: o runner lê o arquivo
+# inteiro antes de cortar (um GGUF em models/ tem 9 GB) e aceita 400 linhas.
+LER_TRECHO_MAX_LINHAS = 200
+LER_TRECHO_MAX_BYTES = 1_000_000
+LER_TRECHO_MAX_CHARS = 20_000
+
+
+def _ler_task(args: dict, db: Session) -> str:
+    try:
+        task_uuid = uuid.UUID(str(args.get("task_id", "")))
+    except ValueError:
+        return json.dumps({"erro": "task_id inválido (esperado uuid)"},
+                          ensure_ascii=False)
+    t = db.query(BacklogItem).filter(BacklogItem.id == task_uuid).first()
+    if not t:
+        return json.dumps({"erro": "task não encontrada"}, ensure_ascii=False)
+    p = db.query(Project).filter(Project.id == t.project_id).first()
+    subs = (db.query(BacklogSubtask)
+            .filter(BacklogSubtask.backlog_id == t.id)
+            .order_by(BacklogSubtask.execution_order).all())
+    descricao = (t.description or "").strip()
+    saida = {
+        "task_id": str(t.id),
+        "titulo": t.title,
+        "descricao": descricao or None,
+        "descricao_vazia": not descricao,
+        "projeto": {"nome": p.name, "slug": p.slug} if p else None,
+        "status": t.status,
+        "prioridade": t.priority,
+        "tipo": t.type,
+        "subtasks": [{"ordem": s.execution_order, "titulo": s.title,
+                      "status": s.status,
+                      "descricao": (s.description or "").strip() or None}
+                     for s in subs],
+    }
+    if not descricao:
+        saida["aviso"] = ("A task não tem descrição. Não planeje nem complete "
+                          "o contexto por conta própria: peça a descrição.")
+    return json.dumps(saida, ensure_ascii=False)
+
+
+def _ler_trecho(args: dict) -> str:
+    def erro(codigo: str, mensagem: str) -> str:
+        return json.dumps({"erro": mensagem, "code": codigo},
+                          ensure_ascii=False)
+
+    caminho = args.get("caminho")
+    try:
+        inicio, fim = int(args.get("inicio")), int(args.get("fim"))
+    except (TypeError, ValueError):
+        return erro("trecho_invalido", "inicio e fim precisam ser inteiros")
+    if inicio < 1 or fim < inicio:
+        return erro("trecho_invalido", f"intervalo inválido: {inicio}-{fim}")
+    if not isinstance(caminho, str) or not caminho.strip():
+        return erro("trecho_invalido", "caminho vazio")
+    raiz = bancada_runner.REPO_TRABALHO.resolve()
+    alvo = Path(os.path.realpath(raiz / caminho.strip()))
+    if raiz not in alvo.parents:
+        return erro("trecho_invalido", f"fora do repositório: {caminho}")
+    # Tamanho checado só por stat, antes de o runner ler o arquivo.
+    if alvo.is_file() and alvo.stat().st_size > LER_TRECHO_MAX_BYTES:
+        return erro("trecho_grande",
+                    f"arquivo acima de {LER_TRECHO_MAX_BYTES} bytes: {caminho}")
+    pedido_fim = fim
+    fim = min(fim, inicio + LER_TRECHO_MAX_LINHAS - 1)
+    try:
+        texto, inicio, fim = bancada_runner.ler_trecho(caminho, inicio, fim)
+    except bancada_runner.BancadaErro as e:
+        return erro(e.codigo, e.mensagem)
+    if "\x00" in texto:
+        return erro("trecho_binario", f"arquivo binário: {caminho}")
+    saida = {"caminho": caminho.strip(), "inicio": inicio, "fim": fim,
+             "texto": texto[:LER_TRECHO_MAX_CHARS]}
+    if fim < pedido_fim or len(texto) > LER_TRECHO_MAX_CHARS:
+        saida["truncado"] = True
+    return json.dumps(saida, ensure_ascii=False)
 
 
 def executar_tool(nome: str, args: dict, db: Session,
@@ -670,6 +774,12 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
                            "status": s.status} for s in subs]},
             ensure_ascii=False,
         )
+
+    if nome == "ler_task":
+        return _ler_task(args, db)
+
+    if nome == "ler_trecho":
+        return _ler_trecho(args)
 
     if nome == "registrar_conhecimento":
         pid = None
