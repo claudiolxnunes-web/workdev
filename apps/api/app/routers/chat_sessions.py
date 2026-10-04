@@ -9,7 +9,7 @@ from app.models.backlog import BacklogItem
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.project import Project
 from app.models.subtask import BacklogSubtask
-from app.schemas.chat import SessionFromTask, SessionUpdate
+from app.schemas.chat import SessionFromTask, SessionUpdate, BancadaPlanningRequest
 from app.services import autoridade, chat_audit
 from app.services.handoff import active_plan_for_task, PLANNING_TASK_STATUSES
 
@@ -106,6 +106,63 @@ def _task_context(
     return "\n".join(lines)
 
 
+def _bancada_planning_context(task: BacklogItem | None, project: Project | None, prompt_livre: str | None = None) -> str | None:
+    """Prompt de planejamento da Bancada Local para LLM grande via OpenRouter."""
+    if prompt_livre:
+        entrada = f"Pedido livre:\n{prompt_livre}"
+    else:
+        if not (task.description or "").strip():
+            return None  # Sinal de que a descrição está vazia
+        entrada = f"Task: {task.title}\n{task.description or ''}"
+
+    lines = [
+        "Você é o planejador da Bancada Local do WorkDev. Vai quebrar o pedido abaixo em",
+        "micro-tarefas para um modelo local pequeno (Qwen ~30B MoE, contexto curto, sem",
+        "ferramentas). O modelo local NÃO lê arquivos: ele só vê os trechos que você",
+        "indicar, com número de linha. Ele inventa nomes com facilidade quando o",
+        "contexto não traz o que precisa.",
+        "",
+        "Regras de cada micro-tarefa:",
+        "- Uma ação só: um diff pequeno, uma docstring, um teste, um resumo, uma lista.",
+        "  Nada de 'refatore o módulo'.",
+        "- Trechos mínimos e suficientes: inclua a definição de TODO nome que a resposta",
+        "  vai precisar usar (função, constante, import). Se o diff mexe em X e chama Y,",
+        "  o trecho de Y também entra. Na dúvida, inclua o bloco de imports do arquivo.",
+        "- Linhas reais do arquivo atual, [caminho relativo à raiz do repo, início, fim],",
+        "  inclusivas. No máximo 8 trechos e 400 linhas por trecho; prefira bem menos.",
+        "- Nunca use .env, .git, chaves, certificados, node_modules ou caminhos fora do",
+        "  repo: a Bancada recusa.",
+        "- Instrução autocontida e explícita sobre o formato de saída. Para mudança de",
+        "  código: 'Saída: diff unificado (--- a/… +++ b/…) contra os trechos, e nada",
+        "  mais.' Para análise: diga o formato (lista, JSON com chaves X/Y).",
+        "- Sempre inclua na instrução: 'Use só nomes que aparecem nos trechos. Se faltar",
+        "  algo, responda FALTA: <o que falta> em vez de inventar.'",
+        "- espera_diff: true quando a saída esperada é um diff. As checagens rodam",
+        "  `git apply --check` contra a base e acusam erro se não vier diff.",
+        "- exige: até 5 pares {regex: explicação} com o essencial que a resposta precisa",
+        "  ACRESCENTAR (ex.: {'current\\\\(\\\\)': 'usar current() para ler a chave'}).",
+        "  É expressão regular Python, procurada só no código NOVO: linhas '+' do diff",
+        "  (ou blocos de código, se não houver diff). Escape parênteses e pontos.",
+        "- max_tokens: o suficiente para a saída, entre 64 e 4000 (diff pequeno ~400-800,",
+        "  teste ~800-1500, resumo ~300-600).",
+        "- id: único, só letras, números, _ e -, até 80 caracteres, descritivo.",
+        "- Ordene as tarefas para que cada uma seja independente: o modelo local não vê",
+        "  a resposta das anteriores.",
+        "- Se o pedido não cabe em micro-tarefas (precisa de muitos arquivos, decisão de",
+        "  arquitetura, migração de banco), NÃO force: devolva {\"tarefas\": [],",
+        "  \"fora_do_alcance\": \"<motivo>\"}.",
+        "",
+        "Responda APENAS com JSON válido, sem texto antes ou depois:",
+        "{\"tarefas\": [ {\"id\": \"...\", \"instrucao\": \"...\", \"trechos\": [[\"caminho\", ini, fim]],",
+        "               \"max_tokens\": 800, \"espera_diff\": true, \"exige\": {\"regex\": \"explicação\"}} ]}",
+        "",
+        f"Contexto do projeto: {project.name if project else 'N/A'} ({project.slug if project else 'N/A'})",
+        "",
+        entrada,
+    ]
+    return "\n".join(lines)
+
+
 def planning_eligibility(db: Session, task) -> dict:
     if task.status not in PLANNING_TASK_STATUSES:
         return {'eligible': False, 'code': 'task_not_eligible',
@@ -187,6 +244,72 @@ def criar_sessao_da_task(
         "task_id": str(task.id),
         "task_title": task.title,
         "backlog_id": str(task.id),
+    }
+
+
+@router.post("/chat/bancada/planejar", status_code=201)
+def criar_sessao_planejamento_bancada(
+    payload: BancadaPlanningRequest, db: Session = Depends(get_db)
+):
+    """Cria uma sessão de chat para planejar uma task da Bancada Local.
+
+    Recebe task_id ou prompt livre. Se task_id, valida que a task tem descrição.
+    Retorna uma sessão em modo OBSERVE com o prompt do planejador.
+    """
+    if not payload.task_id and not payload.prompt:
+        raise HTTPException(422, "Forneça task_id ou prompt")
+
+    task = None
+    project = None
+
+    if payload.task_id:
+        task = db.query(BacklogItem).filter(
+            BacklogItem.id == payload.task_id
+        ).first()
+        if not task:
+            raise HTTPException(404, "Task não encontrada")
+        project = db.query(Project).filter(Project.id == task.project_id).first()
+
+        # Validação: recusa task sem descrição
+        if not (task.description or "").strip():
+            raise HTTPException(409, {
+                "code": "descricao_vazia",
+                "message": "A task não tem descrição. Peça a descrição antes de planejar."
+            })
+    else:
+        # Prompt livre: sem projeto específico
+        project = None
+
+    # Monta o prompt de planejamento
+    prompt_content = _bancada_planning_context(task, project, payload.prompt)
+    if prompt_content is None:
+        raise HTTPException(409, "Task sem descrição")
+
+    # Cria a sessão em modo OBSERVE (somente leitura)
+    session = ChatSession(
+        title=f"Planejar Bancada: {task.title if task else 'Prompt livre'}"[:255],
+        project_id=project.id if project else None,
+        task_id=task.id if task else None,
+        authority=autoridade.OBSERVE,  # Somente leitura
+    )
+    try:
+        db.add(session)
+        db.flush()
+        db.add(ChatMessageDB(
+            session_id=session.id,
+            role="system",
+            content=prompt_content,
+        ))
+        db.commit()
+        db.refresh(session)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(500, "Erro ao criar sessão de planejamento")
+
+    return {
+        **sessao_out(session, project),
+        "task_id": str(task.id) if task else None,
+        "task_title": task.title if task else None,
     }
 
 
