@@ -58,7 +58,18 @@ LOTE = re.compile(r"^(\d{6})-(\d{2,})$")
 
 
 def proximo_lote(pasta_planos: Path, hoje: str | None = None) -> str:
-    """Id do próximo lote do dia. A página e a CLI usam a mesma pasta e a mesma regra."""
+    """Retorna o id do próximo lote no formato AAMMDD-NN.
+
+    AAMMDD = ano (2 dígitos), mês (2 dígitos), dia (2 dígitos).
+    NN = número sequencial com pelo menos 2 dígitos (ex.: 260101-01).
+
+    O parâmetro opcional `hoje` é uma string no formato "yymmdd" que força a data;
+    quando None (padrão), usa a data atual via datetime.now().
+
+    Se `pasta_planos` não existir ou não for um diretório, o glob não itera
+    (lista vazia) e a função retorna sempre "AAMMDD-01" (sequencial 1).
+    A função NÃO cria a pasta.
+    """
     hoje = hoje or datetime.now().strftime("%y%m%d")
     usados = [int(m.group(2)) for p in (pasta_planos.glob(f"{hoje}-*.json") if pasta_planos.is_dir() else [])
               if (m := LOTE.match(p.stem)) and m.group(1) == hoje]
