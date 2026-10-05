@@ -459,7 +459,14 @@ def cmd_avaliar(args) -> int:
 
 def cmd_resumo(args) -> int:
     try:
-        registros = [json.loads(l) for l in REGISTRO.read_text(encoding="utf-8").splitlines() if l.strip()]
+        registros = [
+            r for r in (
+                json.loads(l)
+                for l in REGISTRO.read_text(encoding="utf-8").splitlines()
+                if l.strip()
+            )
+            if r.get("veredito")
+        ]
     except OSError:
         print("sem registro.jsonl ainda — use `avaliar` ou `observar` primeiro")
         return 1
@@ -813,6 +820,265 @@ def cmd_broker(args) -> int:
     return 4
 
 
+# ---------------------------------------------------------------- planejador simplificado
+
+PROTOCOLO_PLANEJADOR = (
+    "Você é o PLANEJADOR SIMPLIFICADO da Bancada Local do WorkDev. "
+    "Sua função é separar somente trabalho pequeno, seguro e verificável para "
+    "um modelo local. Você NÃO altera arquivos.\n\n"
+
+    "Você não lê o repositório sozinho. Quando precisar de contexto, responda "
+    "APENAS com até 3 pedidos por vez:\n"
+    "LER caminho/relativo.py 10-60\n"
+    "PROCURAR termo [pasta]\n\n"
+
+    "REGRAS:\n"
+    "- no máximo 4 tarefas;\n"
+    "- cada tarefa deve ter uma ação só;\n"
+    "- no máximo 2 arquivos por tarefa;\n"
+    "- use somente linhas realmente recebidas por LER;\n"
+    "- não estime linhas;\n"
+    "- nada de decisão arquitetural, configuração, migração, banco ou tarefa "
+    "dependente de outro passo;\n"
+    "- prefira pedir CONTEÚDO para edição, não diff;\n"
+    "- cada instrução deve conter contexto suficiente para funcionar sozinha;\n"
+    "- termine cada instrucao com: "
+    "\"Use só nomes que aparecem nos trechos. Se faltar algo, responda "
+    "FALTA: <o que falta> em vez de inventar. Saída: <formato>.\"\n"
+    "- max_tokens deve ser no máximo 400;\n"
+    "- espera_diff normalmente deve ser false.\n\n"
+
+    "Quando tiver contexto suficiente, responda SOMENTE com JSON válido neste formato:\n"
+    '{"tarefas":[{"id":"...","instrucao":"...","trechos":[["caminho",10,30]],'
+    '"max_tokens":400,"espera_diff":false}],'
+    '"fora_do_alcance":"opcional"}\n\n'
+
+    "Se nada couber na bancada local, responda:\n"
+    '{"tarefas":[],"fora_do_alcance":"motivo"}\n'
+)
+
+
+def _extrair_plano(texto: str) -> dict:
+    bruto = texto.strip()
+
+    if bruto.upper().startswith("PROPOSTA:"):
+        bruto = bruto.split(":", 1)[1].strip()
+    if bruto.upper().startswith("PLANO:"):
+        bruto = bruto.split(":", 1)[1].strip()
+
+    if bruto.startswith("```"):
+        linhas = bruto.splitlines()
+        if linhas:
+            linhas = linhas[1:]
+        if linhas and linhas[-1].strip().startswith("```"):
+            linhas = linhas[:-1]
+        bruto = "\n".join(linhas).strip()
+
+    ini = bruto.find("{")
+    fim = bruto.rfind("}")
+    if ini < 0 or fim < ini:
+        raise ValueError("resposta sem objeto JSON")
+
+    plano = json.loads(bruto[ini:fim + 1])
+
+    if not isinstance(plano, dict):
+        raise ValueError("plano precisa ser objeto JSON")
+
+    tarefas = plano.get("tarefas")
+    if not isinstance(tarefas, list):
+        raise ValueError("campo tarefas precisa ser lista")
+    if len(tarefas) > 4:
+        raise ValueError("máximo de 4 tarefas")
+
+    ids = set()
+
+    for i, tarefa in enumerate(tarefas, 1):
+        if not isinstance(tarefa, dict):
+            raise ValueError(f"tarefa {i}: precisa ser objeto")
+
+        tid = tarefa.get("id")
+        instrucao = tarefa.get("instrucao")
+        trechos = tarefa.get("trechos", [])
+
+        if not isinstance(tid, str) or not ID_VALIDO.match(tid):
+            raise ValueError(f"tarefa {i}: id inválido")
+        if tid in ids:
+            raise ValueError(f"id duplicado: {tid}")
+        ids.add(tid)
+
+        if not isinstance(instrucao, str) or len(instrucao.strip()) < 20:
+            raise ValueError(f"{tid}: instrucao ausente ou curta demais")
+
+        if not isinstance(trechos, list) or not trechos:
+            raise ValueError(f"{tid}: precisa informar trechos reais")
+
+        arquivos = set()
+
+        for trecho in trechos:
+            if not isinstance(trecho, list) or len(trecho) != 3:
+                raise ValueError(f"{tid}: trecho inválido: {trecho!r}")
+
+            caminho, inicio, fim_linha = trecho
+
+            if not isinstance(caminho, str):
+                raise ValueError(f"{tid}: caminho inválido")
+            if not isinstance(inicio, int) or not isinstance(fim_linha, int):
+                raise ValueError(f"{tid}: linhas precisam ser inteiros")
+            if inicio < 1 or fim_linha < inicio:
+                raise ValueError(f"{tid}: intervalo inválido {inicio}-{fim_linha}")
+
+            alvo = (REPO / caminho).resolve()
+            try:
+                alvo.relative_to(REPO.resolve())
+            except ValueError:
+                raise ValueError(f"{tid}: caminho fora do repositório: {caminho}")
+
+            if not alvo.is_file():
+                raise ValueError(f"{tid}: arquivo não existe: {caminho}")
+
+            total_linhas = sum(1 for _ in alvo.open(
+                "r", encoding="utf-8", errors="replace"
+            ))
+
+            if fim_linha > total_linhas:
+                raise ValueError(
+                    f"{tid}: linha {fim_linha} não existe em {caminho} "
+                    f"(arquivo tem {total_linhas})"
+                )
+
+            arquivos.add(caminho)
+
+        if len(arquivos) > 2:
+            raise ValueError(f"{tid}: usa mais de 2 arquivos")
+
+        max_tokens = tarefa.get("max_tokens", 400)
+        if not isinstance(max_tokens, int) or not 1 <= max_tokens <= 400:
+            raise ValueError(f"{tid}: max_tokens deve estar entre 1 e 400")
+
+        tarefa["max_tokens"] = max_tokens
+        tarefa["espera_diff"] = bool(tarefa.get("espera_diff", False))
+
+    return plano
+
+
+def cmd_planejar(args) -> int:
+    if not health(args.url):
+        print(f"llama-server não respondeu em {args.url}/health — nada foi executado.")
+        return 2
+
+    if len(args.tarefa.strip()) < 20:
+        print("tarefa curta demais; descreva objetivo e resultado esperado.")
+        return 1
+
+    mensagens = [
+        {"role": "system", "content": PROTOCOLO_PLANEJADOR},
+        {"role": "user", "content": "TAREFA:\n" + args.tarefa.strip()},
+    ]
+
+    pedidos_feitos = 0
+
+    for volta in range(1, BROKER_MAX_VOLTAS + 1):
+        resposta = chat(
+            args.url,
+            corpo_base(mensagens, args.max_tokens, args.thinking),
+            args.timeout,
+        )
+        texto = (
+            resposta["choices"][0]["message"].get("content") or ""
+        ).strip()
+
+        pedidos = PEDIDO.findall(texto)
+
+        if pedidos:
+            resultados = []
+
+            for tipo, argumento in pedidos[:3]:
+                pedidos_feitos += 1
+                try:
+                    conteudo = cortar(_executar_pedido(tipo, argumento))
+                    print(
+                        f"[planejador volta {volta}] {tipo} {argumento} "
+                        f"-> {len(conteudo)} caracteres"
+                    )
+                except Recusado as erro:
+                    conteudo = f"RECUSADO: {erro}"
+                    print(
+                        f"[planejador volta {volta}] "
+                        f"{tipo} {argumento} -> {conteudo}"
+                    )
+
+                resultados.append(
+                    f"RESULTADO de {tipo} {argumento}:\n{conteudo}"
+                )
+
+            mensagens += [
+                {"role": "assistant", "content": texto},
+                {"role": "user", "content": "\n\n".join(resultados)},
+            ]
+            continue
+
+        try:
+            plano = _extrair_plano(texto)
+        except (ValueError, json.JSONDecodeError) as erro:
+            print(f"[planejador volta {volta}] JSON recusado: {erro}")
+            mensagens += [
+                {"role": "assistant", "content": texto},
+                {
+                    "role": "user",
+                    "content": (
+                        f"FORMATO INVÁLIDO: {erro}. "
+                        "Corrija sem inventar contexto. "
+                        "Se faltar informação, peça LER/PROCURAR. "
+                        "Caso contrário devolva somente o JSON válido."
+                    ),
+                },
+            ]
+            continue
+
+        if args.saida:
+            destino = Path(args.saida)
+            if not destino.is_absolute():
+                destino = REPO / destino
+        else:
+            pasta = SAIDA / "planos"
+            pasta.mkdir(parents=True, exist_ok=True)
+            destino = pasta / f"plano-{int(time.time())}.json"
+
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text(
+            json.dumps(plano, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        print()
+        print("=== PLANO VALIDADO ===")
+        print(json.dumps(plano, ensure_ascii=False, indent=2))
+        print()
+        print(f"leituras feitas: {pedidos_feitos}")
+        print(f"gravado em: {rel(destino)}")
+
+        if plano.get("tarefas"):
+            print()
+            print(
+                "para executar:"
+                f"\npython3 scripts/bancada_local.py rodar {rel(destino)}"
+            )
+        else:
+            print()
+            print(
+                "nenhuma tarefa enviada ao local: "
+                + str(plano.get("fora_do_alcance", "sem motivo informado"))
+            )
+
+        return 0
+
+    print(
+        f"Limite de {BROKER_MAX_VOLTAS} voltas "
+        "sem produzir plano JSON válido."
+    )
+    return 4
+
+
 # ---------------------------------------------------------------- main
 
 def main() -> int:
@@ -871,6 +1137,19 @@ def main() -> int:
     b.add_argument("--max-tokens", type=int, default=1500)
     b.add_argument("--thinking", action="store_true")
     b.set_defaults(func=cmd_broker)
+
+    pl = sub.add_parser(
+        "planejar",
+        help="planejador local simplificado; lê via broker e gera tarefas.json",
+    )
+    pl.add_argument("tarefa", help="descrição da task a decompor")
+    pl.add_argument(
+        "--saida",
+        help="arquivo JSON de destino; padrão: tmp/bancada/planos/plano-<timestamp>.json",
+    )
+    pl.add_argument("--max-tokens", type=int, default=1400)
+    pl.add_argument("--thinking", action="store_true")
+    pl.set_defaults(func=cmd_planejar)
 
     args = p.parse_args()
     try:
