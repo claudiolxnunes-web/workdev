@@ -60,6 +60,7 @@ class TerminalBusyHandshakeTest(unittest.TestCase):
         with patch('app.routers.terminal.websocket_is_authenticated', return_value=True), \
              patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=(False, None)), \
              patch('app.routers.terminal.agent_lifecycle.active_work', return_value=None), \
+             patch('app.routers.terminal._require_session', return_value='codex'), \
              patch('app.routers.terminal.subprocess.Popen') as process, \
              TestClient(app) as client:
             with client.websocket_connect('/ws/agents/codex') as socket:
@@ -83,6 +84,7 @@ class TerminalTakeoverHandshakeTest(unittest.TestCase):
         with patch('app.routers.terminal.websocket_is_authenticated', return_value=True), \
              patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=(False, previous)) as claim, \
              patch('app.routers.terminal.agent_lifecycle.active_work', return_value=None), \
+             patch('app.routers.terminal._require_session', return_value='codex'), \
              patch('app.routers.terminal.subprocess.Popen'), \
              TestClient(app) as client:
             with client.websocket_connect('/ws/agents/codex?takeover=1') as socket:
@@ -345,25 +347,37 @@ class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 404)
 
     @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
+    @patch("app.routers.terminal._require_session", return_value="codex")
     @patch("app.routers.terminal._send_text")
-    async def test_blank_text_is_forwarded_as_a_bare_enter(self, mock_send, _active_work):
+    async def test_blank_text_is_forwarded_as_a_bare_enter(self, mock_send, _require, _active_work):
         result = await agent_send("codex", AgentSendRequest(text=""), db=None)
         mock_send.assert_called_once_with("codex", "")
         self.assertEqual(result, {"agent": "codex", "sent": True})
 
     @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
+    @patch("app.routers.terminal._require_session", return_value="code")
     @patch("app.routers.terminal._send_text")
-    async def test_sends_text_to_the_mapped_tmux_session(self, mock_send, _active_work):
+    async def test_sends_text_to_the_mapped_tmux_session(self, mock_send, require, _active_work):
         result = await agent_send("claude", AgentSendRequest(text="continuar"), db=None)
+        require.assert_called_once_with("claude", None, "send")
         mock_send.assert_called_once_with("code", "continuar")
         self.assertEqual(result, {"agent": "claude", "sent": True})
 
+    @patch("app.routers.terminal.agent_operability.reconcile_snapshot")
+    @patch("app.routers.terminal._explain_denial", side_effect=lambda agent, state, db: state)
     @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
+    @patch("app.routers.terminal._require_session", return_value="codex")
     @patch("app.routers.terminal._send_text", side_effect=RuntimeError("indisponível"))
-    async def test_reports_503_when_tmux_session_is_unavailable(self, _mock_send, _active_work):
+    async def test_reports_503_when_tmux_session_is_unavailable(
+        self, _mock_send, _require, _active_work, _explain, reconcile
+    ):
         with self.assertRaises(HTTPException) as ctx:
             await agent_send("codex", AgentSendRequest(text="oi"), db=None)
         self.assertEqual(ctx.exception.status_code, 503)
+        # Sessão que morreu entre a resolução e o send-keys: erro estruturado
+        # e snapshot reconciliado no mesmo instante, nunca 503 opaco.
+        self.assertEqual(ctx.exception.detail["code"], "agent_send_failed")
+        reconcile.assert_called_once()
 
     @patch("app.routers.terminal.read_transcript", return_value=("linha limpa", 123.0))
     async def test_transcript_endpoint_returns_clean_persistent_text(self, read):

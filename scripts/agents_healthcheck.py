@@ -24,7 +24,7 @@ STATE_FILE = Path(os.environ.get("AGENTS_HEALTH_STATE", "/var/lib/agents-healthc
 ALERT_ENV = Path(os.environ.get("AGENTS_ALERT_ENV", "/opt/scripts/alerta.env"))
 LOG_TAG = "agents-healthcheck"
 sys.path.insert(0, str(WORKDEV_DIR / 'apps/api'))
-from app.services import agent_snapshot, agent_lifecycle, agent_runtimes
+from app.services import agent_snapshot, agent_lifecycle, agent_operability, agent_runtimes
 from app.services.agent_activity import approval_lines
 
 
@@ -84,36 +84,122 @@ def classify(agent: str, session: str, process: str, output: str, checked_at: st
     return AgentHealth(agent, session, "idle", process, None, checked_at)
 
 
+RECOVERY_FILE = STATE_FILE.with_name("recovery.json")
+# Três tentativas seguidas; depois disso só uma a cada 5 min. Sem isso, um
+# launcher quebrado vira um laço de start a cada ciclo do timer.
+RECOVERY_MAX_ATTEMPTS = 3
+RECOVERY_BACKOFF_SECONDS = 300
+
+
+def _recovery_ledger() -> dict:
+    try:
+        data = json.loads(RECOVERY_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def recovery_allowed(agent: str) -> bool:
+    entry = _recovery_ledger().get(agent)
+    if not isinstance(entry, dict) or entry.get("failures", 0) < RECOVERY_MAX_ATTEMPTS:
+        return True
+    last = entry.get("last_attempt", 0)
+    return datetime.now(timezone.utc).timestamp() - last >= RECOVERY_BACKOFF_SECONDS
+
+
+def record_recovery(agent: str, succeeded: bool) -> None:
+    with agent_snapshot.file_lock(RECOVERY_FILE.with_suffix(".lock")):
+        ledger = _recovery_ledger()
+        if succeeded:
+            ledger.pop(agent, None)
+        else:
+            entry = ledger.get(agent) if isinstance(ledger.get(agent), dict) else {}
+            ledger[agent] = {
+                "failures": int(entry.get("failures", 0)) + 1,
+                "last_attempt": datetime.now(timezone.utc).timestamp(),
+            }
+        agent_snapshot.atomic_json(RECOVERY_FILE, ledger)
+
+
+def attempt_recovery(agent: str, session: str) -> bool:
+    """Recria a sessão quando a política permite. Nunca declara ONLINE aqui.
+
+    Quem decide ONLINE é a revalidação física feita depois pelo resolvedor —
+    `started=True` é intenção cumprida, não prova de agente no ar.
+    """
+    if not recovery_allowed(agent):
+        return False
+    try:
+        recovery = agent_lifecycle.try_recover(agent, session, AGENTS[agent][1])
+    except (agent_lifecycle.LifecycleError, OSError, subprocess.SubprocessError):
+        record_recovery(agent, False)
+        return False
+    if recovery is None:
+        return False  # Intenção OFFLINE ou operação concorrente: não é falha.
+    record_recovery(agent, bool(recovery.get("started")))
+    return True
+
+
+def resolve_operability(agent: str, session: str | None, state, work):
+    """Mesmo resolvedor que autoriza /send e o terminal. Uma definição só.
+
+    AUTO antes de standby quando há run física em curso: sem isso a aba
+    mostrava offline/idle com o agente de fato ocupado na sessão AUTO (achado
+    26/set/2026). Agora a escolha é da sondagem, não de um palpite de nome.
+    """
+    if session is None:
+        # Runtime HTTP/headless: regra própria, sem requisito artificial de
+        # tmux. Exigir sessão deles apagaria da aba um endpoint saudável.
+        return agent_operability.resolve(
+            agent, kind=agent_operability.KIND_HEADLESS,
+            runtime_online=state.model_loaded,
+            daemon_alive=bool(state.group_pids),
+        )
+    return agent_operability.resolve(
+        agent, standby_session=session, run_id=(work or {}).get('run_id'),
+        daemon_alive=bool(state.group_pids),
+    )
+
+
 def collect_agent(agent: str, session: str | None, db, allow_restart=False, work=None, run_status=None):
     checked_at = agent_snapshot.now()
     operation = agent_lifecycle.read_operation(agent)
     try:
         state = agent_lifecycle.read_state(agent, session, db=db)
-        if allow_restart and state.offline and not state.session_exists:
-            # try_recover -> start -> ensure_tmux_server: se faltar o servidor, quem
-            # o recria é o workdev-agents.service, nunca este oneshot.
-            recovery = agent_lifecycle.try_recover(agent, session, AGENTS[agent][1])
-            if recovery is not None:
-                state = agent_lifecycle.read_state(agent, session, db=db)
-                checked_at = agent_snapshot.now()
-            operation = agent_lifecycle.read_operation(agent)
         if work is not None:
             state.active_work = work
+        operability = resolve_operability(agent, session, state, work)
+        # Recuperação pela AUSÊNCIA DA SESSÃO, não por `offline`: um daemon
+        # sobrevivente mantinha `offline=False` e congelava o agente em ERROR
+        # para sempre, sem nunca recriar a sessão que faltava.
+        #
+        # Sessão existente só com shell NÃO entra aqui: recriá-la mataria um
+        # painel que o operador pode estar usando para diagnosticar. Quem
+        # decide destruir casca é o start explícito.
+        if (allow_restart and session and not operability.session_exists
+                and operability.determinate and not state.active_work):
+            # try_recover -> start -> ensure_tmux_server: se faltar o servidor, quem
+            # o recria é o workdev-agents.service, nunca este oneshot.
+            if attempt_recovery(agent, session):
+                state = agent_lifecycle.read_state(agent, session, db=db)
+                if work is not None:
+                    state.active_work = work
+                # Revalidação FÍSICA antes de declarar ONLINE: o start pode ter
+                # retornado started=True e a CLI ter morrido em seguida.
+                operability = resolve_operability(agent, session, state, work)
+                checked_at = agent_snapshot.now()
+            operation = agent_lifecycle.read_operation(agent)
         activity, reason = 'IDLE', None
-        effective_session = session
-        # Trabalho fisico pode estar rodando na sessao AUTO (runtime AUTO,
-        # opt-in), invisivel pra sessao standby sondada acima -- sem isso a
-        # aba mostra offline/idle com o agente de fato ocupado la (achado
-        # 26/set/2026, aba Agentes).
-        if work and work.get('run_id'):
-            auto_session = agent_snapshot.auto_session_name(agent, work['run_id'])
-            auto_state = agent_lifecycle.read_state(agent, auto_session, db=db)
-            if auto_state.agent_process_running:
-                state.current_process = auto_state.current_process
-                state.session = auto_state.session
-                state.session_exists = True
-                effective_session = auto_session
-        if effective_session and state.agent_process_running:
+        effective_session = operability.session_name if operability.operational else None
+        if effective_session and effective_session != session:
+            # A sessão viva é a AUTO: o processo e a identidade da sessão
+            # mostrados na aba têm de ser os dela, não os da casca standby.
+            # O processo vem da MESMA sondagem que escolheu a sessão; uma
+            # segunda consulta poderia contradizer o veredito recém-tomado.
+            state.session = effective_session
+            state.session_exists = True
+            state.current_process = operability.process
+        if effective_session:
             health = classify(agent, effective_session, state.current_process,
                 capture_recent(effective_session), checked_at)
             activity = {'busy': 'BUSY', 'waiting_input': 'WAITING_INPUT'}.get(health.status, 'IDLE')
@@ -122,7 +208,8 @@ def collect_agent(agent: str, session: str | None, db, allow_restart=False, work
         # Persisted runs contribute activity only after physical availability.
         if state.active_work and activity != 'WAITING_INPUT':
             activity = 'BUSY'
-        row = agent_snapshot.from_physical(agent, state, activity=activity, checked_at=checked_at)
+        row = agent_snapshot.from_physical(agent, state, activity=activity,
+            checked_at=checked_at, operability=operability)
         row.activity_reason = reason
         row.run_status = run_status
         phase = operation.get('phase')

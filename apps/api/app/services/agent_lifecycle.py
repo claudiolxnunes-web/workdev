@@ -1383,7 +1383,14 @@ def lifecycle_operation(agent: str, session: str | None, phase: str, db=None):
         yield outcome
         values = outcome['state']
         state = AgentState(**{field.name: values[field.name] for field in fields(AgentState) if field.name in values})
-        row = agent_snapshot.from_physical(agent, state)
+        # O desfecho de start/stop também passa pelo contrato de operabilidade,
+        # derivado do `state` que acabou de ser lido sob este mesmo lock: sem
+        # isto, um start que deixou a sessão morta publicaria ONLINE a partir
+        # do processo sobrevivente, e o snapshot sairia sem send_ready.
+        from app.services import agent_operability
+
+        row = agent_snapshot.from_physical(agent, state, operability=(
+            agent_operability.from_agent_state(agent, state, session) if session else None))
         complete = row.runtime_state.value == operation['desired']
         operation['running'] = False
         if not complete:

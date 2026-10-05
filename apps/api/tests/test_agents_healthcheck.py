@@ -14,6 +14,26 @@ sys.modules[SPEC.name] = healthcheck
 SPEC.loader.exec_module(healthcheck)
 
 
+def fake_probe(*live):
+    """Sondagem determinística: só as sessões listadas existem.
+
+    Sem isto os testes consultariam o tmux real da VPS e o veredito mudaria
+    conforme o que estivesse no ar na hora — exatamente o tipo de acoplamento
+    que esta task veio tirar do caminho.
+    """
+    from app.services.agent_operability import SessionProbe
+
+    mapping = {name: process for name, process in live}
+
+    def probe(name):
+        if name not in mapping:
+            return SessionProbe(name=name, exists=False, reason='no_live_session')
+        return SessionProbe(name=name, exists=True, attachable=True,
+                            process=mapping[name])
+
+    return probe
+
+
 class AgentHealthClassificationTest(unittest.TestCase):
     def classify(self, process: str, output: str):
         return healthcheck.classify(
@@ -48,13 +68,16 @@ class AgentHealthClassificationTest(unittest.TestCase):
         self.assertEqual(healthcheck.ALWAYS_ON_AGENTS, frozenset({"claude", "codex"}))
 
     def test_shell_snapshot_does_not_trigger_destructive_recovery(self):
-        from app.services import agent_lifecycle as lifecycle
+        from app.services import agent_lifecycle as lifecycle, agent_operability
         state = lifecycle.AgentState(agent='gemini', session='gemini', session_exists=True, current_process='bash')
         with patch.object(lifecycle, 'read_state', return_value=state), \
              patch.object(lifecycle, 'read_operation', return_value={}), \
+             patch.object(agent_operability, 'probe_session', fake_probe(('gemini', 'bash'))), \
              patch.object(lifecycle, 'start') as start:
             result = healthcheck.collect_agent('gemini', 'gemini', None, allow_restart=True)
         self.assertEqual(result.runtime_state.value, 'ERROR')
+        self.assertEqual(result.reason, 'session_without_agent_process')
+        self.assertFalse(result.send_ready)
         start.assert_not_called()
 
 
@@ -70,8 +93,9 @@ def test_waiting_input_takes_precedence_over_busy_text():
 
 
 def test_consolidation_reports_survivors_and_missing_models_as_error(tmp_path, monkeypatch):
-    from app.services import agent_lifecycle as lifecycle
+    from app.services import agent_lifecycle as lifecycle, agent_operability
     monkeypatch.setattr(lifecycle, 'GROUPS_FILE', tmp_path / 'groups.json')
+    monkeypatch.setattr(agent_operability, 'probe_session', fake_probe())
     for state in [
         lifecycle.AgentState(agent='codex', session='codex', group_pids=[123]),
         lifecycle.AgentState(agent='local-code', session=None, model='m', model_loaded=None),
@@ -82,8 +106,9 @@ def test_consolidation_reports_survivors_and_missing_models_as_error(tmp_path, m
 
 
 def test_disconnect_intent_prevents_always_on_restart(tmp_path, monkeypatch):
-    from app.services import agent_lifecycle as lifecycle, agent_snapshot
+    from app.services import agent_lifecycle as lifecycle, agent_operability, agent_snapshot
     monkeypatch.setattr(lifecycle, 'GROUPS_FILE', tmp_path / 'groups.json')
+    monkeypatch.setattr(agent_operability, 'probe_session', fake_probe())
     agent_snapshot.atomic_json(lifecycle.operation_file('codex'), {'phase': 'completed', 'desired': 'OFFLINE'})
     monkeypatch.setattr(lifecycle, 'read_state', lambda *args, **kw: lifecycle.AgentState(agent='codex', session='codex'))
     def forbidden(*args, **kwargs):
@@ -125,7 +150,10 @@ def test_auto_session_activity_overrides_offline_standby(monkeypatch):
     def fake_classify(agent, session, process, output, checked_at):
         return healthcheck.AgentHealth(agent, session, 'busy', process, None, checked_at)
 
+    from app.services import agent_operability
     monkeypatch.setattr(lifecycle, 'read_state', fake_read_state)
+    monkeypatch.setattr(agent_operability, 'probe_session', fake_probe(('auto-kimi-42', 'kimi-code')))
+    monkeypatch.setattr(lifecycle, 'current_process', lambda session: 'kimi-code')
     monkeypatch.setattr(healthcheck, 'classify', fake_classify)
     monkeypatch.setattr(healthcheck, 'capture_recent', lambda *_args: '')
 
@@ -134,6 +162,8 @@ def test_auto_session_activity_overrides_offline_standby(monkeypatch):
     assert row.runtime_state.value == 'ONLINE'
     assert row.activity_state.value == 'BUSY'
     assert row.persistent is False
+    assert row.session_source == 'auto'
+    assert row.send_ready is True
 
 
 def test_idle_agent_without_active_work_unaffected_by_auto_check(monkeypatch):
@@ -141,8 +171,11 @@ def test_idle_agent_without_active_work_unaffected_by_auto_check(monkeypatch):
     standby importa."""
     from app.services import agent_lifecycle as lifecycle
 
+    from app.services import agent_operability
+
     standby_state = lifecycle.AgentState(agent='gemini', session='gemini', session_exists=False, current_process='')
     monkeypatch.setattr(lifecycle, 'read_state', lambda *args, **kwargs: standby_state)
+    monkeypatch.setattr(agent_operability, 'probe_session', fake_probe())
 
     def forbidden(*args, **kwargs):
         raise AssertionError('sem work ativo, a sessao AUTO nao deve ser consultada')

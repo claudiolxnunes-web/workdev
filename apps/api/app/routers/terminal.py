@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.auth import websocket_is_authenticated
 from app.database import SessionLocal
 from app.routers.ai import get_db
-from app.services import agent_lifecycle, agent_snapshot, agent_runtimes, cli_agent_models
+from app.services import agent_lifecycle, agent_operability, agent_snapshot, agent_runtimes, cli_agent_models
 from app.services.agent_activity import approval_lines
 from app.services.terminal_transcript import clean_terminal_text, read_transcript
 
@@ -30,15 +30,7 @@ router = APIRouter(tags=["agents"])
 # principal é PLAN → recomendação → escolha do usuário → envio ao agente
 # escolhido, que trabalha aqui. Sessões dinâmicas por execução pertencem apenas
 # ao runtime AUTO, que é opt-in (ver `_auto_runtime_enabled` em routers/handoffs).
-ALLOWED_SESSIONS = {
-    "claude": "code",
-    "codex": "codex",
-    "kimi": "kimi",
-    "qwen": "qwen",
-    "grok": "grok",
-    "deepseek": "deepseek",
-    "gemini": "gemini",
-}
+ALLOWED_SESSIONS = agent_operability.CLI_SESSIONS
 STANDBY_COMMANDS = {
     "claude": ["/opt/workdev/scripts/start_claude_agent.sh"],
     "codex": ["/opt/workdev/scripts/start_codex_agent.sh"],
@@ -139,7 +131,10 @@ async def agent_send(agent: str, payload: AgentSendRequest, db: Session = Depend
     standby = ALLOWED_SESSIONS.get(agent)
     if not standby:
         raise HTTPException(status_code=404, detail="Agente inválido")
-    session = _live_session(agent, standby, db)
+    try:
+        session = _require_session(agent, db, "send")
+    except agent_operability.OperabilityDenied as error:
+        raise _denial_http(error) from None
     try:
         from app.services.run_pause import checked_work_unit, RunPaused
         work = agent_lifecycle.active_work(db, agent)
@@ -153,7 +148,16 @@ async def agent_send(agent: str, payload: AgentSendRequest, db: Session = Depend
     except RunPaused as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        # A sessão existia na resolução e morreu antes do send-keys. Erro
+        # estruturado e snapshot reconciliado na hora: a aba não pode seguir
+        # anunciando um agente que acabou de perder o canal.
+        after = _explain_denial(agent, _resolve_operability(agent, db), db)
+        agent_operability.reconcile_snapshot(after, db=db)
+        raise HTTPException(status_code=503, detail={
+            "code": "agent_send_failed", "message": str(error),
+            "health_reason": after.health_reason, "session_source": after.session_source,
+            "state": after.as_dict(),
+        }) from error
     return {"agent": agent, "sent": True}
 
 
@@ -166,7 +170,12 @@ async def agent_history(
     standby = ALLOWED_SESSIONS.get(agent)
     if not standby:
         raise HTTPException(status_code=404, detail="Agente inválido")
-    session = _live_session(agent, standby, db)
+    try:
+        # Histórico é leitura do painel: basta o terminal ser anexável, mesmo
+        # que só haja shell. Ver a casca é como o operador diagnostica.
+        session = _require_session(agent, db, "terminal")
+    except agent_operability.OperabilityDenied as error:
+        raise _denial_http(error) from None
     try:
         content = await asyncio.to_thread(_capture_history, session, lines)
     except (RuntimeError, subprocess.TimeoutExpired) as error:
@@ -369,18 +378,78 @@ def _auto_session(agent: str, run_id) -> str:
     return agent_snapshot.auto_session_name(agent, run_id)
 
 
+def _resolve_operability(agent: str, db) -> agent_operability.OperationalState:
+    """Resolvedor canônico aplicado aos agentes CLI deste router.
+
+    AUTO primeiro quando há run física em curso (runtime AUTO, opt-in), depois
+    standby. Quem decide é sempre a sondagem, nunca o nome esperado.
+    """
+    run_id = None
+    if db is not None:
+        work = agent_lifecycle.active_work(db, agent)
+        run_id = (work or {}).get('run_id')
+    return agent_operability.resolve(
+        agent, standby_session=ALLOWED_SESSIONS.get(agent), run_id=run_id,
+    )
+
+
+def _explain_denial(agent: str, state, db) -> agent_operability.OperationalState:
+    """Enriquece a recusa com o processo sobrevivente, sem sondar tmux de novo.
+
+    É o "Codex App Server vivo sem tmux": o operador precisa ler
+    `daemon_alive_without_session` e não um genérico "sessão indisponível".
+    """
+    from dataclasses import replace
+
+    try:
+        physical = agent_lifecycle.read_state(agent, ALLOWED_SESSIONS.get(agent), db=db)
+    except Exception:  # noqa: BLE001 - diagnóstico não pode esconder a recusa
+        return state
+    daemon = bool(physical.group_pids)
+    if not daemon or state.session_exists:
+        return replace(state, daemon_alive=daemon)
+    return replace(state, daemon_alive=True,
+                   health_reason=agent_operability.REASON_DAEMON_ONLY)
+
+
+def _require_session(agent: str, db, operation: str) -> str:
+    """Autoriza a operação pelo estado FÍSICO atual ou recusa com motivo.
+
+    Nunca devolve um nome de sessão "esperado": só o que a sondagem confirmou
+    utilizável agora. Na recusa, o snapshot é reconciliado imediatamente para
+    que a aba pare de anunciar disponibilidade que já não existe.
+    """
+    state = _resolve_operability(agent, db)
+    try:
+        return state.require(operation)
+    except agent_operability.OperabilityDenied:
+        detailed = _explain_denial(agent, state, db)
+        agent_operability.reconcile_snapshot(detailed, db=db)
+        raise agent_operability.OperabilityDenied(detailed, operation) from None
+
+
+def _denial_http(error: agent_operability.OperabilityDenied) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "agent_not_operational",
+            "message": f"{error.state.agent}: sem sessão física utilizável para {error.operation}",
+            "health_reason": error.state.health_reason,
+            "session_source": error.state.session_source,
+            "state": error.state.as_dict(),
+        },
+    )
+
+
 def _live_session(agent: str, session: str, db) -> str:
-    """Sessao de fato ativa: a standby, a menos que haja uma run fisica
-    rodando na sessao AUTO correspondente (runtime AUTO, opt-in) -- sem
-    isso, terminal/send atacam uma sessao parada enquanto o trabalho real
-    roda em outro lugar (achado 26/set/2026, aba Agentes)."""
-    work = agent_lifecycle.active_work(db, agent)
-    if work and work.get('run_id'):
-        auto = agent_snapshot.auto_session_name(agent, work['run_id'])
-        process = _current_process(auto)
-        if process and process not in _SHELL_PROCESSES:
-            return auto
-    return session
+    """Adapter histórico: hoje delega ao resolvedor canônico.
+
+    Antes devolvia a sessão standby às cegas quando não havia run AUTO viva —
+    inclusive quando essa sessão não existia. O `tmux send-keys` estourava
+    depois, e o /status seguia dizendo ONLINE. Agora, sem sessão física
+    comprovada, nada é devolvido: levanta OperabilityDenied.
+    """
+    return _require_session(agent, db, "send")
 
 def _start_agent_runtime(
     agent: str,
@@ -473,8 +542,8 @@ def stop_agent_runtime(agent: str, run_id) -> bool:
 
 
 def auto_runtime_running(agent: str, run_id) -> bool:
-    process = _current_process(_auto_session(agent, run_id))
-    return bool(process and process not in _SHELL_PROCESSES)
+    probe = agent_operability.probe_session(_auto_session(agent, run_id))
+    return probe.determinate and probe.attachable and probe.agent_process
 
 
 def _finalize_auto_runtime(agent: str, run_id) -> dict:
@@ -758,7 +827,31 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         return
     with SessionLocal() as db:
         work = agent_lifecycle.active_work(db, agent)
-        session = _live_session(agent, session, db)
+        try:
+            # O WebSocket só pode representar terminal operacional se a sessão
+            # física puder mesmo ser anexada. Sem isso, o `tmux attach-session`
+            # morreria em silêncio dentro do PTY e a aba mostraria um terminal
+            # vazio como se estivesse conectada.
+            session = _require_session(agent, db, "terminal")
+        except agent_operability.OperabilityDenied as error:
+            # Handshake completo antes de fechar: sem ele o browser recebe um
+            # 403 opaco em vez do motivo (mesmo cuidado do "terminal em uso").
+            denied = error.state
+            await websocket.accept()
+            await websocket.send_text(json.dumps({
+                "type": "status", "agent": agent, "running": False,
+                "send_ready": False, "terminal_ready": False,
+                "runtime_state": (
+                    "ERROR" if denied.daemon_alive or not denied.determinate else "OFFLINE"),
+                "health_reason": denied.health_reason,
+                "session_source": denied.session_source,
+                "state": denied.as_dict(),
+            }))
+            await websocket.close(
+                code=status.WS_1011_INTERNAL_ERROR,
+                reason=f"Sessão indisponível: {denied.health_reason or 'no_live_session'}",
+            )
+            return
         bound_run_id = (work or {}).get('run_id') if work and session == agent_snapshot.auto_session_name(agent, work['run_id']) else None
     takeover = websocket.query_params.get("takeover") == "1"
     claimed, previous = await _claim(session, websocket, takeover)

@@ -57,10 +57,29 @@ class AgentSnapshot(BaseModel):
     run_status: str | None = None
     activity_reason: str | None = None
     lifecycle: dict | None = None
+    # Operabilidade física observada na coleta. É DESCRIÇÃO, não autorização:
+    # quem vai de fato enviar texto ou anexar terminal resolve de novo ao vivo
+    # (app/services/agent_operability.py). Aqui serve à UI e ao diagnóstico.
+    session_name: str | None = None
+    session_source: str = 'none'
+    send_ready: bool = False
+    terminal_ready: bool = False
+    daemon_alive: bool = False
+    # Boot em que a coleta aconteceu. Snapshot de outro boot descreve um
+    # sistema que não existe mais, por mais recente que seja o checked_at.
+    boot_id: str | None = None
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def boot_id() -> str:
+    """Identidade do boot atual, igual à usada pelo registro de identidade."""
+    try:
+        return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    except OSError:
+        return ''
 
 
 def state_file() -> Path:
@@ -112,7 +131,7 @@ def publish(rows: list[AgentSnapshot], path: Path | None = None, *, source='heal
     """
     from app.services import runtime_state_audit
     from sqlalchemy.exc import SQLAlchemyError
-    if source not in {'healthcheck', 'lifecycle'}:
+    if source not in {'healthcheck', 'lifecycle', 'reconcile'}:
         raise ValueError('invalid snapshot source')
     path = path or state_file()
     with file_lock(path.with_suffix('.lock')):
@@ -197,7 +216,12 @@ def public_row(row: AgentSnapshot) -> dict:
     activity = row.activity_state
     health = ('busy' if activity == ActivityState.BUSY else 'blocked' if activity == ActivityState.WAITING_INPUT else 'idle') if online else (
         'offline' if row.runtime_state == RuntimeState.OFFLINE else 'degraded')
+    # Um agente que não está ONLINE jamais sai daqui com send_ready=true. Era
+    # esta divergência que fazia a aba oferecer um Codex "disponível" que
+    # respondia 503 no primeiro envio.
     data.update(
+        send_ready=row.send_ready and online,
+        terminal_ready=row.terminal_ready,
         running=online, checked=row.runtime_state != RuntimeState.ERROR,
         health=health, health_reason=row.reason,
         awaiting_approval=online and activity == ActivityState.WAITING_INPUT,
@@ -230,6 +254,7 @@ def read_snapshot(agent_ids, path: Path | None = None) -> dict:
     rows = []
     current = datetime.now(timezone.utc)
     max_age = float(os.getenv('AGENTS_HEALTH_MAX_AGE_SECONDS', '45'))
+    current_boot = boot_id()
     for agent in agent_ids:
         try:
             row = AgentSnapshot.model_validate(agents.get(agent))
@@ -241,6 +266,15 @@ def read_snapshot(agent_ids, path: Path | None = None) -> dict:
                 row.runtime_state = RuntimeState.ERROR
                 row.activity_state = ActivityState.IDLE
                 row.reason = 'snapshot_stale'
+            elif row.boot_id and current_boot and row.boot_id != current_boot:
+                # Reinício da API não reaproveita snapshot de outro boot: as
+                # sessões tmux daquele sistema não existem mais, por mais
+                # saudável que o retrato pareça.
+                row.runtime_state = RuntimeState.ERROR
+                row.activity_state = ActivityState.IDLE
+                row.reason = 'snapshot_foreign_boot'
+            if row.runtime_state != RuntimeState.ONLINE:
+                row.send_ready = False
         except (ValidationError, ValueError, TypeError):
             # Deterministic error snapshot too: no request-time timestamp.
             row = AgentSnapshot(agent=agent, runtime_state=RuntimeState.ERROR,
@@ -250,9 +284,29 @@ def read_snapshot(agent_ids, path: Path | None = None) -> dict:
     return {'version': 2, 'updated_at': updated_at, 'agents': rows}
 
 
-def from_physical(agent: str, state, *, activity='IDLE', reason=None, checked_at=None):
+def from_physical(agent: str, state, *, activity='IDLE', reason=None, checked_at=None,
+                  operability=None):
+    """Snapshot derivado do estado físico lido agora.
+
+    Com `operability` de um agente CLI, ela é a AUTORIDADE sobre ONLINE: sem
+    sessão tmux física e utilizável não existe ONLINE, por mais que haja
+    processo sobrevivente, PGID registrado ou daemon auxiliar vivo. Era por
+    essa porta que o Codex aparecia disponível e respondia 503 no /send.
+    """
+    from app.services.agent_operability import KIND_CLI
+
+    cli = operability is not None and operability.kind == KIND_CLI
     if not state.registry_ok or not state.model_state_known:
         runtime, reason = 'ERROR', 'physical_state_unknown'
+    elif cli and not operability.determinate:
+        # Sondagem inconclusiva não é ausência de sessão nem presença dela.
+        runtime, reason = 'ERROR', reason or operability.health_reason
+    elif cli and operability.operational:
+        runtime = 'ONLINE'
+    elif cli:
+        runtime = 'OFFLINE' if state.offline else 'ERROR'
+        if runtime == 'ERROR':
+            reason = reason or operability.health_reason or 'runtime_inconsistent'
     elif state.offline:
         runtime = 'OFFLINE'
     elif state.agent_process_running or (state.session is None and state.model_loaded):
@@ -261,8 +315,17 @@ def from_physical(agent: str, state, *, activity='IDLE', reason=None, checked_at
         runtime, reason = 'ERROR', 'runtime_inconsistent'
     if reason and runtime == 'ONLINE':
         runtime = 'ERROR'
+    online = runtime == 'ONLINE'
     return AgentSnapshot(agent=agent, runtime_state=runtime,
-        activity_state=activity if runtime == 'ONLINE' else 'IDLE',
+        activity_state=activity if online else 'IDLE',
         checked_at=checked_at or now(), reason=reason,
         persistent=is_persistent(agent, state.session), process=state.current_process or '',
-        active_run_id=(state.active_work or {}).get('run_id'), lifecycle=state.as_dict())
+        active_run_id=(state.active_work or {}).get('run_id'), lifecycle=state.as_dict(),
+        boot_id=boot_id(),
+        session_name=operability.session_name if operability else None,
+        session_source=operability.session_source if operability else 'none',
+        # send_ready acompanha o veredito final: um ERROR de lifecycle derruba
+        # a autorização mesmo com a sessão física de pé.
+        send_ready=bool(operability and operability.send_ready and online),
+        terminal_ready=bool(operability and operability.terminal_ready),
+        daemon_alive=bool(operability and operability.daemon_alive))

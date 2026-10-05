@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from app.services import agent_lifecycle as lifecycle, agent_snapshot as snapshot
+from app.services import agent_lifecycle as lifecycle, agent_operability as operability, agent_snapshot as snapshot
 from app.routers import terminal
 
 SPEC = importlib.util.spec_from_file_location('review_health', Path(__file__).parents[3] / 'scripts/agents_healthcheck.py')
@@ -33,6 +33,13 @@ def fake_processes(tmp_path, monkeypatch):
         if 'kill-session' in args:
             state['alive'] = False
         return SimpleNamespace(returncode=0, stdout='', stderr='')
+    def probe(name):
+        # O resolvedor canônico sonda tmux por conta própria; aqui ele enxerga
+        # o mesmo processo fingido que o resto da fixture.
+        if not state['alive']:
+            return operability.SessionProbe(name=name, exists=False, reason='no_live_session')
+        return operability.SessionProbe(name=name, exists=True, attachable=True, process='codex')
+    monkeypatch.setattr(operability, 'probe_session', probe)
     monkeypatch.setattr(lifecycle, 'read_state', read)
     monkeypatch.setattr(lifecycle, '_run', command)
     monkeypatch.setattr(lifecycle, 'active_work', lambda *args: None)
