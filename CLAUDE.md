@@ -500,6 +500,19 @@ Regras:
 - se o agente não estiver executando como `root`, preparar o commit e pedir ao operador/root para realizar o push;
 - nunca imprimir chaves, tokens ou outros segredos nos logs ou na conversa.
 
+### Dono do `.git` depois de git como root (fetch, cherry-pick, commit, push)
+
+Todo git rodado como `root` cria objetos com dono `root`. Devolva sempre com o grupo
+`workdev-runtime`, **nunca** `workdev:workdev`:
+
+`chown -R workdev:workdev-runtime /opt/workdev/.git`
+
+O `.git` é `2750` (setgid): o `workdev-deploy` só entra nele pelo grupo
+`workdev-runtime`. Com o grupo `workdev`, o `workdev-deployctl prepare` passa no gate e
+falha em seguida com `git status ... returned non-zero exit status 128` ("not a git
+repository"), como em 2026-10-05. Arquivos de código tocados por root levam o mesmo dono:
+`git diff --name-only HEAD~N | xargs chown workdev:workdev-runtime`.
+
 ## Deploy — regra canônica obrigatória
 
 Antes de qualquer ação relacionada a deploy, ler obrigatoriamente:
