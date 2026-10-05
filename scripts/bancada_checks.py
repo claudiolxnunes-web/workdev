@@ -239,7 +239,15 @@ def _checar_simbolos(raiz: Path, codigo: list[str], escopo: list[str], modulos_t
     achados: list[dict] = []
     alvo = raiz / escopo[0] if escopo else None
     vinculos = vinculos_de_import(alvo) if alvo and alvo.is_file() and alvo.suffix == ".py" else {}
-    definidos_alvo = nomes_definidos(alvo) if alvo and alvo.is_file() and alvo.suffix == ".py" else frozenset()
+    if alvo and alvo.is_file() and alvo.suffix == ".py":
+        definidos_alvo = nomes_definidos(alvo)
+    elif alvo and alvo.is_file():
+        # TS/JS: sem AST, basta o nome logo depois da palavra de declaração.
+        definidos_alvo = frozenset(re.findall(
+            r"\b(?:const|let|var|function|class|type|interface|enum)\s+(\w+)",
+            alvo.read_text(encoding="utf-8", errors="replace")))
+    else:
+        definidos_alvo = frozenset()
     # Funções públicas dos módulos dos trechos: servem para achar "nome certo no objeto errado".
     funcoes_conhecidas: dict[str, str] = {}
     for modulo in modulos_trecho:

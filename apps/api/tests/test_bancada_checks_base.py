@@ -79,3 +79,31 @@ def test_verificar_exige_em_texto_puro_com_parentese(checks):
     })
     assert resultado["aprovada"], f"Deveria passar, mas achados: {resultado['achados']}"
     assert "ignora_enunciado" not in resultado["categorias_erro"]
+
+
+KNOWLEDGE_TSX = (
+    "const COR_BADGE: Record<string, string> = {\n  adr: 'bg-blue-100',\n}\n"
+    "const LABEL: Record<string, string> = {\n  adr: 'ADR',\n}\n"
+    "export default function Knowledge() { return null }\n"
+)
+
+
+def test_simbolos_aceita_constantes_declaradas_no_tsx(checks, tmp_path):
+    modulo, _ = checks
+    raiz = tmp_path / "raiz"
+    (raiz / "src").mkdir(parents=True)
+    (raiz / "src/Knowledge.tsx").write_text(KNOWLEDGE_TSX)
+    codigo = ["<span className={COR_BADGE[tipo]}>{LABEL[tipo]}</span>"]
+    achados = modulo._checar_simbolos(raiz, codigo, ["src/Knowledge.tsx"], [])
+    assert not [a for a in achados if a["categoria"] == "simbolo_inexistente"], achados
+
+
+def test_simbolos_acusa_constante_ausente_no_tsx(checks, tmp_path):
+    modulo, _ = checks
+    raiz = tmp_path / "raiz"
+    (raiz / "src").mkdir(parents=True)
+    (raiz / "src/Knowledge.tsx").write_text(KNOWLEDGE_TSX)
+    codigo = ["<span className={COR_INEXISTENTE[tipo]}>{LABEL[tipo]}</span>"]
+    achados = modulo._checar_simbolos(raiz, codigo, ["src/Knowledge.tsx"], [])
+    erros = [a for a in achados if a["categoria"] == "simbolo_inexistente"]
+    assert len(erros) == 1 and "COR_INEXISTENTE" in erros[0]["mensagem"], achados
