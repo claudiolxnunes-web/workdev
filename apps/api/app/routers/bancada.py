@@ -10,6 +10,7 @@ aplicado ao repositório; o resultado é só proposta (ver services/bancada_runn
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -261,6 +262,10 @@ class PedidoParecer(BaseModel):
     observer: str | None = None
 
 
+class PedidoLote(BaseModel):
+    plano: dict
+
+
 class PedidoPlanejar(BaseModel):
     tarefa_id: str | None = Field(None, max_length=36)
     prompt: str | None = Field(None, max_length=8000)
@@ -348,3 +353,51 @@ def planejar(pedido: PedidoPlanejar):
                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     except runner.BancadaErro as erro:
         raise _erro(erro) from erro
+
+
+# ---------------------------------------------------------------- lotes vindos do AI Hub
+
+LOTE_VALIDO = re.compile(r"^\d{6}-\d{2,}$")
+# Id que o validar_lote_bancada do chat deu como prévia (<lote>-NN). O lote real
+# só existe ao gravar; se outro plano foi gravado no meio, o número muda e esses
+# ids são refeitos com o lote certo.
+ID_DE_PREVIA = re.compile(r"^\d{6}-\d{2,}-\d{2,}$")
+
+
+@router.post("/lotes", status_code=201)
+def gravar_lote(pedido: PedidoLote):
+    """Valida o plano do AI Hub contra os arquivos reais e grava em planos/<lote>.json.
+
+    Só grava o plano: rodar continua sendo um clique por lote na página.
+    """
+    local = runner._modulo("bancada_local")
+    plano = copy.deepcopy(pedido.plano)
+    for tarefa in plano.get("tarefas") or []:
+        if isinstance(tarefa, dict) and isinstance(tarefa.get("id"), str) and ID_DE_PREVIA.match(tarefa["id"]):
+            tarefa["id"] = ""
+    pasta = runner.pasta() / "planos"
+    try:
+        lotes = local.dividir_em_lotes(plano, local.proximo_lote(pasta), local.LIMITES_AI_HUB,
+                                       runner.REPO_TRABALHO.resolve())
+    except ValueError as erro:
+        raise HTTPException(422, {"code": "plano_invalido", "message": str(erro)}) from erro
+    if not lotes[0][1]["tarefas"]:
+        raise HTTPException(422, {"code": "fora_do_alcance",
+                                  "message": str(plano.get("fora_do_alcance") or "o plano não tem tarefas")})
+    for lote, parte in lotes:
+        if (pasta / f"{lote}.json").exists():
+            raise HTTPException(409, {"code": "lote_existente", "message": f"o lote {lote} já existe; envie de novo"})
+    for lote, parte in lotes:
+        runner._gravar(pasta / f"{lote}.json", {"id": lote, "lote": lote, "origem": "ai_hub",
+                                                "tarefas": parte["tarefas"], "data": runner._agora()})
+    return {"lotes": [{"lote": lote, "tarefas": len(parte["tarefas"])} for lote, parte in lotes]}
+
+
+@router.get("/lotes/{lote}")
+def ler_lote(lote: str):
+    if not LOTE_VALIDO.match(lote):
+        raise HTTPException(400, "lote inválido")
+    dados = _ler_json(raiz() / "planos" / f"{lote}.json")
+    if not dados or not isinstance(dados.get("tarefas"), list):
+        raise HTTPException(404, "lote não encontrado")
+    return _mascarar({"lote": lote, "tarefas": dados["tarefas"]})

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
-  getEstado, getProposta, getPropostas, getResumo, lerLote, ligarModelo, pedirParecer, reenviarProposta,
+  getEstado, getProposta, getPropostas, getResumo, lerLote, lerLoteGravado, ligarModelo, pedirParecer, reenviarProposta,
   rodarTarefa, verificarProposta,
   type EstadoBancada, type EventoBancada, type LinhaResumo, type NovaTarefa, type PropostaDetalhe,
   type PropostaResumo,
@@ -158,6 +158,9 @@ export default function BancadaLocal() {
   const [observer, setObserver] = useState<string | null>(null)
   const [abertoPlanejador, setAbertoPlanejador] = useState(false)
   const [textLote, setTextLote] = useState("")
+  // Lotes que o chat do AI Hub gravou e mandou abrir (/bancada?lote=AAMMDD-NN[&lote=...]).
+  const [lotesDoPlano] = useState<string[]>(() => new URLSearchParams(window.location.search).getAll("lote"))
+  const [loteAtual, setLoteAtual] = useState<string | null>(null)
 
   const carregar = useCallback(async () => {
     setErro("")
@@ -172,6 +175,21 @@ export default function BancadaLocal() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void carregar()
   }, [carregar])
+
+  const carregarLote = useCallback(async (lote: string) => {
+    try {
+      const { tarefas } = await lerLoteGravado(lote)
+      setTextLote(JSON.stringify({ tarefas }, null, 2))
+      setLoteAtual(lote)
+      setLinhas((atual) => [...atual, `[lote] ${lote}: ${tarefas.length} tarefa(s) carregada(s) — confira e clique em Rodar lote`])
+    } catch (causa) { setErro(causa instanceof Error ? causa.message : `Falha ao abrir o lote ${lote}`) }
+  }, [])
+
+  useEffect(() => {
+    // Só carrega o texto do lote; rodar continua sendo um clique.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (lotesDoPlano.length) void carregarLote(lotesDoPlano[0])
+  }, [lotesDoPlano, carregarLote])
 
   async function abrir(modelo: string, id: string) {
     setSelecionada({ modelo, id }); setDetalhe(null)
@@ -267,6 +285,15 @@ export default function BancadaLocal() {
       </header>
       {erro && <p role="alert" className="text-sm text-rose-300">{erro}</p>}
       <EstadoModelo estado={estado} onAcao={(a) => void modelo(a)} acaoEmCurso={acaoModelo || executando} />
+      {lotesDoPlano.length > 1 && (
+        <nav aria-label="Lotes do plano" className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+          Plano do AI Hub em {lotesDoPlano.length} lotes — rode um de cada vez:
+          {lotesDoPlano.map((lote) => (
+            <button key={lote} type="button" disabled={executando || lote === loteAtual} onClick={() => void carregarLote(lote)}
+              className={`rounded border px-2 py-1 ${lote === loteAtual ? "border-sky-600 text-sky-200" : "border-slate-700 hover:bg-slate-800"} disabled:cursor-default`}>
+              {lote}{lote === loteAtual ? " (carregado)" : ""}
+            </button>))}
+        </nav>)}
       <div className="grid gap-4 lg:grid-cols-2">
         <Lote executando={executando} onRodar={(t, a) => void rodarLote(t, a)} onParar={() => { parar.current = true }}
           onPlanejar={() => setAbertoPlanejador(true)} texto={textLote} setTexto={setTextLote} />

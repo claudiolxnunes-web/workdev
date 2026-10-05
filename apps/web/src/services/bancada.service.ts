@@ -185,3 +185,17 @@ export function lerLote(texto: string): NovaTarefa[] {
              exige: t.exige, espera_diff: t.espera_diff }
   })
 }
+
+/** Plano validado no AI Hub -> lote(s) gravados em tmp/bancada/planos/ (11 a 20 tarefas viram 2 lotes). */
+export const gravarLote = (plano: unknown) =>
+  post<{ lotes: Array<{ lote: string; tarefas: number }> }>("/lotes", { plano })
+export const lerLoteGravado = (lote: string) =>
+  get<{ lote: string; tarefas: NovaTarefa[] }>(`/lotes/${encodeURIComponent(lote)}`)
+
+/** O bloco ```json do chat é um plano da Bancada? Devolve o plano ou null. */
+export function planoDaBancada(codigo: string): { tarefas: unknown[] } | null {
+  try {
+    const dados = JSON.parse(codigo)
+    return dados && Array.isArray(dados.tarefas) && dados.tarefas.length > 0 ? dados : null
+  } catch { return null }
+}

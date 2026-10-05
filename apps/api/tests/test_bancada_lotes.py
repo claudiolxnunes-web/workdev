@@ -165,3 +165,50 @@ def test_validador_usa_a_raiz_informada(local, tmp_path):
     (outra / "app" / "so_aqui.py").write_text("a\n" * 5)
     plano = {"tarefas": [_tarefa(arquivos=("app/so_aqui.py",), fim=5)]}
     assert local.validar_lote(plano, "261005-01", local.LIMITES_AI_HUB, outra)["tarefas"]
+
+
+# ---------------------------------------------------------------- extrair
+
+@pytest.fixture
+def repo_git(local):
+    import subprocess
+    git = lambda *a: subprocess.run(["git", "-C", str(local.REPO), *a], check=True, capture_output=True)
+    git("init", "-q")
+    git("add", "app/x.py")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    return local
+
+
+def _proposta(local, texto, tid="261005-01-01"):
+    pasta = local.SAIDA / "moe"
+    pasta.mkdir(parents=True, exist_ok=True)
+    (pasta / f"{tid}.txt").write_text(texto)
+
+
+DIFF = "```diff\n--- a/app/x.py\n+++ b/app/x.py\n@@ -1,3 +1,3 @@\n linha 1\n-linha 2\n+linha dois\n linha 3\n```\n"
+
+
+def test_extrair_grava_patch_e_so_testa(repo_git, capsys):
+    local = repo_git
+    _proposta(local, "Segue:\n" + DIFF)
+    assert local.cmd_extrair(SimpleNamespace(id="261005-01-01", modelo=None)) == 0
+    patch = local.SAIDA / "patches" / "261005-01-01.patch"
+    assert patch.read_text().startswith("--- a/app/x.py")
+    assert "git -C" in capsys.readouterr().out
+    assert "linha 2\n" in (local.REPO / "app" / "x.py").read_text()  # nunca aplica
+
+
+def test_extrair_avisa_quando_nao_aplica(repo_git, capsys):
+    local = repo_git
+    _proposta(local, DIFF.replace("linha 2", "linha que nao existe"))
+    assert local.cmd_extrair(SimpleNamespace(id="261005-01-01", modelo=None)) == 3
+    assert "NÃO APLICA" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("texto, tid, codigo", [
+    ("FALTA: a definição de X", "261005-01-01", 1),
+    (DIFF, "../fora", 1),
+])
+def test_extrair_recusa_sem_diff_ou_id_ruim(repo_git, texto, tid, codigo):
+    _proposta(repo_git, texto)
+    assert repo_git.cmd_extrair(SimpleNamespace(id=tid, modelo=None)) == codigo

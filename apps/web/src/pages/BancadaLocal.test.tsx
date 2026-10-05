@@ -47,6 +47,8 @@ const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     return json({ acao: "ligar", ok: true })
   }
   if (url.endsWith("/observers")) return json(observers)
+  const lote = /\/lotes\/([^/]+)$/.exec(url)?.[1]
+  if (lote) return json({ lote, tarefas: [{ id: `${lote}-01`, instrucao: `tarefa do ${lote}`, trechos: [["app/x.py", 1, 3]] }] })
   const corpo = url.endsWith("/estado") ? estado : url.endsWith("/propostas") ? { propostas }
     : url.endsWith("/resumo") ? { linhas: resumo } : url.includes("/propostas/moe/") ? detalhePagina : detalhe
   return json(corpo)
@@ -60,7 +62,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock)
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true })
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); window.history.replaceState({}, "", "/") })
 
 describe("Bancada Local", () => {
   it("mostra estado do modelo, aproveitamento e propostas com selos", async () => {
@@ -149,5 +151,19 @@ describe("Bancada Local", () => {
     fireEvent.click(screen.getByRole("button", { name: /^t1/ }))
     fireEvent.click(await screen.findByRole("button", { name: "Pedir parecer" }))
     await waitFor(() => expect(posts).toEqual([{ url: "/api/bancada/propostas/moe/t1/parecer", corpo: { observer: "segunda-opiniao" } }]))
+  })
+
+  it("abre o lote mandado pelo AI Hub e troca entre os lotes do plano, sem rodar sozinho", async () => {
+    window.history.replaceState({}, "", "/bancada?lote=261005-03&lote=261005-04")
+    render(<BancadaLocal />)
+    const caixa = screen.getByRole("textbox", { name: "JSON das tarefas" })
+    await waitFor(() => expect((caixa as HTMLTextAreaElement).value).toContain("261005-03-01"))
+    expect(screen.getByText(/261005-03: 1 tarefa\(s\) carregada\(s\)/)).toBeInTheDocument()
+    const lotes = screen.getByRole("navigation", { name: "Lotes do plano" })
+    expect(lotes).toHaveTextContent("261005-03 (carregado)")
+
+    fireEvent.click(screen.getByRole("button", { name: "261005-04" }))
+    await waitFor(() => expect((caixa as HTMLTextAreaElement).value).toContain("261005-04-01"))
+    expect(posts).toHaveLength(0)
   })
 })

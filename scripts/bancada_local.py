@@ -18,6 +18,8 @@ Subcomandos:
   observar <caso> --observer <slug>  checagens + parecer de um observer via OpenRouter
   comparar [--observers ...]         mesmas entradas em vários observers -> comparativo
   avaliar <id> <veredito> [nota]     registra o aproveitamento em registro.jsonl
+  extrair <id>                       grava o diff da proposta em tmp/bancada/patches/<id>.patch
+                                     e roda git apply --recount --check (nunca aplica)
   resumo                             aproveitamento por modelo e por quem avaliou
 
 Observer e comparar usam a OPENROUTER_API_KEY do WorkDev (lida do arquivo de
@@ -483,6 +485,46 @@ def cmd_avaliar(args) -> int:
     registrar({"id": args.id, "modelo": modelo, "veredito": args.veredito, "origem": "operador",
                "nota": " ".join(args.nota)})
     print(f"registrado: {args.id} [{modelo}] = {args.veredito}")
+    return 0
+
+
+def cmd_extrair(args) -> int:
+    """Diff da proposta -> tmp/bancada/patches/<id>.patch + git apply --check. Aplicar é com o operador."""
+    import subprocess
+
+    import bancada_checks as checks
+
+    if not ID_VALIDO.match(args.id):
+        print("id inválido")
+        return 1
+    if args.modelo:
+        if not ID_VALIDO.match(args.modelo):
+            print("modelo inválido")
+            return 1
+        proposta = SAIDA / args.modelo / f"{args.id}.txt"
+    else:
+        candidatos = sorted(SAIDA.glob(f"*/{args.id}.txt"), key=lambda p: p.stat().st_mtime)
+        proposta = candidatos[-1] if candidatos else SAIDA / "_" / f"{args.id}.txt"
+    if not proposta.is_file():
+        print(f"nenhuma proposta {rel(proposta)} — confira o id ou use --modelo")
+        return 1
+    diff = checks.extrair_diff(proposta.read_text(encoding="utf-8", errors="replace"))
+    if not diff:
+        print(f"{rel(proposta)} não traz diff (resposta de análise ou FALTA:) — nada a extrair")
+        return 1
+    patch = SAIDA / "patches" / f"{args.id}.patch"
+    patch.parent.mkdir(parents=True, exist_ok=True)
+    patch.write_text(diff.rstrip("\n") + "\n", encoding="utf-8")
+    arquivos = re.findall(r"^\+\+\+ b/(\S+)", diff, re.M)
+    print(f"proposta: {rel(proposta)}")
+    print(f"patch:    {rel(patch)}  ({', '.join(arquivos) or 'sem cabeçalho +++ b/'})")
+    teste = subprocess.run(["git", "-C", str(REPO), "apply", "--recount", "--check", str(patch)],
+                           capture_output=True, text=True, timeout=30)
+    if teste.returncode != 0:
+        print("NÃO APLICA no checkout atual:\n" + (teste.stderr or teste.stdout).strip())
+        return 3
+    print("aplica no checkout atual. Para aplicar (revise antes):")
+    print(f"  git -C {REPO} apply --recount {patch}")
     return 0
 
 
@@ -1237,6 +1279,11 @@ def main() -> int:
     a.add_argument("nota", nargs="*")
     a.add_argument("--modelo", help="padrão: pasta com a saída mais recente desse id")
     a.set_defaults(func=cmd_avaliar)
+
+    x = sub.add_parser("extrair", help="grava o diff da proposta em tmp/bancada/patches/ e testa (não aplica)")
+    x.add_argument("id")
+    x.add_argument("--modelo", help="padrão: pasta com a proposta mais recente desse id")
+    x.set_defaults(func=cmd_extrair)
 
     s = sub.add_parser("resumo")
     s.set_defaults(func=cmd_resumo)
