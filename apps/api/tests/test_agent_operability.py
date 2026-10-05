@@ -118,6 +118,40 @@ def test_standby_so_e_usada_quando_auto_nao_existe():
     assert state.send_ready is True
 
 
+def test_auto_so_com_shell_usa_standby_se_o_agente_estiver_operacional():
+    state = operability.resolve(
+        'codex', standby_session='codex', run_id='r1',
+        probe=probe_for({'auto-codex-r1': 'bash', 'codex': 'codex'}))
+    assert state.session_source == 'standby'
+    assert state.session_name == 'codex'
+    assert state.send_ready is True
+
+
+@pytest.mark.parametrize('standby_sessions', [{'codex': 'codex'}, {}])
+def test_auto_indeterminada_bloqueia_fallback_e_preserva_estado_desconhecido(
+    standby_sessions,
+):
+    """Timeout da AUTO não prova que a run morreu nem autoriza outro destino."""
+    auto_session = 'auto-codex-r1'
+    standby_probe = probe_for(standby_sessions)
+
+    def probe(name):
+        if name == auto_session:
+            return operability.SessionProbe(
+                name=name, determinate=False,
+                reason=operability.REASON_PROBE_UNKNOWN)
+        return standby_probe(name)
+
+    state = operability.resolve(
+        'codex', standby_session='codex', run_id='r1', probe=probe)
+    assert state.determinate is False
+    assert state.session_name is None
+    assert state.send_ready is False
+    assert state.health_reason == operability.REASON_PROBE_UNKNOWN
+    with pytest.raises(operability.OperabilityDenied):
+        state.require('send')
+
+
 def test_auto_e_standby_mortas_devolvem_motivo_e_nenhuma_sessao():
     state = operability.resolve('codex', standby_session='codex', run_id='r1',
                                 probe=probe_for({}))
