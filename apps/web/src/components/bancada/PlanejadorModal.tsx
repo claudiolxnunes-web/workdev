@@ -1,11 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { AlertCircle, CheckCircle, Loader2, X } from 'lucide-react'
+import { type NovaTarefa } from '@/services/bancada.service'
+
+/** Evento SSE de /api/bancada/planejar. `tipo` discrimina os campos usados. */
+interface EventoPlanejador {
+  tipo: 'contexto' | 'token' | 'validando' | 'ok' | 'erro'
+  resumo?: string
+  texto?: string
+  tokens?: number
+  codigo?: string
+  mensagem?: string
+  tarefas?: NovaTarefa[]
+}
 
 interface PlanejadorModalProps {
   aberto: boolean
   onClose: () => void
-  onUsarTarefas: (tarefas: any[]) => void
+  onUsarTarefas: (tarefas: NovaTarefa[]) => void
 }
 
 export function PlanejadorModal({ aberto, onClose, onUsarTarefas }: PlanejadorModalProps) {
@@ -14,9 +26,9 @@ export function PlanejadorModal({ aberto, onClose, onUsarTarefas }: PlanejadorMo
   const [prompt, setPrompt] = useState('')
   const [modelo, setModelo] = useState('deepseek/deepseek-v4-flash')
   const [executando, setExecutando] = useState(false)
-  const [progresso, setProgresso] = useState<any[]>([])
+  const [progresso, setProgresso] = useState<EventoPlanejador[]>([])
   const [erro, setErro] = useState('')
-  const [tarefasGeradas, setTarefasGeradas] = useState<any[] | null>(null)
+  const [tarefasGeradas, setTarefasGeradas] = useState<NovaTarefa[] | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -67,11 +79,11 @@ export function PlanejadorModal({ aberto, onClose, onUsarTarefas }: PlanejadorMo
         for (const linha of linhas) {
           if (linha.startsWith('data: ')) {
             try {
-              const evento = JSON.parse(linha.slice(6))
+              const evento: EventoPlanejador = JSON.parse(linha.slice(6))
               setProgresso((p) => [...p, evento])
 
               if (evento.tipo === 'ok') {
-                setTarefasGeradas(evento.tarefas)
+                setTarefasGeradas(evento.tarefas ?? [])
               } else if (evento.tipo === 'erro') {
                 setErro(`${evento.codigo}: ${evento.mensagem}`)
               }
@@ -164,7 +176,7 @@ export function PlanejadorModal({ aberto, onClose, onUsarTarefas }: PlanejadorMo
               {/* Progresso */}
               {progresso.length > 0 && (
                 <div ref={scrollRef} className="bg-slate-900 rounded border border-slate-700 p-3 h-48 overflow-auto font-mono text-xs text-slate-300">
-                  {progresso.map((e: any, i: number) => (
+                  {progresso.map((e, i) => (
                     <div key={i} className="mb-1">
                       {e.tipo === 'contexto' && <span className="text-slate-400">[contexto] {e.resumo?.slice(0, 60)}...</span>}
                       {e.tipo === 'token' && <span>{e.texto}</span>}
@@ -193,7 +205,7 @@ export function PlanejadorModal({ aberto, onClose, onUsarTarefas }: PlanejadorMo
                 </p>
               </div>
               <div className="space-y-2 max-h-60 overflow-auto">
-                {tarefasGeradas.map((t: any) => (
+                {tarefasGeradas.map((t) => (
                   <div key={t.id} className="p-2 rounded border border-slate-200 bg-slate-50">
                     <p className="font-mono text-xs font-semibold text-slate-700">{t.id}</p>
                     <p className="text-xs text-slate-600 line-clamp-2">{t.instrucao}</p>
