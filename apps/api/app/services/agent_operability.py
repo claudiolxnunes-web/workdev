@@ -267,8 +267,9 @@ def _resolve_cli(agent, standby_session, run_id, daemon_alive, probe) -> Operati
 
     # 1ª passada: sessão viva COM o processo do agente. É o único estado que
     # autoriza /send — mandar texto para um shell não é falar com o agente.
-    for source, result in results:
-        if result.determinate and result.attachable and result.agent_process:
+    determinable_results = [(s, r) for s, r in results if r.determinate]
+    for source, result in determinable_results:
+        if result.attachable and result.agent_process:
             return OperationalState(
                 agent=agent, kind=KIND_CLI, operational=True, interactive=True,
                 session_name=result.name, session_source=source,
@@ -279,8 +280,9 @@ def _resolve_cli(agent, standby_session, run_id, daemon_alive, probe) -> Operati
 
     # 2ª passada: sessão viva, mas só com shell. O terminal abre (o operador
     # precisa ver a casca para consertá-la), o /send não é autorizado.
-    for source, result in results:
-        if result.determinate and result.attachable:
+    # Iteração reversa para preferir standby se AUTO for shell-only.
+    for source, result in reversed(determinable_results):
+        if result.attachable:
             return OperationalState(
                 agent=agent, kind=KIND_CLI, operational=False, interactive=True,
                 session_name=result.name, session_source=source,
@@ -290,8 +292,10 @@ def _resolve_cli(agent, standby_session, run_id, daemon_alive, probe) -> Operati
                 health_reason=REASON_SHELL_ONLY, candidates=names,
             )
 
-    # Sondagem que não concluiu não vira OFFLINE: vira desconhecido explícito.
-    if any(not result.determinate for _, result in results):
+    # Sondagem que não concluiu não vira OFFLINE somente se todos os
+    # candidatos determinables estiverem esgotados e houver indeterminados.
+    indeterminate_results = [(s, r) for s, r in results if not r.determinate]
+    if indeterminate_results and not determinable_results:
         return OperationalState(
             agent=agent, kind=KIND_CLI, interactive=True, determinate=False,
             daemon_alive=daemon_alive, health_reason=REASON_PROBE_UNKNOWN,
@@ -299,7 +303,7 @@ def _resolve_cli(agent, standby_session, run_id, daemon_alive, probe) -> Operati
         )
 
     dead_pane = next(
-        (result for _, result in results if result.reason == REASON_PANE_DEAD), None
+        (result for _, result in determinable_results if result.reason == REASON_PANE_DEAD), None
     )
     return OperationalState(
         agent=agent, kind=KIND_CLI, interactive=True, daemon_alive=daemon_alive,
