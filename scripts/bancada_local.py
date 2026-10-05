@@ -49,6 +49,8 @@ LIMITE_FERRAMENTA = 6000
 MAX_VOLTAS = 10
 VEREDITOS = ("aproveitada", "correcao_pequena", "descartada")
 ID_VALIDO = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+# Ids que o planejador costuma devolver sem significado: "1", "t1", "tarefa1".
+ID_GENERICO = re.compile(r"^(?:\d+|t[-_]?\d+|tarefa[-_]?\d+)$", re.IGNORECASE)
 
 
 class Recusado(Exception):
@@ -890,11 +892,30 @@ def _extrair_plano(texto: str) -> dict:
     if len(tarefas) > 4:
         raise ValueError("máximo de 4 tarefas")
 
+    def generico(tid) -> bool:
+        if tid is None or isinstance(tid, int) and not isinstance(tid, bool):
+            return True
+        return isinstance(tid, str) and (not tid.strip() or bool(ID_GENERICO.match(tid.strip())))
+
+    # Ids automáticos AAMMDD-NN; pulam os que o modelo já usou de forma descritiva.
+    explicitos = {t.get("id") for t in tarefas
+                  if isinstance(t, dict) and not generico(t.get("id"))}
+    hoje = datetime.now().strftime("%y%m%d")
+    contador = 0
+
     ids = set()
 
     for i, tarefa in enumerate(tarefas, 1):
         if not isinstance(tarefa, dict):
             raise ValueError(f"tarefa {i}: precisa ser objeto")
+
+        if generico(tarefa.get("id")):
+            while True:
+                contador += 1
+                novo = f"{hoje}-{contador:02d}"
+                if novo not in explicitos:
+                    break
+            tarefa["id"] = novo
 
         tid = tarefa.get("id")
         instrucao = tarefa.get("instrucao")
@@ -927,11 +948,10 @@ def _extrair_plano(texto: str) -> dict:
             if inicio < 1 or fim_linha < inicio:
                 raise ValueError(f"{tid}: intervalo inválido {inicio}-{fim_linha}")
 
-            alvo = (REPO / caminho).resolve()
             try:
-                alvo.relative_to(REPO.resolve())
-            except ValueError:
-                raise ValueError(f"{tid}: caminho fora do repositório: {caminho}")
+                alvo = caminho_seguro(caminho)
+            except Recusado as erro:
+                raise ValueError(f"{tid}: {erro}")
 
             if not alvo.is_file():
                 raise ValueError(f"{tid}: arquivo não existe: {caminho}")
@@ -969,6 +989,17 @@ def cmd_planejar(args) -> int:
     if len(args.tarefa.strip()) < 20:
         print("tarefa curta demais; descreva objetivo e resultado esperado.")
         return 1
+
+    if args.saida:
+        bruto = Path(args.saida)
+        destino = Path(os.path.realpath(bruto if bruto.is_absolute() else REPO / bruto))
+        raiz = Path(os.path.realpath(SAIDA))
+        if raiz not in destino.parents:
+            print(f"--saida recusado: precisa ficar dentro de {rel(SAIDA)}/ (recebido: {args.saida})")
+            return 1
+    else:
+        pasta = SAIDA / "planos"
+        destino = pasta / f"plano-{int(time.time())}.json"
 
     mensagens = [
         {"role": "system", "content": PROTOCOLO_PLANEJADOR},
@@ -1034,15 +1065,6 @@ def cmd_planejar(args) -> int:
                 },
             ]
             continue
-
-        if args.saida:
-            destino = Path(args.saida)
-            if not destino.is_absolute():
-                destino = REPO / destino
-        else:
-            pasta = SAIDA / "planos"
-            pasta.mkdir(parents=True, exist_ok=True)
-            destino = pasta / f"plano-{int(time.time())}.json"
 
         destino.parent.mkdir(parents=True, exist_ok=True)
         destino.write_text(
@@ -1145,7 +1167,7 @@ def main() -> int:
     pl.add_argument("tarefa", help="descrição da task a decompor")
     pl.add_argument(
         "--saida",
-        help="arquivo JSON de destino; padrão: tmp/bancada/planos/plano-<timestamp>.json",
+        help="arquivo JSON de destino, só dentro de tmp/bancada/; padrão: tmp/bancada/planos/plano-<timestamp>.json",
     )
     pl.add_argument("--max-tokens", type=int, default=1400)
     pl.add_argument("--thinking", action="store_true")
