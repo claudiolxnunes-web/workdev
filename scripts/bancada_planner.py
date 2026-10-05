@@ -61,34 +61,53 @@ def _ler_claude_md() -> str:
         return ""
 
 
-def _ler_backlog_recente(limite: int = 50) -> list[dict]:
-    """Lê as últimas N tasks abertas do backlog do Postgres.
+STATUS_ABERTOS = ("todo", "doing", "blocked")  # mesmos de handoff.PLANNING_TASK_STATUSES
 
-    Conecta ao banco via DATABASE_URL no env do serviço e retorna
-    [{"id": "uuid", "title": str, "description": str, ...}]
-    """
-    db_url = os.environ.get("DATABASE_URL")
+
+def _conectar():
+    """Conexão psycopg com o DATABASE_URL do serviço (sem o sufixo de driver do SQLAlchemy)."""
+    db_url = os.environ.get("DATABASE_URL", "")
     if not db_url:
-        return []
-
-    # Tenta usar psycopg3 se disponível; senão, return vazio (não é crítico)
+        raise PlanejadorErro("banco_indisponivel", "DATABASE_URL não configurada")
     try:
         import psycopg
-        with psycopg.connect(db_url, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id, title, description FROM tasks WHERE status IN ('todo', 'in_progress') "
-                    "ORDER BY created_at DESC LIMIT %s",
-                    (limite,)
-                )
-                return [
-                    {"id": row[0], "title": row[1], "description": row[2]}
-                    for row in cur.fetchall()
-                ]
+        return psycopg.connect(re.sub(r"^postgresql\+\w+://", "postgresql://", db_url), autocommit=True,
+                               connect_timeout=5)
+    except Exception as erro:
+        raise PlanejadorErro("banco_indisponivel", f"não foi possível ler o backlog: {type(erro).__name__}") from erro
+
+
+def _ler_backlog_recente(limite: int = 50) -> list[dict]:
+    """Últimas N tasks abertas do backlog. Só referência: se o banco falhar, segue sem elas."""
+    try:
+        with _conectar() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, description FROM backlog WHERE status = ANY(%s) "
+                "ORDER BY created_at DESC LIMIT %s",
+                (list(STATUS_ABERTOS), limite),
+            )
+            return [{"id": str(row[0]), "title": row[1], "description": row[2]} for row in cur.fetchall()]
     except Exception:
-        # Se falhar (psycopg não instalado, banco indisponível, etc), retorna vazio
-        # Não interrompe o fluxo — o planejador continua com só CLAUDE.md
         return []
+
+
+def _ler_task(tarefa_id: str) -> dict:
+    """Task do backlog pelo uuid completo ou por um prefixo (mínimo 8 caracteres)."""
+    prefixo = tarefa_id.strip().lower()
+    if not re.fullmatch(r"[0-9a-f-]{8,36}", prefixo):
+        raise PlanejadorErro("tarefa_invalida", "informe o id da task (uuid ou os 8 primeiros caracteres)")
+    with _conectar() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, title, description FROM backlog WHERE id::text LIKE %s LIMIT 2",
+                    (prefixo + "%",))
+        linhas = cur.fetchall()
+    if not linhas:
+        raise PlanejadorErro("tarefa_nao_encontrada", f"Task {tarefa_id} não encontrada no backlog")
+    if len(linhas) > 1:
+        raise PlanejadorErro("tarefa_ambigua", f"mais de uma task começa com {tarefa_id}; use o uuid completo")
+    ident, titulo, descricao = linhas[0]
+    if not (descricao or "").strip():
+        raise PlanejadorErro("descricao_vazia", "A task não tem descrição. Escreva a descrição antes de planejar.")
+    return {"id": str(ident), "title": titulo, "description": descricao}
 
 
 def _montar_contexto(tarefa_id: str | None, prompt_livre: str | None) -> tuple[str, str]:
@@ -100,15 +119,13 @@ def _montar_contexto(tarefa_id: str | None, prompt_livre: str | None) -> tuple[s
     Retorna (contexto_resumido_para_prompt, contexto_completo_para_referencia)
     """
     claude_md = _ler_claude_md()
-    backlog = _ler_backlog_recente(50)
 
     if tarefa_id:
-        tarefa = next((t for t in backlog if str(t["id"]).startswith(tarefa_id[:8])), None)
-        if not tarefa:
-            raise PlanejadorErro("tarefa_nao_encontrada", f"Task {tarefa_id} não encontrada no backlog")
-        resumo = f"Task: {tarefa['title']}\n{tarefa.get('description', '')}"
+        tarefa = _ler_task(tarefa_id)
+        resumo = f"Task: {tarefa['title']}\n{tarefa['description']}"
     else:
         resumo = prompt_livre or ""
+    backlog = _ler_backlog_recente(50)
 
     # Contexto: CLAUDE.md (linhas 1-100) + resumo + backlog resumido
     claude_linhas = claude_md.split("\n")[:100]

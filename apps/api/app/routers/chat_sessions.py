@@ -113,7 +113,8 @@ def _bancada_planning_context(task: BacklogItem | None, project: Project | None,
     else:
         if not (task.description or "").strip():
             return None  # Sinal de que a descrição está vazia
-        entrada = f"Task: {task.title}\n{task.description or ''}"
+        entrada = (f"Task ID: `{task.id}` (use ler_task para reler a ficha)\n"
+                   f"Task: {task.title}\n{task.description or ''}")
 
     lines = [
         "Você é o planejador da Bancada Local do WorkDev. Vai quebrar o pedido abaixo em",
@@ -285,11 +286,12 @@ def criar_sessao_planejamento_bancada(
     if prompt_content is None:
         raise HTTPException(409, "Task sem descrição")
 
-    # Cria a sessão em modo OBSERVE (somente leitura)
+    # Cria a sessão em modo OBSERVE (somente leitura). Sem task_id de propósito:
+    # uq_chat_sessions_task_id reserva a vaga da task para a sessão de PLAN do
+    # "Enviar ao AI Hub". O id da task vai no prompt (ler_task relê a ficha).
     session = ChatSession(
         title=f"Planejar Bancada: {task.title if task else 'Prompt livre'}"[:255],
         project_id=project.id if project else None,
-        task_id=task.id if task else None,
         authority=autoridade.OBSERVE,  # Somente leitura
     )
     try:
