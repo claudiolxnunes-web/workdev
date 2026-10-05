@@ -62,7 +62,7 @@ function loadStoredProjeto(): string | null {
 
 // Início da sessão "Plano para a Bancada Local": o system prompt da sessão já traz as
 // regras das micro-tarefas; aqui só se pede para começar pela ficha e pelo código real.
-const BANCADA_START_PROMPT = "Leia a task com ler_task e os arquivos envolvidos com ler_trecho. Se a task couber na Bancada Local, fatie em micro-tarefas, valide com validar_lote_bancada e entregue o(s) lote(s) validado(s) em blocos ```json. Se não couber, diga por quê e devolva fora_do_alcance para o operador usar o fluxo de nuvem.";
+const BANCADA_START_PROMPT = "Faça primeiro a triagem só com ler_task: se a task não couber na Bancada Local (discovery, várias camadas, arquitetura, migração), responda já com fora_do_alcance, sem ler código. Se couber, leia os arquivos envolvidos com vários ler_trecho na mesma rodada, fatie em micro-tarefas, valide com validar_lote_bancada e entregue o(s) lote(s) validado(s) em blocos ```json. Ao recusar, diga por quê para o operador usar o fluxo de nuvem.";
 
 export default function AIHub() {
   const [messages, setMessages] = useState<Msg[]>([]);

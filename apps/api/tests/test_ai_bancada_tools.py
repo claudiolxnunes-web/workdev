@@ -236,3 +236,38 @@ def test_validar_lote_fora_do_alcance_sugere_nuvem(repo, bancada_dir):
 
 def test_validar_lote_recusa_plano_que_nao_e_objeto(repo, bancada_dir):
     assert _executar("validar_lote_bancada", {"plano": "nao é json"})["ok"] is False
+
+
+# ---------------------------------------------------------------- limite de passos
+
+class _Bloco(SimpleNamespace):
+    pass
+
+
+def _cliente_que_so_le(monkeypatch, tool):
+    """Anthropic falso que pede a mesma tool para sempre."""
+    chamadas = []
+
+    def criar(**kwargs):
+        chamadas.append(kwargs)
+        return SimpleNamespace(
+            stop_reason="tool_use", usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+            content=[_Bloco(type="tool_use", id=f"t{len(chamadas)}", name=tool, input={})])
+
+    monkeypatch.setattr(ai, "get_anthropic", lambda: SimpleNamespace(messages=SimpleNamespace(create=criar)))
+    monkeypatch.setattr(ai, "executar_tool", lambda *a, **k: "{}")
+    monkeypatch.setenv("AI_MAX_TOOL_STEPS", "3")
+    return chamadas
+
+
+def test_limite_lendo_codigo_sugere_fluxo_de_nuvem(monkeypatch):
+    chamadas = _cliente_que_so_le(monkeypatch, "ler_trecho")
+    r = ai.chat_anthropic([{"role": "user", "content": "x"}], MagicMock(), nivel=autoridade.OBSERVE)
+    assert len(chamadas) == 3
+    assert "limite de 3 passos" in r.text and "Enviar ao AI Hub" in r.text
+
+
+def test_limite_fora_da_bancada_mantem_mensagem_generica(monkeypatch):
+    _cliente_que_so_le(monkeypatch, "listar_backlog")
+    r = ai.chat_anthropic([{"role": "user", "content": "x"}], MagicMock(), nivel=autoridade.OBSERVE)
+    assert r.text == "Não consegui concluir a operação (limite de passos)."

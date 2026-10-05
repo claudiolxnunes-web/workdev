@@ -1261,6 +1261,20 @@ def _provider_result(value) -> ProviderResult:
     return value if isinstance(value, ProviderResult) else ProviderResult(str(value))
 
 
+# Planejar para a Bancada é o único fluxo que lê código com ler_trecho; estourar o
+# limite ali quase sempre quer dizer task grande demais, não falha técnica.
+TOOLS_DE_LEITURA_DE_CODIGO = {"ler_trecho", "validar_lote_bancada"}
+
+
+def mensagem_limite_de_passos(usadas: set[str]) -> str:
+    passos = int(os.getenv("AI_MAX_TOOL_STEPS", "12"))
+    if usadas & TOOLS_DE_LEITURA_DE_CODIGO:
+        return (f"Não consegui concluir: o limite de {passos} passos acabou enquanto eu lia o código. "
+                "No planejamento para a Bancada Local, isso costuma indicar que a task é grande demais "
+                "para micro-tarefas. Use \"Enviar ao AI Hub\" (fluxo de nuvem) ou divida a task no backlog.")
+    return "Não consegui concluir a operação (limite de passos)."
+
+
 def chat_anthropic(messages: list, db: Session, model: str | None = None,
                    system: str | None = None,
                    nivel: str = autoridade.NIVEL_PADRAO,
@@ -1270,6 +1284,7 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
     # Camada 1 do gate: o modelo só recebe o catálogo do seu nível.
     tools = autoridade.tools_para(nivel, TOOLS)
     input_tokens = output_tokens = 0
+    usadas: set[str] = set()
     for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
         # max_tokens limita thinking + texto da resposta juntos: 4096 truncava
         # no meio quando o modelo pensa antes de responder. Hoje o valor vem do
@@ -1299,6 +1314,7 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
         results = []
         for block in resp.content:
             if block.type == "tool_use":
+                usadas.add(block.name)
                 try:
                     out = executar_tool(block.name, block.input, db, nivel, backlog_id=backlog_id)
                 except Exception as e:
@@ -1312,8 +1328,7 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
                     "content": out,
                 })
         messages.append({"role": "user", "content": results})
-    return ProviderResult("Não consegui concluir a operação (limite de passos).",
-                          input_tokens, output_tokens)
+    return ProviderResult(mensagem_limite_de_passos(usadas), input_tokens, output_tokens)
 
 def tools_openai(nivel: str = autoridade.NIVEL_PADRAO) -> list:
     """Mesmo catálogo filtrado da camada 1, no formato dos providers compat."""
@@ -1351,6 +1366,7 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
         msgs = [{"role": "system", "content": system or SYSTEM}] + messages
         tools = tools_openai(nivel)
         input_tokens = output_tokens = 0
+        usadas: set[str] = set()
         for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
             kwargs = dict(
                 model=model or COMPAT_PROVIDERS[provider]["default_model"],
@@ -1396,6 +1412,7 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
                 return ProviderResult(msg.content or "", input_tokens, output_tokens)
             msgs.append(msg)
             for tc in msg.tool_calls:
+                usadas.add(tc.function.name)
                 args = json.loads(tc.function.arguments or "{}")
                 try:
                     out = executar_tool(tc.function.name, args, db, nivel, backlog_id=backlog_id)
@@ -1409,8 +1426,7 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
                     "tool_call_id": tc.id,
                     "content": out,
                 })
-        return ProviderResult("Não consegui concluir a operação (limite de passos).",
-                              input_tokens, output_tokens)
+        return ProviderResult(mensagem_limite_de_passos(usadas), input_tokens, output_tokens)
     finally:
         if runtime_id:
             client.close()
