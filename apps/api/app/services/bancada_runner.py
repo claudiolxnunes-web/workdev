@@ -475,10 +475,10 @@ def _planejar(plano: dict) -> Iterator[str]:
             elif evento["tipo"] == "ok":
                 tarefas = evento["tarefas"]
                 tokens = evento.get("tokens")
-                # Grava metadados das tarefas
-                ident_plano = f"plano-{int(time.time())}"
-                _gravar(pasta() / "planejamentos" / f"{ident_plano}.json", {
-                    "id": ident_plano, "tarefas": tarefas, "tokens": tokens,
+                # Mesma pasta e mesmo id de lote (AAMMDD-NN) do `planejar` da CLI.
+                ident_plano = _modulo("bancada_local").proximo_lote(pasta() / "planos")
+                _gravar(pasta() / "planos" / f"{ident_plano}.json", {
+                    "id": ident_plano, "lote": ident_plano, "tarefas": tarefas, "tokens": tokens,
                     "modelo": plano["modelo"], "origem_tarefa": plano.get("tarefa_id"),
                     "origem_prompt": (plano.get("prompt") or "")[:500], "data": _agora()
                 })

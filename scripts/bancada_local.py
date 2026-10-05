@@ -9,7 +9,9 @@ OPENROUTER_API_KEY do arquivo de ambiente do serviço, sem exibir.
 
 Subcomandos:
   rodar tarefas.json [--stream]      executa as tarefas; --stream mostra token a token e
-                                     interrompe/reenvia 1 vez se citar símbolo inexistente
+                                     interrompe/reenvia 1 vez se citar símbolo inexistente;
+                                     pula id que já tem proposta (--sobrescrever refaz)
+  planejar "<task>"                  o modelo local fatia a task em tmp/bancada/planos/<lote>.json
   ferramentas "<pergunta>"           exploração somente leitura com function calling
   broker "<pergunta>"                o modelo pede LER/PROCURAR por texto; o broker só lê
   verificar --caso <id>              checagens mecânicas (git apply na base, símbolos, imports)
@@ -51,6 +53,16 @@ VEREDITOS = ("aproveitada", "correcao_pequena", "descartada")
 ID_VALIDO = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 # Ids que o planejador costuma devolver sem significado: "1", "t1", "tarefa1".
 ID_GENERICO = re.compile(r"^(?:\d+|t[-_]?\d+|tarefa[-_]?\d+)$", re.IGNORECASE)
+# Um lote por plano: AAMMDD-NN, numerado pelo próximo livre em tmp/bancada/planos/.
+LOTE = re.compile(r"^(\d{6})-(\d{2,})$")
+
+
+def proximo_lote(pasta_planos: Path, hoje: str | None = None) -> str:
+    """Id do próximo lote do dia. A página e a CLI usam a mesma pasta e a mesma regra."""
+    hoje = hoje or datetime.now().strftime("%y%m%d")
+    usados = [int(m.group(2)) for p in (pasta_planos.glob(f"{hoje}-*.json") if pasta_planos.is_dir() else [])
+              if (m := LOTE.match(p.stem)) and m.group(1) == hoje]
+    return f"{hoje}-{max(usados, default=0) + 1:02d}"
 
 
 class Recusado(Exception):
@@ -184,6 +196,9 @@ def cmd_rodar(args) -> int:
         tid = str(tarefa.get("id", ""))
         if not ID_VALIDO.match(tid):
             print(f"  [pulada] id inválido: {tid!r}")
+            continue
+        if (destino / f"{tid}.txt").exists() and not args.sobrescrever:
+            print(f"  [pulada] {tid}: já existe proposta em {rel(destino)}/ (use --sobrescrever para refazer)")
             continue
         inicio = time.monotonic()
         tokens = None
@@ -860,7 +875,7 @@ PROTOCOLO_PLANEJADOR = (
 )
 
 
-def _extrair_plano(texto: str) -> dict:
+def _extrair_plano(texto: str, lote: str) -> dict:
     bruto = texto.strip()
 
     if bruto.upper().startswith("PROPOSTA:"):
@@ -897,10 +912,10 @@ def _extrair_plano(texto: str) -> dict:
             return True
         return isinstance(tid, str) and (not tid.strip() or bool(ID_GENERICO.match(tid.strip())))
 
-    # Ids automáticos AAMMDD-NN; pulam os que o modelo já usou de forma descritiva.
+    # Ids automáticos <lote>-NN (lote = AAMMDD-NN): não repetem entre planos do mesmo dia.
+    # Pulam os que o modelo já usou de forma descritiva.
     explicitos = {t.get("id") for t in tarefas
                   if isinstance(t, dict) and not generico(t.get("id"))}
-    hoje = datetime.now().strftime("%y%m%d")
     contador = 0
 
     ids = set()
@@ -912,7 +927,7 @@ def _extrair_plano(texto: str) -> dict:
         if generico(tarefa.get("id")):
             while True:
                 contador += 1
-                novo = f"{hoje}-{contador:02d}"
+                novo = f"{lote}-{contador:02d}"
                 if novo not in explicitos:
                     break
             tarefa["id"] = novo
@@ -990,6 +1005,7 @@ def cmd_planejar(args) -> int:
         print("tarefa curta demais; descreva objetivo e resultado esperado.")
         return 1
 
+    lote = proximo_lote(SAIDA / "planos")
     if args.saida:
         bruto = Path(args.saida)
         destino = Path(os.path.realpath(bruto if bruto.is_absolute() else REPO / bruto))
@@ -998,8 +1014,7 @@ def cmd_planejar(args) -> int:
             print(f"--saida recusado: precisa ficar dentro de {rel(SAIDA)}/ (recebido: {args.saida})")
             return 1
     else:
-        pasta = SAIDA / "planos"
-        destino = pasta / f"plano-{int(time.time())}.json"
+        destino = SAIDA / "planos" / f"{lote}.json"
 
     mensagens = [
         {"role": "system", "content": PROTOCOLO_PLANEJADOR},
@@ -1049,7 +1064,7 @@ def cmd_planejar(args) -> int:
             continue
 
         try:
-            plano = _extrair_plano(texto)
+            plano = _extrair_plano(texto, lote)
         except (ValueError, json.JSONDecodeError) as erro:
             print(f"[planejador volta {volta}] JSON recusado: {erro}")
             mensagens += [
@@ -1066,6 +1081,7 @@ def cmd_planejar(args) -> int:
             ]
             continue
 
+        plano = {"lote": lote, **plano}
         destino.parent.mkdir(parents=True, exist_ok=True)
         destino.write_text(
             json.dumps(plano, ensure_ascii=False, indent=2) + "\n",
@@ -1077,6 +1093,7 @@ def cmd_planejar(args) -> int:
         print(json.dumps(plano, ensure_ascii=False, indent=2))
         print()
         print(f"leituras feitas: {pedidos_feitos}")
+        print(f"lote: {lote}")
         print(f"gravado em: {rel(destino)}")
 
         if plano.get("tarefas"):
@@ -1113,6 +1130,8 @@ def main() -> int:
     r.add_argument("tarefas")
     r.add_argument("--so", nargs="+", help="roda só estes ids")
     r.add_argument("--stream", action="store_true", help="mostra token a token e vigia símbolos")
+    r.add_argument("--sobrescrever", action="store_true",
+                   help="refaz tarefas que já têm proposta deste modelo (padrão: pula)")
     r.set_defaults(func=cmd_rodar)
 
     f = sub.add_parser("ferramentas")
@@ -1167,7 +1186,7 @@ def main() -> int:
     pl.add_argument("tarefa", help="descrição da task a decompor")
     pl.add_argument(
         "--saida",
-        help="arquivo JSON de destino, só dentro de tmp/bancada/; padrão: tmp/bancada/planos/plano-<timestamp>.json",
+        help="arquivo JSON de destino, só dentro de tmp/bancada/; padrão: tmp/bancada/planos/<lote>.json",
     )
     pl.add_argument("--max-tokens", type=int, default=1400)
     pl.add_argument("--thinking", action="store_true")
