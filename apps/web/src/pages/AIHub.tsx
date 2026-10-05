@@ -60,6 +60,10 @@ function loadStoredProjeto(): string | null {
   }
 }
 
+// Início da sessão "Plano para a Bancada Local": o system prompt da sessão já traz as
+// regras das micro-tarefas; aqui só se pede para começar pela ficha e pelo código real.
+const BANCADA_START_PROMPT = "Leia a task com ler_task e os arquivos envolvidos com ler_trecho. Se a task couber na Bancada Local, fatie em micro-tarefas, valide com validar_lote_bancada e entregue o(s) lote(s) validado(s) em blocos ```json. Se não couber, diga por quê e devolva fora_do_alcance para o operador usar o fluxo de nuvem.";
+
 export default function AIHub() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [dividers, setDividers] = useState<Divider[]>([]);
@@ -80,7 +84,7 @@ export default function AIHub() {
   const [catalogModel, setCatalogModel] = useState("");
   const [catalogStatus, setCatalogStatus] = useState<"loading" | "ready" | "error">("loading");
   const [catalogReload, setCatalogReload] = useState(0);
-  const [pendingStart, setPendingStart] = useState<{ id: string; messages: Msg[]; slug: string | null } | null>(null);
+  const [pendingStart, setPendingStart] = useState<{ id: string; messages: Msg[]; slug: string | null; mode: "1" | "bancada" } | null>(null);
   const dynamicSource = modelo.provider === "openrouter" || modelo.provider === "ollama";
   const localSource = modelo.provider === "ollama";
   const modelStorageKey = localSource ? LOCAL_MODEL_STORAGE_KEY : OPENROUTER_MODEL_STORAGE_KEY;
@@ -114,7 +118,7 @@ export default function AIHub() {
   useEffect(() => {
     if (!pendingStart || !selectedModel || autostartedRef.current) return;
     autostartedRef.current = true;
-    void startTaskConversation(pendingStart.id, pendingStart.messages, pendingStart.slug);
+    void startTaskConversation(pendingStart.id, pendingStart.messages, pendingStart.slug, pendingStart.mode);
     // O início aguarda uma escolha válida; a ref evita duplicação após re-render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingStart, selectedModel, modelo.provider]);
@@ -131,7 +135,8 @@ export default function AIHub() {
     loadSessions();
     if (sessionId) {
       const params = new URLSearchParams(window.location.search);
-      restoreSession(sessionId, params.get("autostart") === "1");
+      const autostart = params.get("autostart");
+      restoreSession(sessionId, autostart === "1" || autostart === "bancada" ? autostart : null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -143,7 +148,7 @@ export default function AIHub() {
     } catch { /* silencioso */ }
   }
 
-  async function restoreSession(id: string, autostart = false) {
+  async function restoreSession(id: string, autostart: "1" | "bancada" | null = null) {
     setPendingStart(null);
     try {
       const r = await fetch(`/api/chat/sessions/${id}`);
@@ -160,7 +165,7 @@ export default function AIHub() {
       setSessionId(id);
       localStorage.setItem("workdev_chat_session", id);
       if (autostart && !autostartedRef.current) {
-        setPendingStart({ id, messages: data.messages, slug: data.project_slug ?? null });
+        setPendingStart({ id, messages: data.messages, slug: data.project_slug ?? null, mode: autostart });
       }
     } catch { /* silencioso */ }
   }
@@ -169,9 +174,10 @@ export default function AIHub() {
     id: string,
     currentMessages: Msg[],
     slug: string | null,
+    mode: "1" | "bancada" = "1",
   ) {
     if (!selectedModel) return;
-    const prompt = "Confirme sua compreensão da task, identifique lacunas e formule uma PRÉVIA do plano para revisão humana. Durante toda a revisão use apenas a prévia: não crie plan_id, não gere nova versão e não materialize plano oficial. Corrija a mesma prévia quantas vezes o usuário pedir. Só após aprovação explícita da formulação final o plano oficial poderá ser criado em draft. Aprovar o plano não envia para Build nem escolhe agente; apenas recomende o agente/modelo mais econômico e adequado, e deixe a execução manual para o usuário.";
+    const prompt = mode === "bancada" ? BANCADA_START_PROMPT : "Confirme sua compreensão da task, identifique lacunas e formule uma PRÉVIA do plano para revisão humana. Durante toda a revisão use apenas a prévia: não crie plan_id, não gere nova versão e não materialize plano oficial. Corrija a mesma prévia quantas vezes o usuário pedir. Só após aprovação explícita da formulação final o plano oficial poderá ser criado em draft. Aprovar o plano não envia para Build nem escolhe agente; apenas recomende o agente/modelo mais econômico e adequado, e deixe a execução manual para o usuário.";
     const next: Msg[] = [...currentMessages, { role: "user", content: prompt }];
     setMessages(next);
     setLoading(true);

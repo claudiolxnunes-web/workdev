@@ -71,15 +71,16 @@ class Recusado(Exception):
 
 # ---------------------------------------------------------------- caminhos
 
-def caminho_seguro(relativo: str) -> Path:
+def caminho_seguro(relativo: str, raiz: Path | None = None) -> Path:
     """Resolve com realpath e recusa o que sai da raiz ou bate na lista negra."""
+    raiz = raiz or REPO
     if not isinstance(relativo, str) or not relativo.strip():
         raise Recusado("caminho vazio")
     bruto = relativo.strip()
-    alvo = Path(os.path.realpath(REPO / bruto))
-    if alvo != REPO and REPO not in alvo.parents:
+    alvo = Path(os.path.realpath(raiz / bruto))
+    if alvo != raiz and raiz not in alvo.parents:
         raise Recusado(f"fora do repositório: {bruto}")
-    rel = alvo.relative_to(REPO).as_posix().lower()
+    rel = alvo.relative_to(raiz).as_posix().lower()
     # Confere o pedido e o destino real (um symlink não pode disfarçar o nome).
     for texto in (bruto.lower(), rel):
         for proibido in BLOQUEADOS:
@@ -901,11 +902,70 @@ def _extrair_plano(texto: str, lote: str) -> dict:
     if not isinstance(plano, dict):
         raise ValueError("plano precisa ser objeto JSON")
 
+    return validar_lote(plano, lote, LIMITES_LOCAL)
+
+
+# Limites por origem do lote. O local (modelo pequeno fatiando) é estreito de
+# propósito; o do AI Hub (LLM grande fatiando) segue o contrato do `rodar` da
+# página: até 8 trechos, max_tokens 64-4000. Um lote tem até 10 tarefas, porque
+# cada proposta passa por revisão humana; de 11 a 20 o plano vira 2 lotes
+# (dividir_em_lotes) e acima disso a task é grande demais para a Bancada.
+LIMITES_LOCAL = {"max_tarefas": 4, "max_arquivos": 2, "max_tokens": (64, 400)}
+LIMITES_AI_HUB = {"max_tarefas": 10, "max_arquivos": 8, "max_tokens": (64, 4000)}
+MAX_LOTES_POR_PLANO = 2
+MAX_TRECHOS = 8
+MAX_LINHAS_TRECHO = 400
+MAX_INSTRUCAO = 8000
+MAX_EXIGE = 5
+
+
+def lote_seguinte(lote: str) -> str:
+    dia, numero = LOTE.match(lote).groups()
+    return f"{dia}-{int(numero) + 1:02d}"
+
+
+def dividir_em_lotes(plano: dict, lote: str, limites: dict, raiz: Path | None = None) -> list[tuple[str, dict]]:
+    """Valida o plano e, se passar de max_tarefas, divide em até MAX_LOTES_POR_PLANO lotes
+    equilibrados (15 -> 8 + 7), cada um com seu id AAMMDD-NN. As tarefas já são
+    independentes entre si (o modelo local não vê as respostas anteriores)."""
+    if not isinstance(plano, dict):
+        raise ValueError("plano precisa ser objeto JSON")
     tarefas = plano.get("tarefas")
     if not isinstance(tarefas, list):
         raise ValueError("campo tarefas precisa ser lista")
-    if len(tarefas) > 4:
-        raise ValueError("máximo de 4 tarefas")
+    teto = limites["max_tarefas"] * MAX_LOTES_POR_PLANO
+    if len(tarefas) > teto:
+        raise ValueError(f"máximo de {teto} tarefas ({MAX_LOTES_POR_PLANO} lotes de "
+                         f"{limites['max_tarefas']}); divida a task no backlog")
+    explicitos = [t.get("id") for t in tarefas if isinstance(t, dict) and isinstance(t.get("id"), str)
+                  and t["id"].strip() and not ID_GENERICO.match(t["id"].strip())]
+    repetido = next((i for i in explicitos if explicitos.count(i) > 1), None)
+    if repetido:
+        raise ValueError(f"id duplicado: {repetido}")
+    partes = -(-len(tarefas) // limites["max_tarefas"]) or 1
+    tamanho = -(-len(tarefas) // partes)
+    lotes = []
+    for n in range(partes):
+        parte = {**plano, "tarefas": tarefas[n * tamanho:(n + 1) * tamanho]}
+        lotes.append((lote, validar_lote(parte, lote, limites, raiz)))
+        lote = lote_seguinte(lote)
+    return lotes
+
+
+def validar_lote(plano: dict, lote: str, limites: dict, raiz: Path | None = None) -> dict:
+    """Valida um lote {"tarefas": [...]} contra os arquivos reais e dá ids.
+
+    Ids genéricos (vazio, "1", "t2") viram <lote>-NN. Levanta ValueError com a
+    primeira regra violada; devolve o próprio plano normalizado.
+    """
+    if not isinstance(plano, dict):
+        raise ValueError("plano precisa ser objeto JSON")
+    tarefas = plano.get("tarefas")
+    if not isinstance(tarefas, list):
+        raise ValueError("campo tarefas precisa ser lista")
+    if len(tarefas) > limites["max_tarefas"]:
+        raise ValueError(f"máximo de {limites['max_tarefas']} tarefas")
+    min_tokens, max_tokens_lim = limites["max_tokens"]
 
     def generico(tid) -> bool:
         if tid is None or isinstance(tid, int) and not isinstance(tid, bool):
@@ -944,9 +1004,13 @@ def _extrair_plano(texto: str, lote: str) -> dict:
 
         if not isinstance(instrucao, str) or len(instrucao.strip()) < 20:
             raise ValueError(f"{tid}: instrucao ausente ou curta demais")
+        if len(instrucao) > MAX_INSTRUCAO:
+            raise ValueError(f"{tid}: instrucao acima de {MAX_INSTRUCAO} caracteres")
 
         if not isinstance(trechos, list) or not trechos:
             raise ValueError(f"{tid}: precisa informar trechos reais")
+        if len(trechos) > MAX_TRECHOS:
+            raise ValueError(f"{tid}: no máximo {MAX_TRECHOS} trechos")
 
         arquivos = set()
 
@@ -962,9 +1026,11 @@ def _extrair_plano(texto: str, lote: str) -> dict:
                 raise ValueError(f"{tid}: linhas precisam ser inteiros")
             if inicio < 1 or fim_linha < inicio:
                 raise ValueError(f"{tid}: intervalo inválido {inicio}-{fim_linha}")
+            if fim_linha - inicio + 1 > MAX_LINHAS_TRECHO:
+                raise ValueError(f"{tid}: trecho acima de {MAX_LINHAS_TRECHO} linhas em {caminho}")
 
             try:
-                alvo = caminho_seguro(caminho)
+                alvo = caminho_seguro(caminho, raiz)
             except Recusado as erro:
                 raise ValueError(f"{tid}: {erro}")
 
@@ -983,15 +1049,29 @@ def _extrair_plano(texto: str, lote: str) -> dict:
 
             arquivos.add(caminho)
 
-        if len(arquivos) > 2:
-            raise ValueError(f"{tid}: usa mais de 2 arquivos")
+        if len(arquivos) > limites["max_arquivos"]:
+            raise ValueError(f"{tid}: usa mais de {limites['max_arquivos']} arquivos")
 
-        max_tokens = tarefa.get("max_tokens", 400)
-        if not isinstance(max_tokens, int) or not 1 <= max_tokens <= 400:
-            raise ValueError(f"{tid}: max_tokens deve estar entre 1 e 400")
+        max_tokens = tarefa.get("max_tokens", min(400, max_tokens_lim))
+        if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) \
+                or not min_tokens <= max_tokens <= max_tokens_lim:
+            raise ValueError(f"{tid}: max_tokens deve estar entre {min_tokens} e {max_tokens_lim}")
+
+        exige = tarefa.get("exige") or {}
+        if not isinstance(exige, dict) or len(exige) > MAX_EXIGE:
+            raise ValueError(f"{tid}: exige precisa ser objeto com até {MAX_EXIGE} itens")
+        for padrao, explicacao in exige.items():
+            if len(padrao) > 200 or len(str(explicacao)) > 200:
+                raise ValueError(f"{tid}: cada item de exige tem até 200 caracteres")
+            try:
+                re.compile(padrao)
+            except re.error:
+                raise ValueError(f"{tid}: expressão inválida em exige: {padrao!r}")
 
         tarefa["max_tokens"] = max_tokens
         tarefa["espera_diff"] = bool(tarefa.get("espera_diff", False))
+        if exige:
+            tarefa["exige"] = {str(k): str(v) for k, v in exige.items()}
 
     return plano
 

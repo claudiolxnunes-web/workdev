@@ -4,12 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import TaskDetail from "./TaskDetail";
 import {
+  createBancadaPlanningSession,
   createTaskPlanningSession,
   getSubtasks,
   getTaskPlanningEligibility,
 } from "../services/backlog.service";
 
 vi.mock("../services/backlog.service", () => ({
+  createBancadaPlanningSession: vi.fn(),
   createTaskPlanningSession: vi.fn(),
   getSubtasks: vi.fn(),
   getTaskPlanningEligibility: vi.fn(),
@@ -108,5 +110,42 @@ describe("TaskDetail: planejamento no AI Hub", () => {
     render(<MemoryRouter><TaskDetail item={item} onClose={vi.fn()} onAdvance={vi.fn()} /></MemoryRouter>);
     fireEvent.click(await screen.findByRole('button', { name: 'Enviar ao AI Hub' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Já existe um plano draft.');
+  });
+
+  it('Plano para a Bancada Local abre o AI Hub em modo bancada', async () => {
+    vi.mocked(createBancadaPlanningSession).mockResolvedValueOnce({ id: '44444444-4444-4444-4444-444444444444' });
+    render(
+      <MemoryRouter initialEntries={['/backlog']}>
+        <Routes>
+          <Route path='/backlog' element={<TaskDetail item={item} onClose={vi.fn()} onAdvance={vi.fn()} />} />
+          <Route path='/ai-hub' element={<p>AI Hub aberto</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Plano para a Bancada Local' }));
+    await waitFor(() => expect(screen.getByText('AI Hub aberto')).toBeInTheDocument());
+    expect(createBancadaPlanningSession).toHaveBeenCalledWith(item.id);
+    expect(createTaskPlanningSession).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem('workdev_chat_session')).toBe('44444444-4444-4444-4444-444444444444');
+  });
+
+  it('Bancada continua disponível quando já existe plano ativo na nuvem', async () => {
+    vi.mocked(getTaskPlanningEligibility).mockResolvedValueOnce({ backlog_id: item.id, eligible: false, code: 'active_plan_exists', message: 'Já existe um plano aprovado.' });
+    render(<MemoryRouter><TaskDetail item={item} onClose={vi.fn()} onAdvance={vi.fn()} /></MemoryRouter>);
+    await screen.findByText('Já existe um plano aprovado.');
+    expect(screen.getByRole('button', { name: 'Plano para a Bancada Local' })).toBeInTheDocument();
+  });
+
+  it('task sem descrição pede descrição em vez de oferecer a Bancada', async () => {
+    render(<MemoryRouter><TaskDetail item={{ ...item, description: '  ' }} onClose={vi.fn()} onAdvance={vi.fn()} /></MemoryRouter>);
+    expect(await screen.findByText('Escreva a descrição da task para planejá-la na Bancada Local.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Plano para a Bancada Local' })).not.toBeInTheDocument();
+  });
+
+  it('mostra o erro da Bancada sem sair da task', async () => {
+    vi.mocked(createBancadaPlanningSession).mockRejectedValueOnce(new Error('A task não tem descrição.'));
+    render(<MemoryRouter><TaskDetail item={item} onClose={vi.fn()} onAdvance={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Plano para a Bancada Local' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('A task não tem descrição.');
   });
 });

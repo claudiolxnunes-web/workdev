@@ -1,6 +1,7 @@
 import { startTransition, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  createBancadaPlanningSession,
   createTaskPlanningSession,
   getSubtasks,
   getTaskPlanningEligibility,
@@ -105,16 +106,25 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
   }
 
   async function planInAIHub() {
+    await openPlanning(() => createTaskPlanningSession(item!.id), "1", "Não foi possível enviar a task ao AI Hub.");
+  }
+
+  async function planForBancada() {
+    await openPlanning(() => createBancadaPlanningSession(item!.id), "bancada",
+      "Não foi possível planejar a task para a Bancada Local.");
+  }
+
+  async function openPlanning(create: () => Promise<{ id: string }>, autostart: string, fallback: string) {
     if (planningRef.current) return;
     planningRef.current = true;
     setPlanning(true);
     setPlanningError("");
     try {
-      const session = await createTaskPlanningSession(item!.id);
+      const session = await create();
       sessionStorage.setItem("workdev_chat_session", session.id);
-      navigate(`/ai-hub?session=${encodeURIComponent(session.id)}&autostart=1`);
+      navigate(`/ai-hub?session=${encodeURIComponent(session.id)}&autostart=${autostart}`);
     } catch (error: unknown) {
-      setPlanningError(error instanceof Error && error.message ? error.message : "Não foi possível enviar a task ao AI Hub.");
+      setPlanningError(error instanceof Error && error.message ? error.message : fallback);
       planningRef.current = false;
       setPlanning(false);
     }
@@ -175,6 +185,17 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
           {planning ? "Enviando ao AI Hub…" : "Enviar ao AI Hub"}
         </button>}
         {eligibility && !eligibility.eligible && <p className="mb-4 text-sm text-slate-400">{eligibility.message}</p>}
+        {/* Segundo destino: o AI Hub fatia a task em micro-tarefas para o modelo local. Não cria
+            plano oficial, então não depende da elegibilidade do envio acima. */}
+        {!editing && ["todo", "doing", "blocked"].includes(item.status) && (item.description?.trim()
+          ? <button
+              onClick={planForBancada}
+              disabled={planning}
+              className="mb-4 w-full rounded-lg border border-violet-600 px-4 py-2.5 font-medium text-violet-200 transition-colors hover:bg-violet-900/40 disabled:cursor-wait disabled:opacity-60"
+            >
+              Plano para a Bancada Local
+            </button>
+          : <p className="mb-4 text-sm text-slate-400">Escreva a descrição da task para planejá-la na Bancada Local.</p>)}
         {planningError && (
           <p role="alert" className="mb-4 text-sm text-red-400">{planningError}</p>
         )}

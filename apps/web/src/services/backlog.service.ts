@@ -123,6 +123,21 @@ export async function getTaskPlanningEligibility(taskId: string): Promise<TaskPl
   return response.json();
 }
 
+/** Sessão do AI Hub que fatia a task em micro-tarefas para a Bancada Local (modo Observar). */
+export async function createBancadaPlanningSession(taskId: string): Promise<{ id: string }> {
+  const response = await fetch("/api/chat/bancada/planejar", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ task_id: taskId }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const message = errorData.detail?.message || errorData.detail || "Erro ao planejar a task para a Bancada Local";
+    throw new Error(typeof message === "string" ? message : "Erro ao planejar a task para a Bancada Local");
+  }
+  return response.json();
+}
+
 export async function createTaskPlanningSession(
   taskId: string
 ): Promise<TaskPlanningSession> {

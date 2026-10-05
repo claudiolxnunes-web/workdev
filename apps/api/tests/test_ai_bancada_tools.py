@@ -188,3 +188,51 @@ def test_tools_novas_sao_leitura_e_aparecem_em_observe():
     assert {"ler_task", "ler_trecho"} <= nomes
     assert autoridade.NIVEL_POR_TOOL["ler_task"] == autoridade.OBSERVE
     assert autoridade.NIVEL_POR_TOOL["ler_trecho"] == autoridade.OBSERVE
+
+
+# ---------------------------------------------------------------- validar_lote_bancada
+
+@pytest.fixture
+def bancada_dir(tmp_path, monkeypatch):
+    pasta = tmp_path / "bancada"
+    monkeypatch.setenv("WORKDEV_BANCADA_DIR", str(pasta))
+    return pasta
+
+
+def _lote(*tarefas, **extra):
+    return {"tarefas": [{"id": "", "instrucao": "Escreva a docstring da função do trecho abaixo.",
+                         "trechos": t} for t in tarefas], **extra}
+
+
+def test_validar_lote_da_ids_do_lote_sem_gravar(repo, bancada_dir):
+    r = _executar("validar_lote_bancada", {"plano": _lote([["app/mod.py", 1, 20]], [["app/mod.py", 30, 40]])})
+    assert r["ok"] is True and len(r["lotes"]) == 1
+    lote = r["lotes"][0]["lote"]
+    assert [t["id"] for t in r["lotes"][0]["plano"]["tarefas"]] == [f"{lote}-01", f"{lote}-02"]
+    assert not (bancada_dir / "planos").exists()
+
+
+def test_validar_lote_divide_planos_grandes(repo, bancada_dir):
+    r = _executar("validar_lote_bancada", {"plano": _lote(*[[["app/mod.py", i, i + 5]] for i in range(1, 13)])})
+    assert r["ok"] is True and [len(l["plano"]["tarefas"]) for l in r["lotes"]] == [6, 6]
+    assert "2 lotes" in r["proximo_passo"]
+
+
+def test_validar_lote_aceita_plano_em_texto(repo, bancada_dir):
+    r = _executar("validar_lote_bancada", {"plano": json.dumps(_lote([["app/mod.py", 1, 5]]))})
+    assert r["ok"] is True
+
+
+def test_validar_lote_aponta_linha_inexistente(repo, bancada_dir):
+    r = _executar("validar_lote_bancada", {"plano": _lote([["app/mod.py", 490, 520]])})
+    assert r["ok"] is False and "linha 520 não existe" in r["erro"]
+
+
+def test_validar_lote_fora_do_alcance_sugere_nuvem(repo, bancada_dir):
+    r = _executar("validar_lote_bancada", {"plano": {"tarefas": [], "fora_do_alcance": "migração"}})
+    assert r["ok"] is True and r["lotes"] == [] and r["fora_do_alcance"] == "migração"
+    assert "nuvem" in r["proximo_passo"]
+
+
+def test_validar_lote_recusa_plano_que_nao_e_objeto(repo, bancada_dir):
+    assert _executar("validar_lote_bancada", {"plano": "nao é json"})["ok"] is False

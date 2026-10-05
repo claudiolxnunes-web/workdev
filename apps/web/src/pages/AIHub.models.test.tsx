@@ -111,6 +111,24 @@ describe("fontes do AI Hub", () => {
     expect(sendAiChatWithConfirmation).toHaveBeenCalledWith(expect.objectContaining({ session_id: "task-session", project_slug: "workdev-core", provider: "openrouter", model: "vendor/task-model" }));
   });
 
+  it("autostart=bancada pede o fatiamento para a Bancada, não a prévia do plano de nuvem", async () => {
+    localStorage.setItem("workdev_ai_hub_modelo", "OpenRouter");
+    localStorage.setItem("workdev_ai_hub_openrouter_model", "vendor/task-model");
+    window.history.replaceState({}, "", "/ai-hub?session=bancada-session&autostart=bancada");
+    vi.mocked(getOpenRouterModels).mockResolvedValue([{ provider: "openrouter", model: "vendor/task-model", label: "Task Model" }]);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ ok: true, json: async () =>
+      url === "/api/chat/sessions/bancada-session"
+        ? { messages: [{ role: "system", content: "Planejador da Bancada" }], project_slug: "workdev-core", backlog_id: null, authority: "observe" }
+        : [],
+    })));
+    render(<AIHub />);
+    await waitFor(() => expect(sendAiChatWithConfirmation).toHaveBeenCalledTimes(1));
+    const { messages } = vi.mocked(sendAiChatWithConfirmation).mock.calls[0][0] as { messages: { content: string }[] };
+    const enviado = messages.at(-1)!.content;
+    expect(enviado).toContain("validar_lote_bancada");
+    expect(enviado).not.toContain("PRÉVIA");
+  });
+
   it("preserva mensagens históricas ao reabrir uma sessão", async () => {
     localStorage.setItem("workdev_chat_session", "historical");
     vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ ok: true, json: async () =>

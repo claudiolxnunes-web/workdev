@@ -92,3 +92,76 @@ def test_planejar_da_pagina_grava_em_planos_com_lote(tmp_path, monkeypatch, loca
     gravado = json.loads((tmp_path / "bancada" / "planos" / f"{hoje}-01.json").read_text())
     assert gravado["lote"] == f"{hoje}-01" and gravado["tarefas"] == [{"id": "x"}]
     assert not (tmp_path / "bancada" / "planejamentos").exists()
+
+
+# ---------------------------------------------------------------- validador compartilhado
+
+def _tarefa(tid="", arquivos=("app/x.py",), fim=10, **extra):
+    return {"id": tid, "instrucao": "Escreva a docstring da função do trecho abaixo.",
+            "trechos": [[a, 1, fim] for a in arquivos], **extra}
+
+
+def test_limites_do_ai_hub_sao_mais_largos_que_os_do_local(local):
+    for nome in ("y.py", "z.py"):
+        (local.REPO / "app" / nome).write_text("a\n" * 30)
+    tres_arquivos = {"tarefas": [_tarefa(arquivos=("app/x.py", "app/y.py", "app/z.py"), max_tokens=2000)]}
+
+    plano = local.validar_lote(json.loads(json.dumps(tres_arquivos)), "261005-01", local.LIMITES_AI_HUB)
+    assert plano["tarefas"][0]["id"] == "261005-01-01"
+    with pytest.raises(ValueError, match="mais de 2 arquivos"):
+        local.validar_lote(json.loads(json.dumps(tres_arquivos)), "261005-01", local.LIMITES_LOCAL)
+
+
+def test_ate_10_tarefas_e_um_lote_so(local):
+    lotes = local.dividir_em_lotes({"tarefas": [_tarefa() for _ in range(10)]}, "261005-03", local.LIMITES_AI_HUB)
+    assert [n for n, _ in lotes] == ["261005-03"]
+    assert lotes[0][1]["tarefas"][-1]["id"] == "261005-03-10"
+
+
+def test_de_11_a_20_divide_em_2_lotes_equilibrados(local):
+    lotes = local.dividir_em_lotes({"tarefas": [_tarefa() for _ in range(15)], "obs": "x"},
+                                   "261005-03", local.LIMITES_AI_HUB)
+    assert [(n, len(p["tarefas"])) for n, p in lotes] == [("261005-03", 8), ("261005-04", 7)]
+    assert lotes[1][1]["tarefas"][0]["id"] == "261005-04-01" and lotes[1][1]["obs"] == "x"
+
+
+def test_acima_de_20_vai_para_o_backlog(local):
+    with pytest.raises(ValueError, match="máximo de 20 tarefas.*backlog"):
+        local.dividir_em_lotes({"tarefas": [_tarefa() for _ in range(21)]}, "261005-01", local.LIMITES_AI_HUB)
+
+
+def test_id_descritivo_repetido_entre_lotes_e_recusado(local):
+    tarefas = [_tarefa() for _ in range(11)] + [_tarefa("doc_x"), _tarefa("doc_x")]
+    with pytest.raises(ValueError, match="id duplicado: doc_x"):
+        local.dividir_em_lotes({"tarefas": tarefas}, "261005-01", local.LIMITES_AI_HUB)
+
+
+def test_plano_vazio_continua_um_lote_vazio(local):
+    lotes = local.dividir_em_lotes({"tarefas": [], "fora_do_alcance": "migração"}, "261005-01", local.LIMITES_AI_HUB)
+    assert lotes == [("261005-01", {"tarefas": [], "fora_do_alcance": "migração"})]
+
+
+def test_planejar_local_continua_com_teto_de_4(local):
+    with pytest.raises(ValueError, match="máximo de 4 tarefas"):
+        local._extrair_plano(json.dumps({"tarefas": [_tarefa() for _ in range(5)]}), "261005-01")
+
+
+@pytest.mark.parametrize("tarefa, erro", [
+    (_tarefa(fim=31), "linha 31 não existe"),
+    (_tarefa(arquivos=("app/nao.py",)), "arquivo não existe"),
+    (_tarefa(arquivos=(".env",)), "bloqueado"),
+    (_tarefa(max_tokens=32), "max_tokens deve estar entre 64"),
+    (_tarefa(exige={"current(": "x"}), "expressão inválida"),
+    (_tarefa(trechos=[]), "precisa informar trechos"),
+])
+def test_validador_recusa_o_que_o_rodar_recusaria(local, tarefa, erro):
+    with pytest.raises(ValueError, match=erro):
+        local.validar_lote({"tarefas": [tarefa]}, "261005-01", local.LIMITES_AI_HUB)
+
+
+def test_validador_usa_a_raiz_informada(local, tmp_path):
+    outra = tmp_path / "checkout"
+    (outra / "app").mkdir(parents=True)
+    (outra / "app" / "so_aqui.py").write_text("a\n" * 5)
+    plano = {"tarefas": [_tarefa(arquivos=("app/so_aqui.py",), fim=5)]}
+    assert local.validar_lote(plano, "261005-01", local.LIMITES_AI_HUB, outra)["tarefas"]

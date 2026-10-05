@@ -1,4 +1,5 @@
 import os
+import copy
 import json
 import time
 import uuid
@@ -413,6 +414,20 @@ TOOLS = [
         },
     },
     {
+        "name": "validar_lote_bancada",
+        "description": "Valida um lote de micro-tarefas da Bancada Local contra os arquivos reais do repositorio: arquivo existe, linha final existe, caminho permitido, ate 10 tarefas por lote (11 a 20 sao divididas automaticamente em 2 lotes), ate 8 trechos de ate 400 linhas, max_tokens 64-4000, exige com regex valida. Ids vazios ou genericos recebem o id do lote (AAMMDD-NN-NN). Somente leitura: nao grava nem executa nada. Use antes de entregar o JSON final e entregue o plano devolvido.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plano": {
+                    "type": "object",
+                    "description": "{\"tarefas\": [{\"id\", \"instrucao\", \"trechos\": [[caminho, inicio, fim]], \"max_tokens\", \"espera_diff\", \"exige\"}], \"fora_do_alcance\": opcional}",
+                },
+            },
+            "required": ["plano"],
+        },
+    },
+    {
         "name": "atualizar_task",
         "description": "Atualiza uma task do backlog: status (todo/doing/blocked/done), prioridade, titulo ou sprint. Use quando pedirem para marcar como concluida/done, mover para doing, mudar prioridade, renomear. Se houver mais de uma task com titulo parecido, a tool devolve a lista para voce pedir especificacao.",
         "input_schema": {
@@ -573,6 +588,39 @@ def _ler_task(args: dict, db: Session) -> str:
         saida["aviso"] = ("A task não tem descrição. Não planeje nem complete "
                           "o contexto por conta própria: peça a descrição.")
     return json.dumps(saida, ensure_ascii=False)
+
+
+def _validar_lote_bancada(args: dict) -> str:
+    plano = args.get("plano")
+    if isinstance(plano, str):
+        try:
+            plano = json.loads(plano)
+        except ValueError:
+            plano = None
+    if not isinstance(plano, dict):
+        return json.dumps({"ok": False, "erro": "plano precisa ser objeto {\"tarefas\": [...]}"},
+                          ensure_ascii=False)
+    local = bancada_runner._modulo("bancada_local")
+    # Só prévia do id: o lote é gravado quando a Bancada recebe o plano.
+    lote = local.proximo_lote(bancada_runner.pasta() / "planos")
+    try:
+        lotes = local.dividir_em_lotes(copy.deepcopy(plano), lote, local.LIMITES_AI_HUB,
+                                       bancada_runner.REPO_TRABALHO.resolve())
+    except ValueError as e:
+        return json.dumps({"ok": False, "erro": str(e),
+                           "proximo_passo": "Corrija a tarefa citada (confira as linhas com ler_trecho) e valide de novo."},
+                          ensure_ascii=False)
+    if not lotes[0][1]["tarefas"]:
+        return json.dumps({"ok": True, "lotes": [],
+                           "fora_do_alcance": plano.get("fora_do_alcance"),
+                           "proximo_passo": "Nada vai para a Bancada: explique o motivo e sugira o fluxo de nuvem (Enviar ao AI Hub)."},
+                          ensure_ascii=False)
+    passo = ("Entregue exatamente este plano em um bloco ```json para o operador levar à Bancada."
+             if len(lotes) == 1 else
+             f"O plano foi dividido em {len(lotes)} lotes. Entregue cada um em um bloco ```json "
+             "separado, rotulado com o id do lote, na ordem: o operador roda um lote de cada vez.")
+    return json.dumps({"ok": True, "lotes": [{"lote": n, "plano": p} for n, p in lotes],
+                       "proximo_passo": passo}, ensure_ascii=False)
 
 
 def _ler_trecho(args: dict) -> str:
@@ -780,6 +828,9 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
 
     if nome == "ler_trecho":
         return _ler_trecho(args)
+
+    if nome == "validar_lote_bancada":
+        return _validar_lote_bancada(args)
 
     if nome == "registrar_conhecimento":
         pid = None
