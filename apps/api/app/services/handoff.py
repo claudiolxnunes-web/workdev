@@ -1479,7 +1479,16 @@ Subtasks:
 {subtask_text}
 
 ## Registro da execução
-Use a CLI local, que não exibe secrets:
+Use a CLI local como usuário operacional workdev, sem expor secrets.
+A autenticação vem da configuração local; nunca procure chaves em backups.
+Antes de entregar, revise e registre as alterações da execução, preservando
+alterações preexistentes. O comando review valida o gate, registra evidência
+real e só então solicita revisão. Gate reprovado impede a entrega; corrija os
+checks indicados. Uma evidência válida do mesmo commit é reutilizada.
+Diagnóstico de autenticação: `python3 /opt/workdev/scripts/workdev_agent.py doctor {run['id']}`
+Gate sem transição: `python3 /opt/workdev/scripts/workdev_agent.py gate {run['id']}`
+Para builds em worktree isolado, use o gate do worker; não teste outra árvore.
+Comandos da execução:
 `python3 /opt/workdev/scripts/workdev_agent.py start {run['id']}`
 `python3 /opt/workdev/scripts/workdev_agent.py block {run['id']} "motivo"`
 `python3 /opt/workdev/scripts/workdev_agent.py review {run['id']} "resumo"`

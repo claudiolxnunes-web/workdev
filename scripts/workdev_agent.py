@@ -5,6 +5,8 @@ import argparse
 import json
 import os
 import sys
+import subprocess
+from uuid import UUID
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -17,15 +19,59 @@ ENV_FILE = Path(
 
 
 def api_key() -> str:
-    configured = os.getenv("WORKDEV_API_KEY")
+    configured = os.getenv("WORKDEV_API_KEY", "").strip()
     if configured:
         return configured
-    if ENV_FILE.exists():
-        for raw in ENV_FILE.read_text().splitlines():
+    # Dedicated CLI credential: never search or select historical backups.
+    candidates = [ENV_FILE, Path("/etc/workdev/agent-api.env"),
+                  Path("/opt/workdev/apps/api/.env")]
+    unreadable = False
+    for path in dict.fromkeys(candidates):
+        try:
+            lines = path.read_text().splitlines()
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            unreadable = True
+            continue
+        for raw in lines:
             key, separator, value = raw.partition("=")
             if separator and key.strip() == "WORKDEV_API_KEY":
-                return value.strip().strip("\"'")
-    raise RuntimeError("WORKDEV_API_KEY não configurada")
+                value = value.strip().strip("\"'")
+                if value:
+                    return value
+    suffix = " Há arquivo sem permissão de leitura." if unreadable else ""
+    raise RuntimeError(
+        "Credencial da CLI ausente. Configure /etc/workdev/agent-api.env "
+        "com acesso ao usuário workdev; não envie a chave ao agente." + suffix
+    )
+
+
+def run_review_gate(run_id: str) -> None:
+    run_id = str(UUID(run_id))
+    root = Path("/opt/workdev")
+    helper = root / "scripts/workdev_review_gate.py"
+    interpreter = root / "apps/api/venv/bin/python"
+    if not helper.is_file() or not interpreter.is_file():
+        raise RuntimeError("Runner do gate ou Python da API ausente; review não enviado")
+    # Separate DB configuration from CLI authentication configuration.
+    env_file = os.getenv("WORKDEV_GATE_ENV_FILE", str(root / "apps/api/.env"))
+    environment = os.environ.copy()
+    environment.pop("WORKDEV_API_KEY", None)
+    environment["WORKDEV_API_ENV_FILE"] = env_file
+    environment["PYTHONPATH"] = str(root / "apps/api")
+    command = [str(interpreter), "-u", str(helper), run_id]
+    if os.geteuid() == 0:
+        command = ["sudo", "-n", "-u", "workdev", "env",
+                   "WORKDEV_API_ENV_FILE=" + env_file,
+                   "PYTHONPATH=" + str(root / "apps/api"), *command]
+    print("Validando gate e registrando evidência antes do review...", flush=True)
+    try:
+        result = subprocess.run(command, cwd=root, env=environment, check=False)
+    except OSError as error:
+        raise RuntimeError("Não foi possível iniciar o gate; review não enviado") from error
+    if result.returncode:
+        raise RuntimeError("Gate não aprovado; review não enviado. Corrija os checks acima.")
 
 
 def request(method: str, path: str, payload: dict | None = None):
@@ -49,7 +95,7 @@ def request(method: str, path: str, payload: dict | None = None):
 def main() -> int:
     parser = argparse.ArgumentParser(prog="workdev_agent")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("context", "start"):
+    for command in ("context", "start", "gate", "doctor"):
         item = sub.add_parser(command)
         item.add_argument("run_id")
     for command in ("block", "review", "complete", "fail", "progress"):
@@ -83,6 +129,23 @@ def main() -> int:
     item = sub.add_parser("reviews")
     item.add_argument("run_id")
     args = parser.parse_args()
+
+    if args.command == "doctor":
+        data = request("GET", f"/handoffs/runs/{args.run_id}")
+        print(f"Autenticação OK; execução {data['id']}; status {data['status']}")
+        return 0
+    if args.command == "gate":
+        request("GET", f"/handoffs/runs/{args.run_id}")
+        run_review_gate(args.run_id)
+        return 0
+    if args.command == "review":
+        data = request("GET", f"/handoffs/runs/{args.run_id}")
+        if data["status"] in {"review", "completed"}:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+            return 0
+        if data["status"] != "running":
+            raise RuntimeError(f"Review exige execução running; status atual: {data['status']}")
+        run_review_gate(args.run_id)
 
     if args.command == "context":
         data = request("GET", f"/handoffs/runs/{args.run_id}/context")
@@ -154,6 +217,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (RuntimeError, urllib.error.URLError) as error:
+    except (RuntimeError, ValueError, urllib.error.URLError) as error:
         print(f"erro: {error}", file=sys.stderr)
         raise SystemExit(1)
