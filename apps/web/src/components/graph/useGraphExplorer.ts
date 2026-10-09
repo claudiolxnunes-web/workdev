@@ -70,9 +70,9 @@ export function isJunkGraphNode(node: GraphNode): boolean {
 }
 
 export function fallbackNodeLabel(node: GraphNode): string {
-  if (UUID_PATTERN.test(node.entity_id)) return `${node.type} sem título`;
+  if (UUID_PATTERN.test(node.entity_id)) return node.type;
   const identifier = node.entity_id.trim();
-  return identifier ? `${node.type} · ${truncateLabel(identifier, 20)}` : `${node.type} sem título`;
+  return identifier ? `${node.type} · ${truncateLabel(identifier, 20)}` : node.type;
 }
 
 export interface GraphDeduplicationResult {

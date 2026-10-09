@@ -100,7 +100,7 @@ export function TimelineTab({ projectId }: { projectId?: string }) {
             />
             <div className="min-w-0 flex-1">
               <span className="font-medium">{n.label || n.type}</span>
-              {typeof n.entity_id === "string" && (
+              {(!n.label || n.label === n.type) && typeof n.entity_id === "string" && (
                 <span className="text-slate-600 text-xs ml-2 font-mono">
                   {n.entity_id.slice(0, 8)}
                 </span>
