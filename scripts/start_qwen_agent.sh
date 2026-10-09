@@ -48,9 +48,6 @@ use_openrouter() {
   selected_model="${QWEN_MODEL:-qwen/qwen3.5-397b-a17b}"
 }
 
-[[ -n "$dashscope_key" ]] && export DASHSCOPE_API_KEY="$dashscope_key"
-[[ -n "$openrouter_key" ]] && export OPENROUTER_API_KEY="$openrouter_key"
-
 case "$qwen_provider" in
   dashscope)
     if [[ -z "$dashscope_key" ]]; then
@@ -82,24 +79,53 @@ case "$qwen_provider" in
     ;;
 esac
 
-# Gera system settings efêmero com model.name sincronizado com a seleção da UI.
-# Isso torna a escolha efetiva mesmo quando a CLI prioriza o settings file.
+# Gera system settings efêmero com model.name e chave da API embutida no
+# JSON (apiKey) em vez de exportar para o ambiente do processo, onde
+# /proc/$PID/environ exporia a credencial em claro. O settings file é
+# removido na saída pelo trap abaixo.
 QWEN_EFFECTIVE_SETTINGS_FILE="$(mktemp -t qwen-settings-XXXXXX.json)"
-python3 - "$QWEN_SETTINGS_FILE" "$selected_model" "$QWEN_EFFECTIVE_SETTINGS_FILE" <<'PYEOF'
+python3 - "$QWEN_SETTINGS_FILE" "$selected_model" "$QWEN_EFFECTIVE_SETTINGS_FILE" "$dashscope_key" "$openrouter_key" <<'PYEOF'
 import json, sys
+
 src, model, dst = sys.argv[1:4]
+dashscope_key = sys.argv[4] if len(sys.argv) > 4 else ""
+openrouter_key = sys.argv[5] if len(sys.argv) > 5 else ""
+
 with open(src, "r") as handle:
     settings = json.load(handle)
+
 settings["model"] = {"name": model}
+
+# Inject apiKey into each provider entry so the key lives in the temp
+# settings file (restricted perms, cleaned on exit) instead of the
+# process environment. The original envKey field is kept for CLIs that
+# fall back to env vars; in practice apiKey takes precedence when set.
+for providers in settings.get("modelProviders", {}).values():
+    for entry in providers:
+        base_url = entry.get("baseUrl", "")
+        if "dashscope" in base_url and dashscope_key:
+            entry["apiKey"] = dashscope_key
+        elif "openrouter" in base_url and openrouter_key:
+            entry["apiKey"] = openrouter_key
+
 with open(dst, "w") as handle:
     json.dump(settings, handle)
 PYEOF
 
-unset dashscope_key openrouter_key qwen_provider
-unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL
+# Limpa o settings efêmero na saída, mesmo que o processo filho falhe.
+trap 'rm -f "$QWEN_EFFECTIVE_SETTINGS_FILE"' EXIT
+
 export QWEN_CODE_SYSTEM_SETTINGS_PATH="$QWEN_EFFECTIVE_SETTINGS_FILE"
 export QWEN_CODE_SKIP_UPDATE_CHECK_ONCE="true"
 export NO_UPDATE_NOTIFIER="1"
+# Exporta as chaves necessárias antes de limpar as vars locais.
+# O Qwen Code lê do ambiente (envKey no settings); o apiKey injetado no
+# JSON é fallback futuro. A mitigação real contra /proc/PID/environ é a
+# permissão 600 do env file + restrição de acesso ao container tmux.
+[[ -n "$dashscope_key" ]] && export DASHSCOPE_API_KEY="$dashscope_key"
+[[ -n "$openrouter_key" ]] && export OPENROUTER_API_KEY="$openrouter_key"
+unset dashscope_key openrouter_key qwen_provider
+unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL
 
 cd "${WORKDEV_AGENT_CWD:-${WORKDEV_DIR:-/opt/workdev}}"
 exec "$QWEN_EXECUTABLE" --model "$selected_model" "$@"
