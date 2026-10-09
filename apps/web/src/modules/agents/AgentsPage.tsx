@@ -170,8 +170,9 @@ export default function AgentsPage() {
       <nav aria-label="Selecionar agente" className="flex shrink-0 flex-wrap gap-1 rounded-lg border border-slate-800 bg-slate-900 p-1" role="tablist">
         {choices.filter(item => otherAgents || AGENTS.some(primary => primary.id === item.id) || item.id === agent).map(item => {
           const current = health[item.id]?.runtime_state ?? runtimes.find(row => row.id === item.id)?.runtime_state
+          const iaDot = current === "ONLINE" ? "bg-emerald-400" : current === "ERROR" ? "bg-amber-400" : current === "OFFLINE" ? "bg-slate-500" : "bg-red-950 border border-dashed border-slate-600"
           return <button key={item.id} role="tab" aria-selected={agent === item.id} onClick={() => choose(item.id)} className={`flex min-h-10 shrink-0 items-center gap-2 rounded-md px-3 text-sm ${agent === item.id ? "bg-sky-700 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
-            <span className={`h-2 w-2 rounded-full ${current === "ONLINE" ? "bg-emerald-400" : current === "ERROR" ? "bg-amber-400" : "bg-slate-500"}`} />
+            <span className={`h-2 w-2 rounded-full ${iaDot}`} title={current || "não configurado"} />
             {item.label}
             {awaitingApproval[item.id] && <span className="rounded bg-amber-400 px-1 text-[10px] font-bold text-slate-950">APROVAR</span>}
           </button>
@@ -205,6 +206,7 @@ export default function AgentsPage() {
           {remote && selectedRuntime ? <RuntimePanel runtime={selectedRuntime} showControls={false} />
             : !terminalOpen ? <div className="rounded-lg border border-slate-800 p-6 text-sm text-slate-400">Terminal aberto em outra aba. Use "Trazer terminal para cá" para assumi-lo aqui; não é preciso fechar a outra aba.</div>
             : state === "OFFLINE" ? <div className="rounded-lg border border-slate-800 p-6 text-sm text-slate-400">{agentLabels[agent]} está desligado. Use Ligar para iniciar e abrir o terminal.</div>
+            : state === undefined ? <div className="rounded-lg border border-slate-800 p-6 text-sm text-slate-400">{agentLabels[agent]} não está configurado neste ambiente. Verifique as credenciais e o launcher.</div>
             : <AgentTerminal key={agent} agent={agent} awaitingApproval={Boolean(awaitingApproval[agent])} operationalStatus={operations[agent]?.status} takeOver={bringBack} />}
         </div>
         {terminalCollapsed && !remote && <button className="hidden self-start rounded border border-slate-800 px-4 py-3 text-sm text-sky-300 md:block" onClick={toggleTerminalCollapsed}>Terminal recolhido · Expandir</button>}
