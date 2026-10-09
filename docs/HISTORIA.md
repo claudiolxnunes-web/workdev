@@ -159,6 +159,18 @@ NutriGestor CRM são INTEGRADOS ao WorkDev, nunca migrados para dentro dele.
   uma pasta acima do correto (`apps/config` em vez de `/opt/workdev/config`),
   então mesmo com a rota certa a resposta vinha vazia (`{}`).
 
+## Sessão 27/07/2026 — Correções, limpeza de custos e heartbeat Supabase
+
+1. Terminal dos agentes: scroll up entra em copy-mode, scroll down volta ao live
+   (`8d96c0d`) — melhoria de usabilidade nas sessões tmux.
+2. Handoffs: `execution_plans` agora exige título obrigatório; adicionado status
+   `discarded` para planos descartados sem aprovação (`21d8d8a`).
+3. Resiliência da API: timeout configurável em clientes de IA, rollback de sessão
+   em erro, reconexão robusta com o banco de dados (`ca00585`).
+4. Heartbeat do Supabase validado: conexão contínua mantida sem falhas.
+5. Custos de modelos registrados e limpos — sessão encerrada sem pendências
+   operacionais.
+
 ## Backlog de evolução (registrado)
 - Persistir histórico do AI Hub; auto-refresh do kanban
 - Tool node agente_workdev no coordenador LangGraph do VPS2 (voz→backlog)
