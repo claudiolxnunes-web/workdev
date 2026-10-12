@@ -32,10 +32,14 @@ export default function Backlog() {
   const [modalOpen, setModalOpen] = useState(false);
   const [selected, setSelected] = useState<BacklogItem | null>(null);
   const [mobileColumn, setMobileColumn] = useState<string>("todo");
+  const [showArchived, setShowArchived] = useState(false);
+  // Arquivadas ficam fora das 4 colunas e dos contadores (filtro por igualdade
+  // exata); só aparecem na seção própria com o toggle ligado (ADR 009).
+  const archivedItems = items.filter((i) => i.status === "archived");
 
   async function load() {
     try {
-      setItems(await getBacklog());
+      setItems(await getBacklog({ includeArchived: showArchived }));
       setError("");
     } catch {
       setError("Erro ao carregar backlog da API");
@@ -45,14 +49,14 @@ export default function Backlog() {
   }
 
   useEffect(() => {
-    getBacklog()
+    getBacklog({ includeArchived: showArchived })
       .then((data) => {
         setItems(data);
         setError("");
       })
       .catch(() => setError("Erro ao carregar backlog da API"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [showArchived]);
 
   async function remove(e: React.MouseEvent, item: BacklogItem) {
     e.stopPropagation();
@@ -81,9 +85,15 @@ export default function Backlog() {
     <div>
       <div className="flex justify-between items-center mb-8">
         <h1 className="text-3xl font-bold">Backlog</h1>
-        <button onClick={() => setModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition-colors">
-          + New Task
-        </button>
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+            Mostrar arquivadas
+          </label>
+          <button onClick={() => setModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition-colors">
+            + New Task
+          </button>
+        </div>
       </div>
 
       {loading && <p className="text-slate-400">Carregando...</p>}
@@ -152,10 +162,31 @@ export default function Backlog() {
           </div>
         ))}
       </div>
+      {showArchived && (
+        <div className="mt-6 bg-slate-900 border border-slate-800 rounded-xl p-6">
+          <h2 className="text-xl font-bold mb-4 text-slate-400">
+            Arquivadas <span className="text-slate-500 text-sm">{archivedItems.length}</span>
+          </h2>
+          {archivedItems.length === 0 && <p className="text-slate-500 text-sm">Nenhuma task arquivada.</p>}
+          <div className="space-y-3">
+            {archivedItems.map((item) => (
+              <div
+                key={item.id}
+                onClick={() => setSelected(item)}
+                className="bg-slate-800 rounded-lg p-3 cursor-pointer hover:bg-slate-700 transition-colors"
+                title="Clique para ver ou desarquivar a task"
+              >
+                <p>{item.title}</p>
+                {item.archived_reason && <p className="mt-1 text-xs text-slate-400">motivo: {item.archived_reason}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <TaskDetail item={selected} onClose={() => setSelected(null)} onAdvance={(i) => { advance(i); setSelected(null); }} onUpdated={(updated) => {
         setItems(prev => prev.map(item => item.id === updated.id ? updated : item));
         setSelected(updated);
-        setMobileColumn(updated.status);
+        if (COLUMNS.some((col) => col.key === updated.status)) setMobileColumn(updated.status);
       }} />
       <NewTaskModal
         open={modalOpen}

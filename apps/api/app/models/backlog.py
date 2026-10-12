@@ -22,3 +22,6 @@ class BacklogItem(Base):
     rank = Column(Integer)
     created_at = Column(DateTime, server_default=text("now()"))
     updated_at = Column(DateTime, server_default=text("now()"))
+    # Preenchidos se e somente se status == "archived" (ADR 009).
+    archived_at = Column(DateTime)
+    archived_reason = Column(Text)

@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, SecretStr
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from anthropic import Anthropic
 from openai import OpenAI
@@ -24,6 +25,7 @@ from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.ai_routing import AICallLog, AIModelCatalog
 from app.services import autoridade, context_engine, rag_search
 from app.services import ai_cost_guard, agent_runtimes, bancada_runner
+from app.services.backlog_status import BacklogStatusError, apply_status
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
 
@@ -282,11 +284,11 @@ TOOLS = [
     },
     {
         "name": "listar_backlog",
-        "description": "Lista itens do backlog, filtro opcional por status e/ou projeto",
+        "description": "Lista itens do backlog, filtro opcional por status e/ou projeto. Tasks arquivadas só aparecem com status=archived",
         "input_schema": {
             "type": "object",
             "properties": {
-                "status": {"type": "string", "enum": ["todo", "doing", "blocked", "done"]},
+                "status": {"type": "string", "enum": ["todo", "doing", "blocked", "done", "archived"]},
                 "projeto_slug": {"type": "string"},
             },
         },
@@ -429,13 +431,16 @@ TOOLS = [
     },
     {
         "name": "atualizar_task",
-        "description": "Atualiza uma task do backlog: status (todo/doing/blocked/done), prioridade, titulo ou sprint. Use quando pedirem para marcar como concluida/done, mover para doing, mudar prioridade, renomear. Se houver mais de uma task com titulo parecido, a tool devolve a lista para voce pedir especificacao.",
+        "description": "Atualiza uma task do backlog: status (todo/doing/blocked/done/archived), prioridade, titulo ou sprint. Use quando pedirem para marcar como concluida/done, mover para doing, arquivar, desarquivar, mudar prioridade, renomear. Arquivar (archived) exige motivo_arquivamento; desarquivar e sempre voltar para todo. Se houver mais de uma task com titulo parecido, a tool devolve a lista para voce pedir especificacao.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string", "description": "id (uuid) da task — prefira sempre que souber"},
                 "titulo_task": {"type": "string", "description": "titulo (ou parte unica) da task"},
-                "novo_status": {"type": "string", "enum": ["todo", "doing", "blocked", "done"]},
+                "novo_status": {"type": "string", "enum": ["todo", "doing", "blocked", "done", "archived"]},
+                "motivo_arquivamento": {"type": "string", "enum": ["concluida_fora", "obsoleta", "sem_destravamento"],
+                                        "description": "obrigatorio com novo_status=archived"},
+                "nota_arquivamento": {"type": "string", "description": "texto livre opcional junto do motivo"},
                 "nova_prioridade": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
                 "novo_titulo": {"type": "string"},
                 "novo_sprint": {"type": "string"},
@@ -718,6 +723,8 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
         q = db.query(BacklogItem)
         if args.get("status"):
             q = q.filter(BacklogItem.status == args["status"])
+        else:
+            q = q.filter(BacklogItem.status != "archived")
         if args.get("projeto_slug"):
             p = db.query(Project).filter(Project.slug == args["projeto_slug"]).first()
             if not p:
@@ -952,8 +959,22 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
         t = matches[0]
         alteracoes = {}
         if args.get("novo_status"):
-            t.status = args["novo_status"]
+            try:
+                apply_status(t, args["novo_status"],
+                             db.execute(text("SELECT now()")).scalar(),
+                             args.get("motivo_arquivamento"),
+                             args.get("nota_arquivamento"))
+            except BacklogStatusError as erro:
+                db.rollback()
+                return json.dumps({"erro": erro.message, "code": erro.code,
+                                   "details": erro.details}, ensure_ascii=False)
             alteracoes["status"] = t.status
+            if t.status == "archived":
+                alteracoes["motivo_arquivamento"] = t.archived_reason
+        elif args.get("motivo_arquivamento") or args.get("nota_arquivamento"):
+            return json.dumps({"erro": "motivo de arquivamento exige novo_status=archived",
+                               "code": "archived_reason_without_archive"},
+                              ensure_ascii=False)
         if args.get("nova_prioridade"):
             t.priority = args["nova_prioridade"]
             alteracoes["prioridade"] = t.priority

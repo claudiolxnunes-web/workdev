@@ -719,7 +719,9 @@ def update_run(
             BacklogItem.id == run.backlog_id
         ).first()
 
-        if task:
+        # Task arquivada (ADR 009) só sai do arquivo por desarquivamento
+        # explícito; transição de run não a reabre.
+        if task and task.status != "archived":
             if next_status in {"running", "review"}:
                 task.status = "doing"
             elif next_status in {"blocked", "failed"}:

@@ -168,7 +168,7 @@ def collect_weekly(start, end):
     created = [r for r in backlog if in_period(r, 'created_at', start, end)]
     completed = [r for r in backlog if r['status'] == 'done' and in_period(r, 'updated_at', start, end)]
     changed = [r for r in backlog if in_period(r, 'updated_at', start, end)]
-    pending = [r for r in backlog if r['status'] not in ('done', 'cancelled')]
+    pending = [r for r in backlog if r['status'] not in ('done', 'cancelled', 'archived')]
     priority = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
     pending.sort(key=lambda r: (priority.get(r['priority'], 4), str(r['id'])))
     deployments = items('deployments')

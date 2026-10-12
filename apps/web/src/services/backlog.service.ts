@@ -22,15 +22,29 @@ export interface BacklogItem {
   rank?: number;
   created_at?: string;
   updated_at?: string;
+  archived_at?: string | null;
+  archived_reason?: string | null;
 }
 
-export async function getBacklog(): Promise<BacklogItem[]> {
-  const response = await fetch(`${API_URL}/api/backlog`, { headers });
+/** Motivos aceitos pela API para arquivar (ADR 009). */
+export const ARCHIVE_REASONS = [
+  { value: "concluida_fora", label: "Concluída fora do fluxo" },
+  { value: "obsoleta", label: "Obsoleta / perdeu sentido" },
+  { value: "sem_destravamento", label: "Sem destravamento previsto" },
+] as const;
+
+/** Arquivadas só vêm com includeArchived; a leitura padrão as exclui. */
+export async function getBacklog(options: { includeArchived?: boolean } = {}): Promise<BacklogItem[]> {
+  const query = options.includeArchived ? "?include_archived=true" : "";
+  const response = await fetch(`${API_URL}/api/backlog${query}`, { headers });
   if (!response.ok) throw new Error("Erro ao buscar backlog");
   return response.json();
 }
 
-export type BacklogEdit = Pick<BacklogItem, "title" | "description" | "priority" | "status">;
+export type BacklogEdit = Pick<BacklogItem, "title" | "description" | "priority" | "status"> & {
+  archived_reason?: string;
+  archived_note?: string;
+};
 
 export async function updateItem(id: string, changes: Partial<BacklogEdit>): Promise<BacklogItem> {
   const response = await fetch(`${API_URL}/api/backlog/${encodeURIComponent(id)}`, {

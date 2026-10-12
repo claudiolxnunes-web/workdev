@@ -1,6 +1,7 @@
 import { startTransition, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  ARCHIVE_REASONS,
   createBancadaPlanningSession,
   createTaskPlanningSession,
   getSubtasks,
@@ -34,6 +35,34 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [saveError, setSaveError] = useState("");
+  const [archiving, setArchiving] = useState(false);
+  const [archiveReason, setArchiveReason] = useState("");
+  const [archiveNote, setArchiveNote] = useState("");
+  const archived = item.status === "archived";
+
+  async function changeArchive(changes: Parameters<typeof updateItem>[1]) {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setSaveError("");
+    try {
+      const updated = await updateItem(item.id, changes);
+      setArchiving(false);
+      onUpdated?.(updated);
+    } catch (error: unknown) {
+      setSaveError(error instanceof Error ? error.message : "Não foi possível alterar o arquivamento.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
+  function archive(event: React.FormEvent) {
+    event.preventDefault();
+    if (!archiveReason) { setSaveError("Escolha o motivo do arquivamento."); return; }
+    const note = archiveNote.trim();
+    changeArchive({ status: "archived", archived_reason: archiveReason, ...(note ? { archived_note: note } : {}) });
+  }
 
   function edit() {
     setDraft({ title: item.title, description: item.description || "", priority: item.priority, status: item.status });
@@ -174,7 +203,36 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
           </div>
         </form> : <>
           {item.description && <p className="mb-4 whitespace-pre-wrap text-sm text-slate-300">{item.description}</p>}
-          <button onClick={edit} disabled={planning} className="mb-4 rounded-lg bg-blue-600 px-3 py-2">Editar task</button>
+          {archived && <p className="mb-4 rounded-lg border border-slate-700 bg-slate-800 p-3 text-sm text-slate-300">
+            Arquivada{item.archived_at ? ` em ${new Date(item.archived_at).toLocaleString("pt-BR")}` : ""}
+            {item.archived_reason ? ` — motivo: ${item.archived_reason}` : ""}
+          </p>}
+          <div className="mb-4 flex flex-wrap gap-3">
+            <button onClick={edit} disabled={planning || saving} className="rounded-lg bg-blue-600 px-3 py-2">Editar task</button>
+            {archived
+              ? <button onClick={() => changeArchive({ status: "todo" })} disabled={saving} className="rounded-lg bg-slate-700 px-3 py-2 disabled:opacity-50">
+                  {saving ? "Desarquivando…" : "Desarquivar (volta para todo)"}
+                </button>
+              : !archiving && <button onClick={() => { setArchiving(true); setSaveError(""); }} disabled={planning || saving} className="rounded-lg bg-slate-700 px-3 py-2">Arquivar</button>}
+          </div>
+          {archiving && !archived && <form onSubmit={archive} className="mb-4 space-y-3 rounded-lg border border-slate-700 p-3">
+            <fieldset disabled={saving} className="space-y-3 disabled:opacity-60">
+              <label className="block text-sm">Motivo do arquivamento
+                <select required value={archiveReason} onChange={e => setArchiveReason(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2">
+                  <option value="">Escolha…</option>
+                  {ARCHIVE_REASONS.map(reason => <option key={reason.value} value={reason.value}>{reason.label}</option>)}
+                </select>
+              </label>
+              <label className="block text-sm">Observação (opcional)
+                <input value={archiveNote} onChange={e => setArchiveNote(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2" />
+              </label>
+            </fieldset>
+            <div className="flex justify-end gap-3">
+              <button type="button" disabled={saving} onClick={() => setArchiving(false)} className="rounded-lg bg-slate-800 px-3 py-2">Cancelar</button>
+              <button type="submit" disabled={saving} className="rounded-lg bg-blue-600 px-3 py-2 disabled:opacity-50">{saving ? "Arquivando…" : "Confirmar arquivamento"}</button>
+            </div>
+          </form>}
+          {saveError && <p role="alert" className="mb-4 text-sm text-red-400">{saveError}</p>}
         </>}
 
         {!editing && ["todo", "doing", "blocked"].includes(item.status) && eligibility?.eligible && <button
@@ -204,13 +262,13 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
           <h3 className="font-semibold text-slate-300">
             Subtasks {subs.length > 0 && `(${done}/${subs.length})`}
           </h3>
-          <button
+          {!archived && <button
             disabled={editing || saving}
             onClick={() => onAdvance(item)}
             className="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded-lg transition-colors"
           >
             Avançar status →
-          </button>
+          </button>}
         </div>
 
         {loading && <p className="text-slate-500 text-sm">Carregando...</p>}
