@@ -1,6 +1,7 @@
 # ADR 009 — Backlog: semântica do status `archived`
 
-Status: proposed (implementação submetida a revisão independente).
+Status: accepted (revisão do codex aprovada; em produção desde a release 1d3d59d6, 2026-10-12).
+Registro: `adrs.id = 276d00d0-4c36-46f3-8aee-576526122a44`.
 Task: `1d735ecb-6563-46ab-af3a-104b9822f7e9`.
 Plano aprovado v1. Run: `8fdb8936-a21b-46a1-86fc-458351d78edb`.
 
