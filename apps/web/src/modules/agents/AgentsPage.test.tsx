@@ -43,8 +43,15 @@ describe("Agents workspace", () => {
     view.unmount()
   })
   it("mostra Gemini, Qwen e Kimi diretamente e seleciona suas sessões", async () => {
+    // Agente ausente do snapshot é "não configurado" e não abre terminal (ac73933);
+    // aqui todos os agentes do loop estão configurados.
+    const { agents } = await (await fetchMock()).json()
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ agents: [...agents,
+      ...["gemini", "qwen", "grok", "deepseek"].map(agent => ({ agent, runtime_state: "ONLINE", activity_state: "IDLE", health: "idle", operational_status: "idle", runs: [] }))] }) })
+    fetchMock.mockClear()
     render(<AgentsPage />)
     expect(await screen.findByRole("tab", { name: "Gemini" })).toBeInTheDocument()
+    await screen.findByText("APROVAR")
     expect(screen.queryByRole("tab", { name: /WorkDev Qwen · Local/ })).not.toBeInTheDocument()
     for (const [label, id] of [["Gemini", "gemini"], ["Kimi Code", "kimi"], ["Qwen Code", "qwen"], ["Grok", "grok"], ["DeepSeek", "deepseek"]]) {
       fireEvent.click(screen.getByRole("tab", { name: label }))

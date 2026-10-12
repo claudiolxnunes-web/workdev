@@ -201,7 +201,7 @@ describe("GraphExplorer labels and semantic zoom", () => {
 
     expect(isJunkGraphNode(junk)).toBe(true);
     expect(isJunkGraphNode(valid)).toBe(false);
-    expect(fallbackNodeLabel(valid)).toBe("Task sem título");
+    expect(fallbackNodeLabel(valid)).toBe("Task");
     expect(deduplicateGraph({ nodes: [junk, valid], edges: [] }).graph.nodes).toEqual([valid]);
   });
 
