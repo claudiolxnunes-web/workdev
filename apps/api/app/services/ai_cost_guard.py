@@ -69,7 +69,7 @@ MODEL_POLICIES: dict[tuple[str, str], ModelPolicy] = {
     ),
     ("openrouter", "moonshotai/kimi-k2.5"): ModelPolicy(
         "openrouter", "moonshotai/kimi-k2.5", "economic",
-        Decimal("0.45"), Decimal("2.25"),
+        Decimal("0.50"), Decimal("2.50"),
     ),
     ("openrouter", "moonshotai/kimi-k2-thinking"): ModelPolicy(
         "openrouter", "moonshotai/kimi-k2-thinking", "economic",
@@ -85,7 +85,7 @@ MODEL_POLICIES: dict[tuple[str, str], ModelPolicy] = {
     ),
     ("openrouter", "moonshotai/kimi-k3"): ModelPolicy(
         "openrouter", "moonshotai/kimi-k3", "premium",
-        Decimal("0.677"), Decimal("10.00"), requires_confirmation=True,
+        Decimal("0.70"), Decimal("15.00"), requires_confirmation=True,
     ),
     ("openrouter", "moonshotai/kimi-k3:batch"): ModelPolicy(
         "openrouter", "moonshotai/kimi-k3:batch", "premium",
