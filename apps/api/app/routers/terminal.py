@@ -92,6 +92,9 @@ _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
 _PROCESS_LABELS = {"qwen": "qwen-code", "grok": "qwen-code", "deepseek": "qwen-code", "openrouter": "qwen-code"}
 _HEALTH_STATE_FILE = Path(os.getenv("AGENTS_HEALTH_STATE", "/var/lib/agents-healthcheck/status.json"))
+# Limite empírico do tmux para send-keys -l com um único argumento:
+# ~16KB. 12KB deixa folga segura.
+_SEND_KEYS_CHUNK_BYTES = 12_000
 
 
 def _session_target(session: str) -> str:
@@ -121,18 +124,46 @@ class AgentSendRequest(BaseModel):
     text: str
 
 
+def _chunk_text(text: str, limit: int) -> list[str]:
+    """Divide text em partes de até *limit* bytes (UTF-8), sem quebrar
+    caracteres multibyte. A divisão é por linhas, e linhas que excedem
+    *limit* sozinhas são quebradas por caractere."""
+    chunks: list[str] = []
+    for line in text.splitlines(keepends=True):
+        encoded = line.encode("utf-8")
+        if len(encoded) > limit:
+            # Linha mais longa que o limite: quebrar por caractere.
+            for ch in line:
+                ce = ch.encode("utf-8")
+                if not chunks or len(chunks[-1].encode("utf-8")) + len(ce) > limit:
+                    chunks.append(ch)
+                else:
+                    chunks[-1] += ch
+            continue
+        if chunks:
+            cur = (chunks[-1] + line).encode("utf-8")
+            if len(cur) > limit:
+                chunks.append(line)
+            else:
+                chunks[-1] = cur.decode("utf-8")
+        else:
+            chunks.append(line)
+    return chunks if chunks else [""]
+
+
 def _send_text(session: str, text: str) -> None:
     stripped = text.rstrip("\n")
     if stripped:
-        literal = subprocess.run(
-            ["tmux", "send-keys", "-t", _pane_target(session), "-l", "--", stripped],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        if literal.returncode != 0:
-            raise RuntimeError(literal.stderr.strip() or "Sessão tmux indisponível")
+        for chunk in _chunk_text(stripped, _SEND_KEYS_CHUNK_BYTES):
+            literal = subprocess.run(
+                ["tmux", "send-keys", "-t", _pane_target(session), "-l", "--", chunk],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if literal.returncode != 0:
+                raise RuntimeError(literal.stderr.strip() or "Sessão tmux indisponível")
     enter = subprocess.run(
         ["tmux", "send-keys", "-t", _pane_target(session), "Enter"],
         capture_output=True,
