@@ -14,6 +14,8 @@ from fastapi import HTTPException
 from app.routers.terminal import (
     ALLOWED_SESSIONS,
     STANDBY_COMMANDS,
+    _SEND_KEYS_CHUNK_BYTES,
+    _chunk_text,
     AgentSendRequest,
     _agent_status,
     _approval_state,
@@ -160,6 +162,78 @@ class SendTextTest(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             _send_text("codex", "oi")
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_small_text_passes_unchunked(self, run):
+        """Texto de 5KB deve enviar um único literal + Enter (sem chunking)."""
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+        text = "a" * (5 * 1024)
+
+        _send_text("codex", text)
+
+        self.assertEqual(run.call_args_list[0].args[0], [
+            "tmux", "send-keys", "-t", "=codex:", "-l", "--", text,
+        ])
+        self.assertEqual(run.call_args_list[1].args[0], [
+            "tmux", "send-keys", "-t", "=codex:", "Enter",
+        ])
+        self.assertEqual(run.call_count, 2)
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_chunks_large_payload(self, run):
+        """Texto de 20KB deve gerar múltiplos send-keys com Enter único no fim."""
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+        text = "x" * (20 * 1024)
+
+        _send_text("codex", text)
+
+        # Deve ter gerado ao menos 2 chamadas -l (cada chunk ≤12KB)
+        literal_calls = [c for c in run.call_args_list
+                         if c.args[0][:4] == ["tmux", "send-keys", "-t", "=codex:"]
+                         and c.args[0][4] == "-l"]
+        self.assertGreaterEqual(len(literal_calls), 2)
+        # Última chamada é Enter
+        last_args = run.call_args_list[-1].args[0]
+        self.assertEqual(last_args, ["tmux", "send-keys", "-t", "=codex:", "Enter"])
+        # Soma dos bytes dos chunks == tamanho original
+        total_bytes = sum(len(c.args[0][6]) for c in literal_calls)
+        self.assertEqual(total_bytes, len(text))
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_utf8_multibyte_not_split(self, run):
+        """Caractere multibyte no limite do chunk não deve ser quebrado."""
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+        # Emoji de 4 bytes posicionado exatamente no boundary do chunk
+        prefix = "a" * (_SEND_KEYS_CHUNK_BYTES - 2)  # 2 bytes livres
+        text = prefix + "🔥" + "b" * 50
+        _send_text("codex", text)
+
+        chunks = [
+            c.args[0][6]
+            for c in run.call_args_list
+            if c.args[0][:4] == ["tmux", "send-keys", "-t", "=codex:"]
+            and c.args[0][4] == "-l"
+        ]
+        self.assertGreater(len(chunks), 1)
+        # Reconstituir deve ser igual ao original
+        reconstructed = "".join(chunks)
+        self.assertEqual(reconstructed, text)
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_chunk_blank_skips_literal(self, run):
+        """Texto vazio não gera chamada -l (inalterado)."""
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+
+        _send_text("codex", "")
+
+        run.assert_called_once_with(
+            ["tmux", "send-keys", "-t", "=codex:", "Enter"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
 
 class AgentRuntimeReadinessTest(unittest.TestCase):
     @patch("app.routers.terminal._start_gemini_headless_runtime")
