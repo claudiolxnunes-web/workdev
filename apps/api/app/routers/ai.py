@@ -470,6 +470,121 @@ TOOLS = [
 ]
 
 
+# ler_trecho do AI Hub: wrapper fino sobre bancada_runner.ler_trecho, que já
+# valida realpath, raiz do repo e a lista de caminhos sensíveis. As travas
+# abaixo só existem porque aqui quem chama é o modelo: o runner lê o arquivo
+# inteiro antes de cortar (um GGUF em models/ tem 9 GB) e aceita 400 linhas.
+LER_TRECHO_MAX_LINHAS = 200
+LER_TRECHO_MAX_BYTES = 1_000_000
+LER_TRECHO_MAX_CHARS = 20_000
+
+
+def _ler_task(args: dict, db: Session) -> str:
+    try:
+        task_uuid = uuid.UUID(str(args.get("task_id", "")))
+    except ValueError:
+        return json.dumps({"erro": "task_id inválido (esperado uuid)"},
+                          ensure_ascii=False)
+    t = db.query(BacklogItem).filter(BacklogItem.id == task_uuid).first()
+    if not t:
+        return json.dumps({"erro": "task não encontrada"}, ensure_ascii=False)
+    p = db.query(Project).filter(Project.id == t.project_id).first()
+    subs = (db.query(BacklogSubtask)
+            .filter(BacklogSubtask.backlog_id == t.id)
+            .order_by(BacklogSubtask.execution_order).all())
+    descricao = (t.description or "").strip()
+    saida = {
+        "task_id": str(t.id),
+        "titulo": t.title,
+        "descricao": descricao or None,
+        "descricao_vazia": not descricao,
+        "projeto": {"nome": p.name, "slug": p.slug} if p else None,
+        "status": t.status,
+        "prioridade": t.priority,
+        "tipo": t.type,
+        "archived_reason": t.archived_reason,
+        "archived_at": str(t.archived_at) if t.archived_at else None,
+        "subtasks": [{"ordem": s.execution_order, "titulo": s.title,
+                      "status": s.status,
+                      "descricao": (s.description or "").strip() or None}
+                     for s in subs],
+    }
+    if not descricao:
+        saida["aviso"] = ("A task não tem descrição. Não planeje nem complete "
+                          "o contexto por conta própria: peça a descrição.")
+    return json.dumps(saida, ensure_ascii=False)
+
+
+def _validar_lote_bancada(args: dict) -> str:
+    plano = args.get("plano")
+    if isinstance(plano, str):
+        try:
+            plano = json.loads(plano)
+        except ValueError:
+            plano = None
+    if not isinstance(plano, dict):
+        return json.dumps({"ok": False, "erro": "plano precisa ser objeto {\"tarefas\": [...]}"},
+                          ensure_ascii=False)
+    local = bancada_runner._modulo("bancada_local")
+    # Só prévia do id: o lote é gravado quando a Bancada recebe o plano.
+    lote = local.proximo_lote(bancada_runner.pasta() / "planos")
+    try:
+        lotes = local.dividir_em_lotes(copy.deepcopy(plano), lote, local.LIMITES_AI_HUB,
+                                       bancada_runner.REPO_TRABALHO.resolve())
+    except ValueError as e:
+        return json.dumps({"ok": False, "erro": str(e),
+                           "proximo_passo": "Corrija a tarefa citada (confira as linhas com ler_trecho) e valide de novo."},
+                          ensure_ascii=False)
+    if not lotes[0][1]["tarefas"]:
+        return json.dumps({"ok": True, "lotes": [],
+                           "fora_do_alcance": plano.get("fora_do_alcance"),
+                           "proximo_passo": "Nada vai para a Bancada: explique o motivo e sugira o fluxo de nuvem (Enviar ao AI Hub)."},
+                          ensure_ascii=False)
+    passo = ("Entregue exatamente este plano em um bloco ```json para o operador levar à Bancada."
+             if len(lotes) == 1 else
+             f"O plano foi dividido em {len(lotes)} lotes. Entregue cada um em um bloco ```json "
+             "separado, rotulado com o id do lote, na ordem: o operador roda um lote de cada vez.")
+    return json.dumps({"ok": True, "lotes": [{"lote": n, "plano": p} for n, p in lotes],
+                       "proximo_passo": passo}, ensure_ascii=False)
+
+
+def _ler_trecho(args: dict) -> str:
+    def erro(codigo: str, mensagem: str) -> str:
+        return json.dumps({"erro": mensagem, "code": codigo},
+                          ensure_ascii=False)
+
+    caminho = args.get("caminho")
+    try:
+        inicio, fim = int(args.get("inicio")), int(args.get("fim"))
+    except (TypeError, ValueError):
+        return erro("trecho_invalido", "inicio e fim precisam ser inteiros")
+    if inicio < 1 or fim < inicio:
+        return erro("trecho_invalido", f"intervalo inválido: {inicio}-{fim}")
+    if not isinstance(caminho, str) or not caminho.strip():
+        return erro("trecho_invalido", "caminho vazio")
+    raiz = bancada_runner.REPO_TRABALHO.resolve()
+    alvo = Path(os.path.realpath(raiz / caminho.strip()))
+    if raiz not in alvo.parents:
+        return erro("trecho_invalido", f"fora do repositório: {caminho}")
+    # Tamanho checado só por stat, antes de o runner ler o arquivo.
+    if alvo.is_file() and alvo.stat().st_size > LER_TRECHO_MAX_BYTES:
+        return erro("trecho_grande",
+                    f"arquivo acima de {LER_TRECHO_MAX_BYTES} bytes: {caminho}")
+    pedido_fim = fim
+    fim = min(fim, inicio + LER_TRECHO_MAX_LINHAS - 1)
+    try:
+        texto, inicio, fim = bancada_runner.ler_trecho(caminho, inicio, fim)
+    except bancada_runner.BancadaErro as e:
+        return erro(e.codigo, e.mensagem)
+    if "\x00" in texto:
+        return erro("trecho_binario", f"arquivo binário: {caminho}")
+    saida = {"caminho": caminho.strip(), "inicio": inicio, "fim": fim,
+             "texto": texto[:LER_TRECHO_MAX_CHARS]}
+    if fim < pedido_fim or len(texto) > LER_TRECHO_MAX_CHARS:
+        saida["truncado"] = True
+    return json.dumps(saida, ensure_ascii=False)
+
+
 def executar_tool(nome: str, args: dict, db: Session,
                   nivel: str = autoridade.NIVEL_PADRAO, *, backlog_id=None) -> str:
     """Executa uma tool, respeitando a autoridade da conversa.
@@ -536,7 +651,10 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
         return json.dumps(
             [{"id": str(i.id), "titulo": i.title, "status": i.status,
               "prioridade": i.priority, "tipo": i.type,
-              "sprint": i.sprint} for i in q.all()],
+              "sprint": i.sprint,
+              "archived_reason": i.archived_reason,
+              "archived_at": str(i.archived_at) if i.archived_at else None}
+             for i in q.all()],
             ensure_ascii=False,
         )
 
