@@ -644,6 +644,8 @@ def _ler_task(args: dict, db: Session) -> str:
         "status": t.status,
         "prioridade": t.priority,
         "tipo": t.type,
+        "archived_reason": t.archived_reason,
+        "archived_at": str(t.archived_at) if t.archived_at else None,
         "subtasks": [{"ordem": s.execution_order, "titulo": s.title,
                       "status": s.status,
                       "descricao": (s.description or "").strip() or None}
@@ -850,7 +852,10 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
         return json.dumps(
             [{"id": str(i.id), "titulo": i.title, "status": i.status,
               "prioridade": i.priority, "tipo": i.type,
-              "sprint": i.sprint} for i in q.all()],
+              "sprint": i.sprint,
+              "archived_reason": i.archived_reason,
+              "archived_at": str(i.archived_at) if i.archived_at else None}
+             for i in q.all()],
             ensure_ascii=False,
         )
 
