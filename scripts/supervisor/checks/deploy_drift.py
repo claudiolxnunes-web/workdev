@@ -207,6 +207,11 @@ def _build_desatualizado(repo, agora: datetime) -> list[Fato]:
     fonte, arquivo = repo.mtime_mais_recente(config.FONTES_FRONTEND)
     if fonte is None or fonte <= build:
         return []
+    alterados = repo.alteracoes_desde(config.FONTES_FRONTEND, build)
+    if alterados is not None:
+        if not alterados:
+            return []  # mtime novo, conteúdo igual: sem drift real
+        arquivo = alterados[0]
     horas = round((fonte - build).total_seconds() / 3600, 1)
     dias = max(dias_desde(build, agora) or 0, 0)
     bucket, ordem = classificar(dias, config.FAIXAS_IDADE_PLANO)
@@ -243,6 +248,11 @@ def _servico_mais_velho_que_o_codigo(repo, agora: datetime) -> list[Fato]:
     fonte, arquivo = repo.mtime_mais_recente(config.FONTES_BACKEND, sufixos=(".py",))
     if fonte is None or fonte <= desde:
         return []
+    alterados = repo.alteracoes_desde(config.FONTES_BACKEND, desde, sufixos=(".py",))
+    if alterados is not None:
+        if not alterados:
+            return []
+        arquivo = alterados[0]
     horas = round((fonte - desde).total_seconds() / 3600, 1)
     dias = max(dias_desde(desde, agora) or 0, 0)
     bucket, ordem = classificar(dias, config.FAIXAS_IDADE_PLANO)
