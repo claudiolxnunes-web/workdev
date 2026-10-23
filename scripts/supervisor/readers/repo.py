@@ -121,6 +121,34 @@ class LeitorRepositorio:
             return None, None
         return datetime.fromtimestamp(mais_novo[0], tz=timezone.utc), mais_novo[1]
 
+    def alteracoes_desde(
+        self,
+        subdiretorio: str,
+        desde: datetime,
+        sufixos: Sequence[str] = (".py", ".ts", ".tsx", ".css"),
+    ) -> list[str] | None:
+        """Arquivos de código com conteúdo alterado depois de `desde`.
+
+        Usa git (commits posteriores + árvore suja), não mtime. Retorna None
+        se o git não puder responder, para o chamador usar o critério antigo.
+        """
+        arquivos: set[str] = set()
+        codigo, saida = _git(
+            self.raiz, "log", f"--since={desde.isoformat()}",
+            "--name-only", "--format=", "--", subdiretorio,
+        )
+        if codigo != 0:
+            return None
+        arquivos.update(l.strip() for l in saida.splitlines() if l.strip())
+        codigo, saida = _git(self.raiz, "status", "--porcelain", "--", subdiretorio)
+        if codigo != 0:
+            return None
+        for linha in saida.splitlines():
+            partes = linha.split(maxsplit=1)
+            if len(partes) == 2:
+                arquivos.add(partes[1].split(" -> ")[-1].strip().strip('"'))
+        return sorted(a for a in arquivos if a.endswith(tuple(sufixos)))
+
     def arquivos_markdown(self, subcaminho: str, e_diretorio: bool) -> list[str]:
         """Caminhos relativos dos .md e .txt aceitos pelo ingestor do RAG.
 
