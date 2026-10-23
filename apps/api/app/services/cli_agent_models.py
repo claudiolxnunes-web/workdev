@@ -102,6 +102,26 @@ def selected(agent: str) -> str | None:
     return value if isinstance(value, str) and _valid(agent, value) else DEFAULTS[agent]
 
 
+def validate_selected(agent: str) -> tuple[str, bool]:
+    """Resolve o modelo para uma nova execução, sem fallback silencioso.
+
+    Devolve ``(modelo, salvo_explicitamente)``. Sem seleção persistida vale o
+    DEFAULT. Seleção persistida que saiu do catálogo levanta ValueError, ao
+    contrário de ``selected()``, que a troca em silêncio pelo DEFAULT.
+    """
+    if agent not in MODELS:
+        raise ValueError("Agente sem seleção de modelo")
+    value = _read(_path()).get(agent, {}).get("selected")
+    if value is None:
+        return DEFAULTS[agent], False
+    if not isinstance(value, str) or not _valid(agent, value):
+        raise ValueError(
+            f"A seleção salva para {agent} ({value!r}) não pertence ao catálogo atual; "
+            "escolha outro modelo na aba Agentes"
+        )
+    return value, True
+
+
 def describe(agent: str) -> dict:
     if agent not in MODELS:
         raise ValueError("Agente sem seleção de modelo")

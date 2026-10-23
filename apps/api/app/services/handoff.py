@@ -511,6 +511,17 @@ def queue_build(
     if reviewer is not None or review_requested is not False:
         reviewer = validate_review_pair(agent, reviewer)
 
+    # Só o executor resolve modelo; revisor e observer seguem a configuração
+    # própria. Modelo explícito (envio legado) nunca é substituído, e o modo
+    # AUTO já traz o modelo decidido pelo roteador.
+    if model is None and routing_mode == "manual" and agent in CLI_AGENTS:
+        from app.services import cli_agent_models
+        if agent in cli_agent_models.MODELS:
+            try:
+                model, _ = cli_agent_models.validate_selected(agent)
+            except ValueError as error:
+                raise HandoffError(str(error)) from error
+
     active = db.query(AgentRun).filter(
         AgentRun.backlog_id == plan.backlog_id,
         AgentRun.status.in_(ACTIVE_RUN_STATUSES),

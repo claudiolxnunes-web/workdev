@@ -808,6 +808,28 @@ def plan_review_policy(plan_id: UUID, agent: str | None = None, db: Session = De
             "message": "A classificação final será reavaliada pelo backend com o diff e os gates da execução."}
 
 
+def _assert_session_matches_selection(agent: str, model: str) -> None:
+    """Recusa o envio se a sessão viva roda outro modelo que o selecionado.
+
+    A troca na aba Agentes vale só para processos novos. Não reinicia a sessão
+    nem troca o modelo em silêncio: o operador precisa reiniciar o agente.
+    """
+    from app.services import agent_operability, cli_agent_models
+    active = cli_agent_models.describe(agent)["active"]
+    if active is None or active == model:
+        return
+    from app.routers.terminal import ALLOWED_SESSIONS
+    state = agent_operability.resolve(agent, standby_session=ALLOWED_SESSIONS.get(agent), run_id=None)
+    if not state.session_exists:
+        return  # sessão encerrada: o modelo ativo gravado está obsoleto
+    raise HTTPException(409, {
+        "code": "model_requires_new_session",
+        "message": (f"{agent} está rodando {active}, mas a aba Agentes seleciona {model}. "
+                    "Reinicie o agente para aplicar a troca; o envio não troca o modelo sozinho."),
+        "details": {"agent": agent, "selected": model, "active": active},
+    })
+
+
 @router.post(
     "/plans/{plan_id}/build",
     status_code=201,
@@ -838,7 +860,11 @@ def send_to_build(
     if payload.routing_mode == "manual" and agent in cli_agent_models.OPENROUTER_CLI_AGENTS and model is None:
         # O seletor da aba Agentes é persistente. Fixar sua escolha na run
         # evita que uma troca posterior altere o modelo de execuções antigas.
-        model = cli_agent_models.selected(agent)
+        try:
+            model, _ = cli_agent_models.validate_selected(agent)
+        except ValueError as error:
+            raise HTTPException(409, {"code": "invalid_model_selection", "message": str(error)}) from error
+        _assert_session_matches_selection(agent, model)
 
     if payload.review_requested is not None and payload.routing_mode == "manual":
         task, _project = _task_project(db, plan.backlog_id)
@@ -896,6 +922,17 @@ def send_to_build(
                     },
                 },
             )
+
+    if (payload.routing_mode == "manual" and model is None
+            and agent in cli_agent_models.MODELS):
+        # Demais CLIs (claude, codex, kimi, gemini): a run registra o modelo
+        # da aba Agentes. Fica depois da lista de permitidos, que só vale para
+        # modelo escolhido no envio; aqui ele já vem do catálogo do agente.
+        try:
+            model, _ = cli_agent_models.validate_selected(agent)
+        except ValueError as error:
+            raise HTTPException(409, {"code": "invalid_model_selection", "message": str(error)}) from error
+        _assert_session_matches_selection(agent, model)
 
     if payload.routing_mode == "manual" and is_ollama_agent(agent):
         # Endpoint indisponível não vira run pendurada: recusa antes de criar
