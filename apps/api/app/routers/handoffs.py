@@ -816,12 +816,24 @@ def _assert_session_matches_selection(agent: str, model: str) -> None:
     """
     from app.services import agent_operability, cli_agent_models
     active = cli_agent_models.describe(agent)["active"]
-    if active is None or active == model:
+    if active == model:
         return
     from app.routers.terminal import ALLOWED_SESSIONS
     state = agent_operability.resolve(agent, standby_session=ALLOWED_SESSIONS.get(agent), run_id=None)
     if not state.session_exists:
-        return  # sessão encerrada: o modelo ativo gravado está obsoleto
+        return  # sessão encerrada: não há o que reconciliar
+    if active is None:
+        # Sessão viva sem modelo ativo registrado (ex.: ligada antes desta
+        # feature existir). Sem saber o que ela está rodando de fato, não dá
+        # para assumir compatibilidade com a seleção — bloquear é a escolha
+        # segura, igual a quando sabemos que são modelos diferentes.
+        raise HTTPException(409, {
+            "code": "model_requires_new_session",
+            "message": (f"{agent} tem sessão ativa sem modelo registrado, e a aba Agentes "
+                        f"seleciona {model}. Reinicie o agente para registrar o modelo ativo; "
+                        "o envio não assume compatibilidade sem essa confirmação."),
+            "details": {"agent": agent, "selected": model, "active": None},
+        })
     raise HTTPException(409, {
         "code": "model_requires_new_session",
         "message": (f"{agent} está rodando {active}, mas a aba Agentes seleciona {model}. "
@@ -857,9 +869,12 @@ def send_to_build(
     )
 
     from app.services import cli_agent_models
-    if payload.routing_mode == "manual" and agent in cli_agent_models.OPENROUTER_CLI_AGENTS and model is None:
-        # O seletor da aba Agentes é persistente. Fixar sua escolha na run
-        # evita que uma troca posterior altere o modelo de execuções antigas.
+    if payload.routing_mode == "manual" and agent in cli_agent_models.MODELS and model is None:
+        # O seletor da aba Agentes é persistente. Resolver aqui — antes do gate
+        # de modelos permitidos abaixo — garante que o modelo da aba passe
+        # pelo mesmo controle de custo que um modelo escolhido explicitamente
+        # no envio; fixar a escolha na run evita que uma troca posterior
+        # altere o modelo de execuções antigas.
         try:
             model, _ = cli_agent_models.validate_selected(agent)
         except ValueError as error:
@@ -922,17 +937,6 @@ def send_to_build(
                     },
                 },
             )
-
-    if (payload.routing_mode == "manual" and model is None
-            and agent in cli_agent_models.MODELS):
-        # Demais CLIs (claude, codex, kimi, gemini): a run registra o modelo
-        # da aba Agentes. Fica depois da lista de permitidos, que só vale para
-        # modelo escolhido no envio; aqui ele já vem do catálogo do agente.
-        try:
-            model, _ = cli_agent_models.validate_selected(agent)
-        except ValueError as error:
-            raise HTTPException(409, {"code": "invalid_model_selection", "message": str(error)}) from error
-        _assert_session_matches_selection(agent, model)
 
     if payload.routing_mode == "manual" and is_ollama_agent(agent):
         # Endpoint indisponível não vira run pendurada: recusa antes de criar

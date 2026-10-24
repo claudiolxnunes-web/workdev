@@ -464,6 +464,16 @@ class BuildGuardTest(unittest.TestCase):
                 "app.routers.handoffs.ensure_dispatchable_blocking",
             ) as guard,
             patch(
+                "app.routers.handoffs.allowed_models_for_agent",
+                return_value=[],
+            ),
+            # Modelo resolvido da aba Agentes não tem "active" registrado
+            # neste teste; sem sessão viva real, não há o que reconciliar.
+            patch(
+                "app.services.agent_operability.resolve",
+                return_value=Mock(session_exists=False),
+            ),
+            patch(
                 "app.routers.handoffs.queue_build",
                 return_value=(run, Mock()),
             ),

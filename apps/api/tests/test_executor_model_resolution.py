@@ -121,7 +121,8 @@ def _session(exists):
 
 def test_envio_so_com_agente_usa_modelo_configurado_na_aba_agentes():
     models.choose("claude", "claude-haiku-4-5")
-    result, captured = _send("claude")
+    with _session(False):
+        result, captured = _send("claude")
     assert result["model"] == captured["model"] == "claude-haiku-4-5"
 
 
@@ -162,6 +163,25 @@ def test_sessao_encerrada_ou_modelo_igual_nao_bloqueia():
         assert _send("claude")[0]["model"] == "claude-haiku-4-5"
 
 
+def test_sessao_viva_sem_active_registrado_bloqueia_em_vez_de_assumir_compatibilidade():
+    # Sessão ligada antes desta feature (ou sem record_active por qualquer
+    # motivo): "active" nunca foi gravado. Sem saber o que ela roda de fato,
+    # o envio não pode assumir que bate com a seleção — tem que bloquear.
+    models.choose("claude", "claude-haiku-4-5")
+    with _session(True), pytest.raises(HTTPException) as error:
+        _send("claude")
+    assert error.value.status_code == 409
+    detail = error.value.detail
+    assert detail["code"] == "model_requires_new_session"
+    assert detail["details"] == {"agent": "claude", "selected": "claude-haiku-4-5", "active": None}
+
+
+def test_sessao_sem_active_registrado_mas_encerrada_nao_bloqueia():
+    models.choose("claude", "claude-haiku-4-5")
+    with _session(False):
+        assert _send("claude")[0]["model"] == "claude-haiku-4-5"
+
+
 def test_modelo_explicito_ignora_o_bloqueio_de_sessao():
     models.record_active("claude", "claude-opus-5")
     with _session(True):
@@ -176,6 +196,54 @@ def test_selecao_persistida_invalida_devolve_409_descritivo():
         _send("claude")
     assert error.value.status_code == 409
     assert error.value.detail["code"] == "invalid_model_selection"
+
+
+# --- modelo resolvido da aba Agentes passa pelo gate de modelos permitidos --
+
+def _allowed_row(model):
+    return SimpleNamespace(provider_model_id=model, display_name=model)
+
+
+def _send_com_catalogo(agent, allowed):
+    """Como _send, mas com allowed_models_for_agent real (não vazio)."""
+    payload = BuildRequest(agent=agent, reviewer="codex", routing_mode="manual")
+    captured = {}
+
+    def fake_queue(_db, _plan, _agent, **kwargs):
+        captured.update(kwargs)
+        run = SimpleNamespace(id="run-1", model=kwargs["model"], agent=_agent, routing_mode="manual")
+        return run, SimpleNamespace(id="event-1")
+
+    with patch.object(handoffs, "_get_plan", return_value=_plan()), \
+         patch.object(handoffs, "allowed_models_for_agent", return_value=allowed), \
+         patch.object(handoffs, "queue_build", side_effect=fake_queue), \
+         patch.object(handoffs, "_sync_run"), \
+         patch.object(handoffs, "_run_out", side_effect=lambda _db, row: {"model": row.model}):
+        result = handoffs.send_to_build("plan-1", payload, Mock(), Mock())
+    return result, captured
+
+
+def test_modelo_resolvido_da_aba_agentes_passa_pelo_gate_de_permitidos_quando_premium():
+    # "claude-opus-5-5" é o topo de preço do catálogo de claude (premium); o
+    # gate deve deixar passar porque está na lista configurada para o agente.
+    models.choose("claude", "claude-opus-5-5")
+    allowed = [_allowed_row("claude-opus-5-5"), _allowed_row("claude-haiku-4-5")]
+    with _session(False):
+        result, captured = _send_com_catalogo("claude", allowed)
+    assert result["model"] == captured["model"] == "claude-opus-5-5"
+
+
+def test_modelo_resolvido_da_aba_agentes_bloqueado_quando_fora_do_catalogo_permitido():
+    # Seleção válida no catálogo de modelos do agente, mas fora da lista de
+    # modelos que o operador liberou em Settings: antes da correção, essa
+    # seleção contornava este gate porque era resolvida depois dele.
+    models.choose("claude", "claude-opus-5-5")
+    allowed = [_allowed_row("claude-haiku-4-5")]
+    with _session(False), pytest.raises(HTTPException) as error:
+        _send_com_catalogo("claude", allowed)
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "model_not_allowed_for_agent"
+    assert error.value.detail["details"]["agent"] == "claude"
 
 
 # --- run.model -> launcher ---------------------------------------------------
