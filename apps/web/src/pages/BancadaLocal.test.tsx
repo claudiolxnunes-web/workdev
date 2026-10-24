@@ -17,6 +17,9 @@ const propostas = [
 ]
 const resumo = [{ modelo: "dev", avaliado_por: "deepseek/deepseek-v4-flash", tarefas: 2, aproveitada: 0,
   correcao_pequena: 50, descartada: 50, falhas: 0, tempo_medio_s: null }]
+const medicoes = [{ modelo: "moe", execucoes: 3, prefill_ms: 9000, prefill_medio_ms: 3000,
+  geracao_ms: 21000, geracao_medio_ms: 7000, prefill_tok: 90, cache_tok: 10, prompt_tok: 100,
+  geracao_tok: 140, tok_s_geracao: 6.67, cache_pct: 10 }]
 const detalhe = {
   id: "minimo_dev", modelo: "dev", texto: "from app.services.local_model import current as local_model",
   verificacao: { achados: [{ categoria: "uso_errado", severidade: "erro", mensagem: "local_model é a função current" }], erros: 1, aprovada: false },
@@ -50,7 +53,8 @@ const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
   const lote = /\/lotes\/([^/]+)$/.exec(url)?.[1]
   if (lote) return json({ lote, tarefas: [{ id: `${lote}-01`, instrucao: `tarefa do ${lote}`, trechos: [["app/x.py", 1, 3]] }] })
   const corpo = url.endsWith("/estado") ? estado : url.endsWith("/propostas") ? { propostas }
-    : url.endsWith("/resumo") ? { linhas: resumo } : url.includes("/propostas/moe/") ? detalhePagina : detalhe
+    : url.endsWith("/resumo") ? { linhas: resumo } : url.endsWith("/medicoes") ? { linhas: medicoes }
+    : url.includes("/propostas/moe/") ? detalhePagina : detalhe
   return json(corpo)
 })
 const detalhePagina = { ...detalhe, id: "t1", modelo: "moe",
@@ -71,6 +75,7 @@ describe("Bancada Local", () => {
     expect(screen.getByText("ligado")).toBeInTheDocument()
     expect(screen.getByText("indisponível")).toBeInTheDocument() // memória do processo ilegível
     expect(screen.getByRole("region", { name: "Aproveitamento por modelo" })).toHaveTextContent("deepseek/deepseek-v4-flash")
+    expect(screen.getByRole("region", { name: "Medições de prefill e geração" })).toHaveTextContent("3.0s")
     expect(screen.getByText("1 erro(s)")).toBeInTheDocument()
     expect(screen.getByText("passa")).toBeInTheDocument()
   })

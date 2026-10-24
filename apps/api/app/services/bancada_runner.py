@@ -170,13 +170,15 @@ def _sse(evento: dict) -> str:
 
 def _stream_llama(mensagens: list, max_tokens: int, conhecido: str, vigiar: bool) -> Iterator[dict]:
     """Eventos 'token' e, se o vigia agir, um 'interrompido' final."""
-    suspeitos = _modulo("bancada_local").suspeitos
+    local = _modulo("bancada_local")
+    suspeitos = local.suspeitos
     corpo = {"model": ALIAS, "messages": mensagens, "max_tokens": max_tokens, "temperature": 0.2,
              "stream": True, "stream_options": {"include_usage": True},
              "chat_template_kwargs": {"enable_thinking": False}}
     req = urllib.request.Request(LLAMA_URL + "/v1/chat/completions", data=json.dumps(corpo).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
     linha_atual, em_codigo, definidos, tokens = "", False, set(), None
+    medicao: dict = {}
     with urllib.request.urlopen(req, timeout=TIMEOUT) as resposta:
         for bruto in resposta:
             bruto = bruto.decode("utf-8", "replace").strip()
@@ -187,6 +189,8 @@ def _stream_llama(mensagens: list, max_tokens: int, conhecido: str, vigiar: bool
                 break
             pedaco = json.loads(dado)
             tokens = (pedaco.get("usage") or {}).get("completion_tokens", tokens)
+            if pedaco.get("timings"):
+                medicao = local.medir_timings(pedaco)
             delta = ((pedaco.get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
             if not delta:
                 continue
@@ -204,9 +208,9 @@ def _stream_llama(mensagens: list, max_tokens: int, conhecido: str, vigiar: bool
                     definidos.update(n for n in par if n)
                 ruins = suspeitos(codigo, conhecido, definidos)
                 if vigiar and ruins:
-                    yield {"tipo": "interrompido", "nomes": ruins, "tokens": tokens}
+                    yield {"tipo": "interrompido", "nomes": ruins, "tokens": tokens, "medicao": medicao}
                     return
-    yield {"tipo": "tokens", "tokens": tokens}
+    yield {"tipo": "tokens", "tokens": tokens, "medicao": medicao}
 
 
 def _proximo_id(base: str) -> str:
@@ -283,6 +287,7 @@ def _executar(plano: dict) -> Iterator[str]:
         chave, base = chave_modelo(), commit_base()
         yield _sse({"tipo": "inicio", "id": plano["id"], "modelo": chave, "base": base})
         inicio, texto, tokens, retentativa, suspeitos = time.monotonic(), "", None, False, []
+        medicao: dict = {}
         try:
             for evento in _stream_llama(plano["mensagens"], plano["max_tokens"], plano["prompt"], vigiar=True):
                 if evento["tipo"] == "token":
@@ -294,6 +299,7 @@ def _executar(plano: dict) -> Iterator[str]:
                                 "mensagem": "nome que não está nos trechos; reenviando 1 vez"})
                 else:
                     tokens = evento["tokens"]
+                    medicao = evento.get("medicao") or medicao
             if retentativa:
                 nomes = ", ".join(f"`{n}`" for n in suspeitos)
                 mensagens = plano["mensagens"] + [
@@ -309,6 +315,7 @@ def _executar(plano: dict) -> Iterator[str]:
                         yield _sse(evento)
                     elif evento["tipo"] == "tokens":
                         tokens = evento["tokens"]
+                        medicao = evento.get("medicao") or medicao
         except (urllib.error.URLError, OSError, ValueError) as erro:
             yield _sse({"tipo": "erro", "codigo": "falha_modelo", "mensagem": f"{type(erro).__name__}: {erro}"})
             return
@@ -321,7 +328,7 @@ def _executar(plano: dict) -> Iterator[str]:
         except (OSError, ValueError):
             resumo = {}
         resumo[plano["id"]] = {"segundos": segundos, "tokens": tokens, "ok": True, "retentativa": retentativa,
-                               "suspeitos": suspeitos, "origem": "pagina", "data": _agora()}
+                               "suspeitos": suspeitos, "origem": "pagina", "medicao": medicao, "data": _agora()}
         _gravar(resumo_path, resumo)
         _gravar(pasta() / "tarefas" / f"{plano['id']}.json", {
             "id": plano["id"], "modelo": chave, "base": base, "instrucao": plano["instrucao"],
@@ -331,9 +338,9 @@ def _executar(plano: dict) -> Iterator[str]:
             "espera_diff": bool(plano.get("espera_diff")), "data": _agora()})
         registrar({"id": plano["id"], "modelo": chave, "origem": "pagina", "tipo": "execucao",
                    "segundos": segundos, "tokens": tokens, "retentativa": retentativa,
-                   "origem_de": plano.get("origem_de")})
+                   "medicao": medicao, "origem_de": plano.get("origem_de")})
         yield _sse({"tipo": "fim", "id": plano["id"], "modelo": chave, "segundos": segundos,
-                    "tokens": tokens, "retentativa": retentativa})
+                    "tokens": tokens, "retentativa": retentativa, "medicao": medicao})
 
 
 # ---------------------------------------------------------------- verificar / parecer

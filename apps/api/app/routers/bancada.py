@@ -243,6 +243,13 @@ def resumo():
     return {"linhas": _mascarar(linhas)}
 
 
+@router.get("/medicoes")
+def medicoes():
+    """Prefill x geração por modelo: separa o custo de carregar o prompt do custo de gerar."""
+    local = runner._modulo("bancada_local")
+    return {"linhas": _mascarar(local.agregar_medicoes(raiz()))}
+
+
 # ---------------------------------------------------------------- segunda etapa (POST)
 
 class Execucao(BaseModel):

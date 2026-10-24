@@ -16,10 +16,14 @@ python3 scripts/bancada_local.py rodar tarefas.json --so controle_duas_linhas
 python3 scripts/bancada_local.py ferramentas "Onde current() é chamado e o que acontece se KEY_FILE sumir?"
 python3 scripts/bancada_local.py avaliar controle_duas_linhas aproveitada "diff aplicável de primeira"
 python3 scripts/bancada_local.py resumo
+python3 scripts/bancada_local.py medicoes
 ```
 
-- Saídas: `tmp/bancada/<chave_do_modelo>/<id>.txt` + `_resumo.json` (segundos e
-  `usage.completion_tokens`). Erro vira `ERRO: ...` no arquivo e o lote segue.
+- Saídas: `tmp/bancada/<chave_do_modelo>/<id>.txt` + `_resumo.json` (segundos,
+  `usage.completion_tokens` e a medição de prefill × geração). Erro vira `ERRO: ...`
+  no arquivo e o lote segue.
+- `medicoes` agrega a medição por modelo: prefill (carregar o prompt) separado de
+  geração (escrever a resposta), com o tanto do prompt que veio do KV cache.
 - `avaliar` acrescenta uma linha em `tmp/bancada/registro.jsonl`; o modelo é
   deduzido da saída mais recente daquele id (ou `--modelo <chave>`).
 - `ferramentas` precisa do llama-server com `--jinja` (function calling). Máx. 10 voltas.
