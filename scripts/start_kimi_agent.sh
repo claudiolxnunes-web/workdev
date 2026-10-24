@@ -31,18 +31,6 @@ _read_env_var() {
 }
 
 case "$KIMI_PROVIDER" in
-  moonshot)
-    api_key=$(_read_env_var MOONSHOT_API_KEY)
-    if [[ -z "$api_key" ]]; then
-      echo "Kimi Agent: MOONSHOT_API_KEY não configurada" >&2
-      exit 1
-    fi
-    export KIMI_MODEL_NAME="kimi-k2.7-code"
-    export KIMI_MODEL_DISPLAY_NAME="Kimi K2.7 Code"
-    export KIMI_MODEL_BASE_URL="https://api.moonshot.cn/v1"
-    export KIMI_MODEL_PROVIDER_TYPE="kimi"
-    model_context_size="262144"
-    ;;
   openrouter)
     api_key=$(_read_env_var OPENROUTER_API_KEY)
     if [[ -z "$api_key" ]]; then
@@ -99,7 +87,7 @@ case "$KIMI_PROVIDER" in
     export KIMI_MODEL_PROVIDER_TYPE="openai"
     ;;
   *)
-    echo "Kimi Agent: KIMI_PROVIDER inválido ('$KIMI_PROVIDER'); use moonshot ou openrouter" >&2
+    echo "Kimi Agent: KIMI_PROVIDER inválido ('$KIMI_PROVIDER'); somente openrouter é suportado" >&2
     exit 1
     ;;
 esac
