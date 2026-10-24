@@ -808,19 +808,25 @@ def plan_review_policy(plan_id: UUID, agent: str | None = None, db: Session = De
             "message": "A classificação final será reavaliada pelo backend com o diff e os gates da execução."}
 
 
+def _standby_session_alive(agent: str) -> bool:
+    """Sondagem física da sessão standby do agente (ponto único para isolar em testes)."""
+    from app.routers.terminal import ALLOWED_SESSIONS
+    from app.services import agent_operability
+    state = agent_operability.resolve(agent, standby_session=ALLOWED_SESSIONS.get(agent), run_id=None)
+    return bool(state.session_exists)
+
+
 def _assert_session_matches_selection(agent: str, model: str) -> None:
     """Recusa o envio se a sessão viva roda outro modelo que o selecionado.
 
     A troca na aba Agentes vale só para processos novos. Não reinicia a sessão
     nem troca o modelo em silêncio: o operador precisa reiniciar o agente.
     """
-    from app.services import agent_operability, cli_agent_models
+    from app.services import cli_agent_models
     active = cli_agent_models.describe(agent)["active"]
     if active == model:
         return
-    from app.routers.terminal import ALLOWED_SESSIONS
-    state = agent_operability.resolve(agent, standby_session=ALLOWED_SESSIONS.get(agent), run_id=None)
-    if not state.session_exists:
+    if not _standby_session_alive(agent):
         return  # sessão encerrada: não há o que reconciliar
     if active is None:
         # Sessão viva sem modelo ativo registrado (ex.: ligada antes desta
@@ -842,23 +848,19 @@ def _assert_session_matches_selection(agent: str, model: str) -> None:
     })
 
 
-def _resolve_cli_agent_model(agent: str, *, check_session: bool = True) -> str:
+def _resolve_cli_agent_model(agent: str) -> str:
     """Resolve o modelo persistido na aba Agentes para um agente CLI.
 
     Usado para executor e revisor: mesmo contrato, sem fallback silencioso
-    para seleção incompatível. O bloqueio de sessão viva com modelo
-    divergente (``check_session``) só se aplica ao executor — é a sessão que
-    de fato executa com o modelo carregado via ``cli_agent_models.launcher``.
-    Estender ao revisor exigiria o mesmo procedimento de reinício para
-    sessões de revisor já em uso hoje, o que está fora do escopo desta etapa.
+    para seleção incompatível e com o mesmo bloqueio de sessão viva rodando
+    outro modelo — a troca na aba Agentes só vale após reiniciar o agente.
     """
     from app.services import cli_agent_models
     try:
         model, _ = cli_agent_models.validate_selected(agent)
     except ValueError as error:
         raise HTTPException(409, {"code": "invalid_model_selection", "message": str(error)}) from error
-    if check_session:
-        _assert_session_matches_selection(agent, model)
+    _assert_session_matches_selection(agent, model)
     return model
 
 
@@ -922,7 +924,7 @@ def send_to_build(
         # Tela de planos não oferece mais seletor de modelo para o revisor:
         # mesma resolução central do executor, pela configuração da aba
         # Agentes do agente escolhido como revisor.
-        reviewer_model = _resolve_cli_agent_model(payload.reviewer, check_session=False)
+        reviewer_model = _resolve_cli_agent_model(payload.reviewer)
         reviewer_selection = {
             "agent": payload.reviewer,
             "model": reviewer_model,

@@ -39,3 +39,14 @@ def _isolate_tmux_server_ensure(request, monkeypatch):
         return
     from app.services import agent_lifecycle
     monkeypatch.setattr(agent_lifecycle, "ensure_tmux_server", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_tmux_sessions(monkeypatch):
+    """Testes de envio nunca enxergam as sessões tmux reais do host.
+
+    O bloqueio de sessão viva com modelo divergente sonda a sessão standby;
+    sem isto, o resultado dependia de existir (ou não) uma sessão real de
+    codex/claude no servidor. Testes que exercitam o bloqueio sobrescrevem."""
+    from app.routers import handoffs
+    monkeypatch.setattr(handoffs, "_standby_session_alive", lambda agent: False)

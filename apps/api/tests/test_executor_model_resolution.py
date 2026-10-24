@@ -115,8 +115,7 @@ def _send(agent="claude", **fields):
 
 
 def _session(exists):
-    return patch("app.services.agent_operability.resolve",
-                 return_value=SimpleNamespace(session_exists=exists))
+    return patch.object(handoffs, "_standby_session_alive", return_value=exists)
 
 
 def test_envio_so_com_agente_usa_modelo_configurado_na_aba_agentes():
@@ -159,17 +158,40 @@ def test_revisor_com_selecao_incompativel_bloqueia_sem_criar_run():
     assert error.value.detail["code"] == "invalid_model_selection"
 
 
-def test_revisor_nao_e_bloqueado_por_sessao_viva_com_modelo_divergente():
-    # Diferente do executor: o revisor ainda não tem o procedimento de
-    # reinício de sessão cobrindo essa troca (fora do escopo desta etapa).
+def test_revisor_com_sessao_viva_em_outro_modelo_bloqueia_como_o_executor():
     models.choose("claude", "claude-haiku-4-5")
     models.record_active("claude", "claude-haiku-4-5")
     models.record_active("codex", "gpt-5.6-sol")
     models.choose("codex", "gpt-5.6-luna")
+    with _session(True), pytest.raises(HTTPException) as error:
+        _send("claude")
+    assert error.value.status_code == 409
+    detail = error.value.detail
+    assert detail["code"] == "model_requires_new_session"
+    assert detail["details"] == {"agent": "codex", "selected": "gpt-5.6-luna",
+                                 "active": "gpt-5.6-sol"}
+
+
+def test_revisor_com_sessao_viva_sem_modelo_registrado_tambem_bloqueia():
+    models.choose("claude", "claude-haiku-4-5")
+    models.record_active("claude", "claude-haiku-4-5")
+    models.choose("codex", "gpt-5.6-luna")
+    with _session(True), pytest.raises(HTTPException) as error:
+        _send("claude")
+    assert error.value.detail["details"]["agent"] == "codex"
+    assert error.value.detail["details"]["active"] is None
+
+
+def test_revisor_com_sessao_no_modelo_selecionado_ou_encerrada_nao_bloqueia():
+    models.choose("claude", "claude-haiku-4-5")
+    models.record_active("claude", "claude-haiku-4-5")
+    models.choose("codex", "gpt-5.6-luna")
+    models.record_active("codex", "gpt-5.6-luna")
     with _session(True):
-        result, captured = _send("claude")
-    assert result["model"] == "claude-haiku-4-5"
-    assert captured["reviewer_selection"]["model"] == "gpt-5.6-luna"
+        assert _send("claude")[1]["reviewer_selection"]["model"] == "gpt-5.6-luna"
+    models.record_active("codex", "gpt-5.6-sol")
+    with _session(False):
+        assert _send("claude")[1]["reviewer_selection"]["model"] == "gpt-5.6-luna"
 
 
 def test_envio_com_modelo_explicito_e_preservado():
@@ -200,6 +222,7 @@ def test_bloqueio_vale_tambem_para_agente_openrouter():
 
 
 def test_sessao_encerrada_ou_modelo_igual_nao_bloqueia():
+    models.record_active("codex", models.DEFAULTS["codex"])  # revisor compatível
     models.record_active("claude", "claude-opus-5")
     models.choose("claude", "claude-haiku-4-5")
     with _session(False):
@@ -229,6 +252,7 @@ def test_sessao_sem_active_registrado_mas_encerrada_nao_bloqueia():
 
 
 def test_modelo_explicito_ignora_o_bloqueio_de_sessao():
+    models.record_active("codex", models.DEFAULTS["codex"])  # revisor compatível
     models.record_active("claude", "claude-opus-5")
     with _session(True):
         assert _send("claude", model="claude-sonnet-5")[0]["model"] == "claude-sonnet-5"
