@@ -483,6 +483,7 @@ def queue_build(
     *,
     reviewer: str | None = None,
     model: str | None = None,
+    provider: str | None = None,
     reasoning_effort: str | None = None,
     routing_mode: str = "manual",
     complexity: str | None = None,
@@ -511,9 +512,11 @@ def queue_build(
     if reviewer is not None or review_requested is not False:
         reviewer = validate_review_pair(agent, reviewer)
 
-    # Só o executor resolve modelo; revisor e observer seguem a configuração
-    # própria. Modelo explícito (envio legado) nunca é substituído, e o modo
-    # AUTO já traz o modelo decidido pelo roteador.
+    # Resolução do executor: quem chama sem ter resolvido ainda (ex.: callers
+    # diretos de queue_build) cai no mesmo contrato da aba Agentes. O revisor é
+    # resolvido por quem monta reviewer_selection antes de chegar aqui — nunca
+    # neste ponto. Modelo explícito (envio legado) nunca é substituído, e o
+    # modo AUTO já traz o modelo decidido pelo roteador.
     if model is None and routing_mode == "manual" and agent in CLI_AGENTS:
         from app.services import cli_agent_models
         if agent in cli_agent_models.MODELS:
@@ -521,6 +524,8 @@ def queue_build(
                 model, _ = cli_agent_models.validate_selected(agent)
             except ValueError as error:
                 raise HandoffError(str(error)) from error
+            if provider is None:
+                provider = cli_agent_models.PROVIDERS.get(agent)
 
     active = db.query(AgentRun).filter(
         AgentRun.backlog_id == plan.backlog_id,
@@ -580,6 +585,7 @@ def queue_build(
 
     routing_payload = {
         "agent": agent,
+        "provider": provider,
         "reviewer_agent": reviewer,
         "model": model,
         "reasoning_effort": reasoning_effort,

@@ -40,6 +40,19 @@ MODELS = {
 }
 # Agentes CLI que rodam a CLI qwen contra a OpenRouter.
 OPENROUTER_CLI_AGENTS = ("qwen", "grok", "deepseek")
+
+# Provedor por agente, só para registro (agente, provider, modelo) na run.
+# Não é um catálogo paralelo de modelos: nenhuma destas chaves decide o que é
+# permitido, só rotula de onde o modelo configurado na aba Agentes vem.
+PROVIDERS = {
+    "gemini": "gemini",
+    "claude": "anthropic",
+    "codex": "openai",
+    "kimi": "moonshot",
+    "qwen": "openrouter",
+    "grok": "openrouter",
+    "deepseek": "openrouter",
+}
 DEFAULTS = {"gemini": "gemini-3.5-flash", "claude": "claude-opus-5",
             "codex": "gpt-5.6-sol", "kimi": "moonshotai/kimi-k3",
             "qwen": "qwen/qwen3.5-397b-a17b",

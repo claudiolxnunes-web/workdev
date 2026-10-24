@@ -126,6 +126,52 @@ def test_envio_so_com_agente_usa_modelo_configurado_na_aba_agentes():
     assert result["model"] == captured["model"] == "claude-haiku-4-5"
 
 
+# --- Etapa 2 (tela de planos): revisor também resolve pela aba Agentes -----
+
+def test_envio_sem_selecao_de_revisor_resolve_pela_aba_agentes():
+    models.choose("claude", "claude-haiku-4-5")
+    models.choose("codex", "gpt-5.6-luna")
+    with _session(False):
+        _, captured = _send("claude")
+    assert captured.get("reviewer_selection") == {
+        "agent": "codex", "model": "gpt-5.6-luna",
+        "provider": "openai", "review_capable": True,
+    }
+
+
+def test_executor_e_revisor_resolvem_configuracoes_distintas():
+    models.choose("claude", "claude-haiku-4-5")
+    models.choose("codex", "gpt-5.6-terra")
+    with _session(False):
+        result, captured = _send("claude")
+    assert result["model"] == "claude-haiku-4-5"
+    assert captured["reviewer_selection"]["model"] == "gpt-5.6-terra"
+    assert captured["reviewer_selection"]["model"] != result["model"]
+
+
+def test_revisor_com_selecao_incompativel_bloqueia_sem_criar_run():
+    models.choose("codex", "gpt-5.6-terra")
+    path = models._path()
+    path.write_text(path.read_text().replace("gpt-5.6-terra", "gpt-inexistente"))
+    with pytest.raises(HTTPException) as error, _session(False):
+        _send("claude")
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "invalid_model_selection"
+
+
+def test_revisor_nao_e_bloqueado_por_sessao_viva_com_modelo_divergente():
+    # Diferente do executor: o revisor ainda não tem o procedimento de
+    # reinício de sessão cobrindo essa troca (fora do escopo desta etapa).
+    models.choose("claude", "claude-haiku-4-5")
+    models.record_active("claude", "claude-haiku-4-5")
+    models.record_active("codex", "gpt-5.6-sol")
+    models.choose("codex", "gpt-5.6-luna")
+    with _session(True):
+        result, captured = _send("claude")
+    assert result["model"] == "claude-haiku-4-5"
+    assert captured["reviewer_selection"]["model"] == "gpt-5.6-luna"
+
+
 def test_envio_com_modelo_explicito_e_preservado():
     models.choose("claude", "claude-haiku-4-5")
     result, _ = _send("claude", model="claude-sonnet-5")

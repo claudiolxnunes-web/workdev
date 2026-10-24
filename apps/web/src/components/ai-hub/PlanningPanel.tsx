@@ -5,9 +5,13 @@ import {
   agentLabels, approvePlan, getAgentRuntimes, getCliAgentModel, getPlanRecommendation, getPlans,
   sendToBuild, subscribeToHandoffs, updatePlan, CLI_AGENTS, HandoffApiError,
   RECOMMENDED_REVIEWERS,
-  type AgentName, type AgentRuntime, type ExecutionPlan,
+  type AgentName, type AgentRuntime, type CliAgentName, type ExecutionPlan,
   type PlanRecommendation,
 } from "@/services/handoff.service"
+
+function isCliAgent(agent?: AgentName): agent is CliAgentName {
+  return Boolean(agent) && (CLI_AGENTS as readonly string[]).includes(agent as string)
+}
 
 const statusLabel: Record<string, string> = {
   draft: "Rascunho", approved: "Aprovado", needs_revision: "Revisar", superseded: "Substituído",
@@ -31,7 +35,7 @@ function recommendationKey(plan: ExecutionPlan) {
   return `${plan.id}:${plan.updated_at}`
 }
 
-type RolePair = { executor?: AgentName; executorModel?: string; reviewer?: AgentName; reviewerProvider?: string; reviewerModel?: string }
+type RolePair = { executor?: AgentName; reviewer?: AgentName }
 type AgentChoice = { name: AgentName; label: string; disabled: boolean; hint: string }
 
 /**
@@ -150,17 +154,11 @@ function ModelSelect({
 }
 
 function RecommendationCard({
-  recommendation, selectedModel, onSelectModel,
+  recommendation,
 }: {
   recommendation: PlanRecommendation
-  selectedModel?: string
-  onSelectModel: (model: string) => void
 }) {
   const { recommended, alternative } = recommendation
-  // Só os modelos permitidos deste agente. O seletor aparece apenas quando há
-  // mais de uma opção — com uma só, o modelo é informação, não escolha.
-  const models = recommended.models ?? []
-  const current = selectedModel ?? recommended.model ?? ""
   return (
     <section
       aria-label="Recomendação do WorkDev"
@@ -178,24 +176,6 @@ function RecommendationCard({
         complexidade {recommendation.complexity}
       </p>
       <p className="mt-1 text-slate-300">{recommended.reason}</p>
-      {models.length > 1 && (
-        <label className="mt-2 block text-xs text-slate-400">
-          Modelo
-          <select
-            value={current}
-            onChange={(event) => onSelectModel(event.target.value)}
-            className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
-          >
-            {models.map((model) => (
-              <option key={model.catalog_id ?? model.model} value={model.model ?? ""}>
-                {model.model_label ?? model.model} · {model.cost_label}
-                {model.recommended ? " · recomendado" : ""}
-                {model.capable ? "" : " · abaixo do exigido"}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
       <p className="mt-1 text-xs">
         <span className={availabilityColor[recommended.availability]}>
           Disponibilidade: {recommended.availability_label}
@@ -247,18 +227,16 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
     requestedAgent?: AgentName
   } | null>(null)
   const [recommendations, setRecommendations] = useState<Record<string, PlanRecommendation>>({})
-  // Modelo escolhido pelo usuário para aquele envio, por plano. Vazio = usa o
-  // recomendado. A troca é consultiva e não altera nada no servidor.
-  const [modelChoice, setModelChoice] = useState<Record<string, string>>({})
   // Executor e revisor escolhidos por plano. Sem os dois, não há envio.
   const [roles, setRoles] = useState<Record<string, RolePair>>({})
   const [reviewChoice, setReviewChoice] = useState<Record<string, boolean>>({})
   const [reviewState, setReviewState] = useState<Record<string, string>>({})
-  const [reviewModels, setReviewModels] = useState<ExecutionModel[]>([])
   const [observerModels, setObserverModels] = useState<ExecutionModel[]>([])
   const [observerChoice, setObserverChoice] = useState<Record<string, { enabled: boolean; agent?: string; provider?: string; model?: string; runtime_id?: string }>>({})
-  const [reviewModelsError, setReviewModelsError] = useState("")
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
+  // Modelo configurado na aba Agentes para cada agente CLI já escolhido como
+  // executor ou revisor em algum plano — só leitura, nunca enviado ao Build.
+  const [agentModelLabel, setAgentModelLabel] = useState<Record<string, string>>({})
   const requestedRecommendations = useRef<Set<string>>(new Set())
 
   const executores = executorChoices(runtimes)
@@ -266,20 +244,33 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
 
   useEffect(() => {
     let active = true
-    getExecutionModels().then(data => { if (active) {
-      setReviewModels(data.models.filter(row => row.review_capable))
-      setObserverModels(data.models)
-    } })
-      .catch(() => { if (active) setReviewModelsError("Catálogo de revisão indisponível. Tente reabrir o painel.") })
+    getExecutionModels().then(data => { if (active) setObserverModels(data.models) })
+      .catch(() => {})
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    let active = true
+    const agentes = new Set<CliAgentName>()
+    for (const pair of Object.values(roles)) {
+      if (isCliAgent(pair.executor)) agentes.add(pair.executor)
+      if (isCliAgent(pair.reviewer)) agentes.add(pair.reviewer)
+    }
+    for (const agente of agentes) {
+      if (agente in agentModelLabel) continue
+      void getCliAgentModel(agente).then((info) => {
+        if (!active) return
+        const label = info.options?.find((option) => option.model === info.selected)?.label ?? info.selected
+        setAgentModelLabel((current) => ({ ...current, [agente]: label }))
+      }).catch(() => {})
+    }
+    return () => { active = false }
+  }, [roles, agentModelLabel])
 
   function setRole(planId: string, field: keyof RolePair, agent: AgentName) {
     setRoles((current) => ({
       ...current,
-      [planId]: { ...current[planId], [field]: agent,
-        ...(field === "reviewer" ? { reviewerProvider: undefined, reviewerModel: undefined } : {}),
-        ...(field === "executor" ? { executorModel: undefined } : {}) },
+      [planId]: { ...current[planId], [field]: agent },
     }))
   }
 
@@ -351,26 +342,9 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
     finally { setBusy(null) }
   }
 
-  function chosenModel(plan: ExecutionPlan, agent?: AgentName): string | undefined {
-    const recommendation = recommendations[recommendationKey(plan)]
-    const option = recommendation?.options?.find((item) => item.agent === agent)
-    if (!option || option.models.length === 0) return undefined
-    // A escolha do seletor só vale para o agente a que ela pertence; para os
-    // demais botões vale o modelo recomendado daquele agente.
-    const chosen = agent === recommendation?.recommended.agent
-      ? modelChoice[plan.id]
-      : undefined
-    const valid = option.models.some((model) => model.model === chosen)
-    if (valid) return chosen
-    const recommended = option.models.find((model) => model.recommended)
-    return recommended?.model ?? option.model ?? undefined
-  }
-
   async function build(plan: ExecutionPlan, agent?: AgentName, premiumConfirmed = false) {
     const requested = reviewChoice[plan.id]
     const reviewer = requested === false ? null : roles[plan.id]?.reviewer
-    const reviewerModel = requested !== false && roles[plan.id]?.reviewerModel
-      ? { provider: roles[plan.id].reviewerProvider!, model: roles[plan.id].reviewerModel! } : undefined
     const observer = observerChoice[plan.id]
     if (observer?.enabled && (!observer.provider || !observer.model)) {
       setError("Escolha a fonte e o modelo do Observer antes de enviar ao Build.")
@@ -389,22 +363,16 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
     }
     setBusy(plan.id); setError(""); setMessage("")
     try {
-      let model = roles[plan.id]?.executorModel ?? chosenModel(plan, agent)
-      const viaOpenRouter = (name?: string | null): name is "qwen" | "grok" | "deepseek" =>
-        name === "qwen" || name === "grok" || name === "deepseek"
-      const recommendedChoice = recommendations[recommendationKey(plan)]?.recommended.agent === agent
-        && Boolean(modelChoice[plan.id])
-      if (viaOpenRouter(agent) && !recommendedChoice && !roles[plan.id]?.executorModel) {
-        model = (await getCliAgentModel(agent)).selected
-      }
+      // O modelo nunca é escolhido aqui: o backend resolve pela configuração
+      // salva na aba Agentes do executor e, quando houver, do revisor.
       if (observer?.enabled) {
-        await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, model,
-          requested, reviewerModel, observerConfig)
-      } else if (agent && requested === undefined && !reviewerModel) {
-        await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, model)
+        await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, undefined,
+          requested, undefined, observerConfig)
+      } else if (agent && requested === undefined) {
+        await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, undefined)
       } else {
-        await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, model,
-          requested, reviewerModel)
+        await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, undefined,
+          requested, undefined)
       }
       setPremiumTarget(null)
       setMessage(`Build enviado: ${agentLabel[agent]} executa${reviewer ? `, ${agentLabel[reviewer]} revisa` : "; escolha de revisão registrada"}.`)
@@ -587,10 +555,6 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
               {recommendations[recommendationKey(plan)] && (
                 <RecommendationCard
                   recommendation={recommendations[recommendationKey(plan)]}
-                  selectedModel={modelChoice[plan.id]}
-                  onSelectModel={(model) =>
-                    setModelChoice((current) => ({ ...current, [plan.id]: model }))
-                  }
                 />
               )}
               <details className="mb-3 text-sm text-slate-400">
@@ -617,7 +581,7 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                   <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">
                     Quem executa e quem revisa
                   </p>
-                  <p className="mb-2 text-xs text-slate-400">Escolha quem executa e o modelo. A escolha vale só para este envio.</p>
+                  <p className="mb-2 text-xs text-slate-400">Escolha quem executa e quem revisa. O modelo de cada um vem da configuração salva na aba Agentes.</p>
                   <p className="my-2 text-sm">{reviewState[plan.id] === "required" ? "Revisão independente fortemente recomendada (risco alto). Você decide." : reviewState[plan.id] === "not_required" ? "Revisão independente não necessária inicialmente. Deseja configurar um revisor?" : "Esta task recomenda revisão. Deseja configurar um revisor?"}</p>
                   <div className="mb-3 flex gap-2">
                     <button type="button" aria-pressed={reviewChoice[plan.id] === true} onClick={() => setReviewChoice(current => ({ ...current, [plan.id]: true }))} className="rounded bg-slate-700 px-3 py-1">Sim</button>
@@ -633,15 +597,11 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                         disabled={busy === plan.id}
                         onChange={(agent) => setRole(plan.id, "executor", agent)}
                       />
-                      {roles[plan.id]?.executor && <ModelSelect
-                        label="Modelo do executor"
-                        models={observerModels.filter((row) => row.agent === roles[plan.id]?.executor)}
-                        value={roles[plan.id]?.executorModel}
-                        vazio="Modelo padrão do agente"
-                        disabled={busy === plan.id}
-                        onChange={(row) => setRoles((current) => ({ ...current,
-                          [plan.id]: { ...current[plan.id], executorModel: row?.model } }))}
-                      />}
+                      {isCliAgent(roles[plan.id]?.executor) && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          Modelo (aba Agentes): {agentModelLabel[roles[plan.id]!.executor!] ?? "carregando…"}
+                        </p>
+                      )}
                     </div>
                     {reviewChoice[plan.id] !== false && <div>
                       <RoleSelect
@@ -652,16 +612,11 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
                         disabled={busy === plan.id}
                         onChange={(agent) => setRole(plan.id, "reviewer", agent)}
                       />
-                      {roles[plan.id]?.reviewer && <ModelSelect
-                        label="Modelo do revisor"
-                        models={reviewModels.filter((row) => row.agent === roles[plan.id]?.reviewer)}
-                        value={roles[plan.id]?.reviewerModel}
-                        vazio="Modelo padrão do agente"
-                        disabled={busy === plan.id}
-                        onChange={(row) => setRoles((current) => ({ ...current,
-                          [plan.id]: { ...current[plan.id], reviewerProvider: row?.provider, reviewerModel: row?.model } }))}
-                      />}
-                      {reviewModelsError && <p role="status" className="text-xs text-amber-300">{reviewModelsError}</p>}
+                      {isCliAgent(roles[plan.id]?.reviewer) && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          Modelo (aba Agentes): {agentModelLabel[roles[plan.id]!.reviewer!] ?? "carregando…"}
+                        </p>
+                      )}
                     </div>}
                   </div>
                   <div className="mt-3 rounded border border-slate-700 p-3 text-sm">

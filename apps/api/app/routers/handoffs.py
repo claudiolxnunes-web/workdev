@@ -842,6 +842,26 @@ def _assert_session_matches_selection(agent: str, model: str) -> None:
     })
 
 
+def _resolve_cli_agent_model(agent: str, *, check_session: bool = True) -> str:
+    """Resolve o modelo persistido na aba Agentes para um agente CLI.
+
+    Usado para executor e revisor: mesmo contrato, sem fallback silencioso
+    para seleção incompatível. O bloqueio de sessão viva com modelo
+    divergente (``check_session``) só se aplica ao executor — é a sessão que
+    de fato executa com o modelo carregado via ``cli_agent_models.launcher``.
+    Estender ao revisor exigiria o mesmo procedimento de reinício para
+    sessões de revisor já em uso hoje, o que está fora do escopo desta etapa.
+    """
+    from app.services import cli_agent_models
+    try:
+        model, _ = cli_agent_models.validate_selected(agent)
+    except ValueError as error:
+        raise HTTPException(409, {"code": "invalid_model_selection", "message": str(error)}) from error
+    if check_session:
+        _assert_session_matches_selection(agent, model)
+    return model
+
+
 @router.post(
     "/plans/{plan_id}/build",
     status_code=201,
@@ -875,11 +895,7 @@ def send_to_build(
         # pelo mesmo controle de custo que um modelo escolhido explicitamente
         # no envio; fixar a escolha na run evita que uma troca posterior
         # altere o modelo de execuções antigas.
-        try:
-            model, _ = cli_agent_models.validate_selected(agent)
-        except ValueError as error:
-            raise HTTPException(409, {"code": "invalid_model_selection", "message": str(error)}) from error
-        _assert_session_matches_selection(agent, model)
+        model = _resolve_cli_agent_model(agent)
 
     if payload.review_requested is not None and payload.routing_mode == "manual":
         task, _project = _task_project(db, plan.backlog_id)
@@ -890,6 +906,8 @@ def send_to_build(
 
     reviewer_selection = None
     if payload.reviewer_selection:
+        # Seleção explícita (envio legado): validada contra o catálogo de
+        # execução, não contra a aba Agentes — nunca sobrescrita abaixo.
         from app.services.agent_router import resolve_execution_selection
         try:
             reviewer_selection = resolve_execution_selection(db, payload.reviewer_selection)
@@ -900,6 +918,17 @@ def send_to_build(
         if payload.reviewer and payload.reviewer != reviewer_selection["agent"]:
             raise HTTPException(409, "Fonte e modelo não pertencem ao revisor informado")
         payload.reviewer = reviewer_selection["agent"]
+    elif payload.reviewer and payload.routing_mode == "manual" and payload.reviewer in cli_agent_models.MODELS:
+        # Tela de planos não oferece mais seletor de modelo para o revisor:
+        # mesma resolução central do executor, pela configuração da aba
+        # Agentes do agente escolhido como revisor.
+        reviewer_model = _resolve_cli_agent_model(payload.reviewer, check_session=False)
+        reviewer_selection = {
+            "agent": payload.reviewer,
+            "model": reviewer_model,
+            "provider": cli_agent_models.PROVIDERS.get(payload.reviewer),
+            "review_capable": True,
+        }
 
     observer_selection = None
     if payload.observer_enabled:
@@ -998,6 +1027,10 @@ def send_to_build(
             decision.reason
         )
 
+    provider = (
+        decision.provider if payload.routing_mode == "auto" else cli_agent_models.PROVIDERS.get(agent)
+    )
+
     try:
         run, event = queue_build(
             db,
@@ -1005,6 +1038,7 @@ def send_to_build(
             agent,
             reviewer=payload.reviewer,
             model=model,
+            provider=provider,
             reasoning_effort=(
                 reasoning_effort
             ),

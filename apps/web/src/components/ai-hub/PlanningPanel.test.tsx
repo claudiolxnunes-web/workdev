@@ -172,16 +172,15 @@ describe("PlanningPanel", () => {
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null, "codex", false, undefined, false, undefined))
   })
 
-  it("envia agente e modelo escolhidos para o revisor", async () => {
+  it("envia o agente escolhido para o revisor sem seletor de modelo: o backend resolve pela aba Agentes", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     renderPanel()
     fireEvent.click(await screen.findByRole("button", { name: "Sim" }))
     fireEvent.change(screen.getByLabelText("Revisor independente"), { target: { value: "claude" } })
-    await screen.findByRole("option", { name: /Review Model/ })
-    fireEvent.change(screen.getByLabelText("Modelo do revisor"), { target: { value: "review-model" } })
     fireEvent.change(screen.getByLabelText("Executor"), { target: { value: "codex" } })
+    expect(screen.queryByLabelText("Modelo do revisor")).not.toBeInTheDocument()
     enviar()
-    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, "claude", "codex", false, undefined, true, { provider: "anthropic", model: "review-model" }))
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, "claude", "codex", false, undefined, true, undefined))
   })
 
   it("permite Observer opcional com modelo independente", async () => {
@@ -214,26 +213,21 @@ describe("PlanningPanel", () => {
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null, "codex", false, undefined, false, undefined))
   })
 
-  it("executor também escolhe o modelo, com preço do catálogo", async () => {
+  it("não oferece seletor de modelo para o executor: mostra o modelo da aba Agentes como texto", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ ok: true, json: async () =>
-      url.includes("review-policy") ? { state: "recommended" } : { models: [
-        { provider: "openrouter", model: "x-ai/grok-4.3", agent: "grok", label: "Grok 4.3", review_capable: true,
-          input_cost_per_million: 1.25, output_cost_per_million: 2.5, rank: 2 },
-        { provider: "openrouter", model: "x-ai/grok-4.7", agent: "grok", label: "Grok 4.7", review_capable: true,
-          input_cost_per_million: 2, output_cost_per_million: 6, rank: 1 },
-      ], local_error: null } })))
+    getCliAgentModel.mockResolvedValue({
+      agent: "grok", selected: "x-ai/grok-4.3", active: null,
+      options: [{ model: "x-ai/grok-4.3", label: "Grok 4.3 (médio)", input_cost_per_million: 1.25, output_cost_per_million: 2.5, expensive: false }],
+    })
     renderPanel()
     fireEvent.change(await screen.findByLabelText("Executor"), { target: { value: "grok" } })
-    const modelo = await screen.findByLabelText("Modelo do executor")
-    const opcoes = Array.from(modelo.querySelectorAll("option")).map((o) => o.textContent)
-    expect(opcoes).toEqual(["Modelo padrão do agente",
-      "Grok 4.7 — US$ 2/US$ 6 por 1M", "Grok 4.3 — US$ 1.25/US$ 2.5 por 1M"])
-    fireEvent.change(modelo, { target: { value: "x-ai/grok-4.3" } })
+    expect(screen.queryByLabelText("Modelo do executor")).not.toBeInTheDocument()
+    await waitFor(() => expect(getCliAgentModel).toHaveBeenCalledWith("grok"))
+    expect(await screen.findByText(/Modelo \(aba Agentes\): Grok 4\.3 \(médio\)/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Não" }))
     enviar()
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      basePlan.id, null, "grok", false, "x-ai/grok-4.3", false, undefined))
+      basePlan.id, null, "grok", false, undefined, false, undefined))
   })
 
   it("filtra os planos pela task vinculada à conversa", async () => {
@@ -548,102 +542,42 @@ describe("PlanningPanel", () => {
     expect(screen.getByRole("button", { name: "Enviar ao Build" })).toBeEnabled()
   })
 
-  it("mostra o seletor só quando o agente tem mais de um modelo", async () => {
+  it("recomendação nunca expõe seletor de modelo, mesmo com mais de um modelo permitido", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    getPlanRecommendation.mockResolvedValue(twoModelRecommendation)
     renderPanel()
 
     await screen.findByRole("region", { name: "Recomendação do WorkDev" })
     expect(screen.queryByLabelText("Modelo")).not.toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: /modelo/i })).not.toBeInTheDocument()
   })
 
-  it("lista apenas os modelos permitidos do agente recomendado", async () => {
+  it("nunca envia modelo ao Build: o backend resolve pela aba Agentes do executor e do revisor", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     getPlanRecommendation.mockResolvedValue(twoModelRecommendation)
     renderPanel()
 
-    const seletor = await screen.findByLabelText("Modelo")
-    const opcoes = Array.from(seletor.querySelectorAll("option")).map((o) => o.value)
-
-    expect(opcoes).toEqual(["gpt-5.6-sol", "gpt-5.6-terra"])
-    expect(seletor).toHaveValue("gpt-5.6-sol")
-  })
-
-  it("envia o modelo escolhido pelo usuário", async () => {
-    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
-    getPlanRecommendation.mockResolvedValue(twoModelRecommendation)
-    renderPanel()
-
-    fireEvent.change(await screen.findByLabelText("Modelo"), {
-      target: { value: "gpt-5.6-terra" },
-    })
     await escolherPapeis("codex")
     enviar()
 
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "claude", "codex", false, "gpt-5.6-terra",
+      "plan-1", "claude", "codex", false, undefined,
     ))
   })
 
-  it("sem trocar nada, envia o modelo recomendado", async () => {
+  it("mostra o modelo configurado do executor e do revisor só como informação", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
-    getPlanRecommendation.mockResolvedValue(twoModelRecommendation)
+    getCliAgentModel.mockImplementation(async (agent: string) => ({
+      agent, selected: `${agent}-modelo-padrao`, active: null,
+      options: [{ model: `${agent}-modelo-padrao`, label: `${agent} padrão`, input_cost_per_million: null, output_cost_per_million: null, expensive: false }],
+    }))
     renderPanel()
 
-    // Espera a recomendação chegar: antes dela não há modelo a enviar, e o
-    // clique cedo tornava este teste instável.
-    await screen.findByLabelText("Modelo")
-    await escolherPapeis("codex")
-    enviar()
+    await escolherPapeis("codex", "claude")
 
-    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "claude", "codex", false, "gpt-5.6-sol",
-    ))
-  })
-
-  it("não aplica o modelo escolhido a um agente diferente", async () => {
-    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
-    getPlanRecommendation.mockResolvedValue(twoModelRecommendation)
-    renderPanel()
-
-    fireEvent.change(await screen.findByLabelText("Modelo"), {
-      target: { value: "gpt-5.6-terra" },
-    })
-    await escolherPapeis("gemini")
-    enviar()
-
-    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "claude", "gemini", false, undefined,
-    ))
-  })
-
-  it("envia ao Build o modelo persistido no seletor do agente Grok", async () => {
-    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
-    getCliAgentModel.mockResolvedValue({ selected: "x-ai/grok-4.7" })
-    renderPanel()
-
-    await escolherPapeis("grok")
-    enviar()
-
-    await waitFor(() => expect(getCliAgentModel).toHaveBeenCalledWith("grok"))
-    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "claude", "grok", false, "x-ai/grok-4.7",
-    ))
-  })
-
-  it("não aplica a escolha do cartão Codex ao agente DeepSeek", async () => {
-    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
-    getPlanRecommendation.mockResolvedValue(twoModelRecommendation)
-    getCliAgentModel.mockResolvedValue({ selected: "deepseek/deepseek-v4-flash" })
-    renderPanel()
-
-    fireEvent.change(await screen.findByLabelText("Modelo"), {
-      target: { value: "gpt-5.6-terra" },
-    })
-    await escolherPapeis("deepseek")
-    enviar()
-
-    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(
-      "plan-1", "claude", "deepseek", false, "deepseek/deepseek-v4-flash",
-    ))
+    expect(await screen.findByText("Modelo (aba Agentes): codex padrão")).toBeInTheDocument()
+    expect(await screen.findByText("Modelo (aba Agentes): claude padrão")).toBeInTheDocument()
+    // Informação, não controle: nada ali é selecionável.
+    expect(screen.queryByRole("combobox", { name: /modelo/i })).not.toBeInTheDocument()
   })
 })

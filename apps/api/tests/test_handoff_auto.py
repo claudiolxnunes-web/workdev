@@ -185,6 +185,7 @@ class HandoffAutoRouteTest(unittest.TestCase):
             "gemini",
             reviewer="codex",
             model="gemini-2.5-flash",
+            provider="gemini",
             reasoning_effort=None,
             routing_mode="auto",
             complexity="medium",

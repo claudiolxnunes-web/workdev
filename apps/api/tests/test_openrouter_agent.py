@@ -94,7 +94,15 @@ def test_selected_model_is_fixed_on_new_run_and_reaches_runtime_launcher():
              ]), \
              patch("app.routers.handoffs.queue_build", side_effect=persist_run), \
              patch("app.routers.handoffs._sync_run"), \
+             patch("app.services.agent_operability.resolve",
+                   return_value=SimpleNamespace(session_exists=False)), \
              patch("app.routers.handoffs._run_out", side_effect=lambda _db, row: {"model": row.model}):
+            # session_exists=False: este teste cobre resolução de modelo e
+            # injeção no launcher, não o bloqueio de sessão viva (coberto em
+            # test_executor_model_resolution.py). Sem o mock, o resultado
+            # dependeria de existir ou não uma sessão tmux real chamada
+            # "deepseek" no host — qualquer agente da frota rodando no mesmo
+            # host faz este teste falhar por motivo alheio ao que ele testa.
             result = send_to_build(
                 plan.id, BuildRequest(agent="deepseek", reviewer="claude"), Mock(), Mock()
             )
