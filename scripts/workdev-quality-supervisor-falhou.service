@@ -1,0 +1,16 @@
+# /etc/systemd/system/workdev-quality-supervisor-falhou.service
+[Unit]
+Description=Avisa no Telegram quando a execução do Quality Supervisor falha
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/workdev
+Environment=HOME=/home/workdev
+Environment=QUALITY_SUPERVISOR_ENV_FILE=/etc/workdev/workdev-quality-supervisor.env
+ExecStart=/opt/workdev/apps/api/venv/bin/python -m scripts.quality_supervisor.falhou %n
+User=workdev
+Group=workdev
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
