@@ -138,6 +138,7 @@ function renderPanel() {
 
 describe("PlanningPanel", () => {
   beforeEach(() => {
+    localStorage.clear()
     getPlans.mockReset(); updatePlan.mockReset(); sendToBuild.mockReset()
     getPlanRecommendation.mockReset(); getAgentRuntimes.mockReset(); getCliAgentModel.mockReset()
     getPlans.mockResolvedValue([basePlan])
@@ -195,6 +196,38 @@ describe("PlanningPanel", () => {
     expect(screen.queryByLabelText("Modelo do revisor")).not.toBeInTheDocument()
     enviar()
     await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, "claude", "codex", false, undefined, true, undefined))
+  })
+
+  it("preserva a escolha Sim/Não de revisão depois de recarregar a página", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    const primeira = renderPanel()
+    fireEvent.click(await screen.findByRole("button", { name: "Não" }))
+    expect(screen.getByRole("button", { name: "Não" })).toHaveAttribute("aria-pressed", "true")
+    primeira.unmount()
+    renderPanel()
+    const nao = await screen.findByRole("button", { name: "Não" })
+    expect(nao).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByRole("button", { name: "Sim" })).toHaveAttribute("aria-pressed", "false")
+    expect(screen.queryByLabelText("Revisor independente")).not.toBeInTheDocument()
+  })
+
+  it("ignora escolha de revisão corrompida no armazenamento", async () => {
+    localStorage.setItem("workdev.planos.revisao", "{nao e json")
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    renderPanel()
+    expect(await screen.findByRole("button", { name: "Não" })).toHaveAttribute("aria-pressed", "false")
+  })
+
+  it("depois do envio mostra o modelo registrado na run", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    sendToBuild.mockResolvedValue({ model: "gpt-5.6-sol" })
+    renderPanel()
+    const no = await screen.findByRole("button", { name: "Não" })
+    await waitFor(() => expect(no).toBeEnabled())
+    fireEvent.click(no)
+    fireEvent.change(screen.getByLabelText("Executor"), { target: { value: "codex" } })
+    enviar()
+    expect(await screen.findByText(/Modelo registrado: gpt-5\.6-sol\./)).toBeInTheDocument()
   })
 
   it("permite Observer opcional com modelo independente", async () => {

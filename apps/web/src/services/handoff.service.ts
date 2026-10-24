@@ -236,6 +236,8 @@ export interface AgentRun {
   agent: AgentName
   reviewer_agent: AgentName | null
   review_attempts: number
+  /** Modelo efetivamente registrado na run (resolvido da aba Agentes no envio). */
+  model?: string | null
   status: RunStatus
   summary?: string
   result?: string

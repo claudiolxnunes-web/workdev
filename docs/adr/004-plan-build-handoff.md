@@ -180,3 +180,26 @@ agora também para esforço de raciocínio e saúde dos agentes.
 
 Estado em 2026-10-24: branch `feat/backlog-archived` verde (build, eslint,
 1656 testes), aguardando push por root e abertura de PR.
+
+## Task a4059dd7 (execução 0139fd5b): itens do plano v1 superados — 2026-10-24
+
+O plano v1 da task "Centralizar modelos em Agentes e simplificar os planos" previa
+comportamentos que contradizem a decisão do operador já registrada acima. Por decisão
+do operador, a decisão registrada prevalece e os itens abaixo ficam **superados**
+(o texto do plano v1 permanece como histórico; não vale como contrato):
+
+| Item do plano v1 | Situação | Vale agora |
+|---|---|---|
+| F5: sessão ativa com modelo incompatível ou não identificável **bloqueia** o envio | Superado | Gera **alerta** (`model_requires_new_session`); o envio segue com a escolha do operador. Sem reinício de tmux |
+| F5/API: modelo explícito de outro cliente só aceito se igual à aba Agentes; divergência rejeitada | Superado | Chamadas diretas e legadas com `model` explícito seguem aceitas como antes; divergência do catálogo só alerta |
+| Remover recomendação do painel | Superado | A recomendação do WorkDev é **consultiva**: pode sugerir e ordenar, nunca preenche nem substitui executor, revisor ou modelo |
+| Revisão obrigatória pelo revisor independente nesta execução | Dispensada | Revisão é opcional; o operador decidiu não usar revisor nesta task, pois a maior parte já estava pronta |
+
+Continua valendo e foi entregue: o modelo vem só da aba Agentes (sem seletor no painel),
+seleção salva inválida bloqueia sem fallback, `DEFAULT` só sem seleção salva, e o modelo
+efetivamente usado fica registrado na run.
+
+Lacunas fechadas nesta execução (2B): a escolha Sim/Não de revisão por plano agora
+sobrevive ao reload (`localStorage`, chave `workdev.planos.revisao`) e, depois do envio,
+o painel mostra o **modelo registrado** na run. O modelo configurado já era exibido
+antes do envio.
