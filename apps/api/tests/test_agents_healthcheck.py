@@ -187,3 +187,21 @@ def test_idle_agent_without_active_work_unaffected_by_auto_check(monkeypatch):
 
     assert row.runtime_state.value == 'OFFLINE'
     assert row.persistent is True  # todos os agentes de CLI são mantidos ligados
+
+
+def test_check_memory_devolve_codigo_do_vigia_e_nao_engole_erro(monkeypatch, capsys):
+    from app.services import memory_health
+    monkeypatch.setattr(memory_health, "check", lambda *args, **kwargs: (memory_health.CRITICAL, 1))
+    assert healthcheck.check_memory() == 1
+    assert "memoria: critical" in capsys.readouterr().out
+
+    monkeypatch.setattr(memory_health, "check", lambda *args, **kwargs: (memory_health.OK, 0))
+    assert healthcheck.check_memory() == 0
+
+    def quebra(*args, **kwargs):
+        raise PermissionError("sem escrita")
+    logged = []
+    monkeypatch.setattr(memory_health, "check", quebra)
+    monkeypatch.setattr(healthcheck, "run", lambda command, timeout=5: logged.append(command))
+    assert healthcheck.check_memory() == 1
+    assert logged and "vigia de memória falhou" in logged[0][-1]

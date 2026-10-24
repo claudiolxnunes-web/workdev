@@ -25,6 +25,7 @@ ALERT_ENV = Path(os.environ.get("AGENTS_ALERT_ENV", "/opt/scripts/alerta.env"))
 LOG_TAG = "agents-healthcheck"
 sys.path.insert(0, str(WORKDEV_DIR / 'apps/api'))
 from app.services import agent_snapshot, agent_lifecycle, agent_operability, agent_runtimes
+from app.services import memory_health
 from app.services.agent_activity import approval_lines
 
 
@@ -374,6 +375,21 @@ def notify_transitions(previous, health) -> None:
         agent_snapshot.atomic_json(ledger, records)
 
 
+def check_memory() -> int:
+    """Memória disponível: alerta pelo Telegram e falha alto (exit 1) se crítica.
+
+    Erro ao medir ou gravar o estado nunca é engolido: loga no journal e devolve 1.
+    """
+    try:
+        level, code = memory_health.check(STATE_FILE.with_name('memory.json'), send_alert)
+    except Exception as error:  # noqa: BLE001 - o vigia não pode sumir em silêncio
+        run(["logger", "-t", LOG_TAG, f"vigia de memória falhou: {type(error).__name__}: {error}"], timeout=2)
+        print(f"memoria: erro ({type(error).__name__})")
+        return 1
+    print(f"memoria: {level}")
+    return code
+
+
 def health_exit_code(health) -> int:
     return int(any(row.agent in ALWAYS_ON_AGENTS and row.runtime_state.value in {'OFFLINE', 'ERROR'} for row in health))
 
@@ -397,7 +413,7 @@ def main() -> int:
     notify_transitions(previous, health)
     for item in health:
         print(f"{item.agent}: {item.runtime_state.value}/{item.activity_state.value}")
-    return health_exit_code(health)
+    return max(health_exit_code(health), check_memory())
 
 
 if __name__ == "__main__":
