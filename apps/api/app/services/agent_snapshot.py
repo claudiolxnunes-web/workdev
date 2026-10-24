@@ -15,7 +15,9 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
-PERSISTENT_AGENTS = frozenset({'claude', 'codex'})
+# Agentes que o healthcheck mantém ligados (recupera sessão caída). Desligar de
+# propósito pela aba Agentes é respeitado: a intenção OFFLINE suprime a recuperação.
+PERSISTENT_AGENTS = frozenset({'claude', 'codex', 'kimi', 'qwen', 'grok', 'deepseek', 'gemini'})
 
 
 def is_persistent(agent: str, session: str | None) -> bool:

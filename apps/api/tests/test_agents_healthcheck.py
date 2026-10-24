@@ -64,8 +64,9 @@ class AgentHealthClassificationTest(unittest.TestCase):
         result = self.classify("kimi-code", "Kimi Code\n> ")
         self.assertEqual(result.status, "idle")
 
-    def test_only_claude_and_codex_are_always_on(self):
-        self.assertEqual(healthcheck.ALWAYS_ON_AGENTS, frozenset({"claude", "codex"}))
+    def test_all_cli_agents_are_always_on(self):
+        self.assertEqual(healthcheck.ALWAYS_ON_AGENTS, frozenset(
+            {"claude", "codex", "kimi", "qwen", "grok", "deepseek", "gemini"}))
 
     def test_shell_snapshot_does_not_trigger_destructive_recovery(self):
         from app.services import agent_lifecycle as lifecycle, agent_operability
@@ -185,4 +186,4 @@ def test_idle_agent_without_active_work_unaffected_by_auto_check(monkeypatch):
     row = healthcheck.collect_agent('gemini', 'gemini', None, work=None)
 
     assert row.runtime_state.value == 'OFFLINE'
-    assert row.persistent is False
+    assert row.persistent is True  # todos os agentes de CLI são mantidos ligados

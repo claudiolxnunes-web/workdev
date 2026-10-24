@@ -110,14 +110,16 @@ def test_exit_code_marks_unhealthy_always_on(runtime, expected):
     row = snapshot.AgentSnapshot(agent='codex', runtime_state=runtime, activity_state='IDLE', checked_at=snapshot.now())
     assert health.health_exit_code([row]) == expected
     row.agent = 'kimi'
+    assert health.health_exit_code([row]) == expected
+    row.agent = 'local-code'
     assert health.health_exit_code([row]) == 0
 
 
 def test_persistence_matches_runtime_policy():
-    for agent in ('codex', 'claude'):
+    for agent in ('codex', 'claude', 'kimi', 'qwen', 'grok', 'deepseek', 'gemini'):
         assert snapshot.is_persistent(agent, agent)
         assert not snapshot.is_persistent(agent, f'auto-{agent}-run')
-    for agent in ('kimi', 'openrouter', 'gemini', 'local-code'):
+    for agent in ('openrouter', 'local-code', 'gpu-runpod', 'gpu-hostinger'):
         assert not snapshot.is_persistent(agent, agent)
 
 
