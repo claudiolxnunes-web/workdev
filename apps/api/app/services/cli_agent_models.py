@@ -87,7 +87,9 @@ PRICING: dict[str, tuple[float, float]] = {
     "x-ai/grok-4.3": (1.25, 2.50),
     "x-ai/grok-build-0.1": (1.00, 2.00),
     "deepseek/deepseek-v4-flash": (0.0419, 0.0837),
-    "deepseek/deepseek-v4.1-flash": (0.03, 0.50),
+    # OpenRouter, endpoint OpenInference (fp4, sem desconto), conferido em 2026-10-24:
+    # entrada 0.02, cache de leitura 0.015, saída 1.00 (USD/1M). Cache não é modelado aqui.
+    "deepseek/deepseek-v4.1-flash": (0.02, 1.00),
     "deepseek/deepseek-v4-pro-0813": (0.66, 1.98),
     "moonshotai/kimi-k3": (0.70, 15.00),
     "moonshotai/kimi-k3:batch": (2.28, 11.40),
