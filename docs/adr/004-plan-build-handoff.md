@@ -156,3 +156,27 @@ grep -c "Modelo do executor\|Modelo do revisor" apps/web/src/components/ai-hub/P
 cd apps/api && WORKDEV_API_ENV_FILE=/tmp/test.env venv/bin/python -m pytest \
   tests/test_executor_model_resolution.py -q
 ```
+
+## Esforço por agente e vigia do healthcheck — 2026-10-24
+
+Complementa a decisão acima ("modelo é decisão prévia por agente"); mesma regra,
+agora também para esforço de raciocínio e saúde dos agentes.
+
+- **Esforço é escolha prévia por agente**, salvo na aba Agentes junto do modelo
+  (`PUT /api/cli-agent-models/{agent}/effort`) e vale no próximo "Ligar". Só é
+  injetado onde a CLI tem mecanismo comprovado: `claude --effort`,
+  `codex -c model_reasoning_effort`, `kimi KIMI_MODEL_THINKING_EFFORT`. Gemini,
+  Qwen, Grok e DeepSeek não oferecem o seletor; sem escolha, a CLI usa o padrão
+  dela. Nunca é decidido por envio nem pelo sistema (9891146).
+- **Healthcheck mantém os sete agentes de CLI ligados** (antes só Claude e
+  Codex). A recuperação automática respeita a intenção OFFLINE (desligar pela
+  aba Agentes), com 3 tentativas e backoff de 5 min (c7b620b).
+- **Healthcheck vigia memória disponível**: alerta no Telegram (baixa < 6 GB,
+  crítica < 3 GB, swap > 8 GB, após 120 s) e sai com exit 1 se crítica ou se não
+  conseguir medir (4e6be40). Motivo: 31 GB sem GPU dividem RAM com modelos
+  locais e as sessões dos agentes.
+- **Decisão do operador reafirmada:** planos e agentes são sempre escolha do
+  operador; o sistema só sugere e alerta, nunca bloqueia nem troca em silêncio.
+
+Estado em 2026-10-24: branch `feat/backlog-archived` verde (build, eslint,
+1656 testes), aguardando push por root e abertura de PR.
