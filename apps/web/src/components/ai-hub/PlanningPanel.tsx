@@ -377,8 +377,7 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
       }
       setPremiumTarget(null)
       // Alertas não bloqueiam: o envio seguiu com a escolha do operador.
-      const alerts = ((run as { warnings?: { message: string }[] } | undefined)?.warnings ?? [])
-        .map((item) => ` Alerta: ${item.message}`).join("")
+      const alerts = (run?.warnings ?? []).map((item) => ` Alerta: ${item.message}`).join("")
       setMessage(`Build enviado: ${agentLabel[agent]} executa${reviewer ? `, ${agentLabel[reviewer]} revisa` : "; escolha de revisão registrada"}.${alerts}`)
       await load()
     } catch (cause) {

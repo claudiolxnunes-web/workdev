@@ -248,6 +248,8 @@ export interface AgentRun {
   dispatch_attempts: number
   last_dispatch_at?: string
   observer?: { enabled: boolean; provider: string | null; model: string | null; runtime_id: string | null; configured_at: string } | null
+  /** Alertas do envio: nunca bloqueiam nem trocam a escolha do operador. */
+  warnings?: { code: string; severity: "warning"; message: string; details?: Record<string, unknown> }[]
   pause?: { reason: string; evidence: Record<string, unknown>; event_id: string; created_at: string } | null
 }
 
