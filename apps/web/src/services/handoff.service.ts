@@ -29,6 +29,10 @@ export interface CliAgentModelInfo {
     output_cost_per_million: number | null
     expensive: boolean
   }>
+  /** Níveis de esforço da CLI; vazio quando o agente não tem seletor. */
+  efforts: string[]
+  /** Esforço salvo; null = padrão da própria CLI. */
+  effort: string | null
 }
 
 export function getCliAgentModel(agent: SelectableCliAgent): Promise<CliAgentModelInfo> {
@@ -38,6 +42,12 @@ export function getCliAgentModel(agent: SelectableCliAgent): Promise<CliAgentMod
 export function selectCliAgentModel(agent: SelectableCliAgent, model: string): Promise<CliAgentModelInfo> {
   return runtimeRequest(`/api/cli-agent-models/${agent}`, {
     method: "PUT", headers, body: JSON.stringify({ model }),
+  })
+}
+
+export function selectCliAgentEffort(agent: SelectableCliAgent, effort: string | null): Promise<CliAgentModelInfo> {
+  return runtimeRequest(`/api/cli-agent-models/${agent}/effort`, {
+    method: "PUT", headers, body: JSON.stringify({ effort }),
   })
 }
 

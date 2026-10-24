@@ -38,6 +38,14 @@ MODELS = {
                  ("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
                  ("deepseek/deepseek-v4-pro-0813", "DeepSeek V4 Pro 0813")),
 }
+# Esforço de raciocínio por agente: só onde a CLI tem mecanismo comprovado
+# (claude --effort, codex -c model_reasoning_effort, kimi KIMI_MODEL_THINKING_EFFORT).
+# Os demais não oferecem seletor. Sem escolha salva, a CLI usa o próprio padrão.
+EFFORTS = {
+    "claude": ("low", "medium", "high", "xhigh", "max"),
+    "codex": ("low", "medium", "high"),
+    "kimi": ("low", "high"),
+}
 # Agentes CLI que rodam a CLI qwen contra a OpenRouter.
 OPENROUTER_CLI_AGENTS = ("qwen", "grok", "deepseek")
 
@@ -153,19 +161,41 @@ def describe(agent: str) -> dict:
         })
     return {"agent": agent, "selected": chosen,
             "active": active if isinstance(active, str) and _valid(agent, active) else None,
-            "options": options}
+            "options": options,
+            "efforts": list(EFFORTS.get(agent, ())), "effort": selected_effort(agent)}
+
+
+def selected_effort(agent: str) -> str | None:
+    """Esforço salvo para o agente, ou None (padrão da CLI) se ausente/obsoleto."""
+    value = _read(_path()).get(agent, {}).get("effort")
+    return value if isinstance(value, str) and value in EFFORTS.get(agent, ()) else None
+
+
+def choose_effort(agent: str, effort: str | None) -> None:
+    if agent not in EFFORTS:
+        raise ValueError("Este agente não tem seletor de esforço")
+    if effort is not None and effort not in EFFORTS[agent]:
+        raise ValueError("Esforço inválido para este agente")
+    _store(agent, "effort", effort)
 
 
 def _update(agent: str, field: str, model: str) -> None:
     if not _valid(agent, model):
         raise ValueError("Modelo inválido para este agente")
+    _store(agent, field, model)
+
+
+def _store(agent: str, field: str, value: str | None) -> None:
     path = _path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         data = _read(path)
         row = data.setdefault(agent, {})
-        row[field] = model
+        if value is None:
+            row.pop(field, None)
+        else:
+            row[field] = value
         temporary = None
         try:
             with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as handle:
@@ -188,20 +218,30 @@ def record_active(agent: str, model: str) -> None:
     _update(agent, "active", model)
 
 
-def launcher(agent: str, command: list[str], model: str | None = None) -> list[str]:
+def launcher(agent: str, command: list[str], model: str | None = None,
+             effort: str | None = None) -> list[str]:
     chosen = model or selected(agent)
     if agent not in MODELS or chosen is None:
         return command
     if not _valid(agent, chosen):
         raise ValueError("Modelo inválido para este agente")
+    level = effort or selected_effort(agent)
+    if level is not None and level not in EFFORTS.get(agent, ()):
+        raise ValueError("Esforço inválido para este agente")
     if agent == "gemini":
         return ["env", f"GEMINI_MODEL={chosen}", *command]
     if agent == "kimi":
-        return ["env", "KIMI_PROVIDER=openrouter", f"KIMI_MODEL={chosen}", *command]
+        thinking = [f"KIMI_MODEL_THINKING_EFFORT={level}"] if level else []
+        return ["env", "KIMI_PROVIDER=openrouter", f"KIMI_MODEL={chosen}", *thinking, *command]
     if agent == "qwen":
         return ["env", "QWEN_PROVIDER=openrouter", f"QWEN_MODEL={chosen}", *command]
     if agent == "grok":
         return ["env", f"GROK_MODEL={chosen}", *command]
     if agent == "deepseek":
         return ["env", f"DEEPSEEK_MODEL={chosen}", *command]
+    if agent == "claude":
+        return [*command, "--model", chosen, *(["--effort", level] if level else [])]
+    if agent == "codex":
+        return [*command, "--model", chosen,
+                *(["-c", f"model_reasoning_effort={level}"] if level else [])]
     return [*command, "--model", chosen]

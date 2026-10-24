@@ -54,6 +54,24 @@ def get_cli_agent_model(agent: str):
         raise HTTPException(status_code=404, detail=str(error)) from error
 
 
+class CliEffortSelection(BaseModel):
+    effort: str | None = None
+
+
+@router.put("/api/cli-agent-models/{agent}/effort")
+def select_cli_agent_effort(agent: str, payload: CliEffortSelection):
+    if agent not in cli_agent_models.EFFORTS:
+        raise HTTPException(status_code=404, detail="Este agente não tem seletor de esforço")
+    snapshot = agent_snapshot.read_snapshot([agent], _HEALTH_STATE_FILE)
+    if snapshot["agents"][0].get("activity_state") == "BUSY":
+        raise HTTPException(status_code=409, detail="Aguarde a tarefa terminar para trocar o esforço")
+    try:
+        cli_agent_models.choose_effort(agent, payload.effort)
+        return cli_agent_models.describe(agent)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @router.put("/api/cli-agent-models/{agent}")
 def select_cli_agent_model(agent: str, payload: CliModelSelection):
     if agent not in cli_agent_models.MODELS:

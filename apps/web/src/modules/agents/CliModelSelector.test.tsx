@@ -2,10 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { CliModelSelector } from "./CliModelSelector"
 
-const { getCliAgentModel, selectCliAgentModel } = vi.hoisted(() => ({
-  getCliAgentModel: vi.fn(), selectCliAgentModel: vi.fn(),
+const { getCliAgentModel, selectCliAgentModel, selectCliAgentEffort } = vi.hoisted(() => ({
+  getCliAgentModel: vi.fn(), selectCliAgentModel: vi.fn(), selectCliAgentEffort: vi.fn(),
 }))
-vi.mock("@/services/handoff.service", () => ({ getCliAgentModel, selectCliAgentModel }))
+vi.mock("@/services/handoff.service", () => ({ getCliAgentModel, selectCliAgentModel, selectCliAgentEffort }))
 
 describe("CliModelSelector", () => {
   it("saves an OpenRouter model with price while retaining the active session", async () => {
@@ -34,5 +34,27 @@ describe("CliModelSelector", () => {
     getCliAgentModel.mockResolvedValue({ agent: "kimi", selected: "kimi-model", active: "kimi-model", options })
     render(<CliModelSelector agent="kimi" busy={false} runtimeState="OFFLINE" />)
     expect(await screen.findByText(/Agente desligado; este modelo está selecionado/)).toBeInTheDocument()
+  })
+
+  it("oferece esforço só para agentes com suporte e salva por agente", async () => {
+    const options = [{ model: "claude-opus-5", label: "Claude Opus 5", expensive: false }]
+    const base = { agent: "claude", selected: "claude-opus-5", active: null, options }
+    getCliAgentModel.mockResolvedValue({ ...base, efforts: ["low", "high", "max"], effort: null })
+    selectCliAgentEffort.mockResolvedValue({ ...base, efforts: ["low", "high", "max"], effort: "high" })
+    render(<CliModelSelector agent="claude" busy={false} runtimeState="ONLINE" />)
+    const select = await screen.findByLabelText("Esforço")
+    expect(screen.getByRole("option", { name: "Padrão da CLI" })).toBeInTheDocument()
+    fireEvent.change(select, { target: { value: "high" } })
+    await waitFor(() => expect(selectCliAgentEffort).toHaveBeenCalledWith("claude", "high"))
+    fireEvent.change(await screen.findByLabelText("Esforço"), { target: { value: "" } })
+    await waitFor(() => expect(selectCliAgentEffort).toHaveBeenLastCalledWith("claude", null))
+  })
+
+  it("não mostra seletor de esforço quando a CLI não suporta", async () => {
+    const options = [{ model: "gemini-3.5-flash", label: "Gemini", expensive: false }]
+    getCliAgentModel.mockResolvedValue({ agent: "gemini", selected: "gemini-3.5-flash", active: null, options, efforts: [], effort: null })
+    render(<CliModelSelector agent="gemini" busy={false} runtimeState="ONLINE" />)
+    await screen.findByLabelText("Modelo do agente")
+    expect(screen.queryByLabelText("Esforço")).not.toBeInTheDocument()
   })
 })
