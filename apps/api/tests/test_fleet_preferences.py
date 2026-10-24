@@ -21,7 +21,7 @@ def test_build_ignores_old_saved_default_and_uses_the_chosen_executor(tmp_path, 
     plan = SimpleNamespace(id="plan", backlog_id="task", status="approved")
     monkeypatch.setattr(handoffs, "_get_plan", lambda *_: plan)
     monkeypatch.setattr(handoffs, "allowed_models_for_agent", lambda *_: [])
-    queued = Mock(return_value=(SimpleNamespace(routing_mode="manual"), None))
+    queued = Mock(return_value=(SimpleNamespace(id="run", routing_mode="manual"), None))
     monkeypatch.setattr(handoffs, "queue_build", queued)
     monkeypatch.setattr(handoffs, "_sync_run", lambda *_: None)
     monkeypatch.setattr(handoffs, "_run_out", lambda *_: {})

@@ -161,6 +161,20 @@ describe("PlanningPanel", () => {
     expect(sendToBuild).not.toHaveBeenCalled()
   })
 
+  it("mostra o alerta do backend sem bloquear nem trocar a escolha do operador", async () => {
+    getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
+    sendToBuild.mockResolvedValue({ warnings: [{ code: "model_requires_new_session", severity: "warning",
+      message: "codex está rodando gpt-5.6-sol, mas a aba Agentes seleciona gpt-5.6-luna." }] })
+    renderPanel()
+    const no = await screen.findByRole("button", { name: "Não" })
+    await waitFor(() => expect(no).toBeEnabled())
+    fireEvent.click(no)
+    fireEvent.change(screen.getByLabelText("Executor"), { target: { value: "codex" } })
+    enviar()
+    await waitFor(() => expect(sendToBuild).toHaveBeenCalledWith(basePlan.id, null, "codex", false, undefined, false, undefined))
+    expect(await screen.findByText(/Build enviado.*Alerta: codex está rodando gpt-5\.6-sol/)).toBeInTheDocument()
+  })
+
   it("envia com executor escolhido e recusa explícita de revisão recomendada", async () => {
     getPlans.mockResolvedValue([{ ...basePlan, status: "approved" }])
     renderPanel()

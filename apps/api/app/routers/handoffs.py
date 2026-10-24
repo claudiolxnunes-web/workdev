@@ -816,51 +816,44 @@ def _standby_session_alive(agent: str) -> bool:
     return bool(state.session_exists)
 
 
-def _assert_session_matches_selection(agent: str, model: str) -> None:
-    """Recusa o envio se a sessão viva roda outro modelo que o selecionado.
+def _session_warning(agent: str, model: str) -> dict | None:
+    """Alerta quando a sessão viva roda outro modelo que o selecionado.
 
-    A troca na aba Agentes vale só para processos novos. Não reinicia a sessão
-    nem troca o modelo em silêncio: o operador precisa reiniciar o agente.
+    A escolha é do operador e segue valendo: o envio não é bloqueado nem o
+    modelo trocado. O alerta apenas informa que a sessão atual não carrega o
+    modelo escolhido até o agente ser reiniciado na aba Agentes.
     """
     from app.services import cli_agent_models
     active = cli_agent_models.describe(agent)["active"]
     if active == model:
-        return
+        return None
     if not _standby_session_alive(agent):
-        return  # sessão encerrada: não há o que reconciliar
+        return None
     if active is None:
-        # Sessão viva sem modelo ativo registrado (ex.: ligada antes desta
-        # feature existir). Sem saber o que ela está rodando de fato, não dá
-        # para assumir compatibilidade com a seleção — bloquear é a escolha
-        # segura, igual a quando sabemos que são modelos diferentes.
-        raise HTTPException(409, {
-            "code": "model_requires_new_session",
-            "message": (f"{agent} tem sessão ativa sem modelo registrado, e a aba Agentes "
-                        f"seleciona {model}. Reinicie o agente para registrar o modelo ativo; "
-                        "o envio não assume compatibilidade sem essa confirmação."),
-            "details": {"agent": agent, "selected": model, "active": None},
-        })
-    raise HTTPException(409, {
-        "code": "model_requires_new_session",
-        "message": (f"{agent} está rodando {active}, mas a aba Agentes seleciona {model}. "
-                    "Reinicie o agente para aplicar a troca; o envio não troca o modelo sozinho."),
-        "details": {"agent": agent, "selected": model, "active": active},
-    })
+        message = (f"{agent} tem sessão ativa sem modelo registrado; a aba Agentes seleciona {model}. "
+                   "Reinicie o agente para garantir que a sessão rode esse modelo.")
+    else:
+        message = (f"{agent} está rodando {active}, mas a aba Agentes seleciona {model}. "
+                   "Reinicie o agente para aplicar a troca; o envio segue com a sua escolha.")
+    return {"code": "model_requires_new_session", "severity": "warning", "message": message,
+            "details": {"agent": agent, "selected": model, "active": active}}
 
 
-def _resolve_cli_agent_model(agent: str) -> str:
+def _resolve_cli_agent_model(agent: str, warnings: list[dict]) -> str:
     """Resolve o modelo persistido na aba Agentes para um agente CLI.
 
-    Usado para executor e revisor: mesmo contrato, sem fallback silencioso
-    para seleção incompatível e com o mesmo bloqueio de sessão viva rodando
-    outro modelo — a troca na aba Agentes só vale após reiniciar o agente.
+    Usado para executor e revisor. Seleção que não existe mais no catálogo não
+    pode ser executada e continua bloqueando, sem fallback silencioso; sessão
+    viva em outro modelo só gera alerta em ``warnings``.
     """
     from app.services import cli_agent_models
     try:
         model, _ = cli_agent_models.validate_selected(agent)
     except ValueError as error:
         raise HTTPException(409, {"code": "invalid_model_selection", "message": str(error)}) from error
-    _assert_session_matches_selection(agent, model)
+    warning = _session_warning(agent, model)
+    if warning:
+        warnings.append(warning)
     return model
 
 
@@ -891,13 +884,15 @@ def send_to_build(
     )
 
     from app.services import cli_agent_models
+    # Alertas não bloqueiam: a escolha do operador (agentes e modelos) prevalece.
+    warnings: list[dict] = []
     if payload.routing_mode == "manual" and agent in cli_agent_models.MODELS and model is None:
         # O seletor da aba Agentes é persistente. Resolver aqui — antes do gate
         # de modelos permitidos abaixo — garante que o modelo da aba passe
         # pelo mesmo controle de custo que um modelo escolhido explicitamente
         # no envio; fixar a escolha na run evita que uma troca posterior
         # altere o modelo de execuções antigas.
-        model = _resolve_cli_agent_model(agent)
+        model = _resolve_cli_agent_model(agent, warnings)
 
     if payload.review_requested is not None and payload.routing_mode == "manual":
         task, _project = _task_project(db, plan.backlog_id)
@@ -924,7 +919,7 @@ def send_to_build(
         # Tela de planos não oferece mais seletor de modelo para o revisor:
         # mesma resolução central do executor, pela configuração da aba
         # Agentes do agente escolhido como revisor.
-        reviewer_model = _resolve_cli_agent_model(payload.reviewer)
+        reviewer_model = _resolve_cli_agent_model(payload.reviewer, warnings)
         reviewer_selection = {
             "agent": payload.reviewer,
             "model": reviewer_model,
@@ -941,33 +936,25 @@ def send_to_build(
             raise HTTPException(409, {'code': exc.code, 'message': exc.message}) from exc
 
     if payload.routing_mode == "manual" and model:
-        # O usuário escolhe o modelo, mas só entre os permitidos do agente.
-        # O catálogo inteiro nunca é opção de envio.
+        # O modelo é escolha do operador: nada aqui bloqueia o envio, só avisa.
+        if agent in cli_agent_models.MODELS and model not in dict(cli_agent_models.MODELS[agent]):
+            warnings.append({
+                "code": "model_unsupported_by_cli",
+                "severity": "warning",
+                "message": (f"O modelo {model} não consta no catálogo da CLI de {agent}; "
+                            "o envio segue com a sua escolha, mas a execução pode falhar ao iniciar."),
+                "details": {"agent": agent, "model": model,
+                            "supported_models": [m for m, _ in cli_agent_models.MODELS[agent]]},
+            })
         allowed = allowed_models_for_agent(db, agent)
-
-        if allowed and model not in {
-            row.provider_model_id for row in allowed
-        }:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "model_not_allowed_for_agent",
-                    "message": (
-                        f"O modelo {model} não está configurado para "
-                        f"{agent}."
-                    ),
-                    "details": {
-                        "agent": agent,
-                        "allowed_models": [
-                            {
-                                "model": row.provider_model_id,
-                                "model_label": row.display_name,
-                            }
-                            for row in allowed
-                        ],
-                    },
-                },
-            )
+        if allowed and model not in {row.provider_model_id for row in allowed}:
+            warnings.append({
+                "code": "model_not_allowed_for_agent",
+                "severity": "warning",
+                "message": f"O modelo {model} não está na lista configurada para {agent}; o envio segue com a sua escolha.",
+                "details": {"agent": agent, "model": model,
+                            "allowed_models": [row.provider_model_id for row in allowed]},
+            })
 
     if payload.routing_mode == "manual" and is_ollama_agent(agent):
         # Endpoint indisponível não vira run pendurada: recusa antes de criar
@@ -1065,6 +1052,11 @@ def send_to_build(
             str(error),
         ) from error
 
+    for warning in warnings:
+        add_run_event(db, run, "build.warning", warning["message"], warning)
+    if warnings:
+        db.commit()
+
     _sync_run(
         background,
         db,
@@ -1088,10 +1080,13 @@ def send_to_build(
             context["prompt"],
         )
 
-    return _run_out(
+    result = _run_out(
         db,
         run,
     )
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 @router.get("/runs")
 def list_runs(

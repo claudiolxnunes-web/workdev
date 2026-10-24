@@ -158,40 +158,42 @@ def test_revisor_com_selecao_incompativel_bloqueia_sem_criar_run():
     assert error.value.detail["code"] == "invalid_model_selection"
 
 
-def test_revisor_com_sessao_viva_em_outro_modelo_bloqueia_como_o_executor():
+def test_revisor_com_sessao_viva_em_outro_modelo_alerta_e_envia_com_a_escolha_do_operador():
     models.choose("claude", "claude-haiku-4-5")
     models.record_active("claude", "claude-haiku-4-5")
     models.record_active("codex", "gpt-5.6-sol")
     models.choose("codex", "gpt-5.6-luna")
-    with _session(True), pytest.raises(HTTPException) as error:
-        _send("claude")
-    assert error.value.status_code == 409
-    detail = error.value.detail
-    assert detail["code"] == "model_requires_new_session"
-    assert detail["details"] == {"agent": "codex", "selected": "gpt-5.6-luna",
-                                 "active": "gpt-5.6-sol"}
+    with _session(True):
+        result, captured = _send("claude")
+    assert captured["reviewer_selection"]["model"] == "gpt-5.6-luna"  # não foi trocado
+    (warning,) = result["warnings"]
+    assert warning["code"] == "model_requires_new_session" and warning["severity"] == "warning"
+    assert warning["details"] == {"agent": "codex", "selected": "gpt-5.6-luna", "active": "gpt-5.6-sol"}
 
 
-def test_revisor_com_sessao_viva_sem_modelo_registrado_tambem_bloqueia():
+def test_revisor_com_sessao_viva_sem_modelo_registrado_tambem_alerta():
     models.choose("claude", "claude-haiku-4-5")
     models.record_active("claude", "claude-haiku-4-5")
     models.choose("codex", "gpt-5.6-luna")
-    with _session(True), pytest.raises(HTTPException) as error:
-        _send("claude")
-    assert error.value.detail["details"]["agent"] == "codex"
-    assert error.value.detail["details"]["active"] is None
+    with _session(True):
+        result, captured = _send("claude")
+    assert captured["reviewer_selection"]["model"] == "gpt-5.6-luna"
+    assert result["warnings"][0]["details"]["agent"] == "codex"
+    assert result["warnings"][0]["details"]["active"] is None
 
 
-def test_revisor_com_sessao_no_modelo_selecionado_ou_encerrada_nao_bloqueia():
+def test_revisor_com_sessao_no_modelo_selecionado_ou_encerrada_nao_alerta():
     models.choose("claude", "claude-haiku-4-5")
     models.record_active("claude", "claude-haiku-4-5")
     models.choose("codex", "gpt-5.6-luna")
     models.record_active("codex", "gpt-5.6-luna")
     with _session(True):
-        assert _send("claude")[1]["reviewer_selection"]["model"] == "gpt-5.6-luna"
+        result, captured = _send("claude")
+    assert captured["reviewer_selection"]["model"] == "gpt-5.6-luna" and "warnings" not in result
     models.record_active("codex", "gpt-5.6-sol")
     with _session(False):
-        assert _send("claude")[1]["reviewer_selection"]["model"] == "gpt-5.6-luna"
+        result, _ = _send("claude")
+    assert "warnings" not in result
 
 
 def test_envio_com_modelo_explicito_e_preservado():
@@ -200,28 +202,31 @@ def test_envio_com_modelo_explicito_e_preservado():
     assert result["model"] == "claude-sonnet-5"
 
 
-def test_sessao_viva_com_outro_modelo_bloqueia_com_409_claro():
+def test_sessao_viva_com_outro_modelo_alerta_sem_bloquear_nem_trocar():
+    models.record_active("codex", models.DEFAULTS["codex"])
     models.record_active("claude", "claude-opus-5")
     models.choose("claude", "claude-haiku-4-5")
-    with _session(True), pytest.raises(HTTPException) as error:
-        _send("claude")
-    assert error.value.status_code == 409
-    detail = error.value.detail
-    assert detail["code"] == "model_requires_new_session"
-    assert detail["details"] == {"agent": "claude", "selected": "claude-haiku-4-5",
-                                 "active": "claude-opus-5"}
-    assert "Reinicie" in detail["message"]
+    with _session(True):
+        result, captured = _send("claude")
+    assert result["model"] == captured["model"] == "claude-haiku-4-5"  # escolha do operador prevalece
+    (warning,) = result["warnings"]
+    assert warning["code"] == "model_requires_new_session"
+    assert warning["details"] == {"agent": "claude", "selected": "claude-haiku-4-5",
+                                  "active": "claude-opus-5"}
+    assert "Reinicie" in warning["message"]
 
 
-def test_bloqueio_vale_tambem_para_agente_openrouter():
+def test_alerta_vale_tambem_para_agente_openrouter():
     models.record_active("qwen", "qwen/qwen3-coder-next")
+    models.record_active("codex", models.DEFAULTS["codex"])
     models.choose("qwen", "qwen/qwen3-coder-flash")
-    with _session(True), pytest.raises(HTTPException) as error:
-        _send("qwen")
-    assert error.value.detail["code"] == "model_requires_new_session"
+    with _session(True):
+        result, captured = _send("qwen")
+    assert captured["model"] == "qwen/qwen3-coder-flash"
+    assert result["warnings"][0]["code"] == "model_requires_new_session"
 
 
-def test_sessao_encerrada_ou_modelo_igual_nao_bloqueia():
+def test_sessao_encerrada_ou_modelo_igual_nao_alerta():
     models.record_active("codex", models.DEFAULTS["codex"])  # revisor compatível
     models.record_active("claude", "claude-opus-5")
     models.choose("claude", "claude-haiku-4-5")
@@ -232,17 +237,15 @@ def test_sessao_encerrada_ou_modelo_igual_nao_bloqueia():
         assert _send("claude")[0]["model"] == "claude-haiku-4-5"
 
 
-def test_sessao_viva_sem_active_registrado_bloqueia_em_vez_de_assumir_compatibilidade():
-    # Sessão ligada antes desta feature (ou sem record_active por qualquer
-    # motivo): "active" nunca foi gravado. Sem saber o que ela roda de fato,
-    # o envio não pode assumir que bate com a seleção — tem que bloquear.
+def test_sessao_viva_sem_active_registrado_alerta_em_vez_de_assumir_compatibilidade():
+    # Sessão ligada antes desta feature: "active" nunca foi gravado. O envio
+    # segue com a escolha do operador, mas avisa que não sabe o que a sessão roda.
+    models.record_active("codex", models.DEFAULTS["codex"])
     models.choose("claude", "claude-haiku-4-5")
-    with _session(True), pytest.raises(HTTPException) as error:
-        _send("claude")
-    assert error.value.status_code == 409
-    detail = error.value.detail
-    assert detail["code"] == "model_requires_new_session"
-    assert detail["details"] == {"agent": "claude", "selected": "claude-haiku-4-5", "active": None}
+    with _session(True):
+        result, captured = _send("claude")
+    assert captured["model"] == "claude-haiku-4-5"
+    assert result["warnings"][0]["details"] == {"agent": "claude", "selected": "claude-haiku-4-5", "active": None}
 
 
 def test_sessao_sem_active_registrado_mas_encerrada_nao_bloqueia():
@@ -303,17 +306,24 @@ def test_modelo_resolvido_da_aba_agentes_passa_pelo_gate_de_permitidos_quando_pr
     assert result["model"] == captured["model"] == "claude-opus-5-5"
 
 
-def test_modelo_resolvido_da_aba_agentes_bloqueado_quando_fora_do_catalogo_permitido():
-    # Seleção válida no catálogo de modelos do agente, mas fora da lista de
-    # modelos que o operador liberou em Settings: antes da correção, essa
-    # seleção contornava este gate porque era resolvida depois dele.
+def test_modelo_resolvido_da_aba_agentes_fora_da_lista_permitida_alerta_e_envia():
+    # Seleção válida no catálogo do agente, mas fora da lista liberada em
+    # Settings: a escolha do operador prevalece e o envio apenas avisa.
     models.choose("claude", "claude-opus-5-5")
     allowed = [_allowed_row("claude-haiku-4-5")]
-    with _session(False), pytest.raises(HTTPException) as error:
-        _send_com_catalogo("claude", allowed)
-    assert error.value.status_code == 409
-    assert error.value.detail["code"] == "model_not_allowed_for_agent"
-    assert error.value.detail["details"]["agent"] == "claude"
+    with _session(False):
+        result, captured = _send_com_catalogo("claude", allowed)
+    assert captured["model"] == "claude-opus-5-5"
+    (warning,) = result["warnings"]
+    assert warning["code"] == "model_not_allowed_for_agent"
+    assert warning["details"]["agent"] == "claude"
+
+
+def test_modelo_explicito_fora_do_catalogo_da_cli_alerta_e_envia():
+    with _session(False):
+        result, captured = _send("claude", model="modelo-inventado")
+    assert captured["model"] == "modelo-inventado"
+    assert result["warnings"][0]["code"] == "model_unsupported_by_cli"
 
 
 # --- run.model -> launcher ---------------------------------------------------

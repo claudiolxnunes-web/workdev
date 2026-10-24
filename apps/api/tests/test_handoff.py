@@ -245,26 +245,22 @@ class ManualModelChoiceTest(unittest.TestCase):
             "claude-sonnet-5",
         )
 
-    def test_modelo_fora_da_lista_do_agente_e_recusado(self):
-        _result, error, queue_mock = self._send(
+    def test_modelo_fora_da_lista_do_agente_alerta_e_envia(self):
+        """A escolha do operador prevalece: fora da lista só gera alerta."""
+        result, error, queue_mock = self._send(
             "gpt-5.6-sol",
             self._allowed(),
         )
 
-        self.assertIsNotNone(error)
-        self.assertEqual(error.status_code, 409)
+        self.assertIsNone(error)
+        queue_mock.assert_called_once()
+        self.assertEqual(queue_mock.call_args.kwargs["model"], "gpt-5.6-sol")
+        by_code = {w["code"]: w for w in result["warnings"]}
+        self.assertIn("model_not_allowed_for_agent", by_code)
         self.assertEqual(
-            error.detail["code"],
-            "model_not_allowed_for_agent",
-        )
-        self.assertEqual(
-            [
-                item["model"]
-                for item in error.detail["details"]["allowed_models"]
-            ],
+            by_code["model_not_allowed_for_agent"]["details"]["allowed_models"],
             ["claude-opus-5", "claude-sonnet-5"],
         )
-        queue_mock.assert_not_called()
 
     def test_agente_sem_modelos_configurados_segue_como_hoje(self):
         """Qwen não foi vinculado: o envio manual continua funcionando."""

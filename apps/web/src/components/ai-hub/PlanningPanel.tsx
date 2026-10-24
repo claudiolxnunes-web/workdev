@@ -365,17 +365,21 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
     try {
       // O modelo nunca é escolhido aqui: o backend resolve pela configuração
       // salva na aba Agentes do executor e, quando houver, do revisor.
+      let run
       if (observer?.enabled) {
-        await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, undefined,
+        run = await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, undefined,
           requested, undefined, observerConfig)
       } else if (agent && requested === undefined) {
-        await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, undefined)
+        run = await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, undefined)
       } else {
-        await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, undefined,
+        run = await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, undefined,
           requested, undefined)
       }
       setPremiumTarget(null)
-      setMessage(`Build enviado: ${agentLabel[agent]} executa${reviewer ? `, ${agentLabel[reviewer]} revisa` : "; escolha de revisão registrada"}.`)
+      // Alertas não bloqueiam: o envio seguiu com a escolha do operador.
+      const alerts = ((run as { warnings?: { message: string }[] } | undefined)?.warnings ?? [])
+        .map((item) => ` Alerta: ${item.message}`).join("")
+      setMessage(`Build enviado: ${agentLabel[agent]} executa${reviewer ? `, ${agentLabel[reviewer]} revisa` : "; escolha de revisão registrada"}.${alerts}`)
       await load()
     } catch (cause) {
       if (cause instanceof HandoffApiError && cause.detail.code === "premium_confirmation_required") {
