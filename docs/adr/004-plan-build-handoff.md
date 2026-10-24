@@ -132,19 +132,19 @@ paralelo); registra agente, provider e modelo efetivamente usados no evento
 `build.queued` da run. Observer é exceção deliberada: não tem configuração na
 aba Agentes, então mantém seletor próprio na tela de planos, sem mudança.
 
-Configuração ausente, incompatível (fora do catálogo do agente) ou
-indisponível (sessão viva rodando outro modelo, sem o procedimento de
-reinício) **bloqueia o envio com erro claro — nunca substitui o modelo em
-silêncio nem deixa passar como aviso.** Uma tentativa de revisão transformou
-esses bloqueios em avisos que deixavam o envio seguir mesmo assim
-(`feat(handoff): escolhas do operador viram alertas, nunca bloqueios`); foi
-revertida por contrariar esta decisão.
+As escolhas do operador (agentes e modelos) prevalecem: o envio **nunca é
+bloqueado nem tem o modelo trocado** por causa delas. Sessão viva rodando outro
+modelo, modelo fora da lista permitida em Settings e modelo fora do catálogo da
+CLI geram **alerta** (`build.warning` na run e `warnings` na resposta; a tela de
+planos mostra "Alerta: …") e o envio segue com a escolha. Continua bloqueando só
+o que não dá para executar: seleção salva que saiu do catálogo (erro claro, sem
+substituir o modelo em silêncio), revisor sem canal de veredito e runtime
+indisponível. Regra do operador (2026-10-24): "o sistema só pode sugerir e
+alertar".
 
-Exceção preservada, fora do escopo desta decisão: chamadas diretas e legadas
-da API (fora da tela de planos) que informam `model` explícito no payload
-continuam sem checar a sessão viva — comportamento anterior a esta mudança,
-usado por scripts e integrações que dependem dele de propósito. A tela de
-planos nunca envia modelo explícito para agentes de CLI, então não é afetada.
+Chamadas diretas e legadas da API que informam `model` explícito no payload
+seguem aceitas como antes; a tela de planos nunca envia modelo para agentes de
+CLI.
 
 ### Verificação
 
@@ -152,7 +152,7 @@ planos nunca envia modelo explícito para agentes de CLI, então não é afetada
 # nenhum seletor de modelo na tela de planos
 grep -c "Modelo do executor\|Modelo do revisor" apps/web/src/components/ai-hub/PlanningPanel.tsx  # 0
 
-# executor e revisor resolvem pela aba Agentes; revisor bloqueia por sessão viva
+# executor e revisor resolvem pela aba Agentes; sessão divergente só alerta
 cd apps/api && WORKDEV_API_ENV_FILE=/tmp/test.env venv/bin/python -m pytest \
   tests/test_executor_model_resolution.py -q
 ```
