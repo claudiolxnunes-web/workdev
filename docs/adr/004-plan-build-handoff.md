@@ -110,3 +110,49 @@ classifica, roteia e enfileira — o agente a recolhe pela CLI, na sua sessão d
 sempre. Todo o backend do AUTO v2 (classificação semântica, subtasks reais,
 erros estruturados, lifecycle e isolamento de sessão) permanece intacto e não
 foi expandido.
+
+## Modelo é decisão prévia por agente, nunca por envio — 2026-10-24
+
+A tela de planos (PLAN → BUILD) deixa de oferecer qualquer seletor de modelo —
+inclusive no bloco de recomendação, que continua mostrando o modelo sugerido
+só como texto. O operador escolhe ali apenas **quem** (executor, revisor
+opcional, observer opcional), nunca **qual modelo**. O modelo de cada agente
+de CLI (Claude, Codex, Kimi, Qwen, Grok, DeepSeek, Gemini) é decidido antes,
+na aba Agentes (`GET/PUT /api/cli-agent-models/{agent}`), e vale para toda run
+nova até ser trocado ali — nunca por envio.
+
+Isso formaliza o que já estava implícito em "Recomendação consultiva": o
+WorkDev pode sugerir agente e modelo, nunca decidir quem executa ou qual
+modelo roda. A decisão de agente, revisor e modelo é sempre e exclusivamente
+do operador — soberana, sem hierarquia de qualidade entre agentes.
+
+No envio, o backend resolve o modelo do executor e, quando houver, do revisor
+pela configuração salva na aba Agentes (mesmo contrato, sem catálogo
+paralelo); registra agente, provider e modelo efetivamente usados no evento
+`build.queued` da run. Observer é exceção deliberada: não tem configuração na
+aba Agentes, então mantém seletor próprio na tela de planos, sem mudança.
+
+Configuração ausente, incompatível (fora do catálogo do agente) ou
+indisponível (sessão viva rodando outro modelo, sem o procedimento de
+reinício) **bloqueia o envio com erro claro — nunca substitui o modelo em
+silêncio nem deixa passar como aviso.** Uma tentativa de revisão transformou
+esses bloqueios em avisos que deixavam o envio seguir mesmo assim
+(`feat(handoff): escolhas do operador viram alertas, nunca bloqueios`); foi
+revertida por contrariar esta decisão.
+
+Exceção preservada, fora do escopo desta decisão: chamadas diretas e legadas
+da API (fora da tela de planos) que informam `model` explícito no payload
+continuam sem checar a sessão viva — comportamento anterior a esta mudança,
+usado por scripts e integrações que dependem dele de propósito. A tela de
+planos nunca envia modelo explícito para agentes de CLI, então não é afetada.
+
+### Verificação
+
+```bash
+# nenhum seletor de modelo na tela de planos
+grep -c "Modelo do executor\|Modelo do revisor" apps/web/src/components/ai-hub/PlanningPanel.tsx  # 0
+
+# executor e revisor resolvem pela aba Agentes; revisor bloqueia por sessão viva
+cd apps/api && WORKDEV_API_ENV_FILE=/tmp/test.env venv/bin/python -m pytest \
+  tests/test_executor_model_resolution.py -q
+```
