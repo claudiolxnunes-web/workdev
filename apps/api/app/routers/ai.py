@@ -58,9 +58,6 @@ _compat_clients: dict = {}
 COMPAT_PROVIDERS = {
     "openai": {"base_url": None, "env_key": "OPENAI_API_KEY",
                "default_model": OPENAI_MODEL},
-    "kimi": {"base_url": "https://api.moonshot.cn/v1",
-             "env_key": "MOONSHOT_API_KEY",
-             "default_model": os.getenv("KIMI_MODEL", "kimi-k2.6")},
     "gemini": {"base_url": "https://generativelanguage.googleapis.com"
                            "/v1beta/openai/",
                "env_key": "GEMINI_API_KEY",
@@ -1456,7 +1453,6 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
 AI_PROVIDER_KEYS = {
     "anthropic": ("Claude (Anthropic)", "ANTHROPIC_API_KEY"),
     "openai": ("OpenAI", "OPENAI_API_KEY"),
-    "kimi": ("Kimi (Moonshot)", "MOONSHOT_API_KEY"),
     "gemini": ("Gemini", "GEMINI_API_KEY"),
     "openrouter": ("OpenRouter", "OPENROUTER_API_KEY"),
     "ollama": ("Ollama Cloud", "OLLAMA_API_KEY"),

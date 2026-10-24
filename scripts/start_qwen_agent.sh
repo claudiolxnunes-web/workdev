@@ -32,13 +32,8 @@ read_env_value() {
   printf '%s' "$value"
 }
 
-dashscope_key=$(read_env_value DASHSCOPE_API_KEY)
 openrouter_key=$(read_env_value OPENROUTER_API_KEY)
 qwen_provider="$QWEN_PROVIDER"
-
-use_dashscope() {
-  selected_model="qwen3-coder-plus"
-}
 
 use_openrouter() {
   # Modelo escolhido na UI ou default histórico. O catálogo em
@@ -48,33 +43,17 @@ use_openrouter() {
   selected_model="${QWEN_MODEL:-qwen/qwen3.5-397b-a17b}"
 }
 
+# Somente OpenRouter: provedores diretos (DashScope) foram removidos.
 case "$qwen_provider" in
-  dashscope)
-    if [[ -z "$dashscope_key" ]]; then
-      echo "Qwen Code Agent: DASHSCOPE_API_KEY não configurada" >&2
-      exit 1
-    fi
-    use_dashscope
-    ;;
-  openrouter)
+  openrouter|"")
     if [[ -z "$openrouter_key" ]]; then
       echo "Qwen Code Agent: OPENROUTER_API_KEY não configurada" >&2
       exit 1
     fi
     use_openrouter
     ;;
-  "")
-    if [[ -n "$dashscope_key" ]]; then
-      use_dashscope
-    elif [[ -n "$openrouter_key" ]]; then
-      use_openrouter
-    else
-      echo "Qwen Code Agent: configure DASHSCOPE_API_KEY ou OPENROUTER_API_KEY" >&2
-      exit 1
-    fi
-    ;;
   *)
-    echo "Qwen Code Agent: QWEN_PROVIDER inválido ('$qwen_provider')." >&2
+    echo "Qwen Code Agent: QWEN_PROVIDER inválido ('$qwen_provider'); somente openrouter é suportado." >&2
     exit 1
     ;;
 esac
@@ -84,12 +63,11 @@ esac
 # /proc/$PID/environ exporia a credencial em claro. O settings file é
 # removido na saída pelo trap abaixo.
 QWEN_EFFECTIVE_SETTINGS_FILE="$(mktemp -t qwen-settings-XXXXXX.json)"
-python3 - "$QWEN_SETTINGS_FILE" "$selected_model" "$QWEN_EFFECTIVE_SETTINGS_FILE" "$dashscope_key" "$openrouter_key" <<'PYEOF'
+python3 - "$QWEN_SETTINGS_FILE" "$selected_model" "$QWEN_EFFECTIVE_SETTINGS_FILE" "$openrouter_key" <<'PYEOF'
 import json, sys
 
 src, model, dst = sys.argv[1:4]
-dashscope_key = sys.argv[4] if len(sys.argv) > 4 else ""
-openrouter_key = sys.argv[5] if len(sys.argv) > 5 else ""
+openrouter_key = sys.argv[4] if len(sys.argv) > 4 else ""
 
 with open(src, "r") as handle:
     settings = json.load(handle)
@@ -103,9 +81,7 @@ settings["model"] = {"name": model}
 for providers in settings.get("modelProviders", {}).values():
     for entry in providers:
         base_url = entry.get("baseUrl", "")
-        if "dashscope" in base_url and dashscope_key:
-            entry["apiKey"] = dashscope_key
-        elif "openrouter" in base_url and openrouter_key:
+        if "openrouter" in base_url and openrouter_key:
             entry["apiKey"] = openrouter_key
 
 with open(dst, "w") as handle:
@@ -122,9 +98,8 @@ export NO_UPDATE_NOTIFIER="1"
 # O Qwen Code lê do ambiente (envKey no settings); o apiKey injetado no
 # JSON é fallback futuro. A mitigação real contra /proc/PID/environ é a
 # permissão 600 do env file + restrição de acesso ao container tmux.
-[[ -n "$dashscope_key" ]] && export DASHSCOPE_API_KEY="$dashscope_key"
 [[ -n "$openrouter_key" ]] && export OPENROUTER_API_KEY="$openrouter_key"
-unset dashscope_key openrouter_key qwen_provider
+unset openrouter_key qwen_provider
 unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL
 
 cd "${WORKDEV_AGENT_CWD:-${WORKDEV_DIR:-/opt/workdev}}"

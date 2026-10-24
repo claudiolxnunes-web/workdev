@@ -24,13 +24,6 @@
         "envKey": "OPENROUTER_API_KEY"
       },
       {
-        "id": "qwen3-coder-plus",
-        "name": "Qwen3 Coder Plus — DashScope",
-        "description": "Chave direta do Alibaba Cloud Model Studio",
-        "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        "envKey": "DASHSCOPE_API_KEY"
-      },
-      {
         "id": "qwen/qwen3-coder-flash",
         "name": "Qwen3 Coder Flash — OpenRouter",
         "description": "Qwen3 Coder rápido e barato (o Coder Plus sai da OpenRouter em 09/10/2026)",
