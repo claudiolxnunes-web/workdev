@@ -60,11 +60,18 @@ function App() {
     <div className="min-h-screen max-w-full overflow-x-hidden bg-slate-950 text-white">
       {/* Header */}
       <header className={`border-b border-slate-800 px-4 flex justify-between items-center ${agentsWorkspace ? "py-2 sm:px-6" : "py-3 sm:px-8 sm:py-4"}`}>
-        <div>
-          <h1 className={agentsWorkspace ? "text-lg font-bold" : "text-2xl font-bold"}>{appName}</h1>
-          <p className={agentsWorkspace ? "hidden" : "text-slate-400 text-sm"}>
-            Software Engineering Platform
-          </p>
+        <div className="flex min-w-0 items-center gap-3">
+          <img
+            src="/workdev-logo.png"
+            alt="WorkDev — Software Engineering Platform"
+            className={`shrink-0 object-contain ${agentsWorkspace ? "h-12 w-12" : "h-16 w-16"}`}
+          />
+          <div className="min-w-0">
+            <h1 className={agentsWorkspace ? "text-lg font-bold" : "text-2xl font-bold"}>{appName}</h1>
+            <p className={agentsWorkspace ? "hidden" : "text-slate-400 text-sm"}>
+              Software Engineering Platform
+            </p>
+          </div>
         </div>
 
         <Badge variant="secondary">

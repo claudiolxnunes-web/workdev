@@ -87,6 +87,21 @@ function reviewerChoices(runtimes: AgentRuntime[]): AgentChoice[] {
   return [...recomendados, ...demais, ...semCanal]
 }
 
+const CHAVE_REVISAO = "workdev.planos.revisao"
+
+// localStorage pode lançar (janela privada, site data bloqueado) ou conter lixo.
+function lerEscolhaRevisao(): Record<string, boolean> {
+  try {
+    const bruto = JSON.parse(localStorage.getItem(CHAVE_REVISAO) ?? "{}")
+    if (bruto === null || typeof bruto !== "object" || Array.isArray(bruto)) return {}
+    const escolhas: Record<string, boolean> = {}
+    for (const [plano, valor] of Object.entries(bruto)) if (typeof valor === "boolean") escolhas[plano] = valor
+    return escolhas
+  } catch {
+    return {}
+  }
+}
+
 function RoleSelect({
   id, titulo, valor, choices, onChange, disabled,
 }: {
@@ -229,7 +244,7 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
   const [recommendations, setRecommendations] = useState<Record<string, PlanRecommendation>>({})
   // Executor e revisor escolhidos por plano. Sem os dois, não há envio.
   const [roles, setRoles] = useState<Record<string, RolePair>>({})
-  const [reviewChoice, setReviewChoice] = useState<Record<string, boolean>>({})
+  const [reviewChoice, setReviewChoice] = useState<Record<string, boolean>>(lerEscolhaRevisao)
   const [reviewState, setReviewState] = useState<Record<string, string>>({})
   const [observerModels, setObserverModels] = useState<ExecutionModel[]>([])
   const [observerChoice, setObserverChoice] = useState<Record<string, { enabled: boolean; agent?: string; provider?: string; model?: string; runtime_id?: string }>>({})
@@ -238,6 +253,11 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
   // executor ou revisor em algum plano — só leitura, nunca enviado ao Build.
   const [agentModelLabel, setAgentModelLabel] = useState<Record<string, string>>({})
   const requestedRecommendations = useRef<Set<string>>(new Set())
+
+  // A escolha Sim/Não de revisão por plano é do operador e deve sobreviver ao reload.
+  useEffect(() => {
+    try { localStorage.setItem(CHAVE_REVISAO, JSON.stringify(reviewChoice)) } catch { /* sem armazenamento: não lembra */ }
+  }, [reviewChoice])
 
   const executores = executorChoices(runtimes)
   const revisores = reviewerChoices(runtimes)
@@ -378,7 +398,8 @@ export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; bac
       setPremiumTarget(null)
       // Alertas não bloqueiam: o envio seguiu com a escolha do operador.
       const alerts = (run?.warnings ?? []).map((item) => ` Alerta: ${item.message}`).join("")
-      setMessage(`Build enviado: ${agentLabel[agent]} executa${reviewer ? `, ${agentLabel[reviewer]} revisa` : "; escolha de revisão registrada"}.${alerts}`)
+      const registrado = run?.model ? ` Modelo registrado: ${run.model}.` : ""
+      setMessage(`Build enviado: ${agentLabel[agent]} executa${reviewer ? `, ${agentLabel[reviewer]} revisa` : "; escolha de revisão registrada"}.${registrado}${alerts}`)
       await load()
     } catch (cause) {
       if (cause instanceof HandoffApiError && cause.detail.code === "premium_confirmation_required") {
