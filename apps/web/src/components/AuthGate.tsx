@@ -42,6 +42,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
   return (
     <main className="min-h-screen bg-slate-950 text-white grid place-items-center p-5">
       <form onSubmit={handleLogin} className="w-full max-w-sm rounded-xl border border-slate-800 bg-slate-900 p-6 shadow-2xl">
+        <img
+          src="/workdev-logo.png"
+          alt="WorkDev — Software Engineering Platform"
+          className="mx-auto mb-4 h-32 w-32 object-contain"
+        />
         <h1 className="text-2xl font-bold">WorkDev Core</h1>
         <p className="mt-1 text-sm text-slate-400">Entre para acessar seu ambiente de engenharia.</p>
         <label className="mt-6 block text-sm font-medium" htmlFor="access-key">Chave de acesso</label>
