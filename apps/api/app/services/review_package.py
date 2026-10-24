@@ -1,0 +1,69 @@
+"""Pacote mínimo para o revisor: objetivo, aceite, diff, gates, decisão.
+
+Nunca recria contexto completo; `expand=diff` é o único carregamento lazy
+admitido. O tamanho do pacote mínimo entra no ciclo como context_bytes.
+"""
+import json
+from types import SimpleNamespace
+from sqlalchemy.orm import Session
+
+from app.models.handoff import AgentRun, AgentRunEvent, ExecutionPlan
+from app.models.review_cycle import ReviewCycle
+from app.services.review_cycle import collect_diff_stats
+from app.services.review_scope import load_base, diff_summary
+from app.services.review_policy import ESCALATE_PREFIX
+from app.services.test_gate import get_gate_evidence_for_run
+
+
+def build_package(db: Session, run: AgentRun, expand_diff: bool = False) -> dict:
+    plan = db.get(ExecutionPlan, run.plan_id)
+    cycle = (db.query(ReviewCycle)
+             .filter(ReviewCycle.run_id == run.id)
+             .order_by(ReviewCycle.attempt.desc()).first())
+    evidence = get_gate_evidence_for_run(db, run)
+    gate_sha = evidence.git_commit_sha if evidence else None
+    run_sha = getattr(run, 'commit_sha', None)
+    bound_sha = gate_sha if gate_sha and (not run_sha or run_sha == gate_sha) else None
+    base_sha = load_base(db, run.id)
+    scope = SimpleNamespace(commit_sha=bound_sha, review_base_sha=base_sha)
+    summary = diff_summary(scope)
+    stats = collect_diff_stats(scope) if expand_diff else None
+    diff_unavailable = summary is None or (expand_diff and stats is None)
+    files, lines = summary if summary is not None else ([], 0)
+    diff_text = stats[1] if stats is not None else None
+    package = {
+        'objective': plan.objective if plan else None,
+        'title': plan.title if plan else None,
+        'acceptance_criteria': plan.acceptance_criteria if plan else [],
+        'constraints': plan.constraints if plan else [],
+        'executor_agent': run.agent,
+        'executor_summary': run.summary,
+        'files_changed': files,
+        'diff_files': len(files),
+        'diff_lines': lines,
+        'diff_unavailable': diff_unavailable,
+        'run_id': str(run.id),
+        'commit_sha': bound_sha,
+        'base_sha': base_sha,
+        'gate': {'passed': evidence.passed if evidence else None,
+                 'checks': [check.__dict__ for check in evidence.checks] if evidence else []},
+        'decision': (cycle.decision if cycle else None),
+        'tier': (cycle.tier if cycle else None),
+        'sensitive': (cycle.sensitive if cycle else []),
+        'expand_options': ['diff'],
+        'escalation': {'feedback_prefix': ESCALATE_PREFIX, 'from_tier': 'economic', 'to_tier': 'strong'},
+    }
+    if expand_diff:
+        package['diff'] = diff_text
+    configuration = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run.id,
+        AgentRunEvent.event_type == "build.reviewer_configuration").order_by(AgentRunEvent.created_at.desc()).first()
+    if configuration is not None and isinstance(configuration.payload, dict):
+        selection = configuration.payload
+        # Uma troca posterior por política ou pelo operador invalida a escolha anterior.
+        if selection.get("agent") == getattr(run, "reviewer_agent", None):
+            package["reviewer_configuration"] = selection
+    return package
+
+
+def package_bytes(package: dict) -> int:
+    return len(json.dumps(package, ensure_ascii=False, default=str).encode())

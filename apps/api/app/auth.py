@@ -5,6 +5,7 @@ import os
 import time
 
 from fastapi import Request, WebSocket
+from app.reporting_security import SAFE_ROUTES, readonly_key
 
 
 COOKIE_NAME = "workdev_session"
@@ -43,6 +44,8 @@ def validate_session_token(token: str | None) -> bool:
 
 
 def request_is_authenticated(request: Request) -> bool:
+    if any(readonly_key(value) for value in request.headers.getlist("X-API-Key")):
+        return request.method == "GET" and bool(SAFE_ROUTES.fullmatch(request.url.path))
     if validate_session_token(request.cookies.get(COOKIE_NAME)):
         return True
     api_key = os.getenv("WORKDEV_API_KEY")
@@ -51,4 +54,6 @@ def request_is_authenticated(request: Request) -> bool:
 
 
 def websocket_is_authenticated(websocket: WebSocket) -> bool:
+    if any(readonly_key(value) for value in websocket.headers.getlist("X-API-Key")):
+        return False
     return validate_session_token(websocket.cookies.get(COOKIE_NAME))

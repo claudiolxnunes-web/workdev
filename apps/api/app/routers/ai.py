@@ -1,7 +1,16 @@
 import os
+import copy
 import json
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from decimal import Decimal
+from typing import Literal
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, SecretStr
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from anthropic import Anthropic
 from openai import OpenAI
@@ -13,12 +22,19 @@ from app.models.knowledge import KnowledgeEntry
 from app.models.adr import ADR
 from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
+from app.models.ai_routing import AICallLog, AIModelCatalog
+from app.services import autoridade, context_engine, rag_search
+from app.services import ai_cost_guard, agent_runtimes, bancada_runner
+from app.services.backlog_status import BacklogStatusError, apply_status
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
 
 router = APIRouter()
 
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
+# Opus 5 pensa por padrao; effort controla profundidade e gasto de tokens.
+# low | medium | high | xhigh | max — medium equilibra custo e latencia no chat.
+ANTHROPIC_EFFORT = os.getenv("ANTHROPIC_EFFORT", "medium")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 _anthropic_client = None
@@ -28,7 +44,12 @@ _openai_client = None
 def get_anthropic() -> Anthropic:
     global _anthropic_client
     if _anthropic_client is None:
-        _anthropic_client = Anthropic(timeout=30)
+        # 30s estourava com modelos que pensam (thinking conta no tempo da
+        # request). Cada passo do loop de tools usa esse timeout inteiro.
+        _anthropic_client = Anthropic(
+            timeout=float(os.getenv("ANTHROPIC_TIMEOUT", "120")),
+            max_retries=int(os.getenv("AI_PROVIDER_MAX_RETRIES", "0")),
+        )
     return _anthropic_client
 
 
@@ -56,13 +77,26 @@ COMPAT_PROVIDERS = {
 }
 
 
-def get_openai(provider: str = "openai") -> OpenAI:
+def get_openai(provider: str = "openai", runtime_id: str | None = None) -> OpenAI:
+    if runtime_id is not None:
+        if provider != "ollama":
+            raise ValueError("Runtime local exige provider Ollama")
+        runtime = agent_runtimes.local_chat_runtime(runtime_id)
+        return OpenAI(base_url=f"{agent_runtimes.base_url(runtime)}/v1",
+                      api_key=agent_runtimes.api_key(runtime) or "ollama",
+                      timeout=float(os.getenv("WORKDEV_LOCAL_CHAT_TIMEOUT", "900")),
+                      max_retries=0)
+
     if provider not in _compat_clients:
         cfg = COMPAT_PROVIDERS[provider]
         kwargs = {"api_key": os.getenv(cfg["env_key"])}
         if cfg["base_url"]:
             kwargs["base_url"] = cfg["base_url"]
-        _compat_clients[provider] = OpenAI(timeout=30, **kwargs)
+        _compat_clients[provider] = OpenAI(
+            timeout=float(os.getenv("AI_PROVIDER_TIMEOUT", "30")),
+            max_retries=int(os.getenv("AI_PROVIDER_MAX_RETRIES", "0")),
+            **kwargs,
+        )
     return _compat_clients[provider]
 
 
@@ -73,9 +107,44 @@ SYSTEM = (
     "planos estruturados, mas nunca diga que executou código, testes ou deploy. "
     "O estágio BUILD acontece nos Agents depois da aprovação do plano. "
     "Use as ferramentas para consultar ou modificar projetos, backlog e subtasks. "
-    "Slugs: workdev-core, nutrigestor-crm, agente-pessoal, "
-    "openclaw, feed-bpf, nutricontrole."
+    "O bloco de contexto abaixo foi apurado agora no banco do WorkDev: trate-o "
+    "como verdade e prefira-o à sua memória. Ele é um recorte — use as "
+    "ferramentas quando precisar de detalhe que não esteja ali."
 )
+
+FOCO_PROJETO = (
+    "Responda focado neste projeto, a menos que o usuário peça algo sobre outro."
+)
+
+AIHUB_PLAN_PROMPT_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "docs"
+    / "agents"
+    / "AIHUB_PLAN_SYSTEM_PROMPT.md"
+)
+
+
+def load_plan_system_prompt() -> str:
+    try:
+        prompt = AIHUB_PLAN_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    except OSError as erro:
+        raise RuntimeError(
+            f"Politica canonica PLAN indisponivel: {AIHUB_PLAN_PROMPT_PATH}"
+        ) from erro
+
+    if not prompt:
+        raise RuntimeError(
+            f"Politica canonica PLAN vazia: {AIHUB_PLAN_PROMPT_PATH}"
+        )
+    return prompt
+
+
+def _with_plan_policy(partes: list[str], nivel: str | None) -> list[str]:
+    if autoridade.normalizar(nivel) == autoridade.PLAN:
+        plan_prompt = load_plan_system_prompt()
+        if plan_prompt:
+            partes.append(plan_prompt)
+    return partes
 
 
 def get_db():
@@ -84,6 +153,103 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _jev_planning_block(db: Session, backlog_id, nivel: str | None) -> str | None:
+    """Bloco consultivo do Jev Pré-Plano — só quando faz sentido, nunca quebra o chat.
+
+    `None` (sem efeito no prompt) fora do nível PLAN, sem task em escopo,
+    supervisão adaptativa desligada, ou quando a task já tem algum
+    ExecutionPlan — a janela "antes de existir ExecutionPlan" já passou, e o
+    Jev pós-plano (jev_decision.py) assume a partir da criação do Build.
+    """
+    if autoridade.normalizar(nivel) != autoridade.PLAN or backlog_id is None:
+        return None
+    try:
+        from app.services import adaptive_config, jev_planning
+        if not adaptive_config.load().enabled:
+            return None
+        tem_plano = db.query(ExecutionPlan.id).filter(
+            ExecutionPlan.backlog_id == backlog_id).first()
+        if tem_plano:
+            return None
+        task = db.get(BacklogItem, backlog_id)
+        if task is None:
+            return None
+        assessment = jev_planning.assess(db, task)
+        return jev_planning.render_system_block(assessment)
+    except Exception:  # noqa: BLE001 — consultivo; nunca deve derrubar o chat
+        return None
+
+
+def build_system(db: Session, project_slug: str | None = None,
+                 nivel: str | None = None, backlog_id=None) -> str:
+    """System prompt com o contexto do WorkDev apurado no banco.
+
+    Sem `project_slug`, monta o contexto global. Com um slug desconhecido,
+    degrada para o global e diz isso ao modelo — em vez de responder no vazio.
+
+    Uma falha ao ler o contexto nunca derruba a conversa: o chat volta ao
+    system base e segue com as ferramentas, que continuam funcionando. O
+    mesmo vale para o bloco do Jev Pré-Plano (`backlog_id`, ver
+    `_jev_planning_block`): é aditivo e nunca impede a resposta.
+    """
+    modo = autoridade.instrucao_de_nivel(nivel)
+    jev_block = _jev_planning_block(db, backlog_id, nivel)
+    try:
+        contexto = context_engine.build_chat_context(db, project_slug)
+    except Exception as erro:  # noqa: BLE001 — contexto é melhoria, não requisito
+        partes = _with_plan_policy([
+            SYSTEM,
+            modo,
+            (
+                f"[contexto indisponível: {type(erro).__name__}. "
+                f"Use as ferramentas para consultar o estado atual.]"
+            ),
+        ], nivel)
+        if jev_block:
+            partes.append(jev_block)
+        return "\n\n".join(partes)
+
+    if contexto is None:
+        contexto = context_engine.montar_contexto_global(db)
+        aviso = (
+            f"\n\n[o projeto '{project_slug}' não existe no WorkDev; "
+            f"contexto global abaixo]"
+        )
+        partes = _with_plan_policy([
+            SYSTEM,
+            f"{modo}{aviso}",
+            context_engine.renderizar_contexto(contexto),
+        ], nivel)
+        if jev_block:
+            partes.append(jev_block)
+        return "\n\n".join(partes)
+
+    partes = _with_plan_policy(
+        [SYSTEM, modo, context_engine.renderizar_contexto(contexto)],
+        nivel,
+    )
+
+    if contexto.get("escopo") == context_engine.ESCOPO_PROJETO:
+        partes.append(FOCO_PROJETO)
+    if jev_block:
+        partes.append(jev_block)
+    return "\n\n".join(partes)
+
+
+def build_project_system(slug: str, db: Session) -> str | None:
+    """Contrato preservado da E0: `None` quando o slug não existe.
+
+    Continua sendo o caminho do chat contextual dentro do workspace do projeto.
+    A montagem em si agora é do Context Engine.
+    """
+    contexto = context_engine.build_chat_context(db, slug)
+    if contexto is None:
+        return None
+    return "\n\n".join(
+        [SYSTEM, context_engine.renderizar_contexto(contexto), FOCO_PROJETO]
+    )
 
 
 class ChatMessage(BaseModel):
@@ -95,7 +261,21 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     provider: str | None = None
     model: str | None = None
+    runtime_id: str | None = None
     session_id: str | None = None
+    project_slug: str | None = None
+    # NÃO AUTORITATIVO. Mantido só por compatibilidade com clientes que ainda
+    # enviam o campo; o servidor o ignora para decidir permissões. A autoridade
+    # efetiva vem de chat_sessions.authority, e só o PATCH da sessão a altera.
+    # Ver ai_chat() e app/services/autoridade.py.
+    authority: str | None = None
+    task_type: str = "conversation"
+    requested_mode: str | None = None
+    reasoning_effort: str | None = None
+    estimated_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+    correlation_id: str | None = None
+    user_confirmation: bool = False
 TOOLS = [
     {
         "name": "listar_projetos",
@@ -104,11 +284,11 @@ TOOLS = [
     },
     {
         "name": "listar_backlog",
-        "description": "Lista itens do backlog, filtro opcional por status e/ou projeto",
+        "description": "Lista itens do backlog, filtro opcional por status e/ou projeto. Tasks arquivadas só aparecem com status=archived",
         "input_schema": {
             "type": "object",
             "properties": {
-                "status": {"type": "string", "enum": ["todo", "doing", "blocked", "done"]},
+                "status": {"type": "string", "enum": ["todo", "doing", "blocked", "done", "archived"]},
                 "projeto_slug": {"type": "string"},
             },
         },
@@ -129,8 +309,8 @@ TOOLS = [
         },
     },
     {
-        "name": "decompor_task",
-        "description": "Cria subtasks para um item do backlog. Use quando pedirem para decompor/quebrar uma task. Você decide as subtasks: títulos claros e acionáveis, em ordem de execução.",
+        "name": "desenhar_subtasks",
+        "description": "Propõe um desenho de subtasks para revisão do usuário, sem gravar nada no banco.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -138,6 +318,19 @@ TOOLS = [
                 "subtasks": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["titulo_task", "subtasks"],
+        },
+    },
+    {
+        "name": "decompor_task",
+        "description": "Materializa subtasks somente depois de aprovação explícita do usuário. Não use para propor ou desenhar subtasks; para isso use desenhar_subtasks. Se a task já possuir subtasks, a criação é bloqueada.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "titulo_task": {"type": "string", "description": "título (ou parte) da task"},
+                "subtasks": {"type": "array", "items": {"type": "string"}},
+                "aprovado_pelo_usuario": {"type": "boolean", "description": "deve ser true somente após aprovação explícita do usuário"},
+            },
+            "required": ["titulo_task", "subtasks", "aprovado_pelo_usuario"],
         },
     },
     {
@@ -169,6 +362,24 @@ TOOLS = [
         },
     },
     {
+        "name": "buscar_rag",
+        "description": "Busca semantica somente-leitura no indice RAG do WorkDev. Retorna evidencias indexadas com fonte_id, titulo, metadados, trecho e score. Use para localizar contexto tecnico, ADRs, decisoes, knowledge e backlog relacionados semanticamente.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "termo": {
+                    "type": "string",
+                    "description": "consulta em linguagem natural para busca semantica"
+                },
+                "limite": {
+                    "type": "integer",
+                    "description": "numero de resultados; padrao 8, maximo 20"
+                },
+            },
+            "required": ["termo"],
+        },
+    },
+    {
         "name": "listar_subtasks",
         "description": "Lista as subtasks de uma task do backlog. Prefira task_id (uuid) quando souber; senao use titulo_task. Se houver mais de uma task com titulo parecido, a tool devolve candidatas para voce pedir especificacao.",
         "input_schema": {
@@ -181,14 +392,55 @@ TOOLS = [
         },
     },
     {
+        "name": "ler_task",
+        "description": "Le uma task do backlog pelo id (uuid): titulo, descricao, projeto, status e subtasks. Somente leitura. Se a descricao estiver vazia, a resposta diz isso explicitamente (descricao_vazia=true); nesse caso nao invente contexto.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "id (uuid) da task"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "ler_trecho",
+        "description": "Le linhas reais de um arquivo do repositorio WorkDev (caminho relativo a raiz do repo, linhas inicio..fim inclusivas, a partir de 1). Somente leitura. No maximo 200 linhas por chamada; recusa caminho fora do repo, .env, .git, chaves, credenciais, node_modules, binarios e arquivos acima de 1 MB. Use para citar arquivo e linhas que existem de fato.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "caminho": {"type": "string", "description": "ex.: apps/api/app/routers/ai.py"},
+                "inicio": {"type": "integer", "description": "primeira linha, a partir de 1"},
+                "fim": {"type": "integer", "description": "ultima linha, inclusiva"},
+            },
+            "required": ["caminho", "inicio", "fim"],
+        },
+    },
+    {
+        "name": "validar_lote_bancada",
+        "description": "Valida um lote de micro-tarefas da Bancada Local contra os arquivos reais do repositorio: arquivo existe, linha final existe, caminho permitido, ate 10 tarefas por lote (11 a 20 sao divididas automaticamente em 2 lotes), ate 8 trechos de ate 400 linhas, max_tokens 64-4000, exige com regex valida. Ids vazios ou genericos recebem o id do lote (AAMMDD-NN-NN). Somente leitura: nao grava nem executa nada. Use antes de entregar o JSON final e entregue o plano devolvido.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plano": {
+                    "type": "object",
+                    "description": "{\"tarefas\": [{\"id\", \"instrucao\", \"trechos\": [[caminho, inicio, fim]], \"max_tokens\", \"espera_diff\", \"exige\"}], \"fora_do_alcance\": opcional}",
+                },
+            },
+            "required": ["plano"],
+        },
+    },
+    {
         "name": "atualizar_task",
-        "description": "Atualiza uma task do backlog: status (todo/doing/blocked/done), prioridade, titulo ou sprint. Use quando pedirem para marcar como concluida/done, mover para doing, mudar prioridade, renomear. Se houver mais de uma task com titulo parecido, a tool devolve a lista para voce pedir especificacao.",
+        "description": "Atualiza uma task do backlog: status (todo/doing/blocked/done/archived), prioridade, titulo ou sprint. Use quando pedirem para marcar como concluida/done, mover para doing, arquivar, desarquivar, mudar prioridade, renomear. Arquivar (archived) exige motivo_arquivamento; desarquivar e sempre voltar para todo. Se houver mais de uma task com titulo parecido, a tool devolve a lista para voce pedir especificacao.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string", "description": "id (uuid) da task — prefira sempre que souber"},
                 "titulo_task": {"type": "string", "description": "titulo (ou parte unica) da task"},
-                "novo_status": {"type": "string", "enum": ["todo", "doing", "blocked", "done"]},
+                "novo_status": {"type": "string", "enum": ["todo", "doing", "blocked", "done", "archived"]},
+                "motivo_arquivamento": {"type": "string", "enum": ["concluida_fora", "obsoleta", "sem_destravamento"],
+                                        "description": "obrigatorio com novo_status=archived"},
+                "nota_arquivamento": {"type": "string", "description": "texto livre opcional junto do motivo"},
                 "nova_prioridade": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
                 "novo_titulo": {"type": "string"},
                 "novo_sprint": {"type": "string"},
@@ -214,8 +466,8 @@ TOOLS = [
         },
     },
     {
-        "name": "criar_plano_execucao",
-        "description": "Cria um plano de execução versionado em rascunho para uma task. Use ao finalizar o planejamento; o plano será aprovado e enviado ao Build pela interface.",
+        "name": "previsualizar_plano_execucao",
+        "description": "Gera uma prévia estruturada do plano para revisão humana, sem criar plan_id, versão ou registro no banco. Use durante toda a formulação e revisão do plano.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -230,6 +482,44 @@ TOOLS = [
                 "notas_implementacao": {"type": "string"},
             },
             "required": ["objetivo", "criterios_aceite", "validacoes"],
+        },
+    },
+    {
+        "name": "criar_plano_execucao",
+        "description": "Cria o plano oficial em draft SOMENTE após aprovação explícita do usuário sobre a prévia. Nunca use para formular ou revisar o plano.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "UUID da task; preferencial"},
+                "titulo_task": {"type": "string", "description": "alternativa ao UUID"},
+                "projeto_slug": {"type": "string", "description": "use para desambiguar o título"},
+                "objetivo": {"type": "string"},
+                "escopo": {"type": "string"},
+                "restricoes": {"type": "array", "items": {"type": "string"}},
+                "criterios_aceite": {"type": "array", "items": {"type": "string"}},
+                "validacoes": {"type": "array", "items": {"type": "string"}},
+                "notas_implementacao": {"type": "string"},
+                "aprovado_pelo_usuario": {"type": "boolean", "description": "deve ser true somente após o usuário aprovar explicitamente a prévia final"},
+            },
+            "required": ["objetivo", "criterios_aceite", "validacoes", "aprovado_pelo_usuario"],
+        },
+    },
+    {
+        "name": "atualizar_plano_execucao",
+        "description": "Atualiza parcialmente um plano oficial existente enquanto estiver em draft ou needs_revision. Permite editar todo o conteúdo do plano sem descartar e recriar.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plan_id": {"type": "string", "description": "UUID do plano oficial"},
+                "titulo": {"type": "string"},
+                "objetivo": {"type": "string"},
+                "escopo": {"type": "string"},
+                "restricoes": {"type": "array", "items": {"type": "string"}},
+                "criterios_aceite": {"type": "array", "items": {"type": "string"}},
+                "validacoes": {"type": "array", "items": {"type": "string"}},
+                "notas_implementacao": {"type": "string"},
+            },
+            "required": ["plan_id"],
         },
     },
     {
@@ -262,7 +552,166 @@ TOOLS = [
 ]
 
 
-def executar_tool(nome: str, args: dict, db: Session) -> str:
+# ler_trecho do AI Hub: wrapper fino sobre bancada_runner.ler_trecho, que já
+# valida realpath, raiz do repo e a lista de caminhos sensíveis. As travas
+# abaixo só existem porque aqui quem chama é o modelo: o runner lê o arquivo
+# inteiro antes de cortar (um GGUF em models/ tem 9 GB) e aceita 400 linhas.
+LER_TRECHO_MAX_LINHAS = 200
+LER_TRECHO_MAX_BYTES = 1_000_000
+LER_TRECHO_MAX_CHARS = 20_000
+
+
+def _ler_task(args: dict, db: Session) -> str:
+    try:
+        task_uuid = uuid.UUID(str(args.get("task_id", "")))
+    except ValueError:
+        return json.dumps({"erro": "task_id inválido (esperado uuid)"},
+                          ensure_ascii=False)
+    t = db.query(BacklogItem).filter(BacklogItem.id == task_uuid).first()
+    if not t:
+        return json.dumps({"erro": "task não encontrada"}, ensure_ascii=False)
+    p = db.query(Project).filter(Project.id == t.project_id).first()
+    subs = (db.query(BacklogSubtask)
+            .filter(BacklogSubtask.backlog_id == t.id)
+            .order_by(BacklogSubtask.execution_order).all())
+    descricao = (t.description or "").strip()
+    saida = {
+        "task_id": str(t.id),
+        "titulo": t.title,
+        "descricao": descricao or None,
+        "descricao_vazia": not descricao,
+        "projeto": {"nome": p.name, "slug": p.slug} if p else None,
+        "status": t.status,
+        "prioridade": t.priority,
+        "tipo": t.type,
+        "subtasks": [{"ordem": s.execution_order, "titulo": s.title,
+                      "status": s.status,
+                      "descricao": (s.description or "").strip() or None}
+                     for s in subs],
+    }
+    if not descricao:
+        saida["aviso"] = ("A task não tem descrição. Não planeje nem complete "
+                          "o contexto por conta própria: peça a descrição.")
+    return json.dumps(saida, ensure_ascii=False)
+
+
+def _validar_lote_bancada(args: dict) -> str:
+    plano = args.get("plano")
+    if isinstance(plano, str):
+        try:
+            plano = json.loads(plano)
+        except ValueError:
+            plano = None
+    if not isinstance(plano, dict):
+        return json.dumps({"ok": False, "erro": "plano precisa ser objeto {\"tarefas\": [...]}"},
+                          ensure_ascii=False)
+    local = bancada_runner._modulo("bancada_local")
+    # Só prévia do id: o lote é gravado quando a Bancada recebe o plano.
+    lote = local.proximo_lote(bancada_runner.pasta() / "planos")
+    try:
+        lotes = local.dividir_em_lotes(copy.deepcopy(plano), lote, local.LIMITES_AI_HUB,
+                                       bancada_runner.REPO_TRABALHO.resolve())
+    except ValueError as e:
+        return json.dumps({"ok": False, "erro": str(e),
+                           "proximo_passo": "Corrija a tarefa citada (confira as linhas com ler_trecho) e valide de novo."},
+                          ensure_ascii=False)
+    if not lotes[0][1]["tarefas"]:
+        return json.dumps({"ok": True, "lotes": [],
+                           "fora_do_alcance": plano.get("fora_do_alcance"),
+                           "proximo_passo": "Nada vai para a Bancada: explique o motivo e sugira o fluxo de nuvem (Enviar ao AI Hub)."},
+                          ensure_ascii=False)
+    passo = ("Entregue exatamente este plano em um bloco ```json para o operador levar à Bancada."
+             if len(lotes) == 1 else
+             f"O plano foi dividido em {len(lotes)} lotes. Entregue cada um em um bloco ```json "
+             "separado, rotulado com o id do lote, na ordem: o operador roda um lote de cada vez.")
+    return json.dumps({"ok": True, "lotes": [{"lote": n, "plano": p} for n, p in lotes],
+                       "proximo_passo": passo}, ensure_ascii=False)
+
+
+def _ler_trecho(args: dict) -> str:
+    def erro(codigo: str, mensagem: str) -> str:
+        return json.dumps({"erro": mensagem, "code": codigo},
+                          ensure_ascii=False)
+
+    caminho = args.get("caminho")
+    try:
+        inicio, fim = int(args.get("inicio")), int(args.get("fim"))
+    except (TypeError, ValueError):
+        return erro("trecho_invalido", "inicio e fim precisam ser inteiros")
+    if inicio < 1 or fim < inicio:
+        return erro("trecho_invalido", f"intervalo inválido: {inicio}-{fim}")
+    if not isinstance(caminho, str) or not caminho.strip():
+        return erro("trecho_invalido", "caminho vazio")
+    raiz = bancada_runner.REPO_TRABALHO.resolve()
+    alvo = Path(os.path.realpath(raiz / caminho.strip()))
+    if raiz not in alvo.parents:
+        return erro("trecho_invalido", f"fora do repositório: {caminho}")
+    # Tamanho checado só por stat, antes de o runner ler o arquivo.
+    if alvo.is_file() and alvo.stat().st_size > LER_TRECHO_MAX_BYTES:
+        return erro("trecho_grande",
+                    f"arquivo acima de {LER_TRECHO_MAX_BYTES} bytes: {caminho}")
+    pedido_fim = fim
+    fim = min(fim, inicio + LER_TRECHO_MAX_LINHAS - 1)
+    try:
+        texto, inicio, fim = bancada_runner.ler_trecho(caminho, inicio, fim)
+    except bancada_runner.BancadaErro as e:
+        return erro(e.codigo, e.mensagem)
+    if "\x00" in texto:
+        return erro("trecho_binario", f"arquivo binário: {caminho}")
+    saida = {"caminho": caminho.strip(), "inicio": inicio, "fim": fim,
+             "texto": texto[:LER_TRECHO_MAX_CHARS]}
+    if fim < pedido_fim or len(texto) > LER_TRECHO_MAX_CHARS:
+        saida["truncado"] = True
+    return json.dumps(saida, ensure_ascii=False)
+
+
+def executar_tool(nome: str, args: dict, db: Session,
+                  nivel: str = autoridade.NIVEL_PADRAO, *, backlog_id=None) -> str:
+    """Executa uma tool, respeitando a autoridade da conversa.
+
+    Camada 2 do gate. `nivel` entra como argumento e nenhuma tool o recebe —
+    não há caminho por onde o modelo eleve a própria autoridade.
+    """
+    try:
+        autoridade.garantir(nivel, nome)
+    except autoridade.AutoridadeInsuficiente as erro:
+        return json.dumps(
+            {"erro": str(erro), "autoridade_atual": erro.nivel,
+             "autoridade_necessaria": erro.exigido, "executado": False},
+            ensure_ascii=False,
+        )
+    if backlog_id is not None and nome in {'previsualizar_plano_execucao', 'criar_plano_execucao'}:
+        if args.get('task_id') and str(args['task_id']) != str(backlog_id):
+            return json.dumps({'erro': 'O plano deve pertencer à task de origem desta conversa.',
+                'code': 'backlog_context_mismatch', 'executado': False}, ensure_ascii=False)
+        args = {**args, 'task_id': str(backlog_id)}
+
+    if backlog_id is not None and nome == 'atualizar_plano_execucao':
+        try:
+            plan_uuid = uuid.UUID(str(args.get('plan_id', '')))
+        except ValueError:
+            return json.dumps(
+                {'erro': 'plan_id inválido', 'executado': False},
+                ensure_ascii=False,
+            )
+        plan = db.query(ExecutionPlan).filter(
+            ExecutionPlan.id == plan_uuid
+        ).first()
+        if not plan:
+            return json.dumps(
+                {'erro': 'plano não encontrado', 'executado': False},
+                ensure_ascii=False,
+            )
+        if str(plan.backlog_id) != str(backlog_id):
+            return json.dumps({
+                'erro': 'O plano não pertence à task de origem desta conversa.',
+                'code': 'backlog_context_mismatch',
+                'executado': False,
+            }, ensure_ascii=False)
+    return _executar_tool_sem_gate(nome, args, db)
+
+
+def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
     if nome == "listar_projetos":
         ps = db.query(Project).all()
         return json.dumps(
@@ -274,6 +723,8 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
         q = db.query(BacklogItem)
         if args.get("status"):
             q = q.filter(BacklogItem.status == args["status"])
+        else:
+            q = q.filter(BacklogItem.status != "archived")
         if args.get("projeto_slug"):
             p = db.query(Project).filter(Project.slug == args["projeto_slug"]).first()
             if not p:
@@ -306,12 +757,28 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
         return json.dumps({"ok": True, "titulo": item.title, "projeto": p.name},
                           ensure_ascii=False)
 
+    if nome == "desenhar_subtasks":
+        matches = (db.query(BacklogItem)
+                   .filter(BacklogItem.title.ilike(f"%{args['titulo_task']}%"))
+                   .all())
+        if not matches:
+            return json.dumps({"erro": "task não encontrada"}, ensure_ascii=False)
+        if len(matches) > 1:
+            return json.dumps({"erro": "mais de uma task encontrada, especifique", "candidatas": [{"id": str(t.id), "titulo": t.title} for t in matches]}, ensure_ascii=False)
+        t = matches[0]
+        return json.dumps({"ok": True, "executado": False, "persistido": False, "aguarda_aprovacao": True, "task_id": str(t.id), "task": t.title, "subtasks_propostas": args["subtasks"]}, ensure_ascii=False)
+
     if nome == "decompor_task":
+        if args.get("aprovado_pelo_usuario") is not True:
+            return json.dumps({"erro": "aprovação explícita do usuário obrigatória", "executado": False, "persistido": False}, ensure_ascii=False)
         t = (db.query(BacklogItem)
              .filter(BacklogItem.title.ilike(f"%{args['titulo_task']}%"))
              .first())
         if not t:
             return json.dumps({"erro": "task não encontrada"})
+        existentes = db.query(BacklogSubtask).filter(BacklogSubtask.backlog_id == t.id).count()
+        if existentes:
+            return json.dumps({"erro": "task já possui subtasks; nova criação bloqueada", "task": t.title, "quantidade_existente": existentes, "executado": False}, ensure_ascii=False)
         criadas = []
         objetos = []
         for i, titulo in enumerate(args["subtasks"], start=1):
@@ -362,6 +829,15 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
                            "status": s.status} for s in subs]},
             ensure_ascii=False,
         )
+
+    if nome == "ler_task":
+        return _ler_task(args, db)
+
+    if nome == "ler_trecho":
+        return _ler_trecho(args)
+
+    if nome == "validar_lote_bancada":
+        return _validar_lote_bancada(args)
 
     if nome == "registrar_conhecimento":
         pid = None
@@ -435,6 +911,28 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
             ensure_ascii=False,
         )
 
+    if nome == "buscar_rag":
+        try:
+            resultados = rag_search.search(
+                args["termo"],
+                limit=args.get("limite", rag_search.DEFAULT_LIMIT),
+            )
+        except ValueError as erro:
+            return json.dumps(
+                {"erro": str(erro)},
+                ensure_ascii=False,
+            )
+        except rag_search.RagSearchUnavailable as erro:
+            return json.dumps(
+                {"erro": str(erro)},
+                ensure_ascii=False,
+            )
+
+        return json.dumps(
+            resultados,
+            ensure_ascii=False,
+        )
+
     if nome == "atualizar_task":
         if args.get("task_id") is not None:
             matches = (db.query(BacklogItem)
@@ -461,8 +959,22 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
         t = matches[0]
         alteracoes = {}
         if args.get("novo_status"):
-            t.status = args["novo_status"]
+            try:
+                apply_status(t, args["novo_status"],
+                             db.execute(text("SELECT now()")).scalar(),
+                             args.get("motivo_arquivamento"),
+                             args.get("nota_arquivamento"))
+            except BacklogStatusError as erro:
+                db.rollback()
+                return json.dumps({"erro": erro.message, "code": erro.code,
+                                   "details": erro.details}, ensure_ascii=False)
             alteracoes["status"] = t.status
+            if t.status == "archived":
+                alteracoes["motivo_arquivamento"] = t.archived_reason
+        elif args.get("motivo_arquivamento") or args.get("nota_arquivamento"):
+            return json.dumps({"erro": "motivo de arquivamento exige novo_status=archived",
+                               "code": "archived_reason_without_archive"},
+                              ensure_ascii=False)
         if args.get("nova_prioridade"):
             t.priority = args["nova_prioridade"]
             alteracoes["prioridade"] = t.priority
@@ -544,11 +1056,22 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
                            "subtask": s.title, "ordem": s.execution_order,
                            "alteracoes": alteracoes}, ensure_ascii=False)
 
-    if nome == "criar_plano_execucao":
+    if nome in {"previsualizar_plano_execucao", "criar_plano_execucao"}:
+        if nome == "criar_plano_execucao" and args.get("aprovado_pelo_usuario") is not True:
+            return json.dumps({
+                "erro": "Plano oficial não criado: a prévia precisa de aprovação explícita do usuário.",
+                "executado": False,
+                "proximo_passo": "Use previsualizar_plano_execucao até o usuário aprovar a formulação final.",
+            }, ensure_ascii=False)
+
         task = None
         if args.get("task_id"):
+            try:
+                task_uuid = uuid.UUID(str(args["task_id"]))
+            except ValueError:
+                return json.dumps({"erro": "task_id inválido", "executado": False})
             task = db.query(BacklogItem).filter(
-                BacklogItem.id == args["task_id"]
+                BacklogItem.id == task_uuid
             ).first()
         elif args.get("titulo_task"):
             query = db.query(BacklogItem).filter(
@@ -574,6 +1097,29 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
                 {"erro": "task não encontrada — informe task_id ou titulo_task"},
                 ensure_ascii=False,
             )
+        if nome == "previsualizar_plano_execucao":
+            return json.dumps({
+                "ok": True,
+                "preview": True,
+                "persistido": False,
+                "plano_id": None,
+                "versao": None,
+                "task_id": str(task.id),
+                "task": task.title,
+                "plano": {
+                    "backlog_id": str(task.id),
+                    "title": task.title,
+                    "objective": args["objetivo"],
+                    "scope": args.get("escopo"),
+                    "constraints": args.get("restricoes") or [],
+                    "acceptance_criteria": args.get("criterios_aceite") or [],
+                    "validation_steps": args.get("validacoes") or [],
+                    "implementation_notes": args.get("notas_implementacao"),
+                    "created_by": "ai_hub",
+                },
+                "proximo_passo": "Revisar esta prévia. Só após aprovação explícita criar o plano oficial.",
+            }, ensure_ascii=False)
+
         try:
             plan = create_plan(db, {
                 "backlog_id": task.id,
@@ -594,6 +1140,75 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
             "ok": True, "plano_id": str(plan.id), "versao": plan.version,
             "status": plan.status, "task_id": str(task.id), "task": task.title,
             "proximo_passo": "Revisar e aprovar no painel Planos do AI Hub",
+        }, ensure_ascii=False)
+
+    if nome == "atualizar_plano_execucao":
+        try:
+            plan_uuid = uuid.UUID(str(args.get("plan_id", "")))
+        except ValueError:
+            return json.dumps(
+                {"erro": "plan_id inválido", "executado": False},
+                ensure_ascii=False,
+            )
+
+        plan = db.query(ExecutionPlan).filter(
+            ExecutionPlan.id == plan_uuid
+        ).first()
+        if not plan:
+            return json.dumps(
+                {"erro": "plano não encontrado", "executado": False},
+                ensure_ascii=False,
+            )
+
+        dados = {}
+        mapping = {
+            "titulo": "title",
+            "objetivo": "objective",
+            "escopo": "scope",
+            "restricoes": "constraints",
+            "criterios_aceite": "acceptance_criteria",
+            "validacoes": "validation_steps",
+            "notas_implementacao": "implementation_notes",
+        }
+        for origem, destino in mapping.items():
+            if origem in args:
+                dados[destino] = args[origem]
+
+        if not dados:
+            return json.dumps(
+                {"erro": "nenhuma alteração informada", "executado": False},
+                ensure_ascii=False,
+            )
+
+        try:
+            plan = update_plan(db, plan, dados)
+        except HandoffError as error:
+            return json.dumps(
+                {"erro": str(error), "executado": False},
+                ensure_ascii=False,
+            )
+
+        task = db.query(BacklogItem).filter(
+            BacklogItem.id == plan.backlog_id
+        ).first()
+
+        if task:
+            graph_sync.sync_safely(
+                "sync_plan",
+                str(plan.id),
+                str(task.project_id),
+                str(task.id),
+            )
+
+        return json.dumps({
+            "ok": True,
+            "executado": True,
+            "plano_id": str(plan.id),
+            "versao": plan.version,
+            "status": plan.status,
+            "task_id": str(plan.backlog_id),
+            "task": task.title if task else None,
+            "alteracoes": list(dados.keys()),
         }, ensure_ascii=False)
 
     if nome == "listar_planos_execucao":
@@ -655,29 +1270,74 @@ def executar_tool(nome: str, args: dict, db: Session) -> str:
     return json.dumps({"erro": "ferramenta desconhecida"})
 
 
-def chat_anthropic(messages: list, db: Session, model: str | None = None) -> str:
+@dataclass
+class ProviderResult:
+    text: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+def _provider_result(value) -> ProviderResult:
+    # Compatibilidade com testes e extensões que ainda devolvem apenas texto.
+    return value if isinstance(value, ProviderResult) else ProviderResult(str(value))
+
+
+# Planejar para a Bancada é o único fluxo que lê código com ler_trecho; estourar o
+# limite ali quase sempre quer dizer task grande demais, não falha técnica.
+TOOLS_DE_LEITURA_DE_CODIGO = {"ler_trecho", "validar_lote_bancada"}
+
+
+def mensagem_limite_de_passos(usadas: set[str]) -> str:
+    passos = int(os.getenv("AI_MAX_TOOL_STEPS", "12"))
+    if usadas & TOOLS_DE_LEITURA_DE_CODIGO:
+        return (f"Não consegui concluir: o limite de {passos} passos acabou enquanto eu lia o código. "
+                "No planejamento para a Bancada Local, isso costuma indicar que a task é grande demais "
+                "para micro-tarefas. Use \"Enviar ao AI Hub\" (fluxo de nuvem) ou divida a task no backlog.")
+    return "Não consegui concluir a operação (limite de passos)."
+
+
+def chat_anthropic(messages: list, db: Session, model: str | None = None,
+                   system: str | None = None,
+                   nivel: str = autoridade.NIVEL_PADRAO,
+                   max_output_tokens: int = 16000,
+                   reasoning_effort: str | None = None, backlog_id=None) -> ProviderResult:
     client = get_anthropic()
-    for _ in range(12):
+    # Camada 1 do gate: o modelo só recebe o catálogo do seu nível.
+    tools = autoridade.tools_para(nivel, TOOLS)
+    input_tokens = output_tokens = 0
+    usadas: set[str] = set()
+    for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
+        # max_tokens limita thinking + texto da resposta juntos: 4096 truncava
+        # no meio quando o modelo pensa antes de responder. Hoje o valor vem do
+        # cost guard (AI_MAX_OUTPUT_TOKENS, default 16000) em vez de fixo aqui.
         resp = client.messages.create(
             model=model or ANTHROPIC_MODEL,
-            max_tokens=4096,
-            system=SYSTEM,
-            tools=TOOLS,
+            max_tokens=max_output_tokens,
+            **({"output_config": {"effort": reasoning_effort}} if reasoning_effort else {}),
+            system=system or SYSTEM,
+            tools=tools,
             messages=messages,
         )
+        input_tokens += int(getattr(resp.usage, "input_tokens", 0) or 0)
+        output_tokens += int(getattr(resp.usage, "output_tokens", 0) or 0)
         if resp.stop_reason == "max_tokens":
             txt = "".join(b.text for b in resp.content if b.type == "text")
-            return (txt + "\n\n[resposta truncada — limite de tokens]") \
+            final = (txt + "\n\n[resposta truncada — limite de tokens]") \
                 if txt else ("Resposta truncada pelo limite de tokens — "
                              "tente um pedido menor ou dividido.")
+            return ProviderResult(final, input_tokens, output_tokens)
         if resp.stop_reason != "tool_use":
-            return "".join(b.text for b in resp.content if b.type == "text")
+            return ProviderResult(
+                "".join(b.text for b in resp.content if b.type == "text"),
+                input_tokens, output_tokens,
+            )
         messages.append({"role": "assistant", "content": resp.content})
         results = []
         for block in resp.content:
             if block.type == "tool_use":
+                usadas.add(block.name)
                 try:
-                    out = executar_tool(block.name, block.input, db)
+                    out = executar_tool(block.name, block.input, db, nivel, backlog_id=backlog_id)
                 except Exception as e:
                     db.rollback()
                     out = json.dumps({"erro": f"argumentos invalidos: "
@@ -689,9 +1349,10 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None) -> str
                     "content": out,
                 })
         messages.append({"role": "user", "content": results})
-    return "Não consegui concluir a operação (limite de passos)."
+    return ProviderResult(mensagem_limite_de_passos(usadas), input_tokens, output_tokens)
 
-def tools_openai() -> list:
+def tools_openai(nivel: str = autoridade.NIVEL_PADRAO) -> list:
+    """Mesmo catálogo filtrado da camada 1, no formato dos providers compat."""
     return [
         {
             "type": "function",
@@ -701,58 +1362,225 @@ def tools_openai() -> list:
                 "parameters": t["input_schema"],
             },
         }
-        for t in TOOLS
+        for t in autoridade.tools_para(nivel, TOOLS)
     ]
 
 
-def chat_openai(messages: list, db: Session, model: str | None = None, provider: str = "openai") -> str:
-    client = get_openai(provider)
-    msgs = [{"role": "system", "content": SYSTEM}] + messages
-    for _ in range(12):
-        resp = client.chat.completions.create(
-            model=model or COMPAT_PROVIDERS[provider]["default_model"],
-            max_tokens=1024,
-            tools=tools_openai(),
-            messages=msgs,
-        )
-        msg = resp.choices[0].message
-        if not msg.tool_calls:
-            return msg.content or ""
-        msgs.append(msg)
-        for tc in msg.tool_calls:
-            args = json.loads(tc.function.arguments or "{}")
-            try:
-                out = executar_tool(tc.function.name, args, db)
-            except Exception as e:
-                db.rollback()
-                out = json.dumps({"erro": f"argumentos invalidos: "
-                                  f"{type(e).__name__} {e}"},
-                                 ensure_ascii=False)
-            msgs.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": out,
-            })
-    return "Não consegui concluir a operação (limite de passos)."
+def chat_openai(messages: list, db: Session, model: str | None = None,
+                provider: str = "openai", system: str | None = None,
+                nivel: str = autoridade.NIVEL_PADRAO,
+                max_output_tokens: int = 4096,
+                reasoning_effort: str | None = None, backlog_id=None,
+                runtime_id: str | None = None) -> ProviderResult:
+    local_runtime = (
+        agent_runtimes.local_chat_runtime(runtime_id)
+        if runtime_id
+        else None
+    )
+    context_limit = (
+        agent_runtimes.local_chat_context(runtime_id, model)
+        if runtime_id
+        else None
+    )
+    client = get_openai(provider, runtime_id) if runtime_id else get_openai(provider)
+    try:
+        msgs = [{"role": "system", "content": system or SYSTEM}] + messages
+        tools = tools_openai(nivel)
+        input_tokens = output_tokens = 0
+        usadas: set[str] = set()
+        for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
+            kwargs = dict(
+                model=model or COMPAT_PROVIDERS[provider]["default_model"],
+                tools=tools,
+                messages=msgs,
+            )
+            if provider == "openai":
+                kwargs["max_completion_tokens"] = max_output_tokens
+            else:
+                kwargs["max_tokens"] = max_output_tokens
+            if context_limit is not None:
+                # Estimativa conservadora em tokens, incluindo tools, resultados e
+                # envelopes; nunca comparar bytes diretamente com num_ctx em tokens.
+                serialized = json.dumps({"messages": msgs, "tools": tools}, ensure_ascii=False,
+                                        default=lambda obj: obj.model_dump())
+                estimated_input_tokens = max(1, (len(serialized) + 3) // 4)
+                required_tokens = estimated_input_tokens + 256 + max_output_tokens
+                if required_tokens > context_limit:
+                    raise ai_cost_guard.CostGuardError(
+                        "local_context_limit",
+                        "O contexto configurado do modelo local é insuficiente para esta conversa e suas ferramentas. "
+                        "Configure um contexto maior no runtime ou selecione outro modelo.",
+                        {"context_limit": context_limit, "estimated_input_tokens": estimated_input_tokens, "required_tokens": required_tokens},
+                    )
+            if runtime_id:
+                # llama.cpp expõe o Qwen via API OpenAI-compatible, mas este
+                # runtime não anuncia suporte a reasoning_effort. Não envie
+                # parâmetros que o engine não suporta.
+                if (
+                    local_runtime is not None
+                    and local_runtime.engine != agent_runtimes.ENGINE_LLAMACPP
+                ):
+                    kwargs["reasoning_effort"] = reasoning_effort or "none"
+                kwargs["temperature"] = 0
+            if reasoning_effort and provider == "openai":
+                kwargs["reasoning_effort"] = reasoning_effort
+            resp = client.chat.completions.create(**kwargs)
+            usage = getattr(resp, "usage", None)
+            input_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
+            output_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
+            msg = resp.choices[0].message
+            if not msg.tool_calls:
+                return ProviderResult(msg.content or "", input_tokens, output_tokens)
+            msgs.append(msg)
+            for tc in msg.tool_calls:
+                usadas.add(tc.function.name)
+                args = json.loads(tc.function.arguments or "{}")
+                try:
+                    out = executar_tool(tc.function.name, args, db, nivel, backlog_id=backlog_id)
+                except Exception as e:
+                    db.rollback()
+                    out = json.dumps({"erro": f"argumentos invalidos: "
+                                      f"{type(e).__name__} {e}"},
+                                     ensure_ascii=False)
+                msgs.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": out,
+                })
+        return ProviderResult(mensagem_limite_de_passos(usadas), input_tokens, output_tokens)
+    finally:
+        if runtime_id:
+            client.close()
+
+
+AI_PROVIDER_KEYS = {
+    "anthropic": ("Claude (Anthropic)", "ANTHROPIC_API_KEY"),
+    "openai": ("OpenAI", "OPENAI_API_KEY"),
+    "kimi": ("Kimi (Moonshot)", "MOONSHOT_API_KEY"),
+    "gemini": ("Gemini", "GEMINI_API_KEY"),
+    "openrouter": ("OpenRouter", "OPENROUTER_API_KEY"),
+    "ollama": ("Ollama Cloud", "OLLAMA_API_KEY"),
+}
+API_ENV_FILE = os.environ.get(
+    "WORKDEV_API_ENV_FILE",
+    os.path.join(os.path.dirname(__file__), "..", "..", ".env"),
+)
+
+
+class ApiKeyUpdate(BaseModel):
+    api_key: SecretStr
+
+
+def _provider_status() -> list[dict]:
+    return [
+        {"provider": provider, "label": label,
+         "connected": bool(os.getenv(env_name))}
+        for provider, (label, env_name) in AI_PROVIDER_KEYS.items()
+    ]
+
+
+def _write_env_key(name: str, value: str | None) -> None:
+    """Atualiza uma chave no .env sem jamais ler ou devolver outros valores."""
+    path = os.path.abspath(API_ENV_FILE)
+    with open(path, encoding="utf-8") as source:
+        lines = source.readlines()
+    escaped = (
+        value.replace(chr(92), chr(92) * 2)
+        .replace(chr(34), chr(92) + chr(34))
+        if value else None
+    )
+    replacement = f'{name}="{escaped}"\n' if escaped else None
+    output: list[str] = []
+    found = False
+    for line in lines:
+        if line.startswith(f"{name}="):
+            found = True
+            if replacement:
+                output.append(replacement)
+        else:
+            output.append(line)
+    if replacement and not found:
+        output.append(replacement)
+    temporary = f"{path}.tmp"
+    with open(temporary, "w", encoding="utf-8") as target:
+        target.writelines(output)
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
+class CatalogModelOut(BaseModel):
+    provider: str
+    model: str
+    label: str
+    runtime_id: str | None = None
+
+
+@router.get("/ai/models", response_model=list[CatalogModelOut], response_model_exclude_none=True)
+def ai_models(provider: Literal["openrouter", "local"] = "openrouter", db: Session = Depends(get_db)):
+    """Inventário ativo canônico; vínculo com agente não limita modelos do chat."""
+    if provider == "local":
+        try:
+            return agent_runtimes.local_chat_models()
+        except Exception:
+            raise HTTPException(503, "Não foi possível consultar o inventário local") from None
+    rows = db.query(AIModelCatalog).filter(
+        AIModelCatalog.provider == provider,
+        AIModelCatalog.active.is_(True),
+    ).order_by(AIModelCatalog.display_name, AIModelCatalog.provider_model_id).all()
+    return [CatalogModelOut(provider=row.provider, model=row.provider_model_id,
+                            label=row.display_name) for row in rows]
+
 
 @router.get("/ai/providers")
 def ai_providers():
-    providers = [
-        {"provider": "anthropic", "label": "Claude (Anthropic)",
-         "connected": bool(os.getenv("ANTHROPIC_API_KEY"))},
-        {"provider": "openai", "label": "OpenAI",
-         "connected": bool(os.getenv("OPENAI_API_KEY"))},
-        {"provider": "kimi", "label": "Kimi (Moonshot)",
-         "connected": bool(os.getenv("MOONSHOT_API_KEY"))},
-        {"provider": "gemini", "label": "Gemini",
-         "connected": bool(os.getenv("GEMINI_API_KEY"))},
-        {"provider": "openrouter", "label": "OpenRouter",
-         "connected": bool(os.getenv("OPENROUTER_API_KEY"))},
-        {"provider": "ollama", "label": "Ollama Cloud",
-         "connected": bool(os.getenv("OLLAMA_API_KEY"))},
-    ]
+    providers = _provider_status()
     connected = sum(1 for p in providers if p["connected"])
     return {"providers": providers, "connected": connected, "total": len(providers)}
+
+
+@router.put("/ai/providers/{provider}/key")
+def update_ai_provider_key(provider: str, payload: ApiKeyUpdate):
+    config = AI_PROVIDER_KEYS.get(provider)
+    if not config:
+        raise HTTPException(status_code=404, detail="Provider não encontrado")
+    value = payload.api_key.get_secret_value().strip()
+    if not value or "\n" in value or "\r" in value:
+        raise HTTPException(status_code=422, detail="Chave inválida")
+    env_name = config[1]
+    _write_env_key(env_name, value)
+    os.environ[env_name] = value
+    return {"provider": provider, "connected": True}
+
+
+@router.delete("/ai/providers/{provider}/key")
+def delete_ai_provider_key(provider: str):
+    config = AI_PROVIDER_KEYS.get(provider)
+    if not config:
+        raise HTTPException(status_code=404, detail="Provider não encontrado")
+    env_name = config[1]
+    _write_env_key(env_name, None)
+    os.environ.pop(env_name, None)
+    return {"provider": provider, "connected": False}
+
+
+@router.get("/ai/contexto")
+def ai_contexto(project_slug: str | None = None, db: Session = Depends(get_db)):
+    """Mostra o contexto que o chat receberia agora, sem chamar o LLM.
+
+    Somente leitura. Serve para verificar o Context Engine (e para depurar uma
+    resposta estranha) sem gastar uma chamada ao modelo.
+    """
+    contexto = context_engine.build_chat_context(db, project_slug)
+    if contexto is None:
+        raise HTTPException(status_code=404, detail="Projeto não encontrado")
+    markdown = context_engine.renderizar_contexto(contexto)
+    return {
+        "escopo": contexto["escopo"],
+        "gerado_em": contexto["gerado_em"],
+        "dados": contexto,
+        "markdown": markdown,
+        "caracteres": len(markdown),
+    }
 
 
 class VozRequest(BaseModel):
@@ -770,18 +1598,79 @@ def ai_voz(req: VozRequest, db: Session = Depends(get_db)):
         f"Comando: {req.texto}"
     )
     messages = [{"role": "user", "content": instrucao}]
+    # A ponte de voz não tem sessão, então o nível é fixo e explícito: 'plan'
+    # preserva o uso atual (registrar backlog por voz) sem abrir ação externa.
     try:
-        reply = chat_anthropic(messages, db)
+        reply = chat_anthropic(
+            messages, db,
+            system=build_system(db, None, autoridade.PLAN),
+            nivel=autoridade.PLAN,
+        )
     except Exception as e:
         return {"reply": f"Erro ao executar: {type(e).__name__} - {e}",
                 "error": True}
-    return {"reply": reply}
+    return {"reply": _provider_result(reply).text}
+
+
+def _record_ai_call(db: Session, *, correlation: uuid.UUID, session,
+                    project_id, provider: str, requested_model: str | None,
+                    selected_model: str, req: ChatRequest,
+                    effort: str | None, reason: str, policy,
+                    estimated_cost: Decimal | None, result: ProviderResult,
+                    duration_ms: int, success: bool,
+                    error_type: str | None = None) -> None:
+    """Audita metadados da chamada, nunca prompt, resposta, chave ou CoT."""
+    db.add(AICallLog(
+        correlation_id=correlation,
+        session_id=session.id if session else None,
+        project_id=project_id,
+        user_id=os.getenv("WORKDEV_OPERATOR_ID", "authenticated-user"),
+        task_type=req.task_type,
+        requested_mode=req.requested_mode,
+        requested_model=requested_model,
+        selected_model=selected_model,
+        provider=provider,
+        reasoning_effort=effort,
+        selection_reason=reason,
+        fallback_occurred=False,
+        input_tokens=result.input_tokens or None,
+        output_tokens=result.output_tokens or None,
+        estimated_cost_usd=estimated_cost,
+        actual_cost_usd=None,
+        is_free=policy.is_free,
+        duration_ms=duration_ms,
+        success=success,
+        error_type=error_type,
+        premium_confirmed=bool(req.user_confirmation and policy.requires_confirmation),
+        confirmed_by=(os.getenv("WORKDEV_OPERATOR_ID", "authenticated-user")
+                      if req.user_confirmation and policy.requires_confirmation else None),
+        confirmed_at=(datetime.now(timezone.utc)
+                      if req.user_confirmation and policy.requires_confirmation else None),
+    ))
+    db.commit()
 
 
 @router.post("/ai/chat")
 def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     provider = (req.provider or os.getenv("AI_PROVIDER", "anthropic")).lower()
-    messages = [{"role": m.role, "content": m.content} for m in req.messages]
+    if req.runtime_id is not None:
+        try:
+            if provider != "ollama" or not req.model:
+                raise ValueError("Selecione um modelo local válido")
+            agent_runtimes.local_chat_runtime(req.runtime_id)
+            available = agent_runtimes.local_chat_models()
+            if not any(row["runtime_id"] == req.runtime_id and row["model"] == req.model for row in available):
+                raise ValueError("O modelo selecionado não está disponível no runtime local")
+        except Exception:
+            return {"reply": "Modelo ou runtime local indisponível. Atualize a seleção e tente novamente.",
+                    "error": True, "error_code": "local_model_unavailable", "provider": provider,
+                    "model": req.model, "session_id": req.session_id}
+    # Mensagens system do cliente nunca são autoritativas. Contexto especial
+    # (como a ficha de uma task) é lido da sessão persistida mais abaixo.
+    messages = [
+        {"role": m.role, "content": m.content}
+        for m in req.messages if m.role in {"user", "assistant"}
+    ]
 
     session = None
     if req.session_id:
@@ -794,6 +1683,127 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
         db.add(session)
         db.commit()
         db.refresh(session)
+
+    # E1.4: a autoridade efetiva vem SEMPRE da sessão persistida no servidor.
+    #
+    # `req.authority` continua no contrato por compatibilidade com clientes que
+    # ainda o enviam, mas é **declaração não autoritativa**: nunca persiste,
+    # nunca eleva, nunca rebaixa e nunca é normalizado para virar o nível
+    # efetivo. Uma mensagem de chat não é um canal de mudança de privilégio —
+    # quem altera autoridade é o PATCH explícito da sessão, e só ele.
+    #
+    # Sessão nova nasce com o default do banco ('plan'); o payload não escolhe.
+    nivel = (
+        autoridade.normalizar(session.authority)
+        if session is not None
+        else autoridade.NIVEL_PADRAO
+    )
+    # Divergência não é erro (o cliente pode estar com a tela defasada), mas a
+    # resposta avisa para que ninguém suponha que o pedido foi acatado.
+    payload_ignorado = (
+        req.authority is not None and str(req.authority).strip().lower() != nivel
+    )
+
+    # E1.3: a sessão é a dona do contexto. Quando o cliente manda um slug (o
+    # chat do workspace sempre manda), o vínculo é gravado aqui — assim uma
+    # conversa iniciada no workspace já volta com o projeto certo depois.
+    slug_efetivo = req.project_slug
+    backlog_id = getattr(session, 'task_id', None) if session is not None else None
+    if not isinstance(backlog_id, (str, uuid.UUID)):
+        backlog_id = None
+    if session is not None:
+        if backlog_id is not None:
+            projeto = db.query(Project).filter(Project.id == session.project_id).first()
+            if projeto is None:
+                raise HTTPException(409, 'Projeto da task não encontrado')
+            if req.project_slug and req.project_slug != projeto.slug:
+                raise HTTPException(409, 'O projeto da conversa deve corresponder à task de origem')
+            slug_efetivo = projeto.slug
+        elif req.project_slug:
+            projeto = db.query(Project).filter(
+                Project.slug == req.project_slug).first()
+            if projeto is not None and session.project_id != projeto.id:
+                session.project_id = projeto.id
+                db.commit()
+        elif session.project_id:
+            # Sessão já tem projeto e o cliente não mandou slug: o banco manda.
+            projeto = db.query(Project).filter(
+                Project.id == session.project_id).first()
+            if projeto is not None:
+                slug_efetivo = projeto.slug
+
+
+    # E1.2: o contexto passa a ser montado sempre — global quando não há projeto
+    # ativo. Antes, o chat global ia ao modelo sem nenhum dado do WorkDev.
+    system = build_system(db, slug_efetivo, nivel, backlog_id)
+    if session is not None:
+        persisted_system = (
+            db.query(ChatMessageDB)
+            .filter(
+                ChatMessageDB.session_id == session.id,
+                ChatMessageDB.role == "system",
+            )
+            .order_by(ChatMessageDB.created_at.asc())
+            .all()
+        )
+        if isinstance(persisted_system, list) and persisted_system:
+            system = "\n\n".join(
+                [system, *(message.content for message in persisted_system)]
+            )
+
+    if provider in COMPAT_PROVIDERS:
+        selected_model = req.model or COMPAT_PROVIDERS[provider]["default_model"]
+    elif provider == "anthropic":
+        selected_model = req.model or ANTHROPIC_MODEL
+    else:
+        return {
+            "reply": f"Provider não permitido: {provider}", "provider": provider,
+            "error": True, "error_code": "unknown_provider",
+            "session_id": str(session.id) if session else None,
+            "project_slug": slug_efetivo, "authority": nivel,
+            "authority_payload_ignorada": payload_ignorado,
+        }
+
+    try:
+        policy = ai_cost_guard.policy_for(
+            provider, selected_model, db if isinstance(db, Session) else None
+        )
+        correlation = ai_cost_guard.correlation_id(req.correlation_id)
+        if isinstance(db, Session):
+            ai_cost_guard.reject_duplicate(db, correlation)
+        max_output = ai_cost_guard.output_limit(req.max_output_tokens if req.max_output_tokens is not None else (256 if req.runtime_id else None))
+        server_estimate = ai_cost_guard.estimate_tokens(messages, system)
+        # A estimativa do cliente é apenas um piso informativo; nunca pode
+        # reduzir o valor calculado pelo servidor para contornar custo/limite.
+        estimated_input = max(req.estimated_input_tokens or 0, server_estimate)
+        ai_cost_guard.input_limit(estimated_input)
+        effort = ai_cost_guard.normalize_effort(policy, req.reasoning_effort)
+        estimated_cost = ai_cost_guard.estimate_cost(
+            policy, estimated_input, max_output
+        )
+        ai_cost_guard.enforce_per_call_limit(estimated_cost)
+        ai_cost_guard.require_premium_confirmation(
+            policy, req.user_confirmation, estimated_cost
+        )
+        alerts = (ai_cost_guard.enforce_budgets(
+            db, provider=provider,
+            project_id=session.project_id if session else None,
+            estimated_cost=estimated_cost,
+        ) if isinstance(db, Session) else [])
+    except ai_cost_guard.CostGuardError as exc:
+        return {
+            "reply": exc.message, "provider": provider, "model": selected_model,
+            "error": True, "error_code": exc.code,
+            "confirmation_required": exc.code in {
+                "premium_confirmation_required", "max_effort_confirmation_required"
+            },
+            "cost": exc.details,
+            "correlation_id": str(locals().get("correlation", "")) or None,
+            "session_id": str(session.id) if session else None,
+            "project_slug": slug_efetivo, "authority": nivel,
+            "authority_payload_ignorada": payload_ignorado,
+        }
+
     if session and messages:
         last = messages[-1]
         if last["role"] == "user":
@@ -801,24 +1811,84 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
                                  role="user", content=last["content"]))
             db.commit()
 
+    started = time.monotonic()
     try:
         if provider in COMPAT_PROVIDERS:
-            reply = chat_openai(messages, db, req.model, provider)
+            raw_result = chat_openai(
+                messages, db, selected_model, provider, system=system,
+                nivel=nivel, max_output_tokens=max_output,
+                reasoning_effort=effort,
+                **({'runtime_id': req.runtime_id} if req.runtime_id else {}),
+                **({'backlog_id': backlog_id} if backlog_id is not None else {}),
+            )
         else:
-            provider = "anthropic"
-            reply = chat_anthropic(messages, db, req.model)
+            raw_result = chat_anthropic(
+                messages, db, selected_model, system=system, nivel=nivel,
+                max_output_tokens=max_output, reasoning_effort=effort,
+                **({'backlog_id': backlog_id} if backlog_id is not None else {}),
+            )
+        result = _provider_result(raw_result)
+        reply = result.text
     except Exception as e:
-        reply = f"Erro no provider {provider}: {type(e).__name__} - {e}"
+        duration_ms = int((time.monotonic() - started) * 1000)
+        reply = (str(e) if isinstance(e, (ai_cost_guard.CostGuardError, ValueError)) else "Falha ao consultar o runtime local.") if req.runtime_id else f"Erro no provider {provider}: {type(e).__name__} - {e}"
+        try:
+            _record_ai_call(
+                db, correlation=correlation, session=session,
+                project_id=session.project_id if session else None,
+                provider=provider, requested_model=req.model,
+                selected_model=selected_model, req=req, effort=effort,
+                reason="modelo solicitado pelo cliente ou configuração atual",
+                policy=policy, estimated_cost=estimated_cost,
+                result=ProviderResult(""), duration_ms=duration_ms,
+                success=False, error_type=type(e).__name__,
+            )
+        except Exception:
+            db.rollback()
         return {"reply": reply, "provider": provider, "error": True,
-                "session_id": str(session.id) if session else None}
+                "error_code": getattr(e, "code", "local_runtime_error" if req.runtime_id else "provider_error"),
+                "model": selected_model, "reasoning_effort": effort,
+                "correlation_id": str(correlation),
+                "session_id": str(session.id) if session else None,
+                "project_slug": slug_efetivo, "authority": nivel,
+                "authority_payload_ignorada": payload_ignorado}
 
+    duration_ms = int((time.monotonic() - started) * 1000)
     if session:
         try:
             db.add(ChatMessageDB(session_id=session.id,
-                                 role="assistant", content=reply))
+                                 role="assistant", content=reply,
+                                 provider=provider, model=selected_model))
             session.updated_at = __import__("datetime").datetime.utcnow()
             db.commit()
         except Exception:
             db.rollback()
-    return {"reply": reply, "provider": provider,
-            "session_id": str(session.id) if session else None}
+    try:
+        _record_ai_call(
+            db, correlation=correlation, session=session,
+            project_id=session.project_id if session else None,
+            provider=provider, requested_model=req.model,
+            selected_model=selected_model, req=req, effort=effort,
+            reason="modelo solicitado pelo cliente ou configuração atual",
+            policy=policy, estimated_cost=estimated_cost, result=result,
+            duration_ms=duration_ms, success=True,
+        )
+    except Exception:
+        db.rollback()
+    # `project_slug` é eco do contexto realmente aplicado, não do que veio no
+    # pedido: quando o cliente omite e a sessão já tem projeto, os dois diferem.
+    return {"reply": reply, "provider": provider, "model": selected_model,
+            "backlog_id": str(backlog_id) if backlog_id is not None else None,
+            "reasoning_effort": effort,
+            "selection_reason": "modelo solicitado pelo cliente ou configuração atual",
+            "cost_category": policy.category,
+            "estimated_cost_usd": (str(estimated_cost)
+                                   if estimated_cost is not None else None),
+            "input_tokens": result.input_tokens or None,
+            "output_tokens": result.output_tokens or None,
+            "actual_cost_usd": None,
+            "fallback_occurred": False, "budget_alerts": alerts,
+            "correlation_id": str(correlation),
+            "session_id": str(session.id) if session else None,
+            "project_slug": slug_efetivo, "authority": nivel,
+            "authority_payload_ignorada": payload_ignorado}

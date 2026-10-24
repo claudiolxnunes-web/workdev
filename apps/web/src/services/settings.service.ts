@@ -1,6 +1,20 @@
 const API_KEY = import.meta.env.VITE_API_KEY || "";
 const headers: HeadersInit = { "X-API-Key": API_KEY };
 
+export interface ExecutorSelection { provider: string; model: string; runtime_id?: string }
+export interface ExecutionModel extends ExecutorSelection {
+  agent: string; label: string; review_capable: boolean
+  input_cost_per_million?: number | null; output_cost_per_million?: number | null; rank?: number | null
+}
+
+export async function getExecutionModels(): Promise<{ models: ExecutionModel[]; local_error: string | null }> {
+  const response = await fetch("/api/settings/agent-models", { headers });
+  if (!response.ok) throw new Error("Não foi possível carregar modelos para execução");
+  const data = await response.json();
+  if (!data || !Array.isArray(data.models)) throw new Error("Inventário de execução inválido");
+  return data;
+}
+
 export interface AppSettings {
   app: {
     name: string;

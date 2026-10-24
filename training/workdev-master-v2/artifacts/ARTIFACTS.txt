@@ -1,0 +1,14 @@
+Base:
+  /opt/workdev/training/models/Qwen3.8-4B-Distill
+
+Adapter WorkDev V2:
+  /opt/workdev/models/workdev-local-fast/v2-adapter
+
+Adapter archive:
+  /opt/workdev/models/workdev-local-fast/qwen38-workdev-v2.tar.gz
+
+GGUF V2 Q4:
+  /opt/workdev/models/workdev-local-fast/workdev-local-fast-v2-Q4_K_M.gguf
+
+GGUF mobile Q3:
+  /opt/workdev/models/workdev-local-fast/workdev-local-fast-v2-mobile-Q3_K_S.gguf

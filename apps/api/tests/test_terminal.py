@@ -1,15 +1,45 @@
+import inspect
 import asyncio
+import json
 import os
+import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+from fastapi import HTTPException
 
 from app.routers.terminal import (
     ALLOWED_SESSIONS,
+    STANDBY_COMMANDS,
+    AgentSendRequest,
+    _agent_status,
+    _approval_state,
+    _awaiting_approval,
     _capture_history,
     _claim,
     _release,
-    _scroll_terminal,
+    _read_pty,
+    _load_supervisor_health,
+    _requested_terminal_size,
     _send_output,
+    _send_text,
+    _pane_target,
+    _session_target,
+    _start_gemini_headless_runtime,
+    _start_standby_session,
+    _stop_standby_session,
+    finalize_auto_runtime,
+    agent_send,
+    agent_transcript,
+    agents_status,
+    start_agent_lifecycle,
+    start_agent_session,
+    start_agent_runtime,
+    stop_agent_runtime,
+    stop_agent_session,
 )
 
 
@@ -18,11 +48,76 @@ class FailingWebSocket:
         raise RuntimeError("client disconnected")
 
 
+class TerminalBusyHandshakeTest(unittest.TestCase):
+    def test_busy_terminal_delivers_close_reason_after_handshake(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from unittest.mock import AsyncMock
+        from app.routers.terminal import router
+
+        app = FastAPI()
+        app.include_router(router)
+        with patch('app.routers.terminal.websocket_is_authenticated', return_value=True), \
+             patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=(False, None)), \
+             patch('app.routers.terminal.agent_lifecycle.active_work', return_value=None), \
+             patch('app.routers.terminal._require_session', return_value='codex'), \
+             patch('app.routers.terminal.subprocess.Popen') as process, \
+             TestClient(app) as client:
+            with client.websocket_connect('/ws/agents/codex') as socket:
+                self.assertEqual(socket.receive(), {
+                    'type': 'websocket.close', 'code': 1008,
+                    'reason': 'Terminal já está em uso',
+                })
+            process.assert_not_called()
+
+
+class TerminalTakeoverHandshakeTest(unittest.TestCase):
+    def test_takeover_closes_previous_tab_with_dedicated_code(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from unittest.mock import AsyncMock
+        from app.routers.terminal import router, TAKEN_OVER_CODE
+
+        previous = AsyncMock()
+        app = FastAPI()
+        app.include_router(router)
+        with patch('app.routers.terminal.websocket_is_authenticated', return_value=True), \
+             patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=(False, previous)) as claim, \
+             patch('app.routers.terminal.agent_lifecycle.active_work', return_value=None), \
+             patch('app.routers.terminal._require_session', return_value='codex'), \
+             patch('app.routers.terminal.subprocess.Popen'), \
+             TestClient(app) as client:
+            with client.websocket_connect('/ws/agents/codex?takeover=1') as socket:
+                socket.receive()
+        self.assertTrue(claim.call_args.args[2])
+        previous.close.assert_awaited_once_with(code=TAKEN_OVER_CODE, reason="Terminal assumido por outra aba")
+
+
 class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    @patch("app.services.agent_workspace.audit")
+    @patch("app.routers.terminal.agent_lifecycle.start")
+    async def test_local_code_removido_nao_religa_sessao(self, start, audit):
+        with self.assertRaises(HTTPException) as ctx:
+            await start_agent_lifecycle("local-code")
+        self.assertEqual(ctx.exception.status_code, 404)
+        start.assert_not_called()
+
+    async def test_tmux_targets_require_exact_session_name(self):
+        self.assertEqual(_session_target("code"), "=code")
+        self.assertEqual(_pane_target("code"), "=code:")
+
     async def test_all_agents_have_isolated_tmux_sessions(self):
         self.assertEqual(
             ALLOWED_SESSIONS,
-            {"claude": "code", "codex": "codex", "kimi": "kimi", "qwen": "qwen"},
+            {
+                "claude": "code",
+                "codex": "codex",
+                "kimi": "kimi",
+                "qwen": "qwen",
+                "grok": "grok",
+                "deepseek": "deepseek",
+                "gemini": "gemini",
+            },
         )
 
     async def test_output_sender_stops_when_websocket_disconnects(self):
@@ -41,16 +136,38 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
             if write_fd >= 0:
                 os.close(write_fd)
 
+    async def test_pty_read_can_be_cancelled_without_blocking_executor(self):
+        read_fd, write_fd = os.pipe()
+        task = asyncio.create_task(_read_pty(read_fd))
+        await asyncio.sleep(0)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        os.close(read_fd)
+        os.close(write_fd)
+
     async def test_connection_claim_can_be_released(self):
         session = "test-terminal-lifecycle"
-        await _release(session)
+        first, second = object(), object()
 
-        self.assertTrue(await _claim(session))
-        self.assertFalse(await _claim(session))
+        self.assertEqual(await _claim(session, first), (True, None))
+        self.assertEqual(await _claim(session, second), (False, None))
 
-        await _release(session)
-        self.assertTrue(await _claim(session))
-        await _release(session)
+        await _release(session, first)
+        self.assertEqual(await _claim(session, second), (True, None))
+        await _release(session, second)
+
+    async def test_takeover_hands_over_and_old_tab_cannot_release_new(self):
+        """Aba nova assume o terminal; a antiga, ao cair, não apaga o registro novo."""
+        session = "test-terminal-takeover"
+        old, new = object(), object()
+        self.assertEqual(await _claim(session, old), (True, None))
+        self.assertEqual(await _claim(session, new, takeover=True), (True, old))
+        await _release(session, old)
+        self.assertEqual(await _claim(session, object()), (False, None))
+        await _release(session, new)
+        self.assertEqual(await _claim(session, old), (True, None))
+        await _release(session, old)
 
     @patch("app.routers.terminal.subprocess.run")
     async def test_history_uses_tmux_capture_pane_without_shell(self, run):
@@ -60,39 +177,367 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(_capture_history("codex", 5000), "linha antiga\nlinha atual")
         run.assert_called_once_with(
-            ["tmux", "capture-pane", "-p", "-J", "-S", "-5000", "-t", "codex"],
+            ["tmux", "capture-pane", "-p", "-J", "-S", "-5000", "-t", "=codex:"],
             capture_output=True,
             text=True,
             timeout=5,
             check=False,
         )
 
-    @patch("app.routers.terminal.subprocess.run")
-    async def test_scroll_up_enters_tmux_copy_mode_one_page_up(self, run):
-        run.return_value.stdout = "25\n"
-        _scroll_terminal("codex", "up")
 
-        self.assertEqual(
-            run.call_args_list[0].args[0],
-            ["tmux", "copy-mode", "-u", "-t", "codex"],
-        )
+class RequestedTerminalSizeTest(unittest.TestCase):
+    def test_accepts_size_inside_limits(self):
+        websocket = SimpleNamespace(query_params={"rows": "42", "cols": "132"})
+        self.assertEqual(_requested_terminal_size(websocket), (42, 132))
+
+    def test_clamps_untrusted_size(self):
+        websocket = SimpleNamespace(query_params={"rows": "999", "cols": "1"})
+        self.assertEqual(_requested_terminal_size(websocket), (300, 10))
+
+    def test_uses_safe_default_for_invalid_size(self):
+        websocket = SimpleNamespace(query_params={"rows": "invalid", "cols": "80"})
+        self.assertEqual(_requested_terminal_size(websocket), (24, 80))
+
+
+class SendTextTest(unittest.TestCase):
+    @patch("app.routers.terminal.subprocess.run")
+    def test_sends_literal_text_then_enter(self, run):
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+
+        _send_text("codex", "gerar relatorio\n")
+
+        self.assertEqual(run.call_args_list[0].args[0], [
+            "tmux", "send-keys", "-t", "=codex:", "-l", "--", "gerar relatorio",
+        ])
         self.assertEqual(run.call_args_list[1].args[0], [
-            "tmux", "display-message", "-p", "-t", "codex", "#{scroll_position}"
+            "tmux", "send-keys", "-t", "=codex:", "Enter",
         ])
         self.assertEqual(run.call_count, 2)
 
     @patch("app.routers.terminal.subprocess.run")
-    async def test_scroll_down_returns_to_live_terminal_at_bottom(self, run):
-        run.return_value.stdout = "0\n"
-        _scroll_terminal("codex", "down")
+    def test_blank_text_sends_only_enter_no_literal_call(self, run):
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
 
-        self.assertEqual(run.call_args_list[0].args[0], [
-            "tmux", "send-keys", "-X", "-t", "codex", "page-down"
+        _send_text("codex", "")
+
+        run.assert_called_once_with(
+            ["tmux", "send-keys", "-t", "=codex:", "Enter"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_raises_when_tmux_session_is_unavailable(self, run):
+        run.return_value.returncode = 1
+        run.return_value.stderr = "can't find session"
+
+        with self.assertRaises(RuntimeError):
+            _send_text("codex", "oi")
+
+class AgentRuntimeReadinessTest(unittest.TestCase):
+    @patch("app.routers.terminal._start_gemini_headless_runtime")
+    def test_gemini_uses_headless_runtime(
+        self,
+        start_headless,
+    ):
+        start_headless.return_value = {
+            "agent": "gemini",
+            "session": "gemini",
+            "started": True,
+            "process": "node",
+        }
+
+        result = start_agent_runtime(
+            "gemini",
+            "execute esta tarefa",
+            timeout_seconds=1,
+            model="gemini-2.5-flash",
+        )
+
+        start_headless.assert_called_once_with(
+            "gemini",
+            "execute esta tarefa",
+            "gemini-2.5-flash",
+        )
+        self.assertEqual(result["agent"], "gemini")
+        self.assertEqual(result["process"], "node")
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_gemini_headless_runs_without_tmux_with_prompt(
+        self,
+        run,
+    ):
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+
+        result = _start_gemini_headless_runtime(
+            "gemini",
+            "execute esta tarefa",
+            "gemini-2.5-flash",
+        )
+
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "/opt/workdev/scripts/start_gemini_agent.sh",
+                "--model",
+                "gemini-2.5-flash",
+                "--prompt",
+                "execute esta tarefa",
+            ],
+        )
+        self.assertEqual(run.call_args.kwargs["cwd"], "/opt/workdev")
+        self.assertEqual(result["agent"], "gemini")
+        self.assertTrue(result["started"])
+
+    @patch("app.routers.terminal._send_text")
+    @patch("app.routers.terminal._current_process", return_value="codex")
+    @patch("app.routers.terminal._start_standby_session", return_value=True)
+    def test_auto_runtime_uses_run_scoped_session(self, start_session, current_process, send_text):
+        from contextlib import nullcontext
+        with patch('app.routers.terminal.agent_lifecycle.run_lock', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.agent_lock', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.run_binding', return_value=None), \
+             patch('app.services.run_pause.checked_work_unit', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.bind_run') as bind:
+            result = start_agent_runtime("codex", "prompt", timeout_seconds=1, run_id="run-1")
+            bind.assert_called_once_with('codex', 'run-1', 'auto-codex-run-1')
+        start_session.assert_called_once_with("codex", "auto-codex-run-1", None)
+        send_text.assert_called_once_with("auto-codex-run-1", "prompt")
+        self.assertEqual(result["session"], "auto-codex-run-1")
+
+    def test_paused_run_does_not_send_next_cli_prompt(self):
+        from contextlib import nullcontext
+        from app.services.run_pause import RunPaused
+        with patch('app.routers.terminal.agent_lifecycle.run_lock', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.agent_lock', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.run_binding', return_value=None), \
+             patch('app.services.run_pause.checked_work_unit', side_effect=RunPaused('paused')), \
+             patch('app.routers.terminal._start_standby_session') as start, \
+             patch('app.routers.terminal._send_text') as send:
+            with self.assertRaises(RunPaused):
+                start_agent_runtime('codex', 'next prompt', run_id='run-1')
+            start.assert_not_called()
+            send.assert_not_called()
+    @patch("app.routers.terminal._stop_standby_session", return_value=True)
+    def test_stop_auto_runtime_uses_run_scoped_session(self, stop_session):
+        result = stop_agent_runtime("codex", "run-1")
+        stop_session.assert_called_once_with("auto-codex-run-1")
+        self.assertTrue(result)
+
+    @patch("app.routers.terminal._current_process", return_value="codex")
+    @patch("app.routers.terminal.agent_lifecycle.try_recover", return_value={"started": False})
+    @patch("app.routers.terminal._stop_standby_session", return_value=True)
+    def test_finalize_auto_stops_only_run_and_confirms_standby(
+        self, stop_session, start_standby, _current_process,
+    ):
+        result = finalize_auto_runtime("codex", "run-1")
+        stop_session.assert_called_once_with("auto-codex-run-1")
+        start_standby.assert_called_once_with("codex", "codex", STANDBY_COMMANDS["codex"])
+        self.assertEqual(result["standby_process"], "codex")
+
+
+
+
+class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
+    async def test_rejects_unknown_agent(self):
+        with self.assertRaises(HTTPException) as ctx:
+            await agent_send("desconhecido", AgentSendRequest(text="oi"))
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
+    @patch("app.routers.terminal._require_session", return_value="codex")
+    @patch("app.routers.terminal._send_text")
+    async def test_blank_text_is_forwarded_as_a_bare_enter(self, mock_send, _require, _active_work):
+        result = await agent_send("codex", AgentSendRequest(text=""), db=None)
+        mock_send.assert_called_once_with("codex", "")
+        self.assertEqual(result, {"agent": "codex", "sent": True})
+
+    @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
+    @patch("app.routers.terminal._require_session", return_value="code")
+    @patch("app.routers.terminal._send_text")
+    async def test_sends_text_to_the_mapped_tmux_session(self, mock_send, require, _active_work):
+        result = await agent_send("claude", AgentSendRequest(text="continuar"), db=None)
+        require.assert_called_once_with("claude", None, "send")
+        mock_send.assert_called_once_with("code", "continuar")
+        self.assertEqual(result, {"agent": "claude", "sent": True})
+
+    @patch("app.routers.terminal.agent_operability.reconcile_snapshot")
+    @patch("app.routers.terminal._explain_denial", side_effect=lambda agent, state, db: state)
+    @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
+    @patch("app.routers.terminal._require_session", return_value="codex")
+    @patch("app.routers.terminal._send_text", side_effect=RuntimeError("indisponível"))
+    async def test_reports_503_when_tmux_session_is_unavailable(
+        self, _mock_send, _require, _active_work, _explain, reconcile
+    ):
+        with self.assertRaises(HTTPException) as ctx:
+            await agent_send("codex", AgentSendRequest(text="oi"), db=None)
+        self.assertEqual(ctx.exception.status_code, 503)
+        # Sessão que morreu entre a resolução e o send-keys: erro estruturado
+        # e snapshot reconciliado no mesmo instante, nunca 503 opaco.
+        self.assertEqual(ctx.exception.detail["code"], "agent_send_failed")
+        reconcile.assert_called_once()
+
+    @patch("app.routers.terminal.read_transcript", return_value=("linha limpa", 123.0))
+    async def test_transcript_endpoint_returns_clean_persistent_text(self, read):
+        result = await agent_transcript("codex")
+        read.assert_called_once_with("codex")
+        self.assertEqual(result["content"], "linha limpa")
+        self.assertEqual(result["lines"], 1)
+
+    async def test_transcript_endpoint_rejects_unknown_agent(self):
+        with self.assertRaises(HTTPException) as ctx:
+            await agent_transcript("desconhecido")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
+class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
+    @patch("app.routers.terminal._current_process", return_value="openrouter")
+    @patch("app.routers.terminal.subprocess.run")
+    def test_start_is_idempotent_when_agent_is_running(self, run, _current):
+        self.assertFalse(_start_standby_session("openrouter", "openrouter"))
+        run.assert_not_called()
+
+    @patch("app.routers.terminal._current_process", return_value="")
+    @patch("app.routers.terminal.subprocess.run")
+    def test_start_uses_the_approved_launcher(self, run, _current):
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+        self.assertTrue(_start_standby_session("kimi", "kimi", "moonshotai/kimi-k3"))
+        self.assertEqual(run.call_args.args[0], [
+            "tmux", "new-session", "-d", "-s", "kimi", "-c", "/opt/workdev",
+            "env", "KIMI_PROVIDER=openrouter", "KIMI_MODEL=moonshotai/kimi-k3",
+            "/opt/workdev/scripts/start_kimi_agent.sh",
         ])
-        self.assertEqual(run.call_args_list[2].args[0], [
-            "tmux", "send-keys", "-X", "-t", "codex", "cancel"
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_stop_is_idempotent_when_session_is_absent(self, run):
+        run.return_value.returncode = 1
+        run.return_value.stderr = "can't find session: kimi"
+        self.assertFalse(_stop_standby_session("kimi"))
+
+    async def test_stop_requires_explicit_confirmation(self):
+        # A rota é chamada direto aqui, sem o FastAPI resolver os defaults —
+        # `Query(default=False)` chegaria como objeto (truthy) e passaria pelo
+        # guard. Por isso o confirm vai explícito, e o default declarado é
+        # conferido à parte: é ele a garantia de "exige confirmação".
+        with patch('app.services.agent_workspace.audit') as audit, self.assertRaises(HTTPException) as ctx:
+            await stop_agent_session("codex", confirm=False)
+        self.assertEqual(audit.call_args.kwargs['result'], 'failed')
+        self.assertEqual(ctx.exception.status_code, 409)
+
+        declarado = inspect.signature(stop_agent_session).parameters["confirm"]
+        self.assertFalse(declarado.default.default)
+
+    @patch('app.routers.terminal.start_agent_lifecycle')
+    async def test_start_endpoint_reconnects_through_lifecycle(self, start):
+        start.return_value = {'started': True, 'state': {'agent_process_running': True}}
+        result = await start_agent_session('qwen')
+        start.assert_awaited_once_with('qwen')
+        self.assertEqual(result, {'agent': 'qwen', 'running': True, 'started': True})
+
+    @patch('app.routers.terminal.stop_agent_lifecycle')
+    async def test_confirmed_stop_uses_lifecycle(self, stop):
+        stop.return_value = {'stopped': True, 'state': {'offline': True}}
+        result = await stop_agent_session('kimi', confirm=True)
+        stop.assert_awaited_once_with('kimi', confirm=True)
+        self.assertEqual(result, {'agent': 'kimi', 'running': False, 'stopped': True})
+
+    @patch('app.routers.terminal.stop_agent_lifecycle')
+    async def test_busy_lifecycle_error_is_preserved(self, stop):
+        stop.side_effect = HTTPException(status_code=409, detail='agent_busy')
+        with self.assertRaises(HTTPException) as ctx:
+            await stop_agent_session('gemini', confirm=True)
+        self.assertEqual(ctx.exception.status_code, 409)
+
+
+class AwaitingApprovalTest(unittest.TestCase):
+    @patch("app.routers.terminal._capture_history")
+    def test_detects_yes_no_prompt_on_last_line(self, capture):
+        capture.return_value = "gerando plano...\npronto.\nProsseguir? (y/n)"
+        self.assertTrue(_awaiting_approval("codex"))
+
+    @patch("app.routers.terminal._capture_history")
+    def test_detects_claude_style_numbered_menu(self, capture):
+        capture.return_value = "Do you want to proceed?\n❯ 1. Yes\n  2. No"
+        self.assertTrue(_awaiting_approval("code"))
+
+    @patch("app.routers.terminal._capture_history")
+    def test_detects_required_approval_phrases_and_preserves_prompt(self, capture):
+        for phrase in (
+            "Allow execution?", "Approve?", "Proceed?", "Confirm?",
+            "Allow once", "Allow for this session", "permission required",
+        ):
+            with self.subTest(phrase=phrase):
+                capture.return_value = f"Comando: pytest\n{phrase}\nYes/No"
+                awaiting, prompt = _approval_state("codex")
+                self.assertTrue(awaiting)
+                self.assertIn(phrase, prompt)
+
+    @patch("app.routers.terminal._capture_history")
+    def test_ignores_normal_output_without_prompt_markers(self, capture):
+        capture.return_value = "instalando dependencias...\n1. baixando pacote a\n2. baixando pacote b"
+        self.assertFalse(_awaiting_approval("codex"))
+
+    @patch("app.routers.terminal._capture_history")
+    def test_ignores_prompt_text_that_already_scrolled_out_of_view(self, capture):
+        capture.return_value = "\n".join([
+            "Prosseguir? (y/n)",
+            "usuario respondeu y",
+            "aplicando mudancas",
+            "build concluido",
+            "continuando execucao normalmente",
         ])
-        self.assertEqual(run.call_count, 3)
+        self.assertFalse(_awaiting_approval("codex"))
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_returns_false_when_tmux_session_is_unavailable(self, run):
+        run.return_value.returncode = 1
+        run.return_value.stderr = "can't find session"
+        self.assertFalse(_awaiting_approval("codex"))
+
+
+class AgentStatusTest(unittest.IsolatedAsyncioTestCase):
+    @patch('app.routers.terminal.agent_snapshot.read_snapshot')
+    @patch('app.routers.terminal._current_process')
+    async def test_status_delegates_to_snapshot_without_process_probe(self, process, read):
+        row = {'agent': 'codex', 'runtime_state': 'STOPPING', 'activity_state': 'IDLE'}
+        read.return_value = {'agents': [row]}
+        self.assertEqual(await _agent_status('codex', 'codex'), row)
+        process.assert_not_called()
+
+    @patch('app.routers.terminal.agent_snapshot.read_snapshot')
+    def test_status_endpoint_returns_snapshot_directly(self, read):
+        read.return_value = {'agents': []}
+        self.assertEqual(agents_status(), {'agents': []})
+        self.assertNotIn('local-code', read.call_args.args[0])
+        self.assertIn('gpu-runpod', read.call_args.args[0])
+
+
+class SupervisorHealthStateTest(unittest.TestCase):
+    def test_loads_recent_state_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "status.json"
+            path.write_text(json.dumps({
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "version": 2,
+                "agents": {"kimi": {"agent": "kimi", "runtime_state": "ONLINE", "activity_state": "IDLE", "checked_at": datetime.now(timezone.utc).isoformat()}},
+            }))
+            with patch("app.routers.terminal._HEALTH_STATE_FILE", path):
+                self.assertEqual(_load_supervisor_health()["kimi"]["runtime_state"], "ONLINE")
+
+    def test_ignores_stale_state_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "status.json"
+            path.write_text(json.dumps({
+                "updated_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+                "version": 2,
+                "agents": {"kimi": {"agent": "kimi", "runtime_state": "ONLINE", "activity_state": "IDLE", "checked_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()}},
+            }))
+            with patch("app.routers.terminal._HEALTH_STATE_FILE", path):
+                self.assertEqual(_load_supervisor_health()["kimi"]["runtime_state"], "ERROR")
+
 
 if __name__ == "__main__":
     unittest.main()

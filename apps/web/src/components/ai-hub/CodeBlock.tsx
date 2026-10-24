@@ -23,6 +23,7 @@ import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
 import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
 import yaml from "react-syntax-highlighter/dist/esm/languages/prism/yaml";
 import { Check, Copy } from "lucide-react";
+import { gravarLote, planoDaBancada } from "@/services/bancada.service";
 
 PrismLight.registerLanguage("bash", bash);
 PrismLight.registerLanguage("sh", bash);
@@ -62,10 +63,39 @@ function getCodeString(children: unknown): string {
   return raw.replace(/\n$/, "");
 }
 
+/** Plano da Bancada no chat: grava o lote validado e abre a Bancada já com ele, sem copiar e colar. */
+function MandarParaBancada({ plano }: { plano: unknown }) {
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState("");
+
+  async function mandar() {
+    setEnviando(true);
+    setErro("");
+    try {
+      const { lotes } = await gravarLote(plano);
+      window.location.assign(`/bancada?${lotes.map((l) => `lote=${encodeURIComponent(l.lote)}`).join("&")}`);
+    } catch (causa) {
+      setErro(causa instanceof Error ? causa.message : "Falha ao mandar para a Bancada");
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t border-slate-700 px-3 py-2">
+      <button onClick={() => void mandar()} disabled={enviando}
+        className="rounded bg-sky-700 px-3 py-1 text-xs text-white hover:bg-sky-600 disabled:opacity-50">
+        {enviando ? "Mandando…" : "Mandar para a Bancada"}
+      </button>
+      {erro && <span role="alert" className="text-xs text-rose-300">{erro}</span>}
+    </div>
+  );
+}
+
 export function CodeBlock({ className, children }: { className?: string; children?: unknown }) {
   const [copied, setCopied] = useState(false);
   const code = getCodeString(children);
   const lang = /language-(\w+)/.exec(className || "")?.[1];
+  const plano = lang === "json" ? planoDaBancada(code) : null;
 
   async function handleCopy() {
     await navigator.clipboard.writeText(code);
@@ -106,6 +136,7 @@ export function CodeBlock({ className, children }: { className?: string; childre
           {code}
         </SyntaxHighlighter>
       </div>
+      {plano && <MandarParaBancada plano={plano} />}
     </div>
   );
 }

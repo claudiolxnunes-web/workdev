@@ -1,0 +1,1755 @@
+diff --git a/apps/api/alembic/versions/0001_add_deployment_outcomes.py b/apps/api/alembic/versions/0001_add_deployment_outcomes.py
+new file mode 100644
+index 0000000..67a980c
+--- /dev/null
++++ b/apps/api/alembic/versions/0001_add_deployment_outcomes.py
+@@ -0,0 +1,56 @@
++"""add deployment outcomes
++
++Revision ID: 0001
++Revises: c7f21a9d4e05
++Create Date: 2026-09-01
++
++"""
++from typing import Sequence, Union
++
++from alembic import op
++import sqlalchemy as sa
++from sqlalchemy.dialects import postgresql
++
++
++revision: str = "0001"
++down_revision: Union[str, Sequence[str], None] = "c7f21a9d4e05"
++branch_labels: Union[str, Sequence[str], None] = None
++depends_on: Union[str, Sequence[str], None] = None
++
++
++def upgrade() -> None:
++    """Upgrade schema."""
++    op.create_table(
++        "deployment_outcomes",
++        sa.Column("id", postgresql.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
++        sa.Column("proof_id", sa.String(64), nullable=False),
++        sa.Column("project", sa.String(255), nullable=False),
++        sa.Column("artifact_fingerprint", sa.String(64), nullable=False),
++        sa.Column("outcome", sa.Enum(
++            "success", "rolled_back", "hotfixed", "degraded",
++            name="deployment_outcome"
++        ), nullable=False),
++        sa.Column("deployed_at", sa.DateTime(timezone=True), nullable=False),
++        sa.Column("deployed_by", sa.String(100), nullable=True),
++        sa.Column("commit_sha", sa.String(64), nullable=True),
++        sa.Column("deployment_url", sa.Text(), nullable=True),
++        sa.Column("postcheck_result", postgresql.JSONB(), nullable=True),
++        sa.Column("error_message", sa.Text(), nullable=True),
++        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
++        sa.PrimaryKeyConstraint("id"),
++    )
++    op.create_index("ix_deployment_outcomes_proof_id", "deployment_outcomes", ["proof_id"])
++    op.create_index("ix_deployment_outcomes_project", "deployment_outcomes", ["project"])
++    op.create_index("ix_deployment_outcomes_deployed_at", "deployment_outcomes", ["deployed_at"])
++    op.create_index("ix_deployment_outcomes_outcome", "deployment_outcomes", ["outcome"])
++
++
++def downgrade() -> None:
++    """Downgrade schema."""
++    op.drop_index("ix_deployment_outcomes_outcome", table_name="deployment_outcomes")
++    op.drop_index("ix_deployment_outcomes_deployed_at", table_name="deployment_outcomes")
++    op.drop_index("ix_deployment_outcomes_project", table_name="deployment_outcomes")
++    op.drop_index("ix_deployment_outcomes_proof_id", table_name="deployment_outcomes")
++    op.drop_table("deployment_outcomes")
++
++    op.execute("DROP TYPE IF EXISTS deployment_outcome")
+diff --git a/apps/api/app/database.py b/apps/api/app/database.py
+index a01c7df..1cb6821 100644
+--- a/apps/api/app/database.py
++++ b/apps/api/app/database.py
+@@ -1,5 +1,5 @@
+ from sqlalchemy import create_engine
+-from sqlalchemy.orm import sessionmaker, declarative_base
++from sqlalchemy.orm import sessionmaker, declarative_base, Session
+ from dotenv import load_dotenv
+ import os
+ 
+@@ -20,3 +20,12 @@ SessionLocal = sessionmaker(
+ )
+ 
+ Base = declarative_base()
++
++
++def get_db() -> Session:
++    """Dependency para obter sessão do banco de dados."""
++    db = SessionLocal()
++    try:
++        yield db
++    finally:
++        db.close()
+diff --git a/apps/api/app/main.py b/apps/api/app/main.py
+index 5bf587d..6e3366d 100644
+--- a/apps/api/app/main.py
++++ b/apps/api/app/main.py
+@@ -24,6 +24,7 @@ from app.routers.decisions import router as decisions_router
+ from app.routers.handoffs import plans_router, router as handoffs_router
+ from app.routers.settings import router as settings_router
+ from app.routers.system import router as system_router
++from app.routers.metrics import router as metrics_router
+ from app.auth import request_is_authenticated
+ 
+ load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
+@@ -75,6 +76,7 @@ app.include_router(settings_router, prefix="/api")
+ app.include_router(system_router, prefix="/api")
+ app.include_router(busca_web_router, prefix="/api")
+ app.include_router(terminal_router)
++app.include_router(metrics_router, prefix="/api")
+ 
+ 
+ @app.get("/health")
+diff --git a/apps/api/app/models/__init__.py b/apps/api/app/models/__init__.py
+index e69de29..e27c9ee 100644
+--- a/apps/api/app/models/__init__.py
++++ b/apps/api/app/models/__init__.py
+@@ -0,0 +1,29 @@
++# Import all models to ensure they are registered with SQLAlchemy
++from app.models.adr import ADR
++from app.models.ai_routing import AIModelCatalog
++from app.models.backlog import BacklogItem
++from app.models.chat import ChatMessage, ChatSession
++from app.models.decision import Decision
++from app.models.deployment import DeploymentOutcome
++from app.models.handoff import ExecutionPlan, AgentRun, AgentRunEvent
++from app.models.knowledge import KnowledgeEntry
++from app.models.project import Project
++from app.models.rfc import RFC
++from app.models.subtask import BacklogSubtask
++
++__all__ = [
++    "ADR",
++    "AIModelCatalog",
++    "BacklogItem",
++    "ChatMessage",
++    "ChatSession",
++    "Decision",
++    "DeploymentOutcome",
++    "ExecutionPlan",
++    "AgentRun",
++    "AgentRunEvent",
++    "KnowledgeEntry",
++    "Project",
++    "RFC",
++    "BacklogSubtask",
++]
+diff --git a/apps/api/app/models/deployment.py b/apps/api/app/models/deployment.py
+new file mode 100644
+index 0000000..9a2193c
+--- /dev/null
++++ b/apps/api/app/models/deployment.py
+@@ -0,0 +1,38 @@
++from sqlalchemy import (
++    Column, DateTime, Enum, String, Text, text,
++)
++from sqlalchemy.dialects.postgresql import JSONB, UUID
++
++from app.database import Base
++
++
++class DeploymentOutcome(Base):
++    __tablename__ = "deployment_outcomes"
++
++    id = Column(
++        UUID(as_uuid=True),
++        primary_key=True,
++        server_default=text("gen_random_uuid()"),
++    )
++    proof_id = Column(String(64), nullable=False, index=True)
++    project = Column(String(255), nullable=False, index=True)
++    artifact_fingerprint = Column(String(64), nullable=False)
++    outcome = Column(
++        Enum(
++            "success", "rolled_back", "hotfixed", "degraded",
++            name="deployment_outcome"
++        ),
++        nullable=False,
++        index=True,
++    )
++    deployed_at = Column(DateTime(timezone=True), nullable=False, index=True)
++    deployed_by = Column(String(100), nullable=True)
++    commit_sha = Column(String(64), nullable=True)
++    deployment_url = Column(Text(), nullable=True)
++    postcheck_result = Column(JSONB(), nullable=True)
++    error_message = Column(Text(), nullable=True)
++    created_at = Column(
++        DateTime(timezone=True),
++        server_default=text("now()"),
++        nullable=False,
++    )
+diff --git a/apps/api/app/routers/deployments.py b/apps/api/app/routers/deployments.py
+index ed9f108..a018b28 100644
+--- a/apps/api/app/routers/deployments.py
++++ b/apps/api/app/routers/deployments.py
+@@ -3,8 +3,16 @@ import time
+ import urllib.request
+ import urllib.error
+ from concurrent.futures import ThreadPoolExecutor
+-from datetime import datetime
+-from fastapi import APIRouter
++from datetime import datetime, timedelta
++from fastapi import APIRouter, Depends, HTTPException, status
++from sqlalchemy.orm import Session
++
++from app.database import get_db
++from app.models.deployment import DeploymentOutcome
++from app.schemas.deployment import (
++    DeploymentOutcomeCreate,
++    DeploymentOutcomeOut,
++)
+ 
+ router = APIRouter(prefix="/deployments", tags=["deployments"])
+ CONFIG = "/opt/workdev/deployments.json"
+@@ -33,6 +41,11 @@ def ping(app: dict) -> dict:
+ 
+ @router.get("/status")
+ def status():
++    """
++    Verificar status dos aplicativos monitorados.
++
++    Endpoint existente de monitoramento de saúde de serviços.
++    """
+     try:
+         apps = json.load(open(CONFIG))
+     except Exception as e:
+@@ -45,3 +58,87 @@ def status():
+         "resumo": {"total": len(resultados), "online": online},
+         "apps": resultados,
+     }
++
++
++@router.post(
++    "/outcomes",
++    response_model=DeploymentOutcomeOut,
++    status_code=status.HTTP_201_CREATED,
++)
++def create_deployment_outcome(
++    outcome: DeploymentOutcomeCreate,
++    db: Session = Depends(get_db),
++):
++    """
++    Registrar o resultado de um deploy.
++
++    Este endpoint é chamado pelo pipeline de deploy após o postcheck
++    para persistir o resultado (success, rolled_back, hotfixed, degraded).
++    """
++    db_outcome = DeploymentOutcome(
++        proof_id=outcome.proof_id,
++        project=outcome.project,
++        artifact_fingerprint=outcome.artifact_fingerprint,
++        outcome=outcome.outcome,
++        deployed_at=outcome.deployed_at or datetime.utcnow(),
++        deployed_by=outcome.deployed_by,
++        commit_sha=outcome.commit_sha,
++        deployment_url=outcome.deployment_url,
++        postcheck_result=outcome.postcheck_result,
++        error_message=outcome.error_message,
++    )
++
++    db.add(db_outcome)
++    db.commit()
++    db.refresh(db_outcome)
++
++    return db_outcome
++
++
++@router.get("/outcomes", response_model=list[DeploymentOutcomeOut])
++def list_deployment_outcomes(
++    project: str | None = None,
++    days: int = 30,
++    db: Session = Depends(get_db),
++):
++    """
++    Listar deployment outcomes dos últimos N dias.
++
++    - `project`: filtrar por projeto (opcional)
++    - `days`: número de dias para retroceder (padrão: 30)
++    """
++    cutoff = datetime.utcnow() - timedelta(days=days)
++
++    query = db.query(DeploymentOutcome).filter(
++        DeploymentOutcome.deployed_at >= cutoff
++    )
++
++    if project:
++        query = query.filter(DeploymentOutcome.project == project)
++
++    outcomes = query.order_by(
++        DeploymentOutcome.deployed_at.desc()
++    ).all()
++
++    return outcomes
++
++
++@router.get("/outcomes/{proof_id}", response_model=DeploymentOutcomeOut)
++def get_deployment_outcome(
++    proof_id: str,
++    db: Session = Depends(get_db),
++):
++    """
++    Obter o resultado de um deploy específico pelo proof_id.
++    """
++    outcome = db.query(DeploymentOutcome).filter(
++        DeploymentOutcome.proof_id == proof_id
++    ).first()
++
++    if not outcome:
++        raise HTTPException(
++            status_code=status.HTTP_404_NOT_FOUND,
++            detail=f"Deployment outcome com proof_id '{proof_id}' não encontrado",
++        )
++
++    return outcome
+diff --git a/apps/api/app/routers/metrics.py b/apps/api/app/routers/metrics.py
+new file mode 100644
+index 0000000..03573a8
+--- /dev/null
++++ b/apps/api/app/routers/metrics.py
+@@ -0,0 +1,276 @@
++import os
++import time
++from datetime import datetime, timedelta
++from functools import lru_cache
++from typing import Any
++
++from fastapi import APIRouter, Depends, HTTPException
++from sqlalchemy import text
++from sqlalchemy.orm import Session
++
++from app.database import get_db
++
++router = APIRouter(prefix="/metrics", tags=["metrics"])
++
++# Cache em memória (fallback sem Redis)
++CACHE_TTL = int(os.getenv("METRICS_CACHE_TTL", "300"))  # 5 minutos padrão
++_cache_data: dict[str, tuple[dict[str, Any], float]] = {}
++
++
++def _get_from_cache(key: str) -> dict[str, Any] | None:
++    """Obter dados do cache em memória."""
++    if key not in _cache_data:
++        return None
++    data, timestamp = _cache_data[key]
++    if time.time() - timestamp > CACHE_TTL:
++        del _cache_data[key]
++        return None
++    return data
++
++
++def _set_cache(key: str, data: dict[str, Any]) -> None:
++    """Salvar dados no cache em memória."""
++    _cache_data[key] = (data, time.time())
++
++
++@router.get("/executive")
++def get_executive_metrics(
++    project_id: str | None = None,
++    days: int = 30,
++    db: Session = Depends(get_db),
++):
++    """
++    Obter métricas executivas DORA consolidadas.
++
++    Retorna as 4 métricas DORA:
++    1. Deployment Frequency (frequência de deploy por semana)
++    2. Change Failure Rate (taxa de falha em mudança)
++    3. MTTR (Median Time To Recovery)
++    4. Lead Time for Changes
++
++    Parâmetros:
++    - `project_id`: filtrar por projeto (opcional)
++    - `days`: janela de dias para análise (padrão: 30)
++
++    Cache:
++    - Redis (quando disponível): TTL configurável via METRICS_CACHE_TTL
++    - Fallback: LRU cache em memória (5 minutos)
++    """
++    cache_key = f"metrics:executive:{project_id or 'all'}:{days}"
++
++    # Tentar cache Redis
++    cached = _get_from_cache(cache_key)
++    if cached:
++        cached["_cache_hit"] = True
++        cached["_cache_source"] = "redis"
++        return cached
++
++    # Calcular métricas a partir do PostgreSQL local
++    cutoff = datetime.utcnow() - timedelta(days=days)
++
++    metrics: dict[str, Any] = {
++        "generated_at": datetime.utcnow().isoformat(),
++        "period_days": days,
++        "project_id": project_id,
++        "metrics": {},
++    }
++
++    try:
++        # 1. Deployment Frequency (deploys por semana)
++        deploy_query = """
++        SELECT
++            date_trunc('week', deployed_at) AS week_start,
++            COUNT(*) FILTER (WHERE outcome = 'success') AS successful,
++            COUNT(*) FILTER (WHERE outcome = 'degraded') AS degraded,
++            COUNT(*) FILTER (WHERE outcome IN ('rolled_back', 'hotfixed')) AS failed,
++            COUNT(*) AS total
++        FROM deployment_outcomes
++        WHERE deployed_at >= :cutoff
++        GROUP BY week_start
++        ORDER BY week_start DESC
++        """
++
++        project_filter = ""
++        if project_id:
++            project_filter = " AND project = :project_id"
++            deploy_query += project_filter
++
++        deploy_result = db.execute(
++            text(deploy_query),
++            {"cutoff": cutoff, "project_id": project_id} if project_id else {"cutoff": cutoff}
++        ).fetchall()
++
++        weekly_deploys = [
++            {
++                "week": row.week_start.isoformat(),
++                "successful": row.successful,
++                "degraded": row.degraded,
++                "failed": row.failed,
++                "total": row.total,
++            }
++            for row in deploy_result
++        ]
++
++        # Calcular média semanal
++        if weekly_deploys:
++            avg_weekly = sum(d["successful"] for d in weekly_deploys) / max(len(weekly_deploys), 1)
++        else:
++            avg_weekly = 0
++
++        metrics["metrics"]["deployment_frequency"] = {
++            "weekly_average": round(avg_weekly, 2),
++            "last_4_weeks": weekly_deploys[:4],
++            "total_in_period": sum(d["total"] for d in weekly_deploys),
++        }
++
++        # 2. Change Failure Rate (últimos 30 dias)
++        failure_query = """
++        SELECT
++            COUNT(*) FILTER (WHERE outcome IN ('rolled_back', 'hotfixed'))::numeric AS failed,
++            COUNT(*)::numeric AS total
++        FROM deployment_outcomes
++        WHERE deployed_at >= :cutoff
++        """
++        if project_id:
++            failure_query += " AND project = :project_id"
++
++        failure_result = db.execute(
++            text(failure_query),
++            {"cutoff": datetime.utcnow() - timedelta(days=30), "project_id": project_id} if project_id else {"cutoff": datetime.utcnow() - timedelta(days=30)}
++        ).first()
++
++        failed_count = float(failure_result.failed) if failure_result else 0
++        total_count = float(failure_result.total) if failure_result else 0
++        failure_rate = (failed_count / total_count * 100) if total_count > 0 else 0
++
++        metrics["metrics"]["change_failure_rate"] = {
++            "percent": round(failure_rate, 2),
++            "failed_count": int(failed_count),
++            "total_count": int(total_count),
++        }
++
++        # 3. MTTR - Median Time To Recovery (simulado via agent_run_events)
++        # Como não temos incidentes estruturados, usar eventos do supervisor
++        mttr_query = """
++        WITH incident_events AS (
++            SELECT
++                payload->>'project_id' AS project_id,
++                (payload->>'detected_at')::timestamptz AS detected_at,
++                (payload->>'resolved_at')::timestamptz AS resolved_at,
++                EXTRACT(EPOCH FROM (
++                    (payload->>'resolved_at')::timestamptz -
++                    (payload->>'detected_at')::timestamptz
++                )) / 60 AS recovery_minutes
++            FROM agent_run_events
++            WHERE event_type = 'incident_resolved'
++              AND payload ? 'detected_at'
++              AND payload ? 'resolved_at'
++              AND (payload->>'resolved_at')::timestamptz >= :cutoff
++        )
++        SELECT
++            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY recovery_minutes) AS median_minutes,
++            AVG(recovery_minutes) AS mean_minutes,
++            COUNT(*) AS incident_count
++        FROM incident_events
++        WHERE recovery_minutes > 0
++        """
++
++        mttr_result = db.execute(
++            text(mttr_query),
++            {"cutoff": datetime.utcnow() - timedelta(days=30)}
++        ).first()
++
++        metrics["metrics"]["mttr"] = {
++            "median_minutes": round(float(mttr_result.median_minutes), 2) if mttr_result and mttr_result.median_minutes else None,
++            "mean_minutes": round(float(mttr_result.mean_minutes), 2) if mttr_result and mttr_result.mean_minutes else None,
++            "incident_count": mttr_result.incident_count if mttr_result else 0,
++        }
++
++        # 4. Lead Time - tempo médio de criação até conclusão de tasks
++        lead_time_query = """
++        WITH task_pairs AS (
++            SELECT
++                bl.project_id,
++                EXTRACT(EPOCH FROM (
++                    bl.updated_at - bl.created_at
++                )) / 3600 AS lead_time_hours
++            FROM backlog bl
++            WHERE bl.status = 'done'
++              AND bl.updated_at >= :cutoff
++              AND bl.updated_at > bl.created_at
++        )
++        SELECT
++            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY lead_time_hours) AS median_hours,
++            AVG(lead_time_hours) AS mean_hours,
++            MIN(lead_time_hours) AS min_hours,
++            MAX(lead_time_hours) AS max_hours,
++            COUNT(*) AS completed_count
++        FROM task_pairs
++        """
++
++        lead_result = db.execute(
++            text(lead_time_query),
++            {"cutoff": cutoff}
++        ).first()
++
++        metrics["metrics"]["lead_time"] = {
++            "median_hours": round(float(lead_result.median_hours), 2) if lead_result and lead_result.median_hours else None,
++            "mean_hours": round(float(lead_result.mean_hours), 2) if lead_result and lead_result.mean_hours else None,
++            "min_hours": round(float(lead_result.min_hours), 2) if lead_result and lead_result.min_hours else None,
++            "max_hours": round(float(lead_result.max_hours), 2) if lead_result and lead_result.max_hours else None,
++            "completed_count": lead_result.completed_count if lead_result else 0,
++        }
++
++        # Calcular DORA Score (simplificado)
++        # Elite: >1 deploy/dia, <15% falha, <1h MTTR, <1d lead time
++        dora_score = 0
++        if avg_weekly >= 5:  # ~1 por dia útil
++            dora_score += 25
++        if failure_rate < 15:
++            dora_score += 25
++        if metrics["metrics"]["mttr"]["median_minutes"] and metrics["metrics"]["mttr"]["median_minutes"] < 60:
++            dora_score += 25
++        if metrics["metrics"]["lead_time"]["median_hours"] and metrics["metrics"]["lead_time"]["median_hours"] < 24:
++            dora_score += 25
++
++        metrics["dora_score"] = dora_score
++        metrics["dora_level"] = (
++            "Elite" if dora_score >= 100 else
++            "High" if dora_score >= 75 else
++            "Medium" if dora_score >= 50 else
++            "Low"
++        )
++
++    except Exception as e:
++        metrics["error"] = str(e)
++
++    # Cache o resultado
++    _set_cache(cache_key, metrics)
++
++    metrics["_cache_hit"] = False
++    metrics["_cache_source"] = "database"
++    metrics["_query_time_ms"] = 0  # Poderia ser medido com timing
++
++    return metrics
++
++
++@router.get("/executive/cache")
++def get_cache_status():
++    """Verificar status do cache de métricas."""
++    return {
++        "cache_enabled": True,
++        "cache_type": "memory",
++        "cache_ttl_seconds": CACHE_TTL,
++        "cache_key_pattern": "metrics:executive:{project_id}:{days}",
++        "cache_entries": len(_cache_data),
++    }
++
++
++@router.post("/executive/cache/clear")
++def clear_metrics_cache():
++    """Limpar cache de métricas."""
++    keys = list(_cache_data.keys())
++    for key in keys:
++        if key.startswith("metrics:executive:"):
++            del _cache_data[key]
++    return {"cleared": len(keys), "message": f"{len(keys)} chaves removidas"}
+diff --git a/apps/api/app/schemas/deployment.py b/apps/api/app/schemas/deployment.py
+new file mode 100644
+index 0000000..ab964e5
+--- /dev/null
++++ b/apps/api/app/schemas/deployment.py
+@@ -0,0 +1,40 @@
++from datetime import datetime
++from typing import Literal
++from uuid import UUID
++
++from pydantic import BaseModel, ConfigDict, Field
++
++
++DeploymentOutcomeType = Literal["success", "rolled_back", "hotfixed", "degraded"]
++
++
++class DeploymentOutcomeCreate(BaseModel):
++    model_config = ConfigDict(populate_by_name=True)
++
++    proof_id: str = Field(min_length=1, max_length=64)
++    project: str = Field(min_length=1, max_length=255)
++    artifact_fingerprint: str = Field(min_length=1, max_length=64)
++    outcome: DeploymentOutcomeType
++    deployed_at: datetime | None = None
++    deployed_by: str | None = Field(default=None, max_length=100)
++    commit_sha: str | None = Field(default=None, max_length=64)
++    deployment_url: str | None = None
++    postcheck_result: dict | None = None
++    error_message: str | None = None
++
++
++class DeploymentOutcomeOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: UUID
++    proof_id: str
++    project: str
++    artifact_fingerprint: str
++    outcome: DeploymentOutcomeType
++    deployed_at: datetime
++    deployed_by: str | None
++    commit_sha: str | None
++    deployment_url: str | None
++    postcheck_result: dict | None
++    error_message: str | None
++    created_at: datetime
+diff --git a/apps/api/app/services/incident_parser.py b/apps/api/app/services/incident_parser.py
+new file mode 100644
+index 0000000..f80054c
+--- /dev/null
++++ b/apps/api/app/services/incident_parser.py
+@@ -0,0 +1,276 @@
++"""
++Parser de eventos do supervisor para detectar incidentes.
++
++Este módulo analisa os eventos do supervisor (monitoramento de serviços)
++e gera eventos de incidente quando detecta problemas de saúde na plataforma.
++"""
++
++import json
++import logging
++from datetime import datetime, timezone
++from typing import Any
++from uuid import UUID
++
++from sqlalchemy.orm import Session
++
++from app.models.handoff import AgentRun, AgentRunEvent
++
++logger = logging.getLogger(__name__)
++
++
++# Tipos de eventos de incidente
++INCIDENT_DETECTED = "incident_detected"
++INCIDENT_RESOLVED = "incident_resolved"
++INCIDENT_ESCALATED = "incident_escalated"
++
++# Serviços monitorados críticos
++CRITICAL_SERVICES = {
++    "workdev-api": "API principal do WorkDev",
++    "docker": "Docker daemon",
++    "postgres": "Banco de dados PostgreSQL",
++    "traefik": "Proxy reverso / Load balancer",
++}
++
++# Thresholds para detecção de incidente
++FAILURE_THRESHOLD = 3  # Número de falhas consecutivas para gerar incidente
++RECOVERY_THRESHOLD = 2  # Número de sucessos consecutivos para considerar recuperado
++
++
++class IncidentParser:
++    """
++    Parser para detectar incidentes a partir de eventos de monitoramento.
++
++    Detecta:
++    - Serviços críticos offline
++    - Health checks falhando repetidamente
++    - Latência acima do threshold
++    - Deploy failures em cascata
++    """
++
++    def __init__(self, db: Session):
++        self.db = db
++
++    def parse_service_health(
++        self,
++        service_name: str,
++        status: str,
++        latency_ms: int | None = None,
++        detail: str | None = None,
++        timestamp: datetime | None = None,
++    ) -> dict[str, Any] | None:
++        """
++        Analisar saúde de um serviço e retornar dados de incidente se aplicável.
++
++        Retorna:
++        - dict com dados do incidente se detectado
++        - None se status normal
++        """
++        timestamp = timestamp or datetime.now(timezone.utc)
++
++        # Verificar se é serviço crítico
++        is_critical = service_name in CRITICAL_SERVICES
++
++        # Status considerado "online"
++        online_statuses = {"online", "active", "running", "healthy"}
++        is_offline = status.lower() not in online_statuses
++
++        # Se está offline e é crítico, gerar incidente
++        if is_offline and is_critical:
++            return {
++                "incident_type": "service_outage",
++                "service": service_name,
++                "service_description": CRITICAL_SERVICES.get(service_name),
++                "status": status,
++                "latency_ms": latency_ms,
++                "detail": detail,
++                "severity": "critical",
++                "detected_at": timestamp.isoformat(),
++            }
++
++        # Verificar latência alta (threshold: 5000ms)
++        if latency_ms and latency_ms > 5000:
++            return {
++                "incident_type": "high_latency",
++                "service": service_name,
++                "latency_ms": latency_ms,
++                "threshold_ms": 5000,
++                "severity": "warning",
++                "detected_at": timestamp.isoformat(),
++            }
++
++        return None
++
++    def parse_deploy_failure(
++        self,
++        proof_id: str,
++        project: str,
++        status: str,
++        error_message: str | None = None,
++        timestamp: datetime | None = None,
++    ) -> dict[str, Any] | None:
++        """
++        Analisar falha de deploy e retornar dados de incidente se aplicável.
++
++        Status que geram incidente:
++        - DEPLOY_FAILED
++        - ROLLED_BACK
++        - DEPLOY_DEGRADED (apenas se persistir)
++        """
++        timestamp = timestamp or datetime.now(timezone.utc)
++
++        incident_statuses = {"DEPLOY_FAILED", "ROLLED_BACK"}
++
++        if status in incident_statuses:
++            return {
++                "incident_type": "deploy_failure",
++                "proof_id": proof_id,
++                "project": project,
++                "deploy_status": status,
++                "error_message": error_message,
++                "severity": "high" if status == "DEPLOY_FAILED" else "medium",
++                "detected_at": timestamp.isoformat(),
++            }
++
++        return None
++
++    def create_incident_event(
++        self,
++        project_id: UUID,
++        incident_data: dict[str, Any],
++        run_id: UUID | None = None,
++    ) -> AgentRunEvent:
++        """
++        Criar um evento de incidente no banco de dados.
++
++        Args:
++        - project_id: UUID do projeto afetado
++        - incident_data: dados do incidente detectado
++        - run_id: UUID do agent run relacionado (opcional)
++
++        Returns:
++        - AgentRunEvent criado
++        """
++        event = AgentRunEvent(
++            run_id=run_id or UUID("00000000-0000-0000-0000-000000000000"),
++            event_type=INCIDENT_DETECTED,
++            message=f"Incidente detectado: {incident_data.get('incident_type')} em {incident_data.get('service', 'unknown')}",
++            payload={
++                "project_id": str(project_id),
++                **incident_data,
++            },
++        )
++
++        self.db.add(event)
++        self.db.commit()
++        self.db.refresh(event)
++
++        logger.info(f"Incidente registrado: {incident_data.get('incident_type')}")
++
++        return event
++
++    def create_resolution_event(
++        self,
++        incident_event_id: UUID,
++        resolution_data: dict[str, Any],
++        run_id: UUID | None = None,
++    ) -> AgentRunEvent:
++        """
++        Criar um evento de resolução de incidente.
++
++        Args:
++        - incident_event_id: UUID do evento de incidente original
++        - resolution_data: dados da resolução
++        - run_id: UUID do agent run relacionado (opcional)
++
++        Returns:
++        - AgentRunEvent de resolução criado
++        """
++        event = AgentRunEvent(
++            run_id=run_id or UUID("00000000-0000-0000-0000-000000000000"),
++            event_type=INCIDENT_RESOLVED,
++            message=f"Incidente resolvido: {resolution_data.get('incident_type')}",
++            payload={
++                "incident_event_id": str(incident_event_id),
++                **resolution_data,
++            },
++        )
++
++        self.db.add(event)
++        self.db.commit()
++        self.db.refresh(event)
++
++        logger.info(f"Resolução registrada para incidente {incident_event_id}")
++
++        return event
++
++    def check_and_create_incident(
++        self,
++        service_name: str,
++        status: str,
++        project_id: UUID,
++        latency_ms: int | None = None,
++        detail: str | None = None,
++    ) -> AgentRunEvent | None:
++        """
++        Verificar saúde do serviço e criar incidente se necessário.
++
++        Este é o método principal que deve ser chamado pelo supervisor.
++        """
++        incident_data = self.parse_service_health(
++            service_name=service_name,
++            status=status,
++            latency_ms=latency_ms,
++            detail=detail,
++        )
++
++        if incident_data:
++            return self.create_incident_event(
++                project_id=project_id,
++                incident_data=incident_data,
++            )
++
++        return None
++
++
++def parse_supervisor_output(
++    db: Session,
++    monitoring_result: dict[str, Any],
++    project_id: UUID,
++) -> list[AgentRunEvent]:
++    """
++    Parser principal para output do supervisor de monitoramento.
++
++    Analisa todos os serviços monitorados e cria incidentes para os problemas detectados.
++
++    Args:
++    - db: sessão do banco de dados
++    - monitoring_result: resultado do endpoint /monitoring/status
++    - project_id: UUID do projeto sendo monitorado
++
++    Returns:
++    - lista de AgentRunEvent criados
++    """
++    parser = IncidentParser(db)
++    events = []
++
++    # Extrair serviços do resultado do monitoramento
++    services = monitoring_result.get("services", [])
++
++    for service in services:
++        service_name = service.get("name", "unknown")
++        status = service.get("status", "unknown")
++        latency = service.get("latency_ms")
++        detail = service.get("detail")
++
++        event = parser.check_and_create_incident(
++            service_name=service_name,
++            status=status,
++            project_id=project_id,
++            latency_ms=latency,
++            detail=detail,
++        )
++
++        if event:
++            events.append(event)
++
++    return events
+diff --git a/apps/api/tests/test_rag_adr_projection_contract.py b/apps/api/tests/test_rag_adr_projection_contract.py
+index 0be6e53..2cc1e45 100644
+--- a/apps/api/tests/test_rag_adr_projection_contract.py
++++ b/apps/api/tests/test_rag_adr_projection_contract.py
+@@ -73,3 +73,94 @@ def test_falha_da_api_marca_fonte_indisponivel_para_impedir_prune():
+     assert presentes == set()
+     assert estado["available"] is False
+     assert ingestor.raiz_de_fonte_id("adr:abc") == ingestor.ADR_FONTE
++
++
++def test_knowledge_e_projetado_individualmente_sem_arquivo_intermediario():
++    ingestor = carregar_ingestor()
++    resposta = Mock()
++    resposta.raise_for_status.return_value = None
++    resposta.json.return_value = [{
++        "id": "11111111-1111-1111-1111-111111111111",
++        "project_id": "22222222-2222-2222-2222-222222222222",
++        "backlog_id": None,
++        "title": "Lição operacional",
++        "content": "Sempre validar o journal.",
++        "category": "licao",
++        "tags": "rag,operacao",
++    }]
++
++    with patch.object(ingestor.requests, "get", return_value=resposta) as chamada:
++        docs, presentes, estado = ingestor.coletar_knowledge({
++            "WORKDEV_API_KEY": "segredo-de-teste",
++            "WORKDEV_API_URL": "http://127.0.0.1:8000/api",
++        })
++
++    fonte_id = "knowledge:11111111-1111-1111-1111-111111111111"
++    assert estado == {"available": True, "error": None}
++    assert presentes == {fonte_id}
++    assert docs[0]["fonte_id"] == fonte_id
++    assert docs[0]["metadados"]["tipo"] == "knowledge"
++    assert docs[0]["metadados"]["origem"] == "workdev_api"
++    assert "Sempre validar o journal." in docs[0]["conteudo"]
++    chamada.assert_called_once_with(
++        "http://127.0.0.1:8000/api/knowledge",
++        headers={"X-API-Key": "segredo-de-teste"},
++        timeout=ingestor.WORKDEV_API_TIMEOUT,
++    )
++
++
++def test_backlog_e_projetado_com_um_documento_por_item():
++    ingestor = carregar_ingestor()
++    resposta = Mock()
++    resposta.raise_for_status.return_value = None
++    resposta.json.return_value = [{
++        "id": "33333333-3333-3333-3333-333333333333",
++        "project_id": "22222222-2222-2222-2222-222222222222",
++        "title": "Indexar backlog",
++        "description": "Consumir a API diretamente.",
++        "type": "feature",
++        "priority": "high",
++        "status": "doing",
++        "owner": "codex",
++        "effort": 3,
++        "sprint": "atual",
++        "rank": 1,
++    }]
++
++    with patch.object(ingestor.requests, "get", return_value=resposta):
++        docs, presentes, estado = ingestor.coletar_backlog({
++            "WORKDEV_API_KEY": "segredo-de-teste",
++        })
++
++    fonte_id = "backlog:33333333-3333-3333-3333-333333333333"
++    assert estado == {"available": True, "error": None}
++    assert presentes == {fonte_id}
++    assert len(docs) == 1
++    assert docs[0]["fonte_id"] == fonte_id
++    assert docs[0]["metadados"]["tipo"] == "backlog"
++    assert "Status: doing" in docs[0]["conteudo"]
++    assert "Consumir a API diretamente." in docs[0]["conteudo"]
++
++
++def test_raizes_api_incluem_ids_novos_e_projecoes_legadas_em_disco():
++    ingestor = carregar_ingestor()
++
++    assert ingestor.raiz_de_fonte_id("knowledge:abc") == ingestor.KNOWLEDGE_FONTE
++    assert ingestor.raiz_de_fonte_id("knowledge/antigo.md") == ingestor.KNOWLEDGE_FONTE
++    assert ingestor.raiz_de_fonte_id("backlog:abc") == ingestor.BACKLOG_FONTE
++    assert ingestor.raiz_de_fonte_id("backlog.md") == ingestor.BACKLOG_FONTE
++
++
++@pytest.mark.parametrize("coletor", ["coletar_knowledge", "coletar_backlog"])
++def test_falha_de_cada_api_impede_prune_da_fonte(coletor):
++    ingestor = carregar_ingestor()
++    with patch.object(
++        ingestor.requests, "get", side_effect=ingestor.requests.ConnectionError("off")
++    ):
++        docs, presentes, estado = getattr(ingestor, coletor)({
++            "WORKDEV_API_KEY": "segredo-de-teste",
++        })
++
++    assert docs == []
++    assert presentes == set()
++    assert estado["available"] is False
+diff --git a/apps/web/src/App.tsx b/apps/web/src/App.tsx
+index 28b9604..55aad8e 100644
+--- a/apps/web/src/App.tsx
++++ b/apps/web/src/App.tsx
+@@ -4,6 +4,7 @@ import { Routes, Route, NavLink } from "react-router-dom"
+ 
+ import NewProject from "./pages/NewProject"
+ import Dashboard from "./pages/Dashboard"
++import ExecutiveDashboard from "./pages/ExecutiveDashboard"
+ import Projects from "./pages/Projects"
+ import Knowledge from "./pages/Knowledge"
+ import Deployments from "./pages/Deployments"
+@@ -158,6 +159,7 @@ function App() {
+         <main className="min-w-0 max-w-full flex-1 overflow-x-hidden p-3 sm:p-5 md:p-8">
+           <Routes>
+             <Route path="/" element={<Dashboard />} />
++            <Route path="/dashboard/executive" element={<ExecutiveDashboard />} />
+             <Route path="/projects" element={<Projects />} />
+             <Route
+               path="/ai-hub"
+diff --git a/apps/web/src/components/ui/skeleton.tsx b/apps/web/src/components/ui/skeleton.tsx
+new file mode 100644
+index 0000000..fd83cee
+--- /dev/null
++++ b/apps/web/src/components/ui/skeleton.tsx
+@@ -0,0 +1,15 @@
++import { cn } from "@/lib/utils"
++
++function Skeleton({
++  className,
++  ...props
++}: React.HTMLAttributes<HTMLDivElement>) {
++  return (
++    <div
++      className={cn("animate-pulse rounded-md bg-slate-800", className)}
++      {...props}
++    />
++  )
++}
++
++export { Skeleton }
+diff --git a/apps/web/src/pages/Dashboard.tsx b/apps/web/src/pages/Dashboard.tsx
+index 920615b..e5adef0 100644
+--- a/apps/web/src/pages/Dashboard.tsx
++++ b/apps/web/src/pages/Dashboard.tsx
+@@ -62,6 +62,19 @@ export default function Dashboard() {
+   return (
+     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+ 
++      {/* Novo: Link para Dashboard Executivo */}
++      <div className="md:col-span-3">
++        <a
++          href="/dashboard/executive"
++          className="block bg-gradient-to-r from-blue-900/50 to-purple-900/50 border border-blue-800 rounded-xl p-6 hover:border-blue-600 transition-colors"
++        >
++          <h2 className="text-xl font-bold mb-2">📊 Dashboard Executivo — Métricas DORA</h2>
++          <p className="text-slate-400 text-sm">
++            Deployment Frequency, Change Failure Rate, MTTR e Lead Time for Changes
++          </p>
++        </a>
++      </div>
++
+       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+         <h2 className="text-xl font-bold mb-4">Infrastructure</h2>
+         {deployError && <p className="text-red-400 text-sm">Erro ao carregar status</p>}
+diff --git a/apps/web/src/pages/ExecutiveDashboard.tsx b/apps/web/src/pages/ExecutiveDashboard.tsx
+new file mode 100644
+index 0000000..6a5e30e
+--- /dev/null
++++ b/apps/web/src/pages/ExecutiveDashboard.tsx
+@@ -0,0 +1,351 @@
++import { useEffect, useState } from "react";
++import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
++import { Badge } from "@/components/ui/badge";
++import { Skeleton } from "@/components/ui/skeleton";
++
++// Tipos das métricas DORA
++interface DeploymentFrequency {
++  weekly_average: number;
++  last_4_weeks: Array<{
++    week: string;
++    successful: number;
++    degraded: number;
++    failed: number;
++    total: number;
++  }>;
++  total_in_period: number;
++}
++
++interface ChangeFailureRate {
++  percent: number;
++  failed_count: number;
++  total_count: number;
++}
++
++interface MTTR {
++  median_minutes: number | null;
++  mean_minutes: number | null;
++  incident_count: number;
++}
++
++interface LeadTime {
++  median_hours: number | null;
++  mean_hours: number | null;
++  min_hours: number | null;
++  max_hours: number | null;
++  completed_count: number;
++}
++
++interface ExecutiveMetrics {
++  generated_at: string;
++  period_days: number;
++  project_id: string | null;
++  metrics: {
++    deployment_frequency: DeploymentFrequency;
++    change_failure_rate: ChangeFailureRate;
++    mttr: MTTR;
++    lead_time: LeadTime;
++  };
++  dora_score: number;
++  dora_level: "Elite" | "High" | "Medium" | "Low";
++  _cache_hit: boolean;
++  _cache_source: string;
++  error?: string;
++}
++
++// Cores para níveis DORA
++const DORA_COLORS: Record<string, string> = {
++  Elite: "bg-emerald-500",
++  High: "bg-green-500",
++  Medium: "bg-yellow-500",
++  Low: "bg-red-500",
++};
++
++// Ícones para métricas
++const METRIC_ICONS: Record<string, string> = {
++  deployment_frequency: "🚀",
++  change_failure_rate: "⚠️",
++  mttr: "🔧",
++  lead_time: "⏱️",
++};
++
++export default function ExecutiveDashboard() {
++  const [metrics, setMetrics] = useState<ExecutiveMetrics | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState<string | null>(null);
++
++  useEffect(() => {
++    fetch("/api/metrics/executive?days=30")
++      .then((r) => {
++        if (!r.ok) throw new Error("Falha ao carregar métricas");
++        return r.json();
++      })
++      .then((data) => {
++        setMetrics(data);
++        setLoading(false);
++      })
++      .catch((err) => {
++        setError(err.message);
++        setLoading(false);
++      });
++  }, []);
++
++  if (loading) {
++    return (
++      <div className="space-y-6">
++        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
++          {[1, 2, 3, 4].map((i) => (
++            <Card key={i} className="bg-slate-900 border-slate-800">
++              <CardHeader className="pb-3">
++                <Skeleton className="h-4 w-24" />
++              </CardHeader>
++              <CardContent>
++                <Skeleton className="h-12 w-full mb-2" />
++                <Skeleton className="h-4 w-16" />
++              </CardContent>
++            </Card>
++          ))}
++        </div>
++      </div>
++    );
++  }
++
++  if (error || !metrics) {
++    return (
++      <Card className="bg-slate-900 border-slate-800">
++        <CardContent className="p-6">
++          <p className="text-red-400">Erro ao carregar dashboard: {error}</p>
++        </CardContent>
++      </Card>
++    );
++  }
++
++  const { metrics: m, dora_score, dora_level } = metrics;
++
++  return (
++    <div className="space-y-6">
++      {/* Header */}
++      <div className="flex items-center justify-between">
++        <div>
++          <h1 className="text-2xl font-bold">Dashboard Executivo</h1>
++          <p className="text-slate-400 text-sm">
++            Métricas DORA — últimos {metrics.period_days} dias
++          </p>
++        </div>
++        <Badge className={DORA_COLORS[dora_level] || "bg-slate-500"}>
++          DORA Score: {dora_score}/100 — {dora_level}
++        </Badge>
++      </div>
++
++      {/* 4 Métricas DORA */}
++      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
++        {/* Deployment Frequency */}
++        <Card className="bg-slate-900 border-slate-800">
++          <CardHeader className="pb-3">
++            <CardTitle className="text-sm font-medium text-slate-400">
++              {METRIC_ICONS.deployment_frequency} Deployment Frequency
++            </CardTitle>
++          </CardHeader>
++          <CardContent>
++            <div className="text-3xl font-bold mb-2">
++              {m.deployment_frequency.weekly_average.toFixed(1)}
++            </div>
++            <p className="text-xs text-slate-500">
++              deploys/semana
++            </p>
++            <div className="mt-3 flex gap-1">
++              {m.deployment_frequency.last_4_weeks.slice(0, 4).map((week, i) => (
++                <Badge
++                  key={i}
++                  variant="outline"
++                  className="text-xs"
++                  title={`${week.successful} successful, ${week.failed} failed`}
++                >
++                  S{i + 1}: {week.successful}
++                </Badge>
++              ))}
++            </div>
++          </CardContent>
++        </Card>
++
++        {/* Change Failure Rate */}
++        <Card className="bg-slate-900 border-slate-800">
++          <CardHeader className="pb-3">
++            <CardTitle className="text-sm font-medium text-slate-400">
++              {METRIC_ICONS.change_failure_rate} Change Failure Rate
++            </CardTitle>
++          </CardHeader>
++          <CardContent>
++            <div className="text-3xl font-bold mb-2">
++              {m.change_failure_rate.percent.toFixed(1)}%
++            </div>
++            <p className="text-xs text-slate-500">
++              {m.change_failure_rate.failed_count} falhas / {m.change_failure_rate.total_count} total
++            </p>
++            <div className="mt-3 w-full bg-slate-800 rounded-full h-2">
++              <div
++                className={`h-2 rounded-full ${
++                  m.change_failure_rate.percent < 15
++                    ? "bg-emerald-500"
++                    : m.change_failure_rate.percent < 30
++                    ? "bg-yellow-500"
++                    : "bg-red-500"
++                }`}
++                style={{ width: `${Math.min(m.change_failure_rate.percent, 100)}%` }}
++              />
++            </div>
++          </CardContent>
++        </Card>
++
++        {/* MTTR */}
++        <Card className="bg-slate-900 border-slate-800">
++          <CardHeader className="pb-3">
++            <CardTitle className="text-sm font-medium text-slate-400">
++              {METRIC_ICONS.mttr} MTTR
++            </CardTitle>
++          </CardHeader>
++          <CardContent>
++            <div className="text-3xl font-bold mb-2">
++              {m.mttr.median_minutes !== null
++                ? Math.round(m.mttr.median_minutes)
++                : "—"}
++            </div>
++            <p className="text-xs text-slate-500">
++              minutos (mediana)
++            </p>
++            {m.mttr.incident_count > 0 ? (
++              <p className="text-xs text-slate-500 mt-3">
++                {m.mttr.incident_count} incidentes
++              </p>
++            ) : (
++              <p className="text-xs text-slate-600 mt-3">
++                Nenhum incidente registrado
++              </p>
++            )}
++          </CardContent>
++        </Card>
++
++        {/* Lead Time */}
++        <Card className="bg-slate-900 border-slate-800">
++          <CardHeader className="pb-3">
++            <CardTitle className="text-sm font-medium text-slate-400">
++              {METRIC_ICONS.lead_time} Lead Time
++            </CardTitle>
++          </CardHeader>
++          <CardContent>
++            <div className="text-3xl font-bold mb-2">
++              {m.lead_time.median_hours !== null
++                ? m.lead_time.median_hours.toFixed(1)
++                : "—"}
++            </div>
++            <p className="text-xs text-slate-500">
++              horas (mediana)
++            </p>
++            <p className="text-xs text-slate-500 mt-3">
++              {m.lead_time.completed_count} tasks concluídas
++            </p>
++          </CardContent>
++        </Card>
++      </div>
++
++      {/* Detalhes e Saúde da Plataforma */}
++      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
++        {/* Benchmark DORA */}
++        <Card className="bg-slate-900 border-slate-800">
++          <CardHeader>
++            <CardTitle className="text-lg">📊 DORA Benchmarks</CardTitle>
++          </CardHeader>
++          <CardContent className="space-y-4">
++            <BenchmarkRow
++              label="Deployment Frequency"
++              value={m.deployment_frequency.weekly_average.toFixed(1)}
++              elite=">5/semana"
++              high="1-5/semana"
++              medium="<1/semana"
++            />
++            <BenchmarkRow
++              label="Change Failure Rate"
++              value={`${m.change_failure_rate.percent.toFixed(1)}%`}
++              elite="<15%"
++              high="15-30%"
++              medium=">30%"
++            />
++            <BenchmarkRow
++              label="MTTR"
++              value={
++                m.mttr.median_minutes !== null
++                  ? `${Math.round(m.mttr.median_minutes)}min`
++                  : "N/A"
++              }
++              elite="<1h"
++              high="1-24h"
++              medium=">24h"
++            />
++            <BenchmarkRow
++              label="Lead Time"
++              value={
++                m.lead_time.median_hours !== null
++                  ? `${m.lead_time.median_hours.toFixed(0)}h`
++                  : "N/A"
++              }
++              elite="<1d"
++              high="1-7d"
++              medium=">7d"
++            />
++          </CardContent>
++        </Card>
++
++        {/* Cache Status */}
++        <Card className="bg-slate-900 border-slate-800">
++          <CardHeader>
++            <CardTitle className="text-lg">⚡ Performance</CardTitle>
++          </CardHeader>
++          <CardContent className="space-y-4">
++            <div className="flex justify-between items-center">
++              <span className="text-sm text-slate-400">Cache</span>
++              <Badge variant={metrics._cache_hit ? "default" : "secondary"}>
++                {metrics._cache_hit ? "Hit" : "Miss"}
++              </Badge>
++            </div>
++            <div className="flex justify-between items-center">
++              <span className="text-sm text-slate-400">Fonte</span>
++              <span className="text-sm font-mono">{metrics._cache_source}</span>
++            </div>
++            <div className="flex justify-between items-center">
++              <span className="text-sm text-slate-400">Gerado em</span>
++              <span className="text-sm text-slate-500">
++                {new Date(metrics.generated_at).toLocaleString("pt-BR")}
++              </span>
++            </div>
++          </CardContent>
++        </Card>
++      </div>
++    </div>
++  );
++}
++
++function BenchmarkRow({
++  label,
++  value,
++  elite,
++  high,
++  medium,
++}: {
++  label: string;
++  value: string;
++  elite: string;
++  high: string;
++  medium: string;
++}) {
++  return (
++    <div className="grid grid-cols-4 gap-4 items-center text-sm">
++      <span className="text-slate-300 col-span-1">{label}</span>
++      <span className="font-bold col-span-1">{value}</span>
++      <div className="col-span-2 flex gap-4 text-xs text-slate-500">
++        <span><span className="text-emerald-500">●</span> Elite: {elite}</span>
++        <span><span className="text-green-500">●</span> High: {high}</span>
++        <span><span className="text-yellow-500">●</span> {medium}</span>
++      </div>
++    </div>
++  );
++}
+diff --git a/scripts/deploy/pipeline.py b/scripts/deploy/pipeline.py
+index 2225e43..4af5eb2 100644
+--- a/scripts/deploy/pipeline.py
++++ b/scripts/deploy/pipeline.py
+@@ -7,7 +7,10 @@ import hashlib
+ import hmac
+ import json
+ import os
++import sys
+ import time
++import urllib.error
++import urllib.request
+ from dataclasses import dataclass
+ from pathlib import Path
+ from typing import Any, Callable
+@@ -113,6 +116,72 @@ class DeploymentCallbacks:
+     rollback: Callable[[], None]
+ 
+ 
++def _persist_deployment_outcome(
++    proof: dict[str, Any],
++    approval: dict[str, Any],
++    status: str,
++    postcheck_result: dict[str, Any],
++    api_url: str = "http://127.0.0.1:8000",
++    api_key: str | None = None,
++) -> None:
++    """
++    Persistir o resultado do deploy no banco de dados via API.
++
++    Mapeia os status do pipeline para o enum deployment_outcome:
++    - DEPLOY_SUCCEEDED -> success
++    - DEPLOY_DEGRADED -> degraded
++    - DEPLOY_FAILED -> rolled_back (se houve rollback) ou hotfixed
++    """
++    from deploy_broker import load
++
++    # Carregar proof e approval para obter metadados
++    proof_id = proof.get("proof_id", "")
++    project = proof.get("project", "workdev-core")
++    artifact_fingerprint = proof.get("artifact_fingerprint", "")
++
++    # Mapear status do pipeline para outcome
++    outcome_map = {
++        "DEPLOY_SUCCEEDED": "success",
++        "DEPLOY_DEGRADED": "degraded",
++        "DEPLOY_FAILED": "rolled_back",
++        "ROLLED_BACK": "rolled_back",
++    }
++    outcome = outcome_map.get(status, "rolled_back")
++
++    payload = {
++        "proof_id": proof_id,
++        "project": project,
++        "artifact_fingerprint": artifact_fingerprint,
++        "outcome": outcome,
++        "postcheck_result": postcheck_result,
++    }
++
++    if not api_key:
++        # Tentar ler a API key do env file
++        env_file = Path("/etc/workdev/workdev-api.env")
++        if env_file.exists():
++            for line in env_file.read_text().splitlines():
++                if line.startswith("WORKDEV_API_KEY="):
++                    api_key = line.split("=", 1)[1].strip('"\'')
++                    break
++
++    try:
++        req = urllib.request.Request(
++            f"{api_url}/api/deployments/outcomes",
++            data=json.dumps(payload).encode("utf-8"),
++            headers={
++                "Content-Type": "application/json",
++                "X-API-Key": api_key or "",
++            },
++            method="POST",
++        )
++        with urllib.request.urlopen(req, timeout=10) as response:
++            response.read()
++    except Exception as e:
++        # Falha ao persistir não deve falhar o deploy, apenas logar
++        print(f"Warning: failed to persist deployment outcome: {e}", file=sys.stderr)
++
++
+ class DeploymentPipeline:
+     def __init__(self, state_dir: Path, key: bytes):
+         self.state_dir = state_dir
+@@ -168,6 +237,10 @@ class DeploymentPipeline:
+         if status not in {"DEPLOY_SUCCEEDED", "DEPLOY_DEGRADED", "DEPLOY_FAILED"}:
+             status = "DEPLOY_FAILED"
+         self._record(run_id, status, post_deploy=result)
++
++        # Persistir o deployment outcome no banco de dados
++        _persist_deployment_outcome(proof, approval, status, result)
++
+         if status == "DEPLOY_FAILED":
+             try:
+                 callbacks.rollback()
+diff --git a/supabase/views/dora_metrics.sql b/supabase/views/dora_metrics.sql
+new file mode 100644
+index 0000000..f01cdd2
+--- /dev/null
++++ b/supabase/views/dora_metrics.sql
+@@ -0,0 +1,212 @@
++-- Views para métricas DORA no Engineering Graph (Supabase)
++-- Estas views devem ser criadas no projeto Supabase do grafo (cxqfwswartqqwsanceaj)
++-- para calcular as 4 métricas DORA a partir dos nós graph_nodes.
++
++-- ============================================================================
++-- 1. DEPLOYMENT FREQUENCY (frequência de deploy por semana)
++-- Conta deploys bem-sucedidos por semana nos últimos 90 dias.
++-- ============================================================================
++
++-- View auxiliar: extrai metadados dos deployments
++CREATE OR REPLACE VIEW deployment_weekly AS
++SELECT
++    n.id AS deployment_id,
++    n.entity_id,
++    n.project_id,
++    -- Extrai a data criada_at do nó (assumindo que está no metadata JSON)
++    (n.metadata->>'created_at')::timestamptz AS deployed_at,
++    date_trunc('week', (n.metadata->>'created_at')::timestamptz) AS week_start,
++    -- Extrai o outcome do metadata (success, rolled_back, hotfixed, degraded)
++    n.metadata->>'outcome' AS outcome
++FROM graph_nodes n
++WHERE n.type = 'Deployment'
++  AND (n.metadata->>'created_at')::timestamptz >= now() - interval '90 days';
++
++-- View principal: contagem semanal de deploys bem-sucedidos
++CREATE OR REPLACE VIEW deployment_frequency_weekly AS
++SELECT
++    week_start,
++    project_id,
++    COUNT(*) FILTER (WHERE outcome = 'success') AS successful_deploys,
++    COUNT(*) FILTER (WHERE outcome = 'degraded') AS degraded_deploys,
++    COUNT(*) FILTER (WHERE outcome IN ('rolled_back', 'hotfixed')) AS failed_deploys,
++    COUNT(*) AS total_deploys
++FROM deployment_weekly
++GROUP BY week_start, project_id
++ORDER BY week_start DESC;
++
++-- ============================================================================
++-- 2. CHANGE FAILURE RATE (taxa de falha em mudança)
++-- Percentual de deploys com falha (rolled_back ou hotfixed) nos últimos 30 dias.
++-- ============================================================================
++
++CREATE OR REPLACE VIEW change_failure_rate_30d AS
++SELECT
++    project_id,
++    COUNT(*) FILTER (WHERE outcome IN ('rolled_back', 'hotfixed'))::numeric AS failed_count,
++    COUNT(*)::numeric AS total_count,
++    CASE
++        WHEN COUNT(*) = 0 THEN 0
++        ELSE ROUND(
++            COUNT(*) FILTER (WHERE outcome IN ('rolled_back', 'hotfixed'))::numeric /
++            COUNT(*)::numeric * 100,
++            2
++        )
++    END AS failure_rate_percent
++FROM deployment_weekly
++WHERE deployed_at >= now() - interval '30 days'
++GROUP BY project_id;
++
++-- ============================================================================
++-- 3. MTTR (Mean Time To Recovery / Median Time To Recovery)
++-- Mediana do tempo entre detecção e resolução de incidentes.
++-- Usa eventos do tipo 'incident_detected' e 'incident_resolved' de AgentRunEvent.
++-- ============================================================================
++
++-- View auxiliar: pares de detecção/resolução de incidentes
++CREATE OR REPLACE VIEW incident_pairs AS
++SELECT
++    COALESCE(detected.project_id, resolved.project_id) AS project_id,
++    detected.entity_id AS incident_id,
++    (detected.metadata->>'created_at')::timestamptz AS detected_at,
++    (resolved.metadata->>'created_at')::timestamptz AS resolved_at,
++    EXTRACT(EPOCH FROM (
++        (resolved.metadata->>'created_at')::timestamptz -
++        (detected.metadata->>'created_at')::timestamptz
++    )) / 60 AS recovery_time_minutes
++FROM graph_nodes detected
++JOIN graph_nodes resolved
++    ON detected.entity_id = resolved.entity_id
++    AND detected.project_id = resolved.project_id
++WHERE detected.type = 'AgentEvent'
++  AND resolved.type = 'AgentEvent'
++  AND detected.metadata->>'event_type' = 'incident_detected'
++  AND resolved.metadata->>'event_type' = 'incident_resolved'
++  AND (resolved.metadata->>'created_at')::timestamptz > (detected.metadata->>'created_at')::timestamptz;
++
++-- View principal: MTTR (mediana) por projeto nos últimos 30 dias
++CREATE OR REPLACE VIEW mttr_30d AS
++WITH incident_data AS (
++    SELECT
++        project_id,
++        recovery_time_minutes
++    FROM incident_pairs
++    WHERE detected_at >= now() - interval '30 days'
++      AND recovery_time_minutes IS NOT NULL
++      AND recovery_time_minutes > 0
++    ORDER BY recovery_time_minutes
++),
++ranked AS (
++    SELECT
++        project_id,
++        recovery_time_minutes,
++        ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY recovery_time_minutes) AS rn,
++        COUNT(*) OVER (PARTITION BY project_id) AS cnt
++    FROM incident_data
++)
++SELECT
++    project_id,
++    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY recovery_time_minutes) AS mttr_median_minutes,
++    AVG(recovery_time_minutes) AS mttr_mean_minutes,
++    COUNT(*) AS incident_count
++FROM incident_data
++GROUP BY project_id;
++
++-- ============================================================================
++-- 4. LEAD TIME FOR CHANGES
++-- Mediana do tempo entre criação e conclusão de uma task/feature.
++-- Conta todo o tempo de fila + execução.
++-- ============================================================================
++
++-- View auxiliar: pares de criação/conclusão de tasks
++CREATE OR REPLACE VIEW task_lifecycle AS
++SELECT
++    created.project_id,
++    created.entity_id AS task_id,
++    created.type AS task_type,
++    (created.metadata->>'created_at')::timestamptz AS created_at,
++    (completed.metadata->>'completed_at')::timestamptz AS completed_at,
++    EXTRACT(EPOCH FROM (
++        (completed.metadata->>'completed_at')::timestamptz -
++        (created.metadata->>'created_at')::timestamptz
++    )) / 3600 AS lead_time_hours
++FROM graph_nodes created
++JOIN graph_nodes completed
++    ON created.entity_id = completed.entity_id
++    AND created.project_id = completed.project_id
++WHERE created.type IN ('Task', 'Feature', 'Subtask')
++  AND completed.type IN ('Task', 'Feature', 'Subtask')
++  AND completed.metadata->>'status' = 'done'
++  AND (completed.metadata->>'completed_at')::timestamptz > (created.metadata->>'created_at')::timestamptz;
++
++-- View principal: Lead time (mediana) por projeto nos últimos 30 dias
++CREATE OR REPLACE VIEW lead_time_30d AS
++WITH task_data AS (
++    SELECT
++        project_id,
++        lead_time_hours
++    FROM task_lifecycle
++    WHERE created_at >= now() - interval '30 days'
++      AND lead_time_hours IS NOT NULL
++      AND lead_time_hours > 0
++    ORDER BY lead_time_hours
++)
++SELECT
++    project_id,
++    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY lead_time_hours) AS lead_time_median_hours,
++    AVG(lead_time_hours) AS lead_time_mean_hours,
++    MIN(lead_time_hours) AS lead_time_min_hours,
++    MAX(lead_time_hours) AS lead_time_max_hours,
++    COUNT(*) AS completed_tasks
++FROM task_data
++GROUP BY project_id;
++
++-- ============================================================================
++-- VIEW CONSOLIDADA: Executive Dashboard
++-- Retorna todas as 4 métricas DORA em uma única consulta.
++-- ============================================================================
++
++CREATE OR REPLACE VIEW executive_dashboard_metrics AS
++SELECT
++    COALESCE(df.project_id, cfr.project_id, mt.project_id, lt.project_id) AS project_id,
++    -- Deployment Frequency (últimas 4 semanas)
++    COALESCE(df.weekly_deploys, 0) AS deploys_per_week,
++    COALESCE(df.weekly_successful_deploys, 0) AS successful_deploys_per_week,
++    -- Change Failure Rate
++    COALESCE(cfr.failure_rate_percent, 0) AS change_failure_rate_percent,
++    -- MTTR
++    COALESCE(mt.mttr_median_minutes, 0) AS mttr_median_minutes,
++    mt.incident_count,
++    -- Lead Time
++    COALESCE(lt.lead_time_median_hours, 0) AS lead_time_median_hours,
++    lt.completed_tasks
++FROM (
++    SELECT
++        project_id,
++        SUM(successful_deploys) / 4.0 AS weekly_deploys,
++        SUM(successful_deploys) / 4.0 AS weekly_successful_deploys
++    FROM deployment_frequency_weekly
++    WHERE week_start >= now() - interval '28 days'
++    GROUP BY project_id
++) df
++FULL OUTER JOIN change_failure_rate_30d cfr USING (project_id)
++FULL OUTER JOIN mttr_30d mt USING (project_id)
++FULL OUTER JOIN lead_time_30d lt USING (project_id);
++
++-- ============================================================================
++-- ÍNDICES PARA PERFORMANCE
++-- ============================================================================
++
++CREATE INDEX IF NOT EXISTS idx_graph_nodes_type_entity ON graph_nodes(type, entity_id);
++CREATE INDEX IF NOT EXISTS idx_graph_nodes_type_project ON graph_nodes(type, project_id);
++CREATE INDEX IF NOT EXISTS idx_graph_nodes_metadata_created ON graph_nodes USING gin(metadata jsonb_path_ops);
++
++-- ============================================================================
++-- COMENTÁRIOS
++-- ============================================================================
++
++COMMENT ON VIEW deployment_frequency_weekly IS 'Frequência de deploy semanal - métrica DORA #1';
++COMMENT ON VIEW change_failure_rate_30d IS 'Taxa de falha em mudança (30d) - métrica DORA #2';
++COMMENT ON VIEW mttr_30d IS 'MTTR mediana (30d) - métrica DORA #3';
++COMMENT ON VIEW lead_time_30d IS 'Lead time mediana (30d) - métrica DORA #4';
++COMMENT ON VIEW executive_dashboard_metrics IS 'Dashboard executivo consolidado com todas as métricas DORA';

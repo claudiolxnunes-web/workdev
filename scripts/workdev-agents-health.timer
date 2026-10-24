@@ -1,0 +1,11 @@
+[Unit]
+Description=Verifica a saúde dos agentes WorkDev a cada 5 segundos
+
+[Timer]
+OnBootSec=10s
+OnUnitInactiveSec=5s
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

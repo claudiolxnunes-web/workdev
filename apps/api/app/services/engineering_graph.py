@@ -247,11 +247,8 @@ class EngineeringGraphSync:
         project_id: str,
         backlog_id: str,
     ) -> dict[str, Any]:
-        # O Supabase legado ainda usa enums. AIConversation representa o
-        # artefato de planejamento até a migration dos enums ser aplicada.
         return self.sync_related(
-            "AIConversation", plan_id, project_id,
-            "LINKED_TO_KNOWLEDGE", backlog_id,
+            "Plan", plan_id, project_id, "HAS_PLAN", backlog_id,
         )
 
     def sync_agent_run(
@@ -265,7 +262,7 @@ class EngineeringGraphSync:
         if not parent and backlog_id:
             self.sync_plan(plan_id, project_id, backlog_id)
         return self.sync_related(
-            "Task", run_id, project_id, "HAS_TASK", plan_id
+            "AgentRun", run_id, project_id, "HAS_RUN", plan_id
         )
 
     def sync_agent_event(
@@ -275,7 +272,7 @@ class EngineeringGraphSync:
         run_id: str,
     ) -> dict[str, Any]:
         return self.sync_related(
-            "Monitoring", event_id, project_id, "HAS_SUBTASK", run_id
+            "AgentEvent", event_id, project_id, "HAS_EVENT", run_id
         )
 
     def sync_safely(self, operation: str, *args: Any, **kwargs: Any) -> bool:

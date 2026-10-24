@@ -1,0 +1,77 @@
+# Worker de Build isolado — ADR 005.
+#
+# Unit canônica do worker de Build isolado.
+# Em produção, deve permanecer instalada e habilitada quando
+# WORKDEV_OLLAMA_BUILD_ENABLED=true.
+#
+# ⚠️ `deploy.sh` só reinicia `workdev-api.service`. Depois de todo deploy que
+# mexa no worker, reiniciar explicitamente:
+#   sudo systemctl restart workdev-build-worker
+# Sem isso o worker segue rodando código velho — descompasso silencioso, que é
+# o modo de falha já registrado duas vezes no CLAUDE.md desta VPS.
+#
+# Unit SEPARADA de workdev-agents.service de propósito: aquele é Type=oneshot
+# com RemainAfterExit e carrega o tmux server de TODAS as sessões de agente.
+# Reiniciar o worker não pode derrubar as sessões do Codex/Kimi/Qwen.
+
+[Unit]
+Description=WorkDev Build Worker (execução isolada de runs Ollama)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=workdev
+Group=workdev
+SupplementaryGroups=workdev-runtime
+
+WorkingDirectory=/opt/workdev
+Environment=WORKDEV_API_ENV_FILE=/etc/workdev/workdev-api.env
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/workdev/apps/api/venv/bin/python /opt/workdev/scripts/workdev_build_worker.py
+
+# on-failure, NUNCA always. Com a flag desligada o worker sai com código 0 de
+# propósito, e `always` reinicia mesmo em saída limpa: a unit ficaria subindo e
+# descendo a cada RestartSec para sempre — crash-loop silencioso, que já
+# derrubou esta VPS (NRestarts passou de 7300 em 2026-08-03, ver CLAUDE.md).
+# `on-failure` reinicia só em saída com erro ou morte por sinal.
+Restart=on-failure
+RestartSec=10
+
+# O worker escreve worktrees; precisa do diretório de builds.
+# `full` só protege /usr, /boot e /etc — /opt continuava GRAVÁVEL, e
+# ReadWritePaths apenas ADICIONA permissão, não restringe. Com isso o
+# isolamento da fatia 3 existia só na lógica da aplicação, nunca no systemd.
+# Com `strict` tudo fica somente-leitura e só o que está abaixo é gravável.
+ProtectSystem=strict
+# O `-` é necessário: sem ele o systemd RECUSA iniciar a unit quando o
+# diretório não existe, e /opt/workdev-builds é criado na primeira execução.
+ReadWritePaths=-/opt/workdev-builds
+# O worktree é criado por `git worktree add` rodando sobre o repositório, que
+# precisa escrever em .git/worktrees.
+ReadWritePaths=-/opt/workdev/.git
+# O gate roda vite/vitest dentro do worktree e eles escrevem cache.
+ReadWritePaths=-/opt/workdev/node_modules
+ReadWritePaths=-/opt/workdev/apps/web/node_modules
+# /tmp PRIVADO e gravável. Com ProtectSystem=strict o /tmp compartilhado vira
+# somente-leitura, e o gate precisa dele: pytest cria `tmp_path` lá e o vite
+# cria diretório temporário. Com PrivateTmp=false, TODO build caía em `blocked`
+# por ambiente — 5 testes do pytest e 3 arquivos do vitest falhando no primeiro
+# build real (2026-09-11), com código que não tinha como quebrá-los.
+#
+# `false` foi herdado da unit da API, onde é necessário: o Agent Hub precisa
+# enxergar o socket do tmux em /tmp/tmux-<uid>. O worker não usa tmux.
+#
+# Validado sob o sandbox exato desta unit via systemd-run: pytest 854 passed,
+# vitest 70 passed.
+PrivateTmp=true
+
+NoNewPrivileges=true
+ProtectHome=true
+
+# Um build travado não pode segurar a fila para sempre.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

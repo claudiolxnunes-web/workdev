@@ -1,0 +1,38 @@
+{
+  "review_id": "review-local-code-llamacpp-20260929",
+  "branch": "feat/local-code-llamacpp",
+  "commit": "8cfaad6e716410cc27e0d0d49b79f69b0d87c69e",
+  "commit_message": "config: executor usa OpenRouter DeepSeek V4 Flash como padrao",
+  "reviewer": "qwen",
+  "effort": "high",
+  "timestamp": "2026-09-29T10:19:59Z",
+  "verdict": "approved",
+  "findings": {
+    "criticals": 0,
+    "suggestions": 0,
+    "nice_to_have": 0
+  },
+  "summary": "Revisão de código concluída sem findings críticos. 34 arquivos modificados com implementação de seleção de modelos OpenRouter, agent reset, monitoring e testes associados.",
+  "files_changed": 34,
+  "commits_reviewed": [
+    "8cfaad6 - config: executor usa OpenRouter DeepSeek V4 Flash como padrao",
+    "ba33d2a - fix(agents): bind OpenRouter selection to build runs",
+    "aee6361 - feat(agents): add OpenRouter model selection for CLI agents",
+    "f6b5554 - ajustes: terminal test, CliModelSelector, user.json, supervisor.service",
+    "8a454c4 - feat(agents): add confirmed manual session reset",
+    "55d93f0 - fix(monitoring): checagem do Ollama passa a rodar local na VPS1",
+    "01bba38 - feat(monitoring): monitor de conectividade MCP/Jev no /monitoring/status",
+    "5dcbf10 - fix(agents): rotulo do executor local-code reflete o modelo realmente carregado",
+    "c465c2b - fix(agents): healthcheck e terminal passam a considerar a sessao AUTO"
+  ],
+  "areas_reviewed": [
+    "Backend: cli_agent_models.py, agent_reset.py, monitoring.py, terminal.py, handoffs.py",
+    "Frontend: CliModelSelector.tsx, AgentReset.tsx, AgentsPage.tsx, PlanningPanel.tsx",
+    "Tests: test_agent_reset.py, test_cli_agent_models.py, test_openrouter_agent.py, test_agents_healthcheck.py, test_ai_local_models.py, test_project_monitoring.py, test_terminal.py",
+    "Infra: scripts/agents_healthcheck.py, scripts/start_kimi_agent.sh, scripts/workdev-reset-agents.sh, scripts/workdev-supervisor.service",
+    "Docs: docs/agent-reset-runbook.md",
+    "Config: config/user.json, scripts/qwen-agent-settings.json"
+  ],
+  "status": "approved_for_merge",
+  "notes": "Revisão realizada via skill /review --effort high. Nenhum finding crítico ou sugestão reportada. Branch pronta para merge."
+}

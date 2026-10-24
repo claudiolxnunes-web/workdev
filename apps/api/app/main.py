@@ -7,24 +7,38 @@ from dotenv import load_dotenv
 from app.routers.projects import router as projects_router
 from app.routers.backlog import router as backlog_router
 from app.routers.ai import router as ai_router
+from app.routers.busca_web import router as busca_web_router
+from app.routers.bancada import router as bancada_router
+from app.routers.workspace import router as workspace_router
 from app.routers.subtasks import router as subtasks_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.chat_sessions import router as chat_sessions_router
+from app.routers.chat_free import router as chat_free_router
 from app.routers.engineering import router as engineering_router
 from app.routers.deployments import router as deployments_router
 from app.routers.auth import router as auth_router
 from app.routers.terminal import router as terminal_router
+from app.routers.run_terminal import router as run_terminal_router
 from app.routers.monitoring import router as monitoring_router
+from app.routers.repository import router as repository_router
+from app.routers.database import router as database_router
 from app.routers.adrs import router as adrs_router
 from app.routers.rfcs import router as rfcs_router
 from app.routers.decisions import router as decisions_router
 from app.routers.handoffs import plans_router, router as handoffs_router
 from app.routers.settings import router as settings_router
 from app.routers.system import router as system_router
+from app.routers.metrics import router as metrics_router
 from app.auth import request_is_authenticated
+from app.reporting_security import ReportingAccessMiddleware
+from app.routers.reporting import router as reporting_router
+from app.routers.agent_reset import router as agent_reset_router
 
-load_dotenv()
-DIST = "/opt/workdev/apps/web/dist"
+load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
+import sentry_sdk
+if os.getenv("SENTRY_DSN"):
+    sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), traces_sample_rate=0.0, environment=os.getenv("AMBIENTE", "producao"))
+DIST = os.environ.get("WORKDEV_WEB_DIST", "/opt/workdev/apps/web/dist")
 
 app = FastAPI(title="WorkDev API", version="0.7.0")
 
@@ -48,16 +62,22 @@ app.add_middleware(
 )
 
 
+app.add_middleware(ReportingAccessMiddleware)
+
+app.include_router(reporting_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(backlog_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
 app.include_router(subtasks_router, prefix="/api")
 app.include_router(knowledge_router, prefix="/api")
 app.include_router(chat_sessions_router, prefix="/api")
+app.include_router(chat_free_router, prefix="/api")
 app.include_router(engineering_router, prefix="/api")
 app.include_router(deployments_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(monitoring_router, prefix="/api")
+app.include_router(repository_router, prefix="/api")
+app.include_router(database_router, prefix="/api")
 app.include_router(adrs_router, prefix="/api")
 app.include_router(rfcs_router, prefix="/api")
 app.include_router(decisions_router, prefix="/api")
@@ -65,7 +85,15 @@ app.include_router(handoffs_router, prefix="/api")
 app.include_router(plans_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
+app.include_router(busca_web_router, prefix="/api")
+# Bancada Local: só GET, lê apenas tmp/bancada (ver app/routers/bancada.py).
+app.include_router(bancada_router, prefix="/api")
+# Workspace: só GET, lista do git com bloqueios (ver app/services/workspace.py).
+app.include_router(workspace_router, prefix="/api")
 app.include_router(terminal_router)
+app.include_router(run_terminal_router)
+app.include_router(metrics_router, prefix="/api")
+app.include_router(agent_reset_router, prefix="/api")
 
 
 @app.get("/health")

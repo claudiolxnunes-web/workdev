@@ -2,14 +2,60 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 
 
-PlanStatus = Literal["draft", "approved", "needs_revision", "superseded", "discarded"]
-RunStatus = Literal[
-    "queued", "running", "blocked", "review", "completed", "failed", "cancelled"
+PlanStatus = Literal[
+    "draft",
+    "approved",
+    "needs_revision",
+    "superseded",
+    "discarded",
 ]
-AgentName = Literal["codex", "claude", "kimi", "qwen"]
+
+RunStatus = Literal[
+    "queued",
+    "running",
+    "blocked",
+    "review",
+    "completed",
+    "failed",
+    "cancelled",
+]
+
+AgentName = Literal[
+    # Agentes com CLI e sessão tmux própria na VPS
+    "codex",
+    "claude",
+    "kimi",
+    "qwen",
+    "grok",
+    "deepseek",
+    # openrouter: legado, mantido para ler runs anteriores à separação.
+    "openrouter",
+    "gemini",
+    # Runtimes Ollama: identidade estável, independente do modelo carregado
+    # local-code: legado. Mantido só para ler runs históricas; criar run nova
+    # é recusado em queue_build (agente local removido; use a Bancada Local).
+    "local-code",
+    "gpu-hostinger",
+    "gpu-runpod",
+]
+
+RoutingMode = Literal["manual", "auto"]
+
+ComplexityLevel = Literal[
+    "low",
+    "medium",
+    "high",
+    "critical",
+]
 
 
 class PlanCreate(BaseModel):
@@ -17,11 +63,13 @@ class PlanCreate(BaseModel):
 
     backlog_id: UUID
     title: str | None = Field(
-        default=None, min_length=3,
+        default=None,
+        min_length=3,
         validation_alias=AliasChoices("title", "titulo"),
     )
     objective: str = Field(
-        min_length=3, validation_alias=AliasChoices("objective", "objetivo")
+        min_length=3,
+        validation_alias=AliasChoices("objective", "objetivo"),
     )
     scope: str | None = None
     constraints: list[str] = Field(default_factory=list)
@@ -35,11 +83,13 @@ class PlanUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     title: str | None = Field(
-        default=None, min_length=3,
+        default=None,
+        min_length=3,
         validation_alias=AliasChoices("title", "titulo"),
     )
     objective: str | None = Field(
-        default=None, min_length=3,
+        default=None,
+        min_length=3,
         validation_alias=AliasChoices("objective", "objetivo"),
     )
     status: Literal["discarded"] | None = None
@@ -65,7 +115,54 @@ class PlanOut(PlanCreate):
 
 
 class BuildRequest(BaseModel):
-    agent: AgentName
+    routing_mode: RoutingMode = "manual"
+    premium_confirmed: bool = False
+    review_requested: bool | None = None
+    reviewer_selection: dict[str, str] | None = None
+    observer_enabled: bool = False
+    observer_selection: dict[str, str] | None = None
+    agent: AgentName | None = None
+    reviewer: AgentName | None = None
+    model: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=120,
+    )
+    reasoning_effort: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=16,
+    )
+
+    @model_validator(mode="after")
+    def validate_manual_agent(self):
+        if self.observer_enabled and not self.observer_selection:
+            raise ValueError('Observer ligado exige fonte e modelo')
+        # Não existe executor padrão: o operador escolhe o executor a cada envio.
+        if self.routing_mode == "manual" and self.agent is None:
+            raise ValueError(
+                "Escolha o executor: agent é obrigatório quando routing_mode=manual"
+            )
+        if self.routing_mode == "auto" and (
+            self.agent is not None or self.model is not None
+        ):
+            raise ValueError(
+                "AUTO seleciona agente e modelo automaticamente"
+            )
+        # O executor nunca aprova o próprio trabalho: aprovar o PLAN e mandar
+        # para o Build exige escolher executor E revisor, sempre distintos.
+        if self.reviewer is None and self.review_requested is not False and self.reviewer_selection is None:
+            raise ValueError(
+                "reviewer é obrigatório: escolha um revisor diferente do "
+                "executor antes de enviar ao Build"
+            )
+        if self.review_requested is False and (self.reviewer is not None or self.reviewer_selection is not None):
+            raise ValueError("Recusa de revisão não aceita revisor selecionado")
+        if self.agent is not None and self.reviewer == self.agent:
+            raise ValueError(
+                "executor e revisor precisam ser agentes diferentes"
+            )
+        return self
 
 
 class RunUpdate(BaseModel):
@@ -85,7 +182,19 @@ class RunOut(BaseModel):
     id: UUID
     plan_id: UUID
     backlog_id: UUID
+
     agent: AgentName
+    reviewer_agent: AgentName | None = None
+    review_attempts: int = 0
+    model: str | None = None
+    reasoning_effort: str | None = None
+
+    complexity: ComplexityLevel | None = None
+    complexity_score: int | None = None
+
+    routing_mode: RoutingMode
+    routing_reason: str | None = None
+
     status: RunStatus
     summary: str | None = None
     result: str | None = None
@@ -97,6 +206,7 @@ class RunOut(BaseModel):
     finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
     task_title: str | None = None
     project_id: UUID | None = None
     project_name: str | None = None
@@ -106,10 +216,61 @@ class RunOut(BaseModel):
 class RunTransfer(BaseModel):
     agent: AgentName
     reason: str = Field(min_length=1)
+    # Opcional: trocar executor e revisor no mesmo movimento, necessário
+    # quando o novo executor é justamente o revisor vigente.
+    reviewer: AgentName | None = None
+
+    @model_validator(mode="after")
+    def validate_distinct_roles(self):
+        if self.reviewer is not None and self.reviewer == self.agent:
+            raise ValueError(
+                "executor e revisor precisam ser agentes diferentes"
+            )
+        return self
+
+
+class ReviewerSwap(BaseModel):
+    reviewer: AgentName
+    reason: str = Field(min_length=1)
+
+
+ReviewVerdict = Literal["approved", "rejected"]
+
+
+class RunReviewCreate(BaseModel):
+    reviewer: AgentName
+    verdict: ReviewVerdict
+    feedback: str | None = None
+
+    @model_validator(mode="after")
+    def require_feedback_on_rejection(self):
+        if self.verdict == "rejected" and not (self.feedback or "").strip():
+            raise ValueError(
+                "feedback é obrigatório ao rejeitar: o executor precisa saber "
+                "o que corrigir"
+            )
+        return self
+
+
+class RunReviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    run_id: UUID
+    attempt: int
+    executor_agent: str
+    reviewer_agent: str
+    verdict: ReviewVerdict
+    feedback: str | None = None
+    gate_passed: bool | None = None
+    created_at: datetime
 
 
 class RunEventCreate(BaseModel):
-    event_type: str = Field(min_length=2, max_length=40)
+    event_type: str = Field(
+        min_length=2,
+        max_length=40,
+    )
     message: str | None = None
     payload: dict = Field(default_factory=dict)
 

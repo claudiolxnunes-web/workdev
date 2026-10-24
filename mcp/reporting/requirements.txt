@@ -1,0 +1,4 @@
+# Isolated service; do not install into the API environment.
+mcp==1.29.0
+httpx==0.28.1
+uvicorn==0.51.0

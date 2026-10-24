@@ -1,0 +1,4 @@
+AgroGestao: schema restaurado em nnwlqpgsqhtyqliwufgw, 37 tabelas, 110 policies. Falta: trocar .env (backup em .env.bak-kpkdg), .env.production, build, Traefik, DNS.
+05/08: AgroGestao migrado kpkdg(deletado) -> nnwlqpgsqhtyqliwufgw. Schema OK (37 tab/110 pol). App em agrogestao.bpfconsult.com.br via systemd agrogestao.service porta 3010 + traefik dynamic/agrogestao.yml. FALTAM DADOS: procurar agrogestao_crm_completo.zip (24/07, database_dump.sql 2.8MB, 838 clientes).
+PENDENTE - Secrets: RESEND_API_KEY, PADDLE (nao Stripe - migrado), TWILIO, ELEVENLABS, EVOLUTION_API_KEY, CRON_SECRET, SUPABASE_SERVICE_ROLE_KEY. Verificar em: agro-rc, agrogestao, create-with-voice.
+SEGURANCA VPS1 - pendente: 1) revisar authorized_keys (12 chaves, tablet duplicado, 3 IDs Termux) 2) verificar 'sshd -T | grep passwordauthentication' e desativar se yes 3) considerar fail2ban (bots varrendo user sol/solana). Fazer no PC com 2a sessao aberta.

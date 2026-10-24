@@ -6,13 +6,13 @@ const API_KEY = import.meta.env.VITE_API_KEY || "";
 const headers: HeadersInit = { "X-API-Key": API_KEY };
 
 export async function getProjects() {
-  const response = await fetch(`${API_URL}/api/projects`, { headers });
+  const response = await fetch(`${API_URL}/api/projects`, { headers, credentials: "include" });
   if (!response.ok) throw new Error("Erro ao buscar projetos");
   return response.json();
 }
 
 export async function getProject(slug: string) {
-  const response = await fetch(`${API_URL}/api/projects/${slug}`, { headers });
+  const response = await fetch(`${API_URL}/api/projects/${slug}`, { headers, credentials: "include" });
   if (!response.ok) throw new Error("Erro ao buscar projeto");
   return response.json();
 }
@@ -28,6 +28,7 @@ export async function createProject(data: ProjectCreate) {
   const response = await fetch(`${API_URL}/api/projects`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(data),
   });
   if (!response.ok) {
@@ -55,6 +56,7 @@ export async function updateProject(slug: string, data: ProjectUpdate) {
   const response = await fetch(`${API_URL}/api/projects/${slug}`, {
     method: "PATCH",
     headers: { ...headers, "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error("Erro ao atualizar projeto");

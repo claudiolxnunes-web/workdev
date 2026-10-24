@@ -1,0 +1,281 @@
+"""Contrato do system prompt do AI Hub.
+
+`build_project_system` mantém a assinatura da E0 (`None` para slug
+desconhecido); a montagem em si passou para o Context Engine na E1.2.
+`build_system` é o caminho novo: sempre devolve um system, com contexto global
+quando não há projeto ativo.
+"""
+from pathlib import Path
+
+import unittest
+from unittest.mock import Mock, patch
+
+from app.routers import ai
+from app.services import context_engine as ce
+
+
+CONTEXTO_PROJETO = {
+    "escopo": ce.ESCOPO_PROJETO,
+    "gerado_em": "2026-08-16T22:00:00+00:00",
+    "projeto": {
+        "id": "p1", "nome": "WorkDev Core", "slug": "workdev-core",
+        "status": "Production", "tipo": "plataforma", "stack": None,
+        "descricao": None, "github_url": None, "vps": None,
+        "dev_branch": None, "prod_branch": None,
+    },
+    "backlog_por_status": {"todo": 1, "done": 1},
+    "backlog_aberto": [{
+        "id": "1", "titulo": "Implementar X", "status": "todo",
+        "prioridade": "high", "tipo": "feature", "sprint": None,
+    }],
+    "em_andamento": [], "planos": [], "execucoes": [], "adrs": [],
+    "knowledge": [],
+}
+
+CONTEXTO_GLOBAL = {
+    "escopo": ce.ESCOPO_GLOBAL,
+    "gerado_em": "2026-08-16T22:00:00+00:00",
+    "projetos": [{"slug": "workdev-core", "nome": "WorkDev Core",
+                  "status": "Production", "tipo": "plataforma"}],
+    "backlog_por_status": {"todo": 2},
+    "atencao": [], "planos": [], "execucoes": [], "knowledge": [],
+}
+
+
+class BuildProjectSystemTest(unittest.TestCase):
+    def test_returns_none_for_unknown_slug(self):
+        db = Mock()
+        with patch.object(ce, "build_chat_context", return_value=None):
+            self.assertIsNone(ai.build_project_system("inexistente", db))
+
+    def test_includes_slug_and_backlog_summary(self):
+        db = Mock()
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_PROJETO):
+            system = ai.build_project_system("workdev-core", db)
+
+        self.assertIn("workdev-core", system)
+        self.assertIn("Implementar X", system)
+        self.assertIn("todo", system)
+
+    def test_empty_backlog_still_returns_system(self):
+        db = Mock()
+        contexto = {**CONTEXTO_PROJETO, "backlog_aberto": [],
+                    "backlog_por_status": {}}
+        with patch.object(ce, "build_chat_context", return_value=contexto):
+            system = ai.build_project_system("nutricontrole", db)
+
+        self.assertIn("nenhum item em aberto", system)
+
+    def test_keeps_base_system_and_project_focus(self):
+        db = Mock()
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_PROJETO):
+            system = ai.build_project_system("workdev-core", db)
+
+        self.assertIn("assistente do WorkDev", system)
+        self.assertIn(ai.FOCO_PROJETO, system)
+
+
+class BuildSystemTest(unittest.TestCase):
+    def test_sem_projeto_usa_contexto_global(self):
+        db = Mock()
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL):
+            system = ai.build_system(db)
+
+        self.assertIn("Estado atual do WorkDev", system)
+        self.assertIn("WorkDev Core (`workdev-core`)", system)
+        self.assertNotIn(ai.FOCO_PROJETO, system)
+
+    def test_com_projeto_adiciona_foco(self):
+        db = Mock()
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_PROJETO):
+            system = ai.build_system(db, "workdev-core")
+
+        self.assertIn("Projeto ativo: WorkDev Core", system)
+        self.assertIn(ai.FOCO_PROJETO, system)
+
+    def test_slug_inexistente_degrada_para_global_e_avisa(self):
+        db = Mock()
+        with patch.object(ce, "build_chat_context", return_value=None), \
+             patch.object(ce, "montar_contexto_global", return_value=CONTEXTO_GLOBAL):
+            system = ai.build_system(db, "nao-existe")
+
+        self.assertIn("não existe no WorkDev", system)
+        self.assertIn("Estado atual do WorkDev", system)
+
+    def test_falha_de_contexto_nao_derruba_a_conversa(self):
+        db = Mock()
+        with patch.object(ce, "build_chat_context",
+                          side_effect=RuntimeError("banco fora")):
+            system = ai.build_system(db)
+
+        self.assertIn("contexto indisponível", system)
+        self.assertIn("assistente do WorkDev", system)
+
+    def test_plan_inclui_politica_canonica(self):
+        db = Mock()
+        politica = ai.load_plan_system_prompt()
+
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL):
+            system = ai.build_system(db, nivel="plan")
+
+        self.assertTrue(politica)
+        self.assertIn(politica, system)
+
+    def test_politica_plan_nao_vaza_para_outros_niveis(self):
+        db = Mock()
+        politica = ai.load_plan_system_prompt()
+
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL):
+            for nivel in ("observe", "execute", "admin"):
+                with self.subTest(nivel=nivel):
+                    system = ai.build_system(db, nivel=nivel)
+                    self.assertNotIn(politica, system)
+
+    def test_plan_mantem_politica_com_slug_inexistente(self):
+        db = Mock()
+        politica = ai.load_plan_system_prompt()
+
+        with patch.object(ce, "build_chat_context", return_value=None), \
+             patch.object(ce, "montar_contexto_global", return_value=CONTEXTO_GLOBAL):
+            system = ai.build_system(db, "nao-existe", nivel="plan")
+
+        self.assertIn(politica, system)
+        self.assertIn("não existe no WorkDev", system)
+
+    def test_plan_mantem_politica_quando_contexto_falha(self):
+        db = Mock()
+        politica = ai.load_plan_system_prompt()
+
+        with patch.object(
+            ce,
+            "build_chat_context",
+            side_effect=RuntimeError("banco fora"),
+        ):
+            system = ai.build_system(db, nivel="plan")
+
+        self.assertIn(politica, system)
+        self.assertIn("contexto indisponível", system)
+
+    def test_plan_falha_se_politica_canonica_estiver_indisponivel(self):
+        db = Mock()
+        caminho_inexistente = Path("/tmp/workdev-plan-prompt-inexistente.md")
+
+        with patch.object(
+            ai,
+            "AIHUB_PLAN_PROMPT_PATH",
+            caminho_inexistente,
+        ), patch.object(
+            ce,
+            "build_chat_context",
+            return_value=CONTEXTO_GLOBAL,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Politica canonica PLAN indisponivel",
+            ):
+                ai.build_system(db, nivel="plan")
+
+    def test_system_base_nao_tem_mais_slugs_fixos(self):
+        """Os slugs vêm do banco desde a E1.2; a lista fixa mentia (6 de 19)."""
+        self.assertNotIn("nutrigestor-crm", ai.SYSTEM)
+        self.assertNotIn("openclaw", ai.SYSTEM)
+
+
+class JevPlanningBlockTest(unittest.TestCase):
+    """Integração do Jev Pré-Plano em build_system — via app.services.jev_planning."""
+
+    def _db(self, *, tem_plano=False, task=Mock()):
+        db = Mock()
+        db.query.return_value.filter.return_value.first.return_value = (
+            Mock() if tem_plano else None
+        )
+        db.get.return_value = task
+        return db
+
+    def test_fora_do_nivel_plan_nao_injeta_bloco(self):
+        from app.services import adaptive_config, jev_planning
+        db = self._db()
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=True)), \
+             patch.object(jev_planning, "assess") as assess:
+            system = ai.build_system(db, nivel="execute", backlog_id="task-1")
+
+        assess.assert_not_called()
+        self.assertNotIn("Jev Pré-Plano", system)
+
+    def test_sem_backlog_id_nao_injeta_bloco(self):
+        from app.services import jev_planning
+        db = self._db()
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(jev_planning, "assess") as assess:
+            system = ai.build_system(db, nivel="plan")
+
+        assess.assert_not_called()
+        self.assertNotIn("Jev Pré-Plano", system)
+
+    def test_supervisao_adaptativa_desligada_nao_injeta_bloco(self):
+        from app.services import adaptive_config, jev_planning
+        db = self._db()
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=False)), \
+             patch.object(jev_planning, "assess") as assess:
+            system = ai.build_system(db, nivel="plan", backlog_id="task-1")
+
+        assess.assert_not_called()
+        self.assertNotIn("Jev Pré-Plano", system)
+
+    def test_task_ja_com_plano_nao_reavalia(self):
+        """'Antes de existir ExecutionPlan': uma vez que existe, a janela pré-plano passou."""
+        from app.services import adaptive_config, jev_planning
+        db = self._db(tem_plano=True)
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=True)), \
+             patch.object(jev_planning, "assess") as assess:
+            system = ai.build_system(db, nivel="plan", backlog_id="task-1")
+
+        assess.assert_not_called()
+        self.assertNotIn("Jev Pré-Plano", system)
+
+    def test_task_sem_plano_ainda_injeta_bloco_server_owned(self):
+        from app.services import adaptive_config, jev_planning
+        tarefa = Mock(id="task-1", project_id="proj-1", title="X", description="Y", type="feature")
+        db = self._db(tem_plano=False, task=tarefa)
+        assessment = jev_planning.PlanningAssessment(
+            planning_depth=jev_planning.PlanningDepth.STANDARD, decompose_score=.4,
+            recommended_slices=3, has_architectural_risk=False, has_state_risk=True,
+            has_concurrency_risk=False, has_security_risk=False,
+            has_irreversible_action_risk=False, conservative_fallback=False,
+        )
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=True)), \
+             patch.object(jev_planning, "assess", return_value=assessment) as assess:
+            system = ai.build_system(db, nivel="plan", backlog_id="task-1")
+
+        assess.assert_called_once_with(db, tarefa)
+        self.assertIn(jev_planning.render_system_block(assessment), system)
+        self.assertIn("NÃO é instrução executável", system)
+
+    def test_task_inexistente_nao_quebra_e_nao_injeta(self):
+        from app.services import adaptive_config
+        db = self._db(tem_plano=False, task=None)
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=True)):
+            system = ai.build_system(db, nivel="plan", backlog_id="task-inexistente")
+
+        self.assertNotIn("Jev Pré-Plano", system)
+        self.assertIn("assistente do WorkDev", system)
+
+    def test_falha_no_assess_nao_derruba_a_conversa(self):
+        from app.services import adaptive_config, jev_planning
+        db = self._db(tem_plano=False, task=Mock())
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=True)), \
+             patch.object(jev_planning, "assess", side_effect=RuntimeError("provider fora")):
+            system = ai.build_system(db, nivel="plan", backlog_id="task-1")
+
+        self.assertNotIn("Jev Pré-Plano", system)
+        self.assertIn("assistente do WorkDev", system)
+
+
+if __name__ == "__main__":
+    unittest.main()

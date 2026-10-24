@@ -1,5 +1,7 @@
 # apps/api/app/api/endpoints/settings.py
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.orm import Session
+from app.routers.ai import get_db
 from typing import Dict, Any
 from ...services.config_service import config_service
 
@@ -22,7 +24,7 @@ async def get_settings():
         raise HTTPException(status_code=500, detail=f"Erro ao obter as configurações: {str(e)}")
 
 @router.put("", response_model=Dict[str, Any])
-async def update_settings(settings: Dict[str, Any]):
+async def update_settings(settings: Dict[str, Any], db: Session = Depends(get_db)):
     """
     Atualiza as configurações do usuário
     """
@@ -30,6 +32,14 @@ async def update_settings(settings: Dict[str, Any]):
         # Validação básica para impedir atualização de chaves sensíveis
         if _contains_sensitive_keys(settings):
             raise HTTPException(status_code=400, detail="Não é permitido atualizar chaves de configuração sensíveis")
+
+        if "agents" in settings:
+            agents = settings["agents"]
+            if not isinstance(agents, dict):
+                raise HTTPException(422, "Configuração de agentes inválida")
+            # Não existe mais executor padrão: o executor é escolhido em cada
+            # envio ao Build. Valor antigo (inclusive "ollama") não é regravado.
+            agents.pop("executor", None)
         
         # Atualiza as configurações do usuário
         success = config_service.update_user_config(settings)

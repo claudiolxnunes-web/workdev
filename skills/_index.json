@@ -1,0 +1,435 @@
+{
+  "skills_dir": "/opt/workdev/skills",
+  "count": 38,
+  "skills": [
+    {
+      "id": "agent-manager-skill",
+      "description": "Manage multiple local CLI agents via tmux sessions (start/stop/monitor/assign) with cron-friendly scheduling.",
+      "risk": "critical",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/agent-manager-skill/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "agent-memory-systems",
+      "description": "Memory is the cornerstone of intelligent agents. Without it, every interaction starts from zero. This skill covers the architecture of agent memory:…",
+      "risk": "safe",
+      "source": "vibeship-spawner-skills (Apache 2.0)",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/agent-memory-systems/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "api-design-principles",
+      "description": "Master REST and GraphQL API design principles to build intuitive, scalable, and maintainable APIs that delight developers and stand the test of time.",
+      "risk": "safe",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/api-design-principles/SKILL.md",
+      "files": 6
+    },
+    {
+      "id": "async-python-patterns",
+      "description": "Comprehensive guidance for implementing asynchronous Python applications using asyncio, concurrent programming patterns, and async/await for building…",
+      "risk": "safe",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/async-python-patterns/SKILL.md",
+      "files": 2
+    },
+    {
+      "id": "context-compression",
+      "description": "When agent sessions generate millions of tokens of conversation history, compression becomes mandatory. The naive approach is aggressive compression…",
+      "risk": "none",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/context-compression/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "context-engineering",
+      "description": "Optimizes agent context setup. Use when starting a new session, when agent output quality degrades, when switching between tasks, or when you need to…",
+      "risk": "critical",
+      "source": "https://github.com/addyosmani/agent-skills/tree/main/skills/context-engineering",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/context-engineering/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "cron-doctor",
+      "description": "Diagnose and validate cron expressions before they ship. Catches the five silent death-traps: impossible dates that never fire, OR-semantics that fir…",
+      "risk": "safe",
+      "source": "community",
+      "category": "devops",
+      "tags": [
+        "cron",
+        "crontab",
+        "scheduling",
+        "devops",
+        "debugging",
+        "kubernetes",
+        "validation"
+      ],
+      "path": "/opt/workdev/skills/cron-doctor/SKILL.md",
+      "files": 3
+    },
+    {
+      "id": "database-migration",
+      "description": "Master database schema and data migrations across ORMs (Sequelize, TypeORM, Prisma), including rollback strategies and zero-downtime deployments.",
+      "risk": "critical",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/database-migration/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "delegating-to-agents",
+      "description": "Delegate bounded work to other AI agents while preserving context, ownership, and progress checks.",
+      "risk": "critical",
+      "source": "community",
+      "category": "agent-orchestration",
+      "tags": [
+        "agents",
+        "delegation",
+        "orchestration"
+      ],
+      "path": "/opt/workdev/skills/delegating-to-agents/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "docker-expert",
+      "description": "You are an advanced Docker containerization expert with comprehensive, practical knowledge of container optimization, security hardening, multi-stage…",
+      "risk": "critical",
+      "source": "community",
+      "category": "devops",
+      "tags": [],
+      "path": "/opt/workdev/skills/docker-expert/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "embedding-strategies",
+      "description": "Guide to selecting and optimizing embedding models for vector search applications.",
+      "risk": "critical",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/embedding-strategies/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "fastapi-pro",
+      "description": "Build high-performance async APIs with FastAPI, SQLAlchemy 2.0, and Pydantic V2. Master microservices, WebSockets, and modern Python async patterns.",
+      "risk": "critical",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/fastapi-pro/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "hierarchical-agent-memory",
+      "description": "Scoped CLAUDE.md memory system that reduces context token spend. Creates directory-level context files, tracks savings via dashboard, and routes agen…",
+      "risk": "safe",
+      "source": "https://github.com/kromahlusenii-ops/ham",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/hierarchical-agent-memory/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "incident-runbook-templates",
+      "description": "Production-ready templates for incident response runbooks covering detection, triage, mitigation, resolution, and communication.",
+      "risk": "critical",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/incident-runbook-templates/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "mcp-builder",
+      "description": "Create MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. The quality of an MCP se…",
+      "risk": "critical",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/mcp-builder/SKILL.md",
+      "files": 10
+    },
+    {
+      "id": "mcp-tool-developer",
+      "description": "Build Model Context Protocol (MCP) servers and tools from scratch. Full-stack MCP development with TypeScript/Python, testing, deployment, and regist…",
+      "risk": "safe",
+      "source": "community",
+      "category": "developer-tools",
+      "tags": [
+        "mcp",
+        "ai-agent",
+        "tool-development",
+        "typescript",
+        "python",
+        "llm",
+        "model-context-protocol"
+      ],
+      "path": "/opt/workdev/skills/mcp-tool-developer/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "multi-agent-task-orchestrator",
+      "description": "Route tasks to specialized AI agents with anti-duplication, quality gates, and 30-minute heartbeat monitoring",
+      "risk": "safe",
+      "source": "community",
+      "category": "agent-orchestration",
+      "tags": [
+        "multi-agent",
+        "orchestration",
+        "task-routing",
+        "quality-gates",
+        "anti-duplication"
+      ],
+      "path": "/opt/workdev/skills/multi-agent-task-orchestrator/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "odoo-backup-strategy",
+      "description": "Complete Odoo backup and restore strategy: database dumps, filestore backup, automated scheduling, cloud storage upload, and tested restore procedure…",
+      "risk": "safe",
+      "source": "self",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/odoo-backup-strategy/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "openapi-spec-generation",
+      "description": "Generate and maintain OpenAPI 3.1 specifications from code, design-first specs, and validation patterns. Use when creating API documentation, generat…",
+      "risk": "safe",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/openapi-spec-generation/SKILL.md",
+      "files": 2
+    },
+    {
+      "id": "planning-and-task-breakdown",
+      "description": "Breaks work into ordered tasks. Use when you have a spec or clear requirements and need to break work into implementable tasks. Use when a task feels…",
+      "risk": "none",
+      "source": "https://github.com/addyosmani/agent-skills/tree/main/skills/planning-and-task-breakdown",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/planning-and-task-breakdown/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "postgres-readonly-queries",
+      "description": "Execute safe read-only SQL queries against PostgreSQL databases with multi-connection support and defense-in-depth write protection.",
+      "risk": "safe",
+      "source": "https://github.com/sanjay3290/ai-skills/tree/main/skills/postgres",
+      "category": "data",
+      "tags": [
+        "postgres",
+        "sql",
+        "database",
+        "read-only"
+      ],
+      "path": "/opt/workdev/skills/postgres-readonly-queries/SKILL.md",
+      "files": 5
+    },
+    {
+      "id": "postgresql-cli",
+      "description": "PostgreSQL interactive terminal (psql) reference and usage guide. Use this skill whenever the user mentions psql, PostgreSQL command-line client, bac…",
+      "risk": "critical",
+      "source": "https://github.com/chaunsin/agent-skills/tree/master/skills/postgresql-cli",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/postgresql-cli/SKILL.md",
+      "files": 7
+    },
+    {
+      "id": "postgresql-optimization",
+      "description": "PostgreSQL database optimization workflow for query tuning, indexing strategies, performance analysis, and production database management.",
+      "risk": "safe",
+      "source": "personal",
+      "category": "granular-workflow-bundle",
+      "tags": [],
+      "path": "/opt/workdev/skills/postgresql-optimization/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "protect-mcp-governance",
+      "description": "Agent governance skill for MCP tool calls — Cedar policy authoring, shadow-to-enforce rollout, and Ed25519 receipt verification.",
+      "risk": "safe",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/protect-mcp-governance/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "pytest-skill",
+      "description": "Generates production-grade pytest tests in Python with fixtures, parametrize, markers, mocking, and conftest patterns. Use when user mentions \"pytest…",
+      "risk": "critical",
+      "source": "https://github.com/LambdaTest/agent-skills/tree/main/pytest-skill",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/pytest-skill/SKILL.md",
+      "files": 2
+    },
+    {
+      "id": "rag-implementation",
+      "description": "RAG (Retrieval-Augmented Generation) implementation workflow covering embedding selection, vector database setup, chunking strategies, and retrieval…",
+      "risk": "safe",
+      "source": "personal",
+      "category": "granular-workflow-bundle",
+      "tags": [],
+      "path": "/opt/workdev/skills/rag-implementation/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "saas-multi-tenant",
+      "description": "Design and implement multi-tenant SaaS architectures with row-level security, tenant-scoped queries, shared-schema isolation, and safe cross-tenant a…",
+      "risk": "safe",
+      "source": "community",
+      "category": "",
+      "tags": [
+        "multi-tenancy",
+        "saas",
+        "row-level-security",
+        "postgresql",
+        "tenant-isolation"
+      ],
+      "path": "/opt/workdev/skills/saas-multi-tenant/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "secrets-management",
+      "description": "Secure secrets management practices for CI/CD pipelines using Vault, AWS Secrets Manager, and other tools.",
+      "risk": "critical",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/secrets-management/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "stripe-integration",
+      "description": "Master Stripe payment processing integration for robust, PCI-compliant payment flows including checkout, subscriptions, webhooks, and refunds.",
+      "risk": "critical",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/stripe-integration/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "supabase",
+      "description": "Use when doing ANY task involving Supabase. Triggers: Supabase products (Database, Auth, Edge Functions, Realtime, Storage, Vectors, Cron, Queues); c…",
+      "risk": "critical",
+      "source": "https://github.com/supabase/agent-skills/tree/main/skills/supabase",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/supabase/SKILL.md",
+      "files": 4
+    },
+    {
+      "id": "supabase-postgres-best-practices",
+      "description": "Postgres performance optimization and best practices from Supabase. Use this skill when writing, reviewing, or optimizing Postgres queries, schema de…",
+      "risk": "safe",
+      "source": "https://github.com/supabase/agent-skills/tree/main/skills/supabase-postgres-best-practices",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/supabase-postgres-best-practices/SKILL.md",
+      "files": 36
+    },
+    {
+      "id": "tanstack-query-expert",
+      "description": "Expert in TanStack Query (React Query) — asynchronous state management. Covers data fetching, stale time configuration, mutations, optimistic updates…",
+      "risk": "safe",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/tanstack-query-expert/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "telegram-bot-builder",
+      "description": "Expert in building Telegram bots that solve real problems - from",
+      "risk": "critical",
+      "source": "vibeship-spawner-skills (Apache 2.0)",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/telegram-bot-builder/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "tmux",
+      "description": "Expert tmux session, window, and pane management for terminal multiplexing, persistent remote workflows, and shell scripting automation.",
+      "risk": "safe",
+      "source": "community",
+      "category": "development",
+      "tags": [
+        "tmux",
+        "terminal",
+        "multiplexer",
+        "sessions",
+        "shell",
+        "remote",
+        "automation"
+      ],
+      "path": "/opt/workdev/skills/tmux/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "vector-index-tuning",
+      "description": "Optimize vector index performance for latency, recall, and memory. Use when tuning HNSW parameters, selecting quantization strategies, or scaling vec…",
+      "risk": "safe",
+      "source": "community",
+      "category": "",
+      "tags": [],
+      "path": "/opt/workdev/skills/vector-index-tuning/SKILL.md",
+      "files": 2
+    },
+    {
+      "id": "vps-server-management",
+      "description": "Manage authorized VPS hosts and server-side agents through cautious SSH and operations workflows.",
+      "risk": "critical",
+      "source": "community",
+      "category": "operations",
+      "tags": [
+        "vps",
+        "ssh",
+        "server-management"
+      ],
+      "path": "/opt/workdev/skills/vps-server-management/SKILL.md",
+      "files": 1
+    },
+    {
+      "id": "writing-great-skills",
+      "description": "Reference for writing and editing skills well — the vocabulary and principles that make a skill predictable.",
+      "risk": "safe",
+      "source": "community",
+      "category": "skill-authoring",
+      "tags": [],
+      "path": "/opt/workdev/skills/writing-great-skills/SKILL.md",
+      "files": 2
+    },
+    {
+      "id": "yao-meta-skill",
+      "description": "Create, refactor, evaluate, and package agent skills from workflows, prompts, transcripts, docs, or notes. Use for skill creation, reusable workflow…",
+      "risk": "safe",
+      "source": "community",
+      "category": "skill-authoring",
+      "tags": [],
+      "path": "/opt/workdev/skills/yao-meta-skill/SKILL.md",
+      "files": 38
+    }
+  ]
+}

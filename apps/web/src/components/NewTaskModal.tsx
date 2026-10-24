@@ -13,15 +13,28 @@ interface ProjectOpt {
   name: string;
 }
 
+const STORAGE_KEY = "workdev_newtask_form";
+
 export default function NewTaskModal({ open, onClose, onCreated }: Props) {
   const [projects, setProjects] = useState<ProjectOpt[]>([]);
-  const [title, setTitle] = useState("");
-  const [projectId, setProjectId] = useState("");
-  const [type, setType] = useState("feature");
-  const [priority, setPriority] = useState("medium");
-  const [sprint, setSprint] = useState("");
+  const [title, setTitle] = useState(() => sessionStorage.getItem(`${STORAGE_KEY}_title`) || "");
+  const [description, setDescription] = useState(() => sessionStorage.getItem(`${STORAGE_KEY}_desc`) || "");
+  const [projectId, setProjectId] = useState(() => sessionStorage.getItem(`${STORAGE_KEY}_project`) || "");
+  const [type, setType] = useState(() => sessionStorage.getItem(`${STORAGE_KEY}_type`) || "feature");
+  const [priority, setPriority] = useState(() => sessionStorage.getItem(`${STORAGE_KEY}_priority`) || "medium");
+  const [sprint, setSprint] = useState(() => sessionStorage.getItem(`${STORAGE_KEY}_sprint`) || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  // Persiste o formulário no sessionStorage para sobreviver a troca de abas
+  useEffect(() => {
+    sessionStorage.setItem(`${STORAGE_KEY}_title`, title);
+    sessionStorage.setItem(`${STORAGE_KEY}_desc`, description);
+    sessionStorage.setItem(`${STORAGE_KEY}_project`, projectId);
+    sessionStorage.setItem(`${STORAGE_KEY}_type`, type);
+    sessionStorage.setItem(`${STORAGE_KEY}_priority`, priority);
+    sessionStorage.setItem(`${STORAGE_KEY}_sprint`, sprint);
+  }, [title, description, projectId, type, priority, sprint]);
 
   useEffect(() => {
     if (open) {
@@ -44,6 +57,7 @@ export default function NewTaskModal({ open, onClose, onCreated }: Props) {
     try {
       await createItem({
         title: title.trim(),
+        description: description.trim() || undefined,
         project_id: projectId,
         type,
         priority,
@@ -51,7 +65,14 @@ export default function NewTaskModal({ open, onClose, onCreated }: Props) {
         status: "todo",
       });
       setTitle("");
+      setDescription("");
       setSprint("");
+      sessionStorage.removeItem(`${STORAGE_KEY}_title`);
+      sessionStorage.removeItem(`${STORAGE_KEY}_desc`);
+      sessionStorage.removeItem(`${STORAGE_KEY}_project`);
+      sessionStorage.removeItem(`${STORAGE_KEY}_type`);
+      sessionStorage.removeItem(`${STORAGE_KEY}_priority`);
+      sessionStorage.removeItem(`${STORAGE_KEY}_sprint`);
       onCreated();
       onClose();
     } catch {
@@ -76,6 +97,13 @@ export default function NewTaskModal({ open, onClose, onCreated }: Props) {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             autoFocus
+          />
+          <textarea
+            className={inputCls}
+            placeholder="Descrição / contexto da task"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={5}
           />
           <select
             className={inputCls}

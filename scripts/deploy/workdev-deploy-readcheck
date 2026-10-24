@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+    port)
+        [ "$#" -eq 1 ] || exit 64
+        exec /usr/bin/ss -H -ltnp 'sport = :8000'
+        ;;
+    journal)
+        [ "$#" -eq 1 ] || exit 64
+        exec /usr/bin/journalctl -u workdev-api --since '5 minutes ago' --no-pager
+        ;;
+    *)
+        echo "BLOQUEIA: leitura privilegiada desconhecida" >&2
+        exit 64
+        ;;
+esac

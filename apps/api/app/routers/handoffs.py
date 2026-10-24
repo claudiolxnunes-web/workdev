@@ -1,23 +1,83 @@
+from app.services.review_policy import changed_lines
+from typing import Any
 from uuid import UUID
+import os
+import threading
+import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models.backlog import BacklogItem
-from app.models.handoff import AgentRun, AgentRunEvent, ExecutionPlan
+from app.models.handoff import (
+    AgentBuildJob,
+    AgentRun,
+    AgentRunEvent,
+    ExecutionPlan,
+)
 from app.models.project import Project
 from app.models.subtask import BacklogSubtask
 from app.schemas.handoff import (
-    BuildRequest, PlanCreate, PlanUpdate, RunEventCreate, RunTransfer,
-    RunUpdate, SubtaskProgress,
+    BuildRequest,
+    PlanCreate,
+    PlanUpdate,
+    ReviewerSwap,
+    RunEventCreate,
+    RunReviewCreate,
+    RunTransfer,
+    RunUpdate,
+    SubtaskProgress,
 )
+from app.services import agent_runtimes, build_jobs, context_egress
+from app.services.observer_selection import current as observer_current
+from app.services.run_pause import active_pause
+from app.services.build_executor import build_enabled
+from app.services.agent_runtimes import LOCAL_AGENT_REMOVED, RETIRED_AGENT_IDS, is_ollama_agent
+from app.services.build_rag import augment_prompt
+from app.services.plan_granularity import assess as assess_plan_granularity
 from app.services.engineering_graph import graph_sync
+from app.services.ollama_driver import (
+    OllamaDispatchError,
+    dispatch as dispatch_to_ollama,
+    ensure_dispatchable_blocking,
+)
 from app.services.handoff import (
-    HandoffError, add_run_event, approve_plan, build_context, create_plan,
-    queue_build, transfer_run, update_plan, update_run,
+    HandoffError,
+    add_run_event,
+    approve_plan,
+    build_context,
+    create_plan,
+    decompose_plan,
+    load_reviews,
+    load_subtasks,
+    queue_build,
+    record_review,
+    swap_reviewer,
+    transfer_run,
+    update_plan,
+    update_run,
+)
+from app.services.agent_recommendation import (
+    allowed_models_for_agent,
+    detect_quota_blocks,
+    recommend_agents,
+)
+from app.services.agent_router import (
+    AgentRoutingError,
+    route_agent,
+)
+from app.services.task_complexity import (
+    classify_task,
 )
 
+from app.routers.terminal import (
+    agent_runtime_snapshot,
+    auto_runtime_running,
+    finalize_auto_runtime,
+    start_agent_runtime,
+)
 
 router = APIRouter(prefix="/handoffs", tags=["handoffs"])
 plans_router = APIRouter(prefix="/plans", tags=["plans"])
@@ -31,69 +91,180 @@ def get_db():
         db.close()
 
 
-def _task_project(db: Session, backlog_id) -> tuple[BacklogItem, Project]:
-    task = db.query(BacklogItem).filter(BacklogItem.id == backlog_id).first()
+def _task_project(
+    db: Session,
+    backlog_id,
+) -> tuple[BacklogItem, Project]:
+    task = db.query(BacklogItem).filter(
+        BacklogItem.id == backlog_id
+    ).first()
+
     if not task:
-        raise HTTPException(404, "Task do backlog não encontrada")
-    project = db.query(Project).filter(Project.id == task.project_id).first()
+        raise HTTPException(
+            404,
+            "Task do backlog não encontrada",
+        )
+
+    project = db.query(Project).filter(
+        Project.id == task.project_id
+    ).first()
+
     if not project:
-        raise HTTPException(404, "Projeto não encontrado")
+        raise HTTPException(
+            404,
+            "Projeto não encontrado",
+        )
+
     return task, project
 
 
-def _plan_out(db: Session, plan: ExecutionPlan) -> dict:
-    task, project = _task_project(db, plan.backlog_id)
+def _plan_out(
+    db: Session,
+    plan: ExecutionPlan,
+) -> dict:
+    task, project = _task_project(
+        db,
+        plan.backlog_id,
+    )
+
     return {
-        "id": plan.id, "backlog_id": plan.backlog_id,
-        "version": plan.version, "status": plan.status,
+        "id": plan.id,
+        "backlog_id": plan.backlog_id,
+        "version": plan.version,
+        "status": plan.status,
         "title": plan.title,
-        "objective": plan.objective, "scope": plan.scope,
+        "objective": plan.objective,
+        "scope": plan.scope,
         "constraints": plan.constraints or [],
-        "acceptance_criteria": plan.acceptance_criteria or [],
-        "validation_steps": plan.validation_steps or [],
-        "implementation_notes": plan.implementation_notes,
-        "created_by": plan.created_by, "approved_at": plan.approved_at,
-        "created_at": plan.created_at, "updated_at": plan.updated_at,
-        "task_title": task.title, "project_id": project.id,
+        "acceptance_criteria": (
+            plan.acceptance_criteria or []
+        ),
+        "validation_steps": (
+            plan.validation_steps or []
+        ),
+        "implementation_notes": (
+            plan.implementation_notes
+        ),
+        "created_by": plan.created_by,
+        "approved_at": plan.approved_at,
+        "created_at": plan.created_at,
+        "updated_at": plan.updated_at,
+        "task_title": task.title,
+        "project_id": project.id,
         "project_name": project.name,
     }
 
 
-def _run_out(db: Session, run: AgentRun) -> dict:
-    task, project = _task_project(db, run.backlog_id)
-    plan = db.query(ExecutionPlan).filter(ExecutionPlan.id == run.plan_id).first()
+def _run_out(
+    db: Session,
+    run: AgentRun,
+) -> dict:
+    task, project = _task_project(
+        db,
+        run.backlog_id,
+    )
+
+    plan = db.query(ExecutionPlan).filter(
+        ExecutionPlan.id == run.plan_id
+    ).first()
+
     return {
-        "id": run.id, "plan_id": run.plan_id, "backlog_id": run.backlog_id,
-        "agent": run.agent, "status": run.status, "summary": run.summary,
-        "result": run.result, "error": run.error, "branch": run.branch,
-        "commit_sha": run.commit_sha, "deployment_url": run.deployment_url,
-        "started_at": run.started_at, "finished_at": run.finished_at,
-        "created_at": run.created_at, "updated_at": run.updated_at,
-        "task_title": task.title, "project_id": project.id,
+        "id": run.id,
+        "plan_id": run.plan_id,
+        "backlog_id": run.backlog_id,
+        "agent": run.agent,
+        "reviewer_agent": run.reviewer_agent,
+        "review_attempts": run.review_attempts or 0,
+        "model": run.model,
+        # Modelo físico servido pelo llama.cpp no despacho do local-code
+        # (prod/dev/fast). NULL para os demais agentes; `model` segue com o
+        # alias estável.
+        "local_model_key": run.local_model_key,
+        "reasoning_effort": run.reasoning_effort,
+        "complexity": run.complexity,
+        "complexity_score": run.complexity_score,
+        "routing_mode": run.routing_mode,
+        "routing_reason": run.routing_reason,
+        "status": run.status,
+        "summary": run.summary,
+        "result": run.result,
+        "error": run.error,
+        "branch": run.branch,
+        "commit_sha": run.commit_sha,
+        "deployment_url": run.deployment_url,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "created_at": run.created_at,
+        "updated_at": run.updated_at,
+        "task_title": task.title,
+        "project_id": project.id,
         "project_name": project.name,
-        "plan_version": plan.version if plan else None,
+        "plan_version": (
+            plan.version
+            if plan
+            else None
+        ),
+        # Estado do despacho (fatia 2). A UI precisa disto para não oferecer
+        # "despachar" a uma run que já tem job vivo — o 409 do banco continua
+        # sendo a garantia, isto aqui é só para não convidar ao erro.
+        "dispatch_state": run.dispatch_state or "idle",
+        "dispatch_attempts": run.dispatch_attempts or 0,
+        "last_dispatch_at": run.last_dispatch_at,
+        "observer": observer_current(db, run.id),
+        "pause": active_pause(db, run.id),
     }
 
 
-def _get_plan(db: Session, plan_id: UUID) -> ExecutionPlan:
-    plan = db.query(ExecutionPlan).filter(ExecutionPlan.id == plan_id).first()
+def _get_plan(
+    db: Session,
+    plan_id: UUID,
+) -> ExecutionPlan:
+    plan = db.query(ExecutionPlan).filter(
+        ExecutionPlan.id == plan_id
+    ).first()
+
     if not plan:
-        raise HTTPException(404, "Plano não encontrado")
+        raise HTTPException(
+            404,
+            "Plano não encontrado",
+        )
+
     return plan
 
 
-def _get_run(db: Session, run_id: UUID) -> AgentRun:
-    run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+def _get_run(
+    db: Session,
+    run_id: UUID,
+) -> AgentRun:
+    run = db.query(AgentRun).filter(
+        AgentRun.id == run_id
+    ).first()
+
     if not run:
-        raise HTTPException(404, "Execução não encontrada")
+        raise HTTPException(
+            404,
+            "Execução não encontrada",
+        )
+
     return run
 
 
-def _sync_plan(background: BackgroundTasks, db: Session, plan: ExecutionPlan):
-    task, project = _task_project(db, plan.backlog_id)
+def _sync_plan(
+    background: BackgroundTasks,
+    db: Session,
+    plan: ExecutionPlan,
+):
+    task, project = _task_project(
+        db,
+        plan.backlog_id,
+    )
+
     background.add_task(
-        graph_sync.sync_safely, "sync_plan", str(plan.id),
-        str(project.id), str(task.id),
+        graph_sync.sync_safely,
+        "sync_plan",
+        str(plan.id),
+        str(project.id),
+        str(task.id),
     )
 
 
@@ -103,53 +274,304 @@ def _sync_run(
     run: AgentRun,
     event: AgentRunEvent | None = None,
 ):
-    task, project = _task_project(db, run.backlog_id)
-    background.add_task(
-        graph_sync.sync_safely, "sync_agent_run", str(run.id),
-        str(project.id), str(run.plan_id), str(task.id),
+    task, project = _task_project(
+        db,
+        run.backlog_id,
     )
+
+    background.add_task(
+        graph_sync.sync_safely,
+        "sync_agent_run",
+        str(run.id),
+        str(project.id),
+        str(run.plan_id),
+        str(task.id),
+    )
+
     if event:
         background.add_task(
-            graph_sync.sync_safely, "sync_agent_event", str(event.id),
-            str(project.id), str(run.id),
+            graph_sync.sync_safely,
+            "sync_agent_event",
+            str(event.id),
+            str(project.id),
+            str(run.id),
         )
+
+
+def _sync_auto_transition(
+    db: Session,
+    run: AgentRun,
+    event: AgentRunEvent | None,
+) -> None:
+    task, project = _task_project(db, run.backlog_id)
+    graph_sync.sync_safely(
+        "sync_agent_run",
+        str(run.id),
+        str(project.id),
+        str(run.plan_id),
+        str(task.id),
+    )
+    if event:
+        graph_sync.sync_safely(
+            "sync_agent_event",
+            str(event.id),
+            str(project.id),
+            str(run.id),
+        )
+
+
+def _monitor_auto_agent(run_id: UUID, agent: str, timeout_seconds: int) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        time.sleep(5)
+        db = SessionLocal()
+        try:
+            run = _get_run(db, run_id)
+            if run.status in {"completed", "failed", "cancelled"}:
+                return
+            if run.status != "running":
+                continue
+            if auto_runtime_running(agent, run_id):
+                continue
+            finalize_auto_runtime(agent, run_id)
+            run, event = update_run(db, run, {
+                "status": "failed",
+                "error": "Runtime AUTO encerrou antes de registrar resultado",
+                "message": "Runtime AUTO desapareceu; sessão limpa e agente em standby",
+            })
+            _sync_auto_transition(db, run, event)
+            return
+        finally:
+            db.close()
+
+    db = SessionLocal()
+    try:
+        run = _get_run(db, run_id)
+        if run.status == "running":
+            finalize_auto_runtime(agent, run_id)
+            run, event = update_run(db, run, {
+                "status": "failed",
+                "error": f"Timeout de segurança após {timeout_seconds} segundos",
+                "message": "Runtime AUTO excedeu o timeout; sessão limpa e agente em standby",
+            })
+            _sync_auto_transition(db, run, event)
+    finally:
+        db.close()
+
+
+def _start_auto_monitor(run_id: UUID, agent: str) -> None:
+    timeout_seconds = max(
+        60,
+        min(86400, int(os.getenv("AUTO_RUNTIME_TIMEOUT_SECONDS", "14400"))),
+    )
+    threading.Thread(
+        target=_monitor_auto_agent,
+        args=(run_id, agent, timeout_seconds),
+        name=f"auto-monitor-{run_id}",
+        daemon=True,
+    ).start()
+
+
+def _run_auto_agent(
+    run_id: UUID,
+    agent: str,
+    model: str | None,
+    prompt: str,
+    allow_manual: bool = False,
+) -> None:
+    db = SessionLocal()
+    try:
+        run = _get_run(db, run_id)
+        if (run.routing_mode != "auto" and not allow_manual) or run.status != "queued":
+            return
+
+        from app.services.review_scope import capture_start_base
+        capture_start_base(db, run)
+        run, event = update_run(
+            db,
+            run,
+            {
+                "status": "running",
+                "message": f"Runtime AUTO iniciou {agent}",
+            },
+        )
+        _sync_auto_transition(db, run, event)
+
+        try:
+            start_agent_runtime(agent, prompt, model=model, run_id=run_id)
+        except Exception as error:
+            db.rollback()
+            db.expire_all()
+            run = _get_run(db, run_id)
+            if run.status == "running":
+                try:
+                    finalize_auto_runtime(agent, run_id)
+                    terminal_status = "failed"
+                    terminal_error = str(error)
+                except Exception as cleanup_error:
+                    terminal_status = "blocked"
+                    terminal_error = (
+                        f"{error}; cleanup pendente: {cleanup_error}"
+                    )
+                run, event = update_run(
+                    db,
+                    run,
+                    {
+                        "status": terminal_status,
+                        "error": terminal_error,
+                        "message": f"Runtime AUTO falhou: {terminal_error}",
+                    },
+                )
+                _sync_auto_transition(db, run, event)
+            return
+
+        if agent != "gemini":
+            _start_auto_monitor(run_id, agent)
+            return
+
+        # GEMINI AUTO: fluxo correto para conclusão
+        # 1. Execução técnica terminou (runtime headless encerrou)
+        # 2. Executar gate ANTES de marcar completed
+        # 3. Persistir evidência
+        # 4. Se gate PASS: avançar para completed
+        # 5. Se gate FAIL: ir para blocked/review com justificativa
+        # 6. Só então finalizar runtime
+
+        db.expire_all()
+        run = _get_run(db, run_id)
+
+        if run.status == "running":
+            # Executar gate antes de qualquer transição terminal
+            from app.services.test_gate import execute_gate, persist_gate_evidence
+
+            gate_evidence = execute_gate(run)
+            gate_event = persist_gate_evidence(db, gate_evidence)
+
+            # Decidir status baseado no gate
+            if gate_evidence.passed:
+                # Gate PASS: entrega ao revisor independente. Execução técnica
+                # terminada nunca é conclusão — quem conclui é a revisão.
+                reviewer = getattr(run, "reviewer_agent", None)
+                run, event = update_run(
+                    db,
+                    run,
+                    {
+                        "status": "review",
+                        "summary": f"{agent} headless encerrou com sucesso",
+                        "message": (
+                            "Runtime AUTO concluiu a execução; aguardando "
+                            f"revisão de {reviewer or 'revisor designado'}"
+                        ),
+                    },
+                )
+                finalize_auto_runtime(agent, run_id)
+            else:
+                # Gate FAIL: não completar, ir para blocked ou review
+                # Para Fase 1: vai para blocked com erro do gate
+                failed_checks = ", ".join(gate_evidence.mandatory_failed)
+                run, event = update_run(
+                    db,
+                    run,
+                    {
+                        "status": "blocked",
+                        "error": f"Gate de testes reprovado: {failed_checks}",
+                        "message": "Runtime AUTO encerrou, mas testes falharam; task bloqueada para revisão",
+                    },
+                )
+                finalize_auto_runtime(agent, run_id)
+
+            _sync_auto_transition(db, run, event)
+    finally:
+        db.close()
 
 
 @router.get("/plans")
 def list_plans(
     status: str | None = None,
     backlog_id: UUID | None = None,
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(
+        50,
+        ge=1,
+        le=200,
+    ),
     db: Session = Depends(get_db),
 ):
     query = db.query(ExecutionPlan)
+
     if status:
-        query = query.filter(ExecutionPlan.status == status)
+        query = query.filter(
+            ExecutionPlan.status == status
+        )
     else:
-        query = query.filter(ExecutionPlan.status != "discarded")
+        query = query.filter(
+            ExecutionPlan.status != "discarded"
+        )
+
     if backlog_id:
-        query = query.filter(ExecutionPlan.backlog_id == backlog_id)
-    rows = query.order_by(ExecutionPlan.created_at.desc()).limit(limit).all()
-    return [_plan_out(db, row) for row in rows]
+        query = query.filter(
+            ExecutionPlan.backlog_id
+            == backlog_id
+        )
+
+    rows = (
+        query
+        .order_by(
+            ExecutionPlan.created_at.desc()
+        )
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        _plan_out(db, row)
+        for row in rows
+    ]
 
 
-@router.post("/plans", status_code=201)
+@router.post(
+    "/plans",
+    status_code=201,
+)
 def create_execution_plan(
     payload: PlanCreate,
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     try:
-        plan = create_plan(db, payload.model_dump())
+        plan = create_plan(
+            db,
+            payload.model_dump(),
+        )
     except HandoffError as error:
-        raise HTTPException(400, str(error)) from error
-    _sync_plan(background, db, plan)
-    return _plan_out(db, plan)
+        raise HTTPException(
+            400,
+            str(error),
+        ) from error
+
+    _sync_plan(
+        background,
+        db,
+        plan,
+    )
+
+    return _plan_out(
+        db,
+        plan,
+    )
 
 
 @router.get("/plans/{plan_id}")
-def get_execution_plan(plan_id: UUID, db: Session = Depends(get_db)):
-    return _plan_out(db, _get_plan(db, plan_id))
+def get_execution_plan(
+    plan_id: UUID,
+    db: Session = Depends(get_db),
+):
+    return _plan_out(
+        db,
+        _get_plan(
+            db,
+            plan_id,
+        ),
+    )
 
 
 @plans_router.patch("/{plan_id}")
@@ -162,70 +584,665 @@ def edit_execution_plan(
 ):
     try:
         plan = update_plan(
-            db, _get_plan(db, plan_id), payload.model_dump(exclude_unset=True)
+            db,
+            _get_plan(
+                db,
+                plan_id,
+            ),
+            payload.model_dump(
+                exclude_unset=True,
+            ),
         )
     except HandoffError as error:
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+    _sync_plan(
+        background,
+        db,
+        plan,
+    )
+
+    return _plan_out(
+        db,
+        plan,
+    )
+
+
+@router.get("/plans/{plan_id}/granularity")
+def get_plan_granularity(
+    plan_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Diagnóstico de tamanho do plano e fatias sugeridas. Não altera nada."""
+    plan = _get_plan(db, plan_id)
+
+    payload = assess_plan_granularity(
+        plan,
+        load_subtasks(db, plan.backlog_id),
+    )
+    payload["plan_id"] = str(plan.id)
+    payload["plan_version"] = plan.version
+
+    return payload
+
+
+@router.post(
+    "/plans/{plan_id}/decompose",
+    status_code=201,
+)
+def decompose_execution_plan(
+    plan_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Cria as fatias sugeridas como subtasks auditáveis da task."""
+    plan = _get_plan(db, plan_id)
+
+    try:
+        criadas = decompose_plan(db, plan)
+    except HandoffError as error:
         raise HTTPException(409, str(error)) from error
-    _sync_plan(background, db, plan)
-    return _plan_out(db, plan)
+
+    return {
+        "plan_id": plan.id,
+        "created": [
+            {
+                "id": row.id,
+                "order": row.execution_order,
+                "title": row.title,
+            }
+            for row in criadas
+        ],
+        "subtasks": [
+            {
+                "id": row.id,
+                "order": row.execution_order,
+                "title": row.title,
+                "status": row.status,
+            }
+            for row in load_subtasks(db, plan.backlog_id)
+        ],
+    }
 
 
 @router.post("/plans/{plan_id}/approve")
 def approve_execution_plan(
     plan_id: UUID,
     background: BackgroundTasks,
+    force: bool = Query(
+        False,
+        description=(
+            "Aprova mesmo com o plano acima do tamanho de uma unidade "
+            "auditável, assumindo a exceção"
+        ),
+    ),
     db: Session = Depends(get_db),
 ):
     try:
-        plan = approve_plan(db, _get_plan(db, plan_id))
+        plan = approve_plan(
+            db,
+            _get_plan(
+                db,
+                plan_id,
+            ),
+            allow_oversized=force,
+        )
     except HandoffError as error:
-        raise HTTPException(409, str(error)) from error
-    _sync_plan(background, db, plan)
-    return _plan_out(db, plan)
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+    _sync_plan(
+        background,
+        db,
+        plan,
+    )
+
+    return _plan_out(
+        db,
+        plan,
+    )
 
 
-@router.post("/plans/{plan_id}/build", status_code=201)
+_AUTO_RUNTIME_FLAG = "WORKDEV_AUTO_RUNTIME_ENABLED"
+
+
+def _auto_runtime_enabled() -> bool:
+    """O tmux é terminal persistente manual, não orquestrador do AUTO.
+
+    O caminho principal é PLAN → recomendação → escolha do usuário → envio ao
+    agente escolhido, que trabalha na sua própria sessão persistente. O runtime
+    AUTO com sessão dinâmica `auto-<agent>-<run_id>` continua existindo no
+    backend, mas só liga sob opt-in explícito. Desligado, um build AUTO ainda
+    classifica, roteia e enfileira a execução — o agente a recolhe pela CLI, na
+    sua sessão de sempre, sem criação dinâmica de runtime.
+    """
+    return os.getenv(_AUTO_RUNTIME_FLAG, "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _cached_runtime_snapshot() -> dict[str, dict]:
+    # Compatibility name; operational reads are always the durable snapshot.
+    from app.routers.terminal import agent_runtime_snapshot
+    return agent_runtime_snapshot()
+
+
+@router.get("/plans/{plan_id}/recommendation")
+def get_plan_recommendation(
+    plan_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Recomendação consultiva de agente/modelo. Não inicia nada."""
+    plan = _get_plan(
+        db,
+        plan_id,
+    )
+
+    task, _project = _task_project(
+        db,
+        plan.backlog_id,
+    )
+
+    subtasks = load_subtasks(
+        db,
+        plan.backlog_id,
+    )
+
+    payload = recommend_agents(
+        db,
+        task,
+        plan,
+        subtasks,
+        runtime=_cached_runtime_snapshot(),
+        quota_signals=detect_quota_blocks(db),
+    )
+
+    payload["plan_id"] = str(plan.id)
+    payload["plan_version"] = plan.version
+
+    return payload
+
+
+def execute_test_gate_for_run(db: Session, run: AgentRun) -> dict:
+    """
+    Executar gate de testes para um AgentRun e persistir evidência.
+
+    Usa o service dedicado test_gate para execução e persistência.
+    Retorna resultado para o caller.
+    """
+    from app.services.test_gate import execute_gate, persist_gate_evidence
+
+    # Executar gate
+    evidence = execute_gate(run)
+
+    # Persistir evidência como evento
+    event = persist_gate_evidence(db, evidence)
+
+    return {
+        "passed": evidence.passed,
+        "reason": evidence.error or "Gate aprovado",
+        "evidence_id": event.id,
+        "checks": [c.name for c in evidence.checks],
+        "mandatory_failed": evidence.mandatory_failed,
+    }
+
+
+@router.get("/plans/{plan_id}/review-policy")
+def plan_review_policy(plan_id: UUID, agent: str | None = None, db: Session = Depends(get_db)):
+    from app.services.review_policy import classify_risk, load_config
+    plan = _get_plan(db, plan_id)
+    task, _project = _task_project(db, plan.backlog_id)
+    assessment = classify_task(task, plan, load_subtasks(db, plan.backlog_id))
+    risk = classify_risk([], "", assessment.level)
+    state = "required" if risk.sensitive else "recommended"
+    if not risk.sensitive and risk.risk == "low" and agent in load_config()["trusted_agents"]:
+        state = "not_required"
+    return {"state": state, "complexity": assessment.level,
+            "message": "A classificação final será reavaliada pelo backend com o diff e os gates da execução."}
+
+
+def _standby_session_alive(agent: str) -> bool:
+    """Sondagem física da sessão standby do agente (ponto único para isolar em testes)."""
+    from app.routers.terminal import ALLOWED_SESSIONS
+    from app.services import agent_operability
+    state = agent_operability.resolve(agent, standby_session=ALLOWED_SESSIONS.get(agent), run_id=None)
+    return bool(state.session_exists)
+
+
+def _session_warning(agent: str, model: str) -> dict | None:
+    """Alerta quando a sessão viva roda outro modelo que o selecionado.
+
+    A escolha é do operador e segue valendo: o envio não é bloqueado nem o
+    modelo trocado. O alerta apenas informa que a sessão atual não carrega o
+    modelo escolhido até o agente ser reiniciado na aba Agentes.
+    """
+    from app.services import cli_agent_models
+    active = cli_agent_models.describe(agent)["active"]
+    if active == model:
+        return None
+    if not _standby_session_alive(agent):
+        return None
+    if active is None:
+        message = (f"{agent} tem sessão ativa sem modelo registrado; a aba Agentes seleciona {model}. "
+                   "Reinicie o agente para garantir que a sessão rode esse modelo.")
+    else:
+        message = (f"{agent} está rodando {active}, mas a aba Agentes seleciona {model}. "
+                   "Reinicie o agente para aplicar a troca; o envio segue com a sua escolha.")
+    return {"code": "model_requires_new_session", "severity": "warning", "message": message,
+            "details": {"agent": agent, "selected": model, "active": active}}
+
+
+def _resolve_cli_agent_model(agent: str, warnings: list[dict]) -> str:
+    """Resolve o modelo persistido na aba Agentes para um agente CLI.
+
+    Usado para executor e revisor. Seleção que não existe mais no catálogo não
+    pode ser executada e continua bloqueando, sem fallback silencioso; sessão
+    viva em outro modelo só gera alerta em ``warnings``.
+    """
+    from app.services import cli_agent_models
+    try:
+        model, _ = cli_agent_models.validate_selected(agent)
+    except ValueError as error:
+        raise HTTPException(409, {"code": "invalid_model_selection", "message": str(error)}) from error
+    warning = _session_warning(agent, model)
+    if warning:
+        warnings.append(warning)
+    return model
+
+
+@router.post(
+    "/plans/{plan_id}/build",
+    status_code=201,
+)
 def send_to_build(
     plan_id: UUID,
     payload: BuildRequest,
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    try:
-        run, event = queue_build(db, _get_plan(db, plan_id), payload.agent)
-    except HandoffError as error:
-        raise HTTPException(409, str(error)) from error
-    _sync_run(background, db, run, event)
-    return _run_out(db, run)
+    plan = _get_plan(
+        db,
+        plan_id,
+    )
 
+    agent = payload.agent
+    model = payload.model
+    reasoning_effort = (
+        payload.reasoning_effort
+    )
+    complexity = None
+    complexity_score = None
+    routing_reason = (
+        "Seleção manual pelo usuário"
+    )
+
+    from app.services import cli_agent_models
+    # Alertas não bloqueiam: a escolha do operador (agentes e modelos) prevalece.
+    warnings: list[dict] = []
+    if payload.routing_mode == "manual" and agent in cli_agent_models.MODELS and model is None:
+        # O seletor da aba Agentes é persistente. Resolver aqui — antes do gate
+        # de modelos permitidos abaixo — garante que o modelo da aba passe
+        # pelo mesmo controle de custo que um modelo escolhido explicitamente
+        # no envio; fixar a escolha na run evita que uma troca posterior
+        # altere o modelo de execuções antigas.
+        model = _resolve_cli_agent_model(agent, warnings)
+
+    if payload.review_requested is not None and payload.routing_mode == "manual":
+        task, _project = _task_project(db, plan.backlog_id)
+        assessment = classify_task(task, plan, load_subtasks(db, plan.backlog_id))
+        complexity, complexity_score = assessment.level, assessment.score
+        # A recomendação de revisão é só recomendação: o operador decide em
+        # qualquer risco, e a escolha fica auditada em build.review_preference.
+
+    reviewer_selection = None
+    if payload.reviewer_selection:
+        # Seleção explícita (envio legado): validada contra o catálogo de
+        # execução, não contra a aba Agentes — nunca sobrescrita abaixo.
+        from app.services.agent_router import resolve_execution_selection
+        try:
+            reviewer_selection = resolve_execution_selection(db, payload.reviewer_selection)
+        except AgentRoutingError as exc:
+            raise HTTPException(409, {"code": exc.code, "message": exc.message}) from exc
+        if not reviewer_selection["review_capable"]:
+            raise HTTPException(409, {"code": "reviewer_has_no_review_channel", "message": "O runtime selecionado não possui canal de revisão"})
+        if payload.reviewer and payload.reviewer != reviewer_selection["agent"]:
+            raise HTTPException(409, "Fonte e modelo não pertencem ao revisor informado")
+        payload.reviewer = reviewer_selection["agent"]
+    elif payload.reviewer and payload.routing_mode == "manual" and payload.reviewer in cli_agent_models.MODELS:
+        # Tela de planos não oferece mais seletor de modelo para o revisor:
+        # mesma resolução central do executor, pela configuração da aba
+        # Agentes do agente escolhido como revisor.
+        reviewer_model = _resolve_cli_agent_model(payload.reviewer, warnings)
+        reviewer_selection = {
+            "agent": payload.reviewer,
+            "model": reviewer_model,
+            "provider": cli_agent_models.PROVIDERS.get(payload.reviewer),
+            "review_capable": True,
+        }
+
+    observer_selection = None
+    if payload.observer_enabled:
+        from app.services.agent_router import resolve_execution_selection
+        try:
+            observer_selection = resolve_execution_selection(db, payload.observer_selection)
+        except AgentRoutingError as exc:
+            raise HTTPException(409, {'code': exc.code, 'message': exc.message}) from exc
+
+    if payload.routing_mode == "manual" and model:
+        # O modelo é escolha do operador: nada aqui bloqueia o envio, só avisa.
+        if agent in cli_agent_models.MODELS and model not in dict(cli_agent_models.MODELS[agent]):
+            warnings.append({
+                "code": "model_unsupported_by_cli",
+                "severity": "warning",
+                "message": (f"O modelo {model} não consta no catálogo da CLI de {agent}; "
+                            "o envio segue com a sua escolha, mas a execução pode falhar ao iniciar."),
+                "details": {"agent": agent, "model": model,
+                            "supported_models": [m for m, _ in cli_agent_models.MODELS[agent]]},
+            })
+        allowed = allowed_models_for_agent(db, agent)
+        if allowed and model not in {row.provider_model_id for row in allowed}:
+            warnings.append({
+                "code": "model_not_allowed_for_agent",
+                "severity": "warning",
+                "message": f"O modelo {model} não está na lista configurada para {agent}; o envio segue com a sua escolha.",
+                "details": {"agent": agent, "model": model,
+                            "allowed_models": [row.provider_model_id for row in allowed]},
+            })
+
+    if payload.routing_mode == "manual" and is_ollama_agent(agent):
+        # Endpoint indisponível não vira run pendurada: recusa antes de criar
+        # qualquer estado. Os demais agentes seguem utilizáveis normalmente.
+        try:
+            ensure_dispatchable_blocking(agent, **({"model": model} if model else {}))
+        except OllamaDispatchError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": error.code,
+                    "message": error.message,
+                    "details": error.details,
+                },
+            ) from error
+
+    if payload.routing_mode == "auto":
+        task, _project = _task_project(
+            db,
+            plan.backlog_id,
+        )
+
+        subtasks = load_subtasks(db, plan.backlog_id)
+
+        assessment = classify_task(
+            task,
+            plan,
+            subtasks,
+        )
+
+        try:
+            decision = route_agent(
+                db,
+                assessment,
+                allow_premium=payload.premium_confirmed,
+            )
+        except AgentRoutingError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": error.code,
+                    "message": error.message,
+                    "details": error.details,
+                },
+            ) from error
+
+        agent = decision.agent
+        model = decision.model
+        reasoning_effort = (
+            decision.reasoning_effort
+        )
+        complexity = (
+            decision.complexity
+        )
+        complexity_score = (
+            decision.complexity_score
+        )
+        routing_reason = (
+            decision.reason
+        )
+
+    provider = (
+        decision.provider if payload.routing_mode == "auto" else cli_agent_models.PROVIDERS.get(agent)
+    )
+
+    try:
+        run, event = queue_build(
+            db,
+            plan,
+            agent,
+            reviewer=payload.reviewer,
+            model=model,
+            provider=provider,
+            reasoning_effort=(
+                reasoning_effort
+            ),
+            routing_mode=(
+                payload.routing_mode
+            ),
+            complexity=complexity,
+            complexity_score=(
+                complexity_score
+            ),
+            routing_reason=(
+                routing_reason
+            ),
+            **({"review_requested": payload.review_requested} if payload.review_requested is not None else {}),
+            **({"reviewer_selection": reviewer_selection} if reviewer_selection else {}),
+            **({'observer_enabled': True, 'observer_selection': observer_selection}
+              if payload.observer_enabled else {}),
+        )
+    except HandoffError as error:
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+    for warning in warnings:
+        add_run_event(db, run, "build.warning", warning["message"], warning)
+    if warnings:
+        db.commit()
+
+    _sync_run(
+        background,
+        db,
+        run,
+        event,
+    )
+
+    if (
+        run.routing_mode == "auto"
+        and _auto_runtime_enabled()
+    ):
+        context = build_context(
+            db,
+            run,
+        )
+        background.add_task(
+            _run_auto_agent,
+            run.id,
+            run.agent,
+            run.model,
+            context["prompt"],
+        )
+
+    result = _run_out(
+        db,
+        run,
+    )
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 @router.get("/runs")
 def list_runs(
     agent: str | None = None,
     status: str | None = None,
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(
+        50,
+        ge=1,
+        le=200,
+    ),
     db: Session = Depends(get_db),
 ):
     query = db.query(AgentRun)
+
     if agent:
-        query = query.filter(AgentRun.agent == agent)
+        query = query.filter(
+            AgentRun.agent == agent
+        )
+
     if status:
-        query = query.filter(AgentRun.status == status)
-    rows = query.order_by(AgentRun.created_at.desc()).limit(limit).all()
-    return [_run_out(db, row) for row in rows]
+        query = query.filter(
+            AgentRun.status == status
+        )
+
+    rows = (
+        query
+        .order_by(
+            AgentRun.created_at.desc()
+        )
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        _run_out(db, row)
+        for row in rows
+    ]
 
 
 @router.get("/runs/{run_id}")
-def get_agent_run(run_id: UUID, db: Session = Depends(get_db)):
-    return _run_out(db, _get_run(db, run_id))
+def get_agent_run(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+):
+    return _run_out(
+        db,
+        _get_run(
+            db,
+            run_id,
+        ),
+    )
+
+
+class RunResume(BaseModel):
+    reason: str
+
+
+@router.post('/runs/{run_id}/resume')
+def resume_observer_pause(run_id: UUID, payload: RunResume,
+                          db: Session = Depends(get_db)):
+    """Explicit authenticated operator action; never triggered by the worker."""
+    from app.services.run_pause import resume_paused_run, RunPaused
+    if not payload.reason.strip():
+        raise HTTPException(422, 'Motivo da retomada é obrigatório')
+    try:
+        run = resume_paused_run(db, run_id, actor='authenticated_operator',
+                                reason=payload.reason.strip())
+    except RunPaused as error:
+        raise HTTPException(409, str(error)) from error
+    from app.services.build_worker import continue_paused_outcome
+    try:
+        continue_paused_outcome(db, run)
+    except HandoffError as error:
+        raise HTTPException(409, str(error)) from error
+    if run.agent == 'local-code':
+        from app.services.local_code_build import continue_paused_delivery
+        try:
+            continue_paused_delivery(db, run)
+        except HandoffError as error:
+            raise HTTPException(409, str(error)) from error
+    return _run_out(db, run)
+
+
+class RunObserverChoice(BaseModel):
+    enabled: bool
+    selection: dict[str, str] | None = None
+
+
+@router.put('/runs/{run_id}/observer')
+def configure_run_observer(run_id: UUID, payload: RunObserverChoice,
+                           background: BackgroundTasks, db: Session = Depends(get_db)):
+    """An explicit operator choice changes observation, never resumes a PAUSE."""
+    run = _get_run(db, run_id)
+    if run.status not in {'queued', 'running', 'blocked'}:
+        raise HTTPException(409, 'Observer só pode ser alterado durante Run ativa')
+    selected = None
+    if payload.enabled:
+        if not payload.selection:
+            raise HTTPException(422, 'Fonte e modelo do Observer são obrigatórios')
+        from app.services.agent_router import resolve_execution_selection
+        try:
+            selected = resolve_execution_selection(db, payload.selection)
+        except AgentRoutingError as error:
+            raise HTTPException(409, {'code': error.code, 'message': error.message}) from error
+    event = add_run_event(db, run, 'observer.configured',
+        'Observer ligado' if payload.enabled else 'Observer desligado',
+        {'enabled': payload.enabled,
+         'provider': selected.get('provider') if selected else None,
+         'model': selected.get('model') if selected else None,
+         'runtime_id': selected.get('runtime_id') if selected else None})
+    if payload.enabled:
+        from app.services.observer_workspace import baseline
+        baseline(db, run)
+    db.commit()
+    _sync_run(background, db, run, event)
+    return _run_out(db, run)
 
 
 @router.get("/runs/{run_id}/context")
-def get_agent_context(run_id: UUID, db: Session = Depends(get_db)):
+def get_agent_context(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+):
     try:
-        return build_context(db, _get_run(db, run_id))
+        return build_context(
+            db,
+            _get_run(
+                db,
+                run_id,
+            ),
+        )
     except HandoffError as error:
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+
+@router.post('/runs/{run_id}/start', status_code=202)
+def start_workspace_run(run_id: UUID, background: BackgroundTasks, db: Session = Depends(get_db)):
+    from app.services.agent_workspace import audit
+    from app.routers.terminal import STANDBY_COMMANDS
+    run = _get_run(db, run_id)
+    from app.services.run_pause import assert_run_can_continue, RunPaused
+    try:
+        assert_run_can_continue(db, run_id)
+    except RunPaused as error:
         raise HTTPException(409, str(error)) from error
+    if run.status != 'queued' or run.agent not in STANDBY_COMMANDS:
+        raise HTTPException(409, 'Somente Run CLI aguardando pode iniciar sessão isolada')
+    if run.agent == 'local-code':
+        return dispatch_run_to_ollama(run_id, background, db)
+    context = build_context(db, run)
+    audit('start_run', agent=run.agent, run_id=run.id)
+    background.add_task(_run_auto_agent, run.id, run.agent, run.model, context['prompt'], True)
+    return {'run_id': str(run.id), 'status': run.status, 'accepted': True}
 
 
 @router.patch("/runs/{run_id}")
@@ -235,18 +1252,170 @@ def update_agent_run(
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    current = _get_run(db, run_id)
+    data = payload.model_dump(exclude_unset=True)
+    requested_status = data.get("status")
+    if current.status == 'queued' and requested_status == 'running' and not current.started_at:
+        from app.services.review_scope import capture_start_base
+        capture_start_base(db, current)
+
+    if requested_status == 'cancelled':
+        from app.services.agent_workspace import stop_run
+        from app.services.agent_lifecycle import LifecycleError
+        from app.services.terminal_sessions import TerminalSessionError
+        try:
+            stopped = stop_run(db, current)
+            _sync_run(background, db, stopped)
+            return _run_out(db, stopped)
+        except (HandoffError, LifecycleError, TerminalSessionError) as error:
+            raise HTTPException(409, detail={'code': getattr(error, 'code', 'stop_failed'),
+                                              'message': str(error)}) from error
+
+    # BUG FIX: Capturar previous_status ANTES de update_run modificar o objeto
+    # Após update_run, current.status já foi alterado, então a comparação
+    # requested_status != current.status estaria errada
+    previous_status = current.status
+
+    # ORDEM CORRETA PARA AUTO RUNTIME:
+    # 1. Validar transição (inclui gate se necessário)
+    # 2. Só então finalizar runtime se transição for aceita
+    # 3. Executar update_run
+
+    # Primeiro validar transição (gate é verificado dentro de update_run)
     try:
+        # Validar pré-requisitos antes de qualquer modificação
+        if (
+            current.routing_mode == "auto"
+            and requested_status == "completed"
+            and not data.get("result")
+        ):
+            raise HTTPException(
+                409,
+                "Execução AUTO concluída exige resultado persistido",
+            )
+
+        # Executar gate de testes se necessário (dentro de update_run)
+        # Se gate falhar, HandoffError será lançado
         run, event = update_run(
-            db, _get_run(db, run_id),
-            payload.model_dump(exclude_unset=True),
+            db,
+            current,
+            data,
         )
+
+        # Só após update_run aceitar a transição, finalizar runtime
+        # Usar previous_status capturado antes, não current.status que foi modificado
+        if (
+            current.routing_mode == "auto"
+            and requested_status in {"completed", "failed", "cancelled"}
+            and requested_status != previous_status
+        ):
+            try:
+                finalize_auto_runtime(current.agent, current.id)
+            except Exception as error:
+                # Runtime já foi finalizado, mas transição foi aceita
+                # Logar erro mas não reverter
+                import logging
+                logging.warning(
+                    f"Runtime AUTO finalizado com erro após transição aceita: {error}"
+                )
+
     except HandoffError as error:
-        raise HTTPException(409, str(error)) from error
-    _sync_run(background, db, run, event)
-    return _run_out(db, run)
+        # Fail operacional (guardrails) → blocked; fail de testes → executor.
+        from app.services.test_gate import get_gate_evidence_for_run
+        evidence = get_gate_evidence_for_run(db, current)
+        operational = evidence and 'guardrails' in (evidence.mandatory_failed or [])
+        if operational and requested_status == "review":
+            run, _ev = update_run(
+                db, current,
+                {"status": "blocked", "message": "Gate operacional (guardrails) reprovado"},
+            )
+            add_run_event(db, run, "build.operational_failure",
+                          "Guardrails reprovaram; execução fica blocked, nunca done")
+            db.commit()
+        elif requested_status == "review":
+            from app.services.review_cycle import evaluate_for_run, persist_decision
+            decision, diff = evaluate_for_run(current, 'fail')
+            persist_decision(db, current, decision, len(diff.files), changed_lines(diff.text))
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+    # Política de revisão: gates JÁ executaram dentro de update_run; aqui só
+    # lemos a evidência persistida, classificamos risco e persistimos decisão.
+    if run.status == "review" and previous_status != "review":
+        from app.services.review_cycle import evaluate_for_run, persist_decision
+        from app.services.test_gate import get_gate_evidence_for_run
+        evidence = get_gate_evidence_for_run(db, run)
+        gate_result = 'pass' if evidence and evidence.passed else 'fail'
+        from app.services.review_scope import load_base
+        run.review_base_sha = load_base(db, run.id)
+        decision, diff = evaluate_for_run(run, gate_result, gate_sha=evidence.git_commit_sha if evidence else None)
+        from app.services.review_policy import with_user_preference
+        preference = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run.id,
+            AgentRunEvent.event_type == "build.review_preference").order_by(AgentRunEvent.created_at.desc()).first()
+        if preference is not None and isinstance(preference.payload, dict):
+            decision = with_user_preference(decision, preference.payload.get("requested"), run.reviewer_agent, run.agent)
+        from app.services.adaptive_review import request_observation
+        decision = request_observation(db, run, decision, diff)
+        persist_decision(db, run, decision, len(diff.files), changed_lines(diff.text))
+        if decision.decision == 'NO_REVIEW_GATE_FAIL':
+            run, event = update_run(db, run, {
+                'status': 'running', 'error': decision.justification,
+                'message': decision.justification,
+            })
+        if decision.decision == 'BLOCKED_OPERATIONAL':
+            run, event = update_run(db, run, {
+                'status': 'blocked', 'error': decision.justification,
+                'message': decision.justification,
+            })
+        if decision.decision == 'REVISAR' and decision.reviewer_candidates:
+            # Tier decidido pela política tem autoridade sobre o revisor atribuído:
+            # um econômico nunca fica com uma revisão forte (nem vice-versa).
+            if run.reviewer_agent not in decision.reviewer_candidates:
+                from app.services.handoff import swap_reviewer
+                swap_reviewer(
+                    db, run, decision.reviewer_candidates[0],
+                    f'Roteamento por política: tier {decision.tier}',
+                )
+        if decision.decision == 'NO_REVIEW_COMPLETE':
+            run, event = update_run(
+                db, run,
+                {"status": "completed",
+                 "result": run.result or f"Concluído por gates + política ({decision.justification})",
+                 "message": decision.justification},
+            )
+
+    _sync_run(
+        background,
+        db,
+        run,
+        event,
+    )
+
+    return _run_out(
+        db,
+        run,
+    )
 
 
-@router.post("/runs/{run_id}/transfer", status_code=201)
+@router.get("/runs/{run_id}/review-context")
+def get_review_context(
+    run_id: UUID,
+    expand: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Pacote mínimo para o revisor LLM. `expand=diff` é o único lazy admitido."""
+    from app.services.review_package import build_package, package_bytes
+    run = _get_run(db, run_id)
+    package = build_package(db, run, expand == 'diff')
+    package['context_bytes'] = package_bytes(package)
+    return package
+
+
+@router.post(
+    "/runs/{run_id}/transfer",
+    status_code=201,
+)
 def transfer_agent_run(
     run_id: UUID,
     payload: RunTransfer,
@@ -255,37 +1424,579 @@ def transfer_agent_run(
 ):
     try:
         cancelled_run, new_run = transfer_run(
-            db, _get_run(db, run_id), payload.agent, payload.reason,
+            db,
+            _get_run(
+                db,
+                run_id,
+            ),
+            payload.agent,
+            payload.reason,
+            new_reviewer=payload.reviewer,
         )
     except HandoffError as error:
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+    _sync_run(
+        background,
+        db,
+        cancelled_run,
+    )
+
+    _sync_run(
+        background,
+        db,
+        new_run,
+    )
+
+    return _run_out(
+        db,
+        new_run,
+    )
+
+
+async def _consume_dispatch_job(
+    run_id: UUID,
+    job_id: UUID,
+    prompt: str,
+    model: str | None,
+) -> None:
+    """Consome um job de despacho fora do ciclo da requisição.
+
+    Provisório e assim declarado: o consumidor definitivo é o worker isolado da
+    fatia 3, em processo e systemd próprios, com permissão de escrever arquivo.
+    Este aqui só tira a inferência de dentro da rota — que era o achado 6, a
+    sessão de banco presa por até 900s — e mantém o comportamento de hoje:
+    o runtime devolve TEXTO, que vira evento auditável. Nenhum arquivo é
+    editado, nenhum gate roda, nada é commitado.
+
+    A sessão é própria e curta: abre, marca `running`, solta o banco durante a
+    inferência e reabre para gravar. Segurar a sessão pelo await seria repetir
+    o problema que a fatia 2 existe para resolver.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(AgentBuildJob).filter(AgentBuildJob.id == job_id).first()
+        if job is None or job.state != "queued" or job.runtime_id == "local-code":
+            return
+        from app.services.run_pause import assert_run_can_continue, RunPaused
+        try:
+            assert_run_can_continue(db, run_id)
+        except RunPaused:
+            db.rollback()
+            return
+        build_jobs.start_job(db, job)
+        db.commit()
+        runtime_id = job.runtime_id
+    finally:
+        db.close()
+
+    erro: OllamaDispatchError | None = None
+    result: dict | None = None
+
+    # O gravador de parcial vive em build_jobs, usado igual aqui e no worker
+    # isolado: duas cópias divergiriam, e é justamente o parcial que sobra
+    # quando a geração morre no meio.
+    try:
+        with SessionLocal() as checkpoint_db:
+            assert_run_can_continue(checkpoint_db, run_id)
+        result = await dispatch_to_ollama(
+            runtime_id,
+            prompt,
+            model=model,
+            on_chunk=build_jobs.partial_writer(job_id),
+        )
+    except OllamaDispatchError as falha:
+        erro = falha
+    except RunPaused:
+        with SessionLocal() as checkpoint_db:
+            queued = checkpoint_db.get(AgentBuildJob, job_id)
+            if queued and queued.state == 'running':
+                queued.state = 'queued'
+                checkpoint_db.commit()
+        return
+
+    db = SessionLocal()
+    try:
+        job = db.query(AgentBuildJob).filter(AgentBuildJob.id == job_id).first()
+        run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+
+        if job is None or run is None:  # pragma: no cover - run apagada no meio
+            return
+
+        if erro is not None:
+            event = add_run_event(
+                db,
+                run,
+                "build.dispatch_failed",
+                erro.message,
+                {"code": erro.code, "job_id": str(job.id), **erro.details},
+            )
+            build_jobs.fail_job(
+                db,
+                job,
+                error=erro.message,
+                payload={"code": erro.code, **erro.details},
+            )
+            db.commit()
+            _sync_auto_transition(db, run, event)
+            return
+
+        if result is None:  # pragma: no cover - sem resposta e sem erro
+            build_jobs.fail_job(
+                db,
+                job,
+                error="Driver não devolveu resposta nem erro",
+            )
+            db.commit()
+            return
+
+        if run.status == "queued":
+            run, _event = update_run(
+                db,
+                run,
+                {
+                    "status": "running",
+                    "message": f"Despacho para {run.agent} iniciado",
+                },
+            )
+
+        event = add_run_event(
+            db,
+            run,
+            "build.ollama_response",
+            f"Resposta de {result['runtime_id']} ({result['model']})",
+            {
+                "runtime_id": result["runtime_id"],
+                "model": result["model"],
+                "duration_ms": result["duration_ms"],
+                "truncated": result["truncated"],
+                "response": result["response"],
+                # Guardado para auditoria: sem isto, num modelo com raciocínio
+                # explícito o evento não registra nada do que ele produziu.
+                "thinking": result.get("thinking") or "",
+                "job_id": str(job.id),
+            },
+        )
+        build_jobs.finish_job(
+            db,
+            job,
+            payload={
+                "duration_ms": result["duration_ms"],
+                "truncated": result["truncated"],
+                "event_id": str(event.id),
+            },
+        )
+        db.commit()
+        _sync_auto_transition(db, run, event)
+    finally:
+        db.close()
+
+
+@router.post(
+    "/runs/{run_id}/dispatch",
+    status_code=202,
+)
+def dispatch_run_to_ollama(
+    run_id: UUID,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Abre um job de despacho para o runtime Ollama e devolve 202.
+
+    A rota não espera a inferência. Ela valida, registra a intenção como linha
+    em `agent_build_jobs` e sai — a resposta é o `job_id`, que a UI acompanha
+    por `GET /runs/{id}/dispatch/{job_id}`.
+
+    Chamada concorrente para a mesma run devolve 409 com o `job_id` que já está
+    vivo, e a recusa vem do índice parcial do banco, não de um `if` daqui.
+    """
+    run = _get_run(db, run_id)
+    from app.services.run_pause import assert_run_can_continue, RunPaused
+    try:
+        assert_run_can_continue(db, run_id)
+    except RunPaused as error:
         raise HTTPException(409, str(error)) from error
-    _sync_run(background, db, cancelled_run)
-    _sync_run(background, db, new_run)
-    return _run_out(db, new_run)
+
+    if run.agent in RETIRED_AGENT_IDS:
+        # Runs antigas do local-code só aceitam continue e stop; envio novo não.
+        raise HTTPException(409, {'code': 'local_agent_removed', 'message': LOCAL_AGENT_REMOVED})
+
+    if not is_ollama_agent(run.agent):
+        raise HTTPException(
+            409,
+            f"{run.agent} não é um runtime Ollama; use a sessão do agente",
+        )
+
+    if run.status not in {"queued", "running"}:
+        raise HTTPException(
+            409,
+            f"Execução em '{run.status}' não aceita despacho",
+        )
+
+    # Modelo e saúde resolvidos ANTES de abrir o job: erro de configuração
+    # aparece no envio, não numa linha órfã em `queued` que ninguém consome.
+    try:
+        runtime = ensure_dispatchable_blocking(run.agent, **({"model": run.model} if run.model else {}))
+    except OllamaDispatchError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": error.code,
+                "message": error.message,
+                "details": error.details,
+            },
+        ) from error
+
+    model = run.model or agent_runtimes.model_for(runtime)
+
+    if not model:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "model_not_configured",
+                "message": (
+                    f"Nenhum modelo configurado para {runtime.label}; defina "
+                    f"{runtime.model_env}"
+                ),
+                "details": {"runtime_id": runtime.id},
+            },
+        )
+
+    try:
+        context = build_context(db, run)
+    except HandoffError as error:
+        raise HTTPException(409, str(error)) from error
+
+    # O prompt sai daqui com os trechos recuperados já embutidos em texto: a
+    # recuperação acontece na VPS, o runtime só lê.
+    prompt = augment_prompt(context)
+
+    # Política de egresso ANTES de abrir o job, e não depois: uma recusa entre
+    # o open_job e o envio deixaria uma linha órfã em `queued`, que o índice
+    # parcial usaria para recusar todo redespacho daquela run.
+    #
+    # A checagem vive aqui, e não só no worker isolado, porque a proteção não
+    # pode depender de qual executor está ligado — com a flag desligada é este
+    # caminho que roda, e era ele que mandava o prompt inteiro, sem redaction
+    # nem consentimento, para um runtime remoto.
+    try:
+        decisao_egresso = context_egress.prepare(db, run, run.agent, prompt)
+    except context_egress.EgressDenied as recusa:
+        add_run_event(
+            db,
+            run,
+            "build.egress_denied",
+            recusa.message,
+            {"code": recusa.code, **recusa.details},
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": recusa.code,
+                "message": recusa.message,
+                "details": recusa.details,
+            },
+        ) from recusa
+
+    prompt = decisao_egresso.prompt
+
+    try:
+        job = build_jobs.open_job(
+            db,
+            run,
+            runtime_id=run.agent,
+            model=model,
+            prompt_sha256=build_jobs.prompt_fingerprint(prompt),
+        )
+    except build_jobs.DispatchConflict as conflito:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "dispatch_already_active",
+                "message": (
+                    "Já existe um despacho ativo para esta execução"
+                ),
+                "details": build_jobs.job_out(conflito.job),
+            },
+        ) from conflito
+
+    event = add_run_event(
+        db,
+        run,
+        "build.dispatch_requested",
+        f"Despacho pedido para {runtime.label} ({model})",
+        {
+            "job_id": str(job.id),
+            "runtime_id": run.agent,
+            "model": model,
+            "attempt": job.attempt,
+            "prompt_sha256": job.prompt_sha256,
+        },
+    )
+    db.commit()
+    db.refresh(job)
+
+    _sync_run(background, db, run, event)
+
+    # Quem consome o job depende da flag, e só um dos dois pode consumir.
+    #
+    # Com WORKDEV_OLLAMA_BUILD_ENABLED ligada, o worker isolado é o executor e
+    # este consumidor sai de cena. Sem essa condição os dois disputavam o mesmo
+    # job: este roda no ato, o worker faz poll a cada 5s, então este ganhava
+    # sempre — e o build isolado, que é o motivo da fatia 3 existir, nunca
+    # executava. Na janela em que ambos liam `queued`, a mesma inferência
+    # rodava duas vezes.
+    #
+    # A fatia 3f previa REMOVER este consumidor. Removê-lo hoje deixaria o
+    # despacho sem executor nenhum, porque a unit do worker não está instalada:
+    # a UI voltaria a aceitar o clique e não acontecer nada. Ele sai quando o
+    # worker estiver de pé, não antes.
+    if not build_enabled():
+        background.add_task(
+            _consume_dispatch_job, run.id, job.id, prompt, model
+        )
+
+    return {
+        "run": _run_out(db, run),
+        "dispatch": build_jobs.job_out(job),
+    }
 
 
-@router.post("/runs/{run_id}/events", status_code=201)
+class EgressConsent(BaseModel):
+    runtime_id: str
+    actor: str
+
+
+@router.post("/runs/{run_id}/egress-consent", status_code=201)
+def grant_egress_consent(
+    run_id: UUID,
+    payload: EgressConsent,
+    db: Session = Depends(get_db),
+):
+    """Autoriza o egresso do contexto desta run para UM runtime remoto.
+
+    Existe porque `record_consent` não tinha chamador nenhum: com a política de
+    egresso ativa, todo despacho remoto falhava em `remote_egress_not_consented`
+    e não havia como conceder. Proteção que não pode ser satisfeita não protege,
+    bloqueia.
+
+    O consentimento é por run E por runtime — autorizar a Hostinger não autoriza
+    a RunPod — e fica na trilha com quem autorizou. Para projeto `restricted`
+    não serve de nada: lá o egresso é recusado antes de olhar consentimento.
+    """
+    run = _get_run(db, run_id)
+
+    if not is_ollama_agent(payload.runtime_id):
+        raise HTTPException(
+            409,
+            f"{payload.runtime_id} não é um runtime Ollama",
+        )
+
+    if not payload.actor.strip():
+        raise HTTPException(422, "Informe quem está autorizando")
+
+    classificacao = context_egress.classification_for_run(db, run)
+
+    if classificacao == context_egress.CLASSIFICATION_RESTRICTED:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "context_restricted",
+                "message": (
+                    "Projeto restrito: consentimento não libera egresso. "
+                    "Reclassifique o projeto, com a decisão registrada."
+                ),
+                "details": {"classification": classificacao},
+            },
+        )
+
+    evento = context_egress.record_consent(
+        db,
+        run,
+        payload.runtime_id,
+        actor=payload.actor.strip(),
+    )
+    db.commit()
+
+    return {
+        "run_id": str(run.id),
+        "runtime_id": payload.runtime_id,
+        "actor": payload.actor.strip(),
+        "event_id": str(evento.id),
+        "classification": classificacao,
+    }
+
+
+@router.get("/runs/{run_id}/dispatch/{job_id}")
+def get_dispatch_job(
+    run_id: UUID,
+    job_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Estado de um job de despacho, para a UI acompanhar sem repetir o POST."""
+    job = build_jobs.get_job(db, run_id, job_id)
+
+    if job is None:
+        raise HTTPException(404, "Despacho não encontrado para esta execução")
+
+    return build_jobs.job_out(job)
+
+
+@router.post("/runs/{run_id}/reviewer")
+def swap_run_reviewer(
+    run_id: UUID,
+    payload: ReviewerSwap,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Troca auditada do revisor, sem cancelar a execução em andamento."""
+    try:
+        run, event = swap_reviewer(
+            db,
+            _get_run(db, run_id),
+            payload.reviewer,
+            payload.reason,
+        )
+    except HandoffError as error:
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+    _sync_run(
+        background,
+        db,
+        run,
+        event,
+    )
+
+    return _run_out(db, run)
+
+
+def _review_out(review) -> dict:
+    return {
+        "id": review.id,
+        "run_id": review.run_id,
+        "attempt": review.attempt,
+        "executor_agent": review.executor_agent,
+        "reviewer_agent": review.reviewer_agent,
+        "verdict": review.verdict,
+        "feedback": review.feedback,
+        "gate_passed": review.gate_passed,
+        "created_at": review.created_at,
+    }
+
+
+@router.get("/runs/{run_id}/reviews")
+def list_run_reviews(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Trilha cumulativa: toda rodada de revisão fica, mesmo as rejeitadas."""
+    run = _get_run(db, run_id)
+
+    return {
+        "run_id": run.id,
+        "executor_agent": run.agent,
+        "reviewer_agent": run.reviewer_agent,
+        "review_attempts": run.review_attempts or 0,
+        "reviews": [
+            _review_out(review)
+            for review in load_reviews(db, run.id)
+        ],
+    }
+
+
+@router.post(
+    "/runs/{run_id}/reviews",
+    status_code=201,
+)
+def create_run_review(
+    run_id: UUID,
+    payload: RunReviewCreate,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Veredito do revisor independente sobre uma execução em revisão."""
+    run = _get_run(db, run_id)
+
+    try:
+        run, review = record_review(
+            db,
+            run,
+            payload.reviewer,
+            payload.verdict,
+            payload.feedback,
+        )
+    except HandoffError as error:
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+    _sync_run(
+        background,
+        db,
+        run,
+    )
+
+    return {
+        "review": _review_out(review),
+        "run": _run_out(db, run),
+    }
+
+
+@router.post(
+    "/runs/{run_id}/events",
+    status_code=201,
+)
 def create_run_event(
     run_id: UUID,
     payload: RunEventCreate,
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    run = _get_run(db, run_id)
+    run = _get_run(
+        db,
+        run_id,
+    )
+
+    if payload.event_type.startswith(('observer.', 'routing.jev_', 'runtime.')):
+        raise HTTPException(403, 'Policy and runtime audit evidence is backend-owned')
     event = add_run_event(
-        db, run, payload.event_type, payload.message, payload.payload
+        db,
+        run,
+        payload.event_type,
+        payload.message,
+        payload.payload,
     )
     db.commit()
     db.refresh(event)
-    _sync_run(background, db, run, event)
+
+    _sync_run(
+        background,
+        db,
+        run,
+        event,
+    )
+
     return {
-        "id": event.id, "run_id": event.run_id,
-        "event_type": event.event_type, "message": event.message,
-        "payload": event.payload, "created_at": event.created_at,
+        "id": event.id,
+        "run_id": event.run_id,
+        "event_type": event.event_type,
+        "message": event.message,
+        "payload": event.payload,
+        "created_at": event.created_at,
     }
 
 
-@router.patch("/runs/{run_id}/subtasks/{subtask_id}")
+@router.patch(
+    "/runs/{run_id}/subtasks/{subtask_id}"
+)
 def update_run_subtask(
     run_id: UUID,
     subtask_id: UUID,
@@ -293,25 +2004,65 @@ def update_run_subtask(
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    run = _get_run(db, run_id)
-    subtask = db.query(BacklogSubtask).filter(
+    run = _get_run(
+        db,
+        run_id,
+    )
+    from app.services.run_pause import assert_run_can_continue, RunPaused
+    try:
+        assert_run_can_continue(db, run_id)
+    except RunPaused as error:
+        raise HTTPException(409, str(error)) from error
+
+    subtask = db.query(
+        BacklogSubtask
+    ).filter(
         BacklogSubtask.id == subtask_id,
-        BacklogSubtask.backlog_id == run.backlog_id,
+        BacklogSubtask.backlog_id
+        == run.backlog_id,
     ).first()
+
     if not subtask:
-        raise HTTPException(404, "Subtask não encontrada nesta execução")
+        raise HTTPException(
+            404,
+            "Subtask não encontrada nesta execução",
+        )
+
     subtask.status = payload.status
     subtask.result = payload.result
     subtask.assigned_agent = run.agent
+
     event = add_run_event(
-        db, run, "subtask.updated", f"{subtask.title}: {payload.status}",
-        {"subtask_id": str(subtask.id), "status": payload.status},
+        db,
+        run,
+        "subtask.updated",
+        (
+            f"{subtask.title}: "
+            f"{payload.status}"
+        ),
+        {
+            "subtask_id": str(subtask.id),
+            "status": payload.status,
+        },
     )
+
     db.commit()
     db.refresh(subtask)
     db.refresh(event)
-    _sync_run(background, db, run, event)
+
+    _sync_run(
+        background,
+        db,
+        run,
+        event,
+    )
+
     return {
-        "id": subtask.id, "title": subtask.title, "status": subtask.status,
-        "result": subtask.result, "assigned_agent": subtask.assigned_agent,
+        "id": subtask.id,
+        "title": subtask.title,
+        "status": subtask.status,
+        "result": subtask.result,
+        "assigned_agent": (
+            subtask.assigned_agent
+        ),
     }

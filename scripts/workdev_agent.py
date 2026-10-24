@@ -5,25 +5,73 @@ import argparse
 import json
 import os
 import sys
+import subprocess
+from uuid import UUID
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 
 API_BASE = os.getenv("WORKDEV_LOCAL_API", "http://127.0.0.1:8000/api")
-ENV_FILE = Path("/opt/workdev/apps/api/.env")
+ENV_FILE = Path(
+    os.getenv("WORKDEV_API_ENV_FILE", "/etc/workdev/workdev-api.env")
+)
 
 
 def api_key() -> str:
-    configured = os.getenv("WORKDEV_API_KEY")
+    configured = os.getenv("WORKDEV_API_KEY", "").strip()
     if configured:
         return configured
-    if ENV_FILE.exists():
-        for raw in ENV_FILE.read_text().splitlines():
+    # Dedicated CLI credential: never search or select historical backups.
+    candidates = [ENV_FILE, Path("/etc/workdev/agent-api.env"),
+                  Path("/opt/workdev/apps/api/.env")]
+    unreadable = False
+    for path in dict.fromkeys(candidates):
+        try:
+            lines = path.read_text().splitlines()
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            unreadable = True
+            continue
+        for raw in lines:
             key, separator, value = raw.partition("=")
             if separator and key.strip() == "WORKDEV_API_KEY":
-                return value.strip().strip("\"'")
-    raise RuntimeError("WORKDEV_API_KEY não configurada")
+                value = value.strip().strip("\"'")
+                if value:
+                    return value
+    suffix = " Há arquivo sem permissão de leitura." if unreadable else ""
+    raise RuntimeError(
+        "Credencial da CLI ausente. Configure /etc/workdev/agent-api.env "
+        "com acesso ao usuário workdev; não envie a chave ao agente." + suffix
+    )
+
+
+def run_review_gate(run_id: str) -> None:
+    run_id = str(UUID(run_id))
+    root = Path("/opt/workdev")
+    helper = root / "scripts/workdev_review_gate.py"
+    interpreter = root / "apps/api/venv/bin/python"
+    if not helper.is_file() or not interpreter.is_file():
+        raise RuntimeError("Runner do gate ou Python da API ausente; review não enviado")
+    # Separate DB configuration from CLI authentication configuration.
+    env_file = os.getenv("WORKDEV_GATE_ENV_FILE", str(root / "apps/api/.env"))
+    environment = os.environ.copy()
+    environment.pop("WORKDEV_API_KEY", None)
+    environment["WORKDEV_API_ENV_FILE"] = env_file
+    environment["PYTHONPATH"] = str(root / "apps/api")
+    command = [str(interpreter), "-u", str(helper), run_id]
+    if os.geteuid() == 0:
+        command = ["sudo", "-n", "-u", "workdev", "env",
+                   "WORKDEV_API_ENV_FILE=" + env_file,
+                   "PYTHONPATH=" + str(root / "apps/api"), *command]
+    print("Validando gate e registrando evidência antes do review...", flush=True)
+    try:
+        result = subprocess.run(command, cwd=root, env=environment, check=False)
+    except OSError as error:
+        raise RuntimeError("Não foi possível iniciar o gate; review não enviado") from error
+    if result.returncode:
+        raise RuntimeError("Gate não aprovado; review não enviado. Corrija os checks acima.")
 
 
 def request(method: str, path: str, payload: dict | None = None):
@@ -47,7 +95,7 @@ def request(method: str, path: str, payload: dict | None = None):
 def main() -> int:
     parser = argparse.ArgumentParser(prog="workdev_agent")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("context", "start"):
+    for command in ("context", "start", "gate", "doctor"):
         item = sub.add_parser(command)
         item.add_argument("run_id")
     for command in ("block", "review", "complete", "fail", "progress"):
@@ -61,9 +109,43 @@ def main() -> int:
     item.add_argument("result", nargs="?")
     item = sub.add_parser("transfer")
     item.add_argument("run_id")
-    item.add_argument("agent", choices=("codex", "claude", "kimi", "qwen"))
+    item.add_argument("agent", choices=("codex", "claude", "kimi", "qwen", "grok", "deepseek"))
     item.add_argument("reason")
+    # Veredito do revisor independente. Quem executou não usa isto: o executor
+    # entrega com `review` e o revisor decide aqui, depois dos gates.
+    item = sub.add_parser("verdict")
+    item.add_argument("run_id")
+    item.add_argument("reviewer")
+    item.add_argument("verdict", choices=("approved", "rejected"))
+    item.add_argument("feedback", nargs="?")
+    item = sub.add_parser(
+        "consent",
+        help="autoriza egresso do contexto desta run para um runtime remoto",
+    )
+    item.add_argument("run_id")
+    item.add_argument("runtime_id")
+    item.add_argument("actor")
+
+    item = sub.add_parser("reviews")
+    item.add_argument("run_id")
     args = parser.parse_args()
+
+    if args.command == "doctor":
+        data = request("GET", f"/handoffs/runs/{args.run_id}")
+        print(f"Autenticação OK; execução {data['id']}; status {data['status']}")
+        return 0
+    if args.command == "gate":
+        request("GET", f"/handoffs/runs/{args.run_id}")
+        run_review_gate(args.run_id)
+        return 0
+    if args.command == "review":
+        data = request("GET", f"/handoffs/runs/{args.run_id}")
+        if data["status"] in {"review", "completed"}:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+            return 0
+        if data["status"] != "running":
+            raise RuntimeError(f"Review exige execução running; status atual: {data['status']}")
+        run_review_gate(args.run_id)
 
     if args.command == "context":
         data = request("GET", f"/handoffs/runs/{args.run_id}/context")
@@ -75,6 +157,34 @@ def main() -> int:
             f"/handoffs/runs/{args.run_id}/subtasks/{args.subtask_id}",
             {"status": args.status, "result": args.result},
         )
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "verdict":
+        data = request(
+            "POST",
+            f"/handoffs/runs/{args.run_id}/reviews",
+            {
+                "reviewer": args.reviewer,
+                "verdict": args.verdict,
+                "feedback": args.feedback,
+            },
+        )
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "consent":
+        data = request(
+            "POST",
+            f"/handoffs/runs/{args.run_id}/egress-consent",
+            {"runtime_id": args.runtime_id, "actor": args.actor},
+        )
+        print(
+            f"egresso autorizado: {data['runtime_id']} "
+            f"por {data['actor']} (evento {data['event_id']})"
+        )
+        return
+
+    if args.command == "reviews":
+        data = request("GET", f"/handoffs/runs/{args.run_id}/reviews")
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return 0
     if args.command == "transfer":
@@ -107,6 +217,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (RuntimeError, urllib.error.URLError) as error:
+    except (RuntimeError, ValueError, urllib.error.URLError) as error:
         print(f"erro: {error}", file=sys.stderr)
         raise SystemExit(1)

@@ -30,6 +30,7 @@ export function BacklogTab() {
   const [items, setItems] = useState<BacklogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<BacklogItem | null>(null);
+  const [mobileColumn, setMobileColumn] = useState<string>("todo");
 
   function load() {
     setLoading(true);
@@ -72,11 +73,22 @@ export function BacklogTab() {
 
   return (
     <div>
+      <div className="mb-4 grid grid-cols-2 gap-2 md:hidden">
+        {COLUMNS.map((col) => (
+          <button
+            key={col.key}
+            onClick={() => setMobileColumn(col.key)}
+            className={`shrink-0 rounded-lg px-3 py-2 text-sm ${mobileColumn === col.key ? "bg-slate-700 text-white" : "bg-slate-900 text-slate-400"}`}
+          >
+            {col.label} ({items.filter((i) => i.status === col.key).length})
+          </button>
+        ))}
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {COLUMNS.map((col) => (
           <div
             key={col.key}
-            className="bg-slate-900 border border-slate-800 rounded-xl p-6"
+            className={`bg-slate-900 border border-slate-800 rounded-xl p-6 ${mobileColumn === col.key ? "block" : "hidden"} md:block`}
           >
             <h2 className={`text-lg font-bold mb-4 ${col.color}`}>
               {col.label}{" "}
@@ -92,7 +104,7 @@ export function BacklogTab() {
                     key={item.id}
                     onClick={() => setSelected(item)}
                     className="bg-slate-800 rounded-lg p-3 cursor-pointer hover:bg-slate-700 transition-colors"
-                    title="Clique para avançar o status"
+                    title="Clique para ver ou editar a task"
                   >
                     <div className="flex justify-between items-start gap-2">
                       <p className="text-sm">{item.title}</p>
@@ -123,6 +135,11 @@ export function BacklogTab() {
         ))}
       </div>
       <TaskDetail
+        onUpdated={(updated) => {
+          setItems(prev => prev.map(item => item.id === updated.id ? updated : item));
+          setSelected(updated);
+          if (COLUMNS.some((col) => col.key === updated.status)) setMobileColumn(updated.status);
+        }}
         item={selected}
         onClose={() => setSelected(null)}
         onAdvance={(i) => {

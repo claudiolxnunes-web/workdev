@@ -3,6 +3,7 @@ import { getADRs, createADR } from "../../../services/adrs.service";
 import type { ADR, ADRStatus } from "../../../services/adrs.service";
 import { getBacklog } from "../../../services/backlog.service";
 import type { BacklogItem } from "../../../services/backlog.service";
+import { ADRMarkdown } from "./ADRMarkdown";
 
 const STATUSES: ADRStatus[] = ["proposed", "accepted", "deprecated", "superseded"];
 
@@ -183,19 +184,43 @@ export function ADRsTab({ projectId }: { projectId?: string }) {
             <p className="text-slate-500 text-xs mb-3">
               {new Date(a.created_at).toLocaleDateString("pt-BR")}
             </p>
-            <p className="text-slate-400 text-sm mb-2">
-              <span className="text-slate-500">Contexto: </span>
-              {a.context}
-            </p>
-            <p className="text-slate-400 text-sm mb-2">
-              <span className="text-slate-500">Decisão: </span>
-              {a.decision}
-            </p>
+            <section
+              className="mb-5 min-w-0"
+              aria-labelledby={`adr-${a.id}-context`}
+            >
+              <h4
+                id={`adr-${a.id}-context`}
+                className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500"
+              >
+                Contexto
+              </h4>
+              <ADRMarkdown content={a.context} />
+            </section>
+            <section
+              className="mb-5 min-w-0"
+              aria-labelledby={`adr-${a.id}-decision`}
+            >
+              <h4
+                id={`adr-${a.id}-decision`}
+                className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500"
+              >
+                Decisão
+              </h4>
+              <ADRMarkdown content={a.decision} />
+            </section>
             {a.consequences && (
-              <p className="text-slate-400 text-sm">
-                <span className="text-slate-500">Consequências: </span>
-                {a.consequences}
-              </p>
+              <section
+                className="min-w-0"
+                aria-labelledby={`adr-${a.id}-consequences`}
+              >
+                <h4
+                  id={`adr-${a.id}-consequences`}
+                  className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Consequências
+                </h4>
+                <ADRMarkdown content={a.consequences} />
+              </section>
             )}
           </div>
         ))}

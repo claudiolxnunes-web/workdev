@@ -22,11 +22,46 @@ export interface BacklogItem {
   rank?: number;
   created_at?: string;
   updated_at?: string;
+  archived_at?: string | null;
+  archived_reason?: string | null;
 }
 
-export async function getBacklog(): Promise<BacklogItem[]> {
-  const response = await fetch(`${API_URL}/api/backlog`, { headers });
+/** Motivos aceitos pela API para arquivar (ADR 009). */
+export const ARCHIVE_REASONS = [
+  { value: "concluida_fora", label: "Concluída fora do fluxo" },
+  { value: "obsoleta", label: "Obsoleta / perdeu sentido" },
+  { value: "sem_destravamento", label: "Sem destravamento previsto" },
+] as const;
+
+/** Arquivadas só vêm com includeArchived; a leitura padrão as exclui. */
+export async function getBacklog(options: { includeArchived?: boolean } = {}): Promise<BacklogItem[]> {
+  const query = options.includeArchived ? "?include_archived=true" : "";
+  const response = await fetch(`${API_URL}/api/backlog${query}`, { headers });
   if (!response.ok) throw new Error("Erro ao buscar backlog");
+  return response.json();
+}
+
+export type BacklogEdit = Pick<BacklogItem, "title" | "description" | "priority" | "status"> & {
+  archived_reason?: string;
+  archived_note?: string;
+};
+
+export async function updateItem(id: string, changes: Partial<BacklogEdit>): Promise<BacklogItem> {
+  const response = await fetch(`${API_URL}/api/backlog/${encodeURIComponent(id)}`, {
+    method: "PATCH", headers, body: JSON.stringify(changes),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    const detail = data?.detail;
+    let message = `Erro ao salvar task (HTTP ${response.status})`;
+    if (typeof detail === "string") message = detail;
+    else if (typeof detail?.message === "string") message = detail.message;
+    else if (Array.isArray(detail)) {
+      const errors = detail.map(error => typeof error?.msg === "string" ? error.msg : "").filter(Boolean);
+      if (errors.length) message = errors.join("; ");
+    }
+    throw new Error(message);
+  }
   return response.json();
 }
 
@@ -79,4 +114,56 @@ export async function updateSubtask(id: string, data: Partial<Subtask>) {
   });
   if (!r.ok) throw new Error("Erro ao atualizar subtask");
   return r.json();
+}
+
+export interface TaskPlanningSession {
+  id: string;
+  task_id: string;
+  task_title: string;
+  project_slug: string;
+  backlog_id: string;
+}
+
+export interface TaskPlanningEligibility {
+  backlog_id: string;
+  eligible: boolean;
+  message: string | null;
+  code: string | null;
+}
+
+export async function getTaskPlanningEligibility(taskId: string): Promise<TaskPlanningEligibility> {
+  const response = await fetch(`/api/chat/sessions/from-task/${encodeURIComponent(taskId)}/eligibility`, { headers });
+  if (!response.ok) throw new Error('Não foi possível verificar o planejamento desta task.');
+  return response.json();
+}
+
+/** Sessão do AI Hub que fatia a task em micro-tarefas para a Bancada Local (modo Observar). */
+export async function createBancadaPlanningSession(taskId: string): Promise<{ id: string }> {
+  const response = await fetch("/api/chat/bancada/planejar", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ task_id: taskId }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const message = errorData.detail?.message || errorData.detail || "Erro ao planejar a task para a Bancada Local";
+    throw new Error(typeof message === "string" ? message : "Erro ao planejar a task para a Bancada Local");
+  }
+  return response.json();
+}
+
+export async function createTaskPlanningSession(
+  taskId: string
+): Promise<TaskPlanningSession> {
+  const response = await fetch("/api/chat/sessions/from-task", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ task_id: taskId }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const message = errorData.detail?.message || errorData.detail || "Erro ao enviar task ao AI Hub";
+    throw new Error(message);
+  }
+  return response.json();
 }

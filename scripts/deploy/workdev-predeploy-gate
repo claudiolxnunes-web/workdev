@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 0 ] || {
+    echo "BLOQUEIA: gate nao aceita argumentos" >&2
+    exit 64
+}
+
+exec runuser -u workdev -g workdev-runtime -G workdev -- env \
+    WORKDEV_DEPLOY_LIB=/usr/local/lib/workdev-deploy \
+    WORKDEV_PRIVILEGED_PORT_CHECK=1 \
+    WORKDEV_API_ENV_FILE=/etc/workdev/workdev-api.env \
+    timeout 240 bash /usr/local/lib/workdev-deploy/verificar-deploy.sh --testes

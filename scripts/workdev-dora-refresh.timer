@@ -1,0 +1,13 @@
+[Unit]
+Description=WorkDev DORA — Timer de refresh de cache (5min)
+Documentation=https://workdev.bpfconsult.com.br
+
+[Timer]
+# Executa a cada 5 minutos
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

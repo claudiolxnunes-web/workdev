@@ -1,26 +1,34 @@
 import { useEffect, useState, lazy, Suspense } from "react"
 import { Badge } from "@/components/ui/badge"
-import { Routes, Route, NavLink } from "react-router-dom"
+import { Routes, Route, NavLink, useLocation } from "react-router-dom"
 
 import NewProject from "./pages/NewProject"
 import Dashboard from "./pages/Dashboard"
+import ExecutiveDashboard from "./pages/ExecutiveDashboard"
 import Projects from "./pages/Projects"
 import Knowledge from "./pages/Knowledge"
 import Deployments from "./pages/Deployments"
 import Monitoring from "./pages/Monitoring"
 import Settings from "./pages/Settings"
 import Backlog from "./pages/Backlog"
+import { AgentReset } from "./modules/agents/AgentReset"
 
 const EngineeringPage = lazy(() =>
   import('./modules/engineering').then((m) => ({ default: m.EngineeringPage }))
 )
+const AgentTerminalPage = lazy(() => import("./modules/agents/AgentTerminalPage"))
+const RunTerminalPage = lazy(() => import("./modules/agents/RunObserverStatus"))
 const AIHub = lazy(() => import("./pages/AIHub"))
+const ChatLivre = lazy(() => import("./pages/ChatLivre"))
+const BancadaLocal = lazy(() => import("./pages/BancadaLocal"))
+const Workspace = lazy(() => import("./pages/Workspace"))
 const AgentsPage = lazy(() =>
   import("./modules/agents").then((module) => ({ default: module.AgentsPage }))
 )
 const ProjectWorkspace = lazy(() => import("./pages/ProjectWorkspace"))
 
 function App() {
+  const location = useLocation()
   const [versao, setVersao] = useState("")
   const [appName, setAppName] = useState("WorkDev Core")
   useEffect(() => {
@@ -33,19 +41,28 @@ function App() {
       .then((d) => d?.app?.name && setAppName(d.app.name))
       .catch(() => {})
   }, [])
+  const agentsWorkspace = location.pathname === "/agents" || location.pathname === "/workspace"
   const menuClass =
     "block px-3 py-2 rounded-lg transition-colors hover:bg-slate-800"
 
   const activeMenuClass =
     "block px-3 py-2 rounded-lg bg-slate-800"
 
+  if (/^\/agents\/[^/]+\/terminal$/.test(location.pathname) || (/^\/runs\/[^/]+\/terminal$/.test(location.pathname) && new URLSearchParams(location.search).get("compact") === "1")) {
+    return <Suspense fallback={<div className="h-dvh bg-slate-950 p-6 text-slate-300">Carregando terminal…</div>}>
+      <Routes>
+        <Route path="/agents/:agentId/terminal" element={<AgentTerminalPage />} />
+        <Route path="/runs/:runId/terminal" element={<RunTerminalPage />} />
+      </Routes>
+    </Suspense>
+  }
   return (
-    <div className="min-h-screen bg-slate-950 text-white">
+    <div className="min-h-screen max-w-full overflow-x-hidden bg-slate-950 text-white">
       {/* Header */}
-      <header className="border-b border-slate-800 px-4 py-3 sm:px-8 sm:py-4 flex justify-between items-center">
+      <header className={`border-b border-slate-800 px-4 flex justify-between items-center ${agentsWorkspace ? "py-2 sm:px-6" : "py-3 sm:px-8 sm:py-4"}`}>
         <div>
-          <h1 className="text-2xl font-bold">{appName}</h1>
-          <p className="text-slate-400 text-sm">
+          <h1 className={agentsWorkspace ? "text-lg font-bold" : "text-2xl font-bold"}>{appName}</h1>
+          <p className={agentsWorkspace ? "hidden" : "text-slate-400 text-sm"}>
             Software Engineering Platform
           </p>
         </div>
@@ -55,7 +72,7 @@ function App() {
         </Badge>
       </header>
 
-      <div className="flex flex-col md:flex-row">
+      <div className="flex min-w-0 flex-col md:flex-row">
         {/* Sidebar */}
         <aside className="w-full border-b border-slate-800 p-2 md:w-64 md:border-b-0 md:border-r md:min-h-[calc(100vh-81px)] md:p-6">
           <nav className="flex gap-1 overflow-x-auto md:block md:space-y-4">
@@ -107,6 +124,24 @@ function App() {
             </NavLink>
 
             <NavLink
+              to="/bancada"
+              className={({ isActive }) =>
+                isActive ? activeMenuClass : menuClass
+              }
+            >
+              🧪 Bancada Local
+            </NavLink>
+
+            <NavLink
+              to="/workspace"
+              className={({ isActive }) =>
+                isActive ? activeMenuClass : menuClass
+              }
+            >
+              🧩 Workspace Local
+            </NavLink>
+
+            <NavLink
               to="/knowledge"
               className={({ isActive }) =>
                 isActive ? activeMenuClass : menuClass
@@ -155,9 +190,11 @@ function App() {
         </aside>
 
         {/* Main Content */}
-        <main className="min-w-0 flex-1 p-3 sm:p-5 md:p-8">
+        <main className={`min-w-0 max-w-full flex-1 overflow-x-hidden p-3 ${agentsWorkspace ? "md:p-4" : "sm:p-5 md:p-8"}`}>
           <Routes>
+              <Route path="/runs/:runId/terminal" element={<RunTerminalPage />} />
             <Route path="/" element={<Dashboard />} />
+            <Route path="/dashboard/executive" element={<ExecutiveDashboard />} />
             <Route path="/projects" element={<Projects />} />
             <Route
               path="/ai-hub"
@@ -167,11 +204,36 @@ function App() {
                 </Suspense>
               }
             />
+            <Route
+              path="/chat-livre/:conversationId?"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <ChatLivre />
+                </Suspense>
+              }
+            />
             <Route path="/knowledge" element={<Knowledge />} />
+            <Route
+              path="/bancada"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <BancadaLocal />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/workspace"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <Workspace />
+                </Suspense>
+              }
+            />
             <Route
               path="/agents"
               element={
                 <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <AgentReset />
                   <AgentsPage />
                 </Suspense>
               }

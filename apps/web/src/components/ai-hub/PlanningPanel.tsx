@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
+import { getExecutionModels, type ExecutionModel } from "@/services/settings.service"
 import {
-  approvePlan, getPlans, sendToBuild, subscribeToHandoffs, updatePlan,
-  type AgentName, type ExecutionPlan,
+  agentLabels, approvePlan, getAgentRuntimes, getCliAgentModel, getPlanRecommendation, getPlans,
+  sendToBuild, subscribeToHandoffs, updatePlan, CLI_AGENTS, HandoffApiError,
+  RECOMMENDED_REVIEWERS,
+  type AgentName, type AgentRuntime, type CliAgentName, type ExecutionPlan,
+  type PlanRecommendation,
 } from "@/services/handoff.service"
+
+function isCliAgent(agent?: AgentName): agent is CliAgentName {
+  return Boolean(agent) && (CLI_AGENTS as readonly string[]).includes(agent as string)
+}
 
 const statusLabel: Record<string, string> = {
   draft: "Rascunho", approved: "Aprovado", needs_revision: "Revisar", superseded: "Substituído",
@@ -14,11 +22,188 @@ const statusColor: Record<string, string> = {
   needs_revision: "bg-red-500/20 text-red-300", superseded: "bg-slate-700 text-slate-400",
   discarded: "bg-slate-800 text-slate-300",
 }
-const agentLabel: Record<AgentName, string> = {
-  claude: "Claude Code", codex: "Codex", kimi: "Kimi Code", qwen: "Qwen Code",
+const agentLabel = agentLabels
+const costColor: Record<string, string> = {
+  free: "text-emerald-300", economic: "text-emerald-300", moderate: "text-amber-300",
+  premium: "text-rose-300", unknown: "text-slate-400",
+}
+const availabilityColor: Record<string, string> = {
+  available: "text-emerald-300", unavailable: "text-rose-300", unknown: "text-slate-400",
 }
 
-export function PlanningPanel({ onClose }: { onClose: () => void }) {
+function recommendationKey(plan: ExecutionPlan) {
+  return `${plan.id}:${plan.updated_at}`
+}
+
+type RolePair = { executor?: AgentName; reviewer?: AgentName }
+type AgentChoice = { name: AgentName; label: string; disabled: boolean; hint: string }
+
+/**
+ * Opções de EXECUTOR. Agentes com CLI própria estão sempre disponíveis;
+ * runtimes Ollama só quando o backend os reporta despacháveis — endpoint
+ * offline não vira opção de envio.
+ *
+ * Runtimes Ollama são executores manuais válidos quando o Build isolado está
+ * habilitado. O modelo não recebe shell irrestrito: ele propõe a alteração e o
+ * workdev-build-worker aplica em worktree isolado, executa gates e entrega para
+ * revisão independente.
+ */
+function executorChoices(runtimes: AgentRuntime[]): AgentChoice[] {
+  const cli: AgentChoice[] = CLI_AGENTS.map((name) => ({
+    name, label: agentLabel[name], disabled: false, hint: "",
+  }))
+  const locais: AgentChoice[] = runtimes.map((runtime) => ({
+    name: runtime.id,
+    label: `${runtime.label} · executor isolado · ${runtime.status_label}`,
+    disabled: !runtime.dispatchable,
+    hint: runtime.reason ?? "",
+  }))
+  return [...cli, ...locais]
+}
+
+/**
+ * Opções de REVISOR. Os recomendados vêm primeiro e marcados; os demais
+ * agentes CLI seguem habilitados, só sem destaque — recomendação é dica
+ * visual, nunca filtro.
+ *
+ * Runtimes Ollama aparecem DESABILITADOS com o motivo à vista, em vez de
+ * sumirem sem explicação: escolhê-los não daria uma revisão pior, daria uma
+ * run parada em `review` para sempre, porque não existe canal de veredito
+ * para essas identidades.
+ */
+function reviewerChoices(runtimes: AgentRuntime[]): AgentChoice[] {
+  const recomendados: AgentChoice[] = RECOMMENDED_REVIEWERS.map((name) => ({
+    name, label: `${agentLabel[name]} · recomendado`, disabled: false, hint: "",
+  }))
+  const demais: AgentChoice[] = CLI_AGENTS
+    .filter((name) => !RECOMMENDED_REVIEWERS.includes(name))
+    .map((name) => ({ name, label: agentLabel[name], disabled: false, hint: "" }))
+  const semCanal: AgentChoice[] = runtimes.map((runtime) => ({
+    name: runtime.id,
+    label: runtime.label,
+    disabled: true,
+    hint: "sem canal de veredito; a run ficaria parada em revisão",
+  }))
+  return [...recomendados, ...demais, ...semCanal]
+}
+
+function RoleSelect({
+  id, titulo, valor, choices, onChange, disabled,
+}: {
+  id: string
+  titulo: string
+  valor?: AgentName
+  choices: AgentChoice[]
+  onChange: (agent: AgentName) => void
+  disabled: boolean
+}) {
+  return (
+    <label htmlFor={id} className="block text-xs text-slate-400">
+      {titulo}
+      <select
+        id={id}
+        value={valor ?? ""}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value as AgentName)}
+        className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100 disabled:opacity-50"
+      >
+        <option value="">Selecione…</option>
+        {choices.map((choice) => (
+          <option key={choice.name} value={choice.name} disabled={choice.disabled}>
+            {choice.label}{choice.disabled && choice.hint ? ` — ${choice.hint}` : ""}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function precoTexto(row: ExecutionModel): string {
+  const entrada = row.input_cost_per_million
+  const saida = row.output_cost_per_million
+  return entrada != null && saida != null ? ` — US$ ${entrada}/US$ ${saida} por 1M` : " — sem preço no catálogo"
+}
+
+/** Segundo passo dos três papéis: depois do agente, o modelo dele, com preço. */
+function ModelSelect({
+  label, models, value, vazio, onChange, disabled,
+}: {
+  label: string
+  models: ExecutionModel[]
+  value?: string
+  vazio: string
+  onChange: (row?: ExecutionModel) => void
+  disabled: boolean
+}) {
+  const rows = [...models].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
+  return (
+    <label className="mt-2 block text-xs text-slate-400">
+      {label}
+      <select aria-label={label} value={value ?? ""} disabled={disabled || rows.length === 0}
+        onChange={(event) => onChange(rows.find((row) => row.model === event.target.value))}
+        className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100 disabled:opacity-50">
+        <option value="">{rows.length ? vazio : "Sem modelo no catálogo"}</option>
+        {rows.map((row) => (
+          <option key={`${row.provider}:${row.model}:${row.runtime_id ?? ""}`} value={row.model}>
+            {row.label}{precoTexto(row)}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function RecommendationCard({
+  recommendation,
+}: {
+  recommendation: PlanRecommendation
+}) {
+  const { recommended, alternative } = recommendation
+  return (
+    <section
+      aria-label="Recomendação do WorkDev"
+      className="mb-3 rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-sm"
+    >
+      <p className="text-xs uppercase tracking-wide text-slate-500">Recomendação do WorkDev</p>
+      <p className="mt-1 font-semibold text-slate-100">
+        Recomendado: {recommended.agent_label}
+      </p>
+      <p className="text-xs text-slate-400">
+        {recommended.model_label ?? "modelo não informado no catálogo"}
+        {" · "}
+        <span className={costColor[recommended.cost_class]}>custo {recommended.cost_label}</span>
+        {" · "}
+        complexidade {recommendation.complexity}
+      </p>
+      <p className="mt-1 text-slate-300">{recommended.reason}</p>
+      <p className="mt-1 text-xs">
+        <span className={availabilityColor[recommended.availability]}>
+          Disponibilidade: {recommended.availability_label}
+        </span>
+        {" · "}
+        <span className="text-slate-400">
+          Disponibilidade financeira: {recommended.quota_label}
+        </span>
+      </p>
+      {recommended.quota === "exhausted" && (
+        <p className="mt-1 text-xs text-rose-300">
+          Agente/modelo recomendado indisponível por cota/crédito.
+        </p>
+      )}
+      {alternative && (
+        <p className="mt-2 text-xs text-slate-400">
+          Alternativa: <span className="text-slate-200">{alternative.agent_label}</span>
+          {alternative.model_label ? ` (${alternative.model_label})` : ""} — {alternative.reason}
+        </p>
+      )}
+      <p className="mt-2 text-xs text-slate-500">
+        Sugestão consultiva: a escolha e o custo são decisão sua.
+      </p>
+    </section>
+  )
+}
+
+export function PlanningPanel({ onClose, backlogId }: { onClose: () => void; backlogId?: string | null }) {
   const [plans, setPlans] = useState<ExecutionPlan[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -28,13 +213,76 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
   const [editing, setEditing] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState("")
   const [editObjective, setEditObjective] = useState("")
+  const [editScope, setEditScope] = useState("")
+  const [editConstraints, setEditConstraints] = useState("")
+  const [editAcceptanceCriteria, setEditAcceptanceCriteria] = useState("")
+  const [editValidationSteps, setEditValidationSteps] = useState("")
+  const [editImplementationNotes, setEditImplementationNotes] = useState("")
   const [discardTarget, setDiscardTarget] = useState<ExecutionPlan | null>(null)
+  const [premiumTarget, setPremiumTarget] = useState<{
+    plan: ExecutionPlan
+    message: string
+    model?: string
+    agent?: AgentName
+    requestedAgent?: AgentName
+  } | null>(null)
+  const [recommendations, setRecommendations] = useState<Record<string, PlanRecommendation>>({})
+  // Executor e revisor escolhidos por plano. Sem os dois, não há envio.
+  const [roles, setRoles] = useState<Record<string, RolePair>>({})
+  const [reviewChoice, setReviewChoice] = useState<Record<string, boolean>>({})
+  const [reviewState, setReviewState] = useState<Record<string, string>>({})
+  const [observerModels, setObserverModels] = useState<ExecutionModel[]>([])
+  const [observerChoice, setObserverChoice] = useState<Record<string, { enabled: boolean; agent?: string; provider?: string; model?: string; runtime_id?: string }>>({})
+  const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
+  // Modelo configurado na aba Agentes para cada agente CLI já escolhido como
+  // executor ou revisor em algum plano — só leitura, nunca enviado ao Build.
+  const [agentModelLabel, setAgentModelLabel] = useState<Record<string, string>>({})
+  const requestedRecommendations = useRef<Set<string>>(new Set())
+
+  const executores = executorChoices(runtimes)
+  const revisores = reviewerChoices(runtimes)
+
+  useEffect(() => {
+    let active = true
+    getExecutionModels().then(data => { if (active) setObserverModels(data.models) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const agentes = new Set<CliAgentName>()
+    for (const pair of Object.values(roles)) {
+      if (isCliAgent(pair.executor)) agentes.add(pair.executor)
+      if (isCliAgent(pair.reviewer)) agentes.add(pair.reviewer)
+    }
+    for (const agente of agentes) {
+      if (agente in agentModelLabel) continue
+      void getCliAgentModel(agente).then((info) => {
+        if (!active) return
+        const label = info.options?.find((option) => option.model === info.selected)?.label ?? info.selected
+        setAgentModelLabel((current) => ({ ...current, [agente]: label }))
+      }).catch(() => {})
+    }
+    return () => { active = false }
+  }, [roles, agentModelLabel])
+
+  function setRole(planId: string, field: keyof RolePair, agent: AgentName) {
+    setRoles((current) => ({
+      ...current,
+      [planId]: { ...current[planId], [field]: agent },
+    }))
+  }
 
   const load = useCallback(async () => {
-    try { setPlans(await getPlans(filter === "discarded" ? "discarded" : undefined)); setError("") }
+    try {
+      const status = filter === 'discarded' ? 'discarded' : undefined
+      setPlans(await (backlogId ? getPlans(status, backlogId) : getPlans(status)))
+      setError('')
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Erro ao carregar planos") }
     finally { setLoading(false) }
-  }, [filter])
+  }, [filter, backlogId])
 
   useEffect(() => {
     // load() é reaproveitado por 3 gatilhos (mount, evento realtime, timer)
@@ -47,6 +295,46 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
     return () => { unsubscribe(); window.clearInterval(timer) }
   }, [load])
 
+  useEffect(() => {
+    // Status dos runtimes Ollama vem do backend. Se a rota falhar, a aba segue
+    // utilizável com os agentes de CLI — GPU fora do ar não derruba o envio.
+    let cancelled = false
+    async function poll() {
+      try {
+        const rows = await getAgentRuntimes()
+        if (!cancelled) setRuntimes(rows)
+      } catch { /* próxima rodada tenta de novo */ }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 15000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [])
+
+  useEffect(() => {
+    const pending = plans.filter(
+      (plan) =>
+        plan.status === "approved" &&
+        !requestedRecommendations.current.has(recommendationKey(plan)),
+    )
+    if (pending.length === 0) return
+
+    for (const plan of pending) {
+      const key = recommendationKey(plan)
+      requestedRecommendations.current.add(key)
+      void getPlanRecommendation(plan.id)
+        .then((recommendation) => {
+          // A recomendação é consultiva: se falhar, a aba continua utilizável
+          // e o usuário segue escolhendo o agente por conta própria.
+          setRecommendations((current) => ({ ...current, [key]: recommendation }))
+        })
+        .catch(() => requestedRecommendations.current.delete(key))
+      void fetch(`/api/handoffs/plans/${plan.id}/review-policy`, { headers: { "X-API-Key": import.meta.env.VITE_API_KEY || "" } })
+        .then(async response => { if (!response.ok) throw new Error("policy"); return response.json() })
+        .then(data => setReviewState(current => ({ ...current, [plan.id]: data.state })))
+        .catch(() => setReviewState(current => ({ ...current, [plan.id]: "unavailable" })))
+    }
+  }, [plans])
+
   async function approve(plan: ExecutionPlan) {
     setBusy(plan.id); setError(""); setMessage("")
     try { await approvePlan(plan.id); setMessage(`Plano v${plan.version} aprovado.`); await load() }
@@ -54,27 +342,99 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
     finally { setBusy(null) }
   }
 
-  async function build(plan: ExecutionPlan, agent: AgentName) {
+  async function build(plan: ExecutionPlan, agent?: AgentName, premiumConfirmed = false) {
+    const requested = reviewChoice[plan.id]
+    const reviewer = requested === false ? null : roles[plan.id]?.reviewer
+    const observer = observerChoice[plan.id]
+    if (observer?.enabled && (!observer.provider || !observer.model)) {
+      setError("Escolha a fonte e o modelo do Observer antes de enviar ao Build.")
+      return
+    }
+    const observerConfig = { enabled: Boolean(observer?.enabled),
+      ...(observer?.enabled ? { selection: { provider: observer.provider!, model: observer.model!,
+        ...(observer.runtime_id ? { runtime_id: observer.runtime_id } : {}) } } : {}) }
+    if (!agent) {
+      setError("Escolha o executor antes de enviar ao Build.")
+      return
+    }
+    if (!reviewer && requested !== false) {
+      setError("Escolha o revisor independente antes de enviar ao Build.")
+      return
+    }
     setBusy(plan.id); setError(""); setMessage("")
     try {
-      await sendToBuild(plan.id, agent)
-      setMessage(`Build enviado para ${agentLabel[agent]}.`)
+      // O modelo nunca é escolhido aqui: o backend resolve pela configuração
+      // salva na aba Agentes do executor e, quando houver, do revisor.
+      let run
+      if (observer?.enabled) {
+        run = await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, undefined,
+          requested, undefined, observerConfig)
+      } else if (agent && requested === undefined) {
+        run = await sendToBuild(plan.id, reviewer!, agent, premiumConfirmed, undefined)
+      } else {
+        run = await sendToBuild(plan.id, reviewer ?? null, agent, premiumConfirmed, undefined,
+          requested, undefined)
+      }
+      setPremiumTarget(null)
+      // Alertas não bloqueiam: o envio seguiu com a escolha do operador.
+      const alerts = (run?.warnings ?? []).map((item) => ` Alerta: ${item.message}`).join("")
+      setMessage(`Build enviado: ${agentLabel[agent]} executa${reviewer ? `, ${agentLabel[reviewer]} revisa` : "; escolha de revisão registrada"}.${alerts}`)
       await load()
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha no handoff") }
+    } catch (cause) {
+      if (cause instanceof HandoffApiError && cause.detail.code === "premium_confirmation_required") {
+        const recommended = cause.detail.details?.recommended
+        setPremiumTarget({
+          plan,
+          message: cause.message,
+          model: recommended?.model,
+          agent: recommended?.agent,
+          requestedAgent: agent,
+        })
+      } else {
+        setError(cause instanceof Error ? cause.message : "Falha no handoff")
+      }
+    }
     finally { setBusy(null) }
   }
 
   function beginEdit(plan: ExecutionPlan) {
-    setEditing(plan.id); setEditTitle(plan.title); setEditObjective(plan.objective)
-    setError(""); setMessage("")
+    setEditing(plan.id)
+    setEditTitle(plan.title)
+    setEditObjective(plan.objective)
+    setEditScope(plan.scope ?? "")
+    setEditConstraints((plan.constraints ?? []).join("\n"))
+    setEditAcceptanceCriteria((plan.acceptance_criteria ?? []).join("\n"))
+    setEditValidationSteps((plan.validation_steps ?? []).join("\n"))
+    setEditImplementationNotes(plan.implementation_notes ?? "")
+    setError("")
+    setMessage("")
+  }
+
+  function editLines(value: string): string[] {
+    return value
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean)
   }
 
   async function saveEdit(plan: ExecutionPlan) {
     setBusy(plan.id); setError(""); setMessage("")
     try {
-      await updatePlan(plan.id, { title: editTitle.trim(), objective: editObjective.trim() })
-      setEditing(null); setMessage(`Plano v${plan.version} atualizado.`); await load()
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao editar plano") }
+      await updatePlan(plan.id, {
+        title: editTitle.trim(),
+        objective: editObjective.trim(),
+        scope: editScope.trim(),
+        constraints: editLines(editConstraints),
+        acceptance_criteria: editLines(editAcceptanceCriteria),
+        validation_steps: editLines(editValidationSteps),
+        implementation_notes: editImplementationNotes.trim(),
+      })
+      setEditing(null)
+      setMessage(`Plano v${plan.version} atualizado.`)
+      await load()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Falha ao editar plano")
+    }
     finally { setBusy(null) }
   }
 
@@ -93,7 +453,7 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
         <div className="mb-5 flex items-start justify-between gap-3">
           <div>
             <h2 className="text-2xl font-bold">Planos de execução</h2>
-            <p className="text-sm text-slate-400">PLAN no AI Hub → aprovação → BUILD nos Agents</p>
+            <p className="text-sm text-slate-400">Prévia no AI Hub → plano oficial → aprovação → recomendação → envio manual</p>
           </div>
           <button className="text-xl text-slate-400 hover:text-white" onClick={onClose}>✕</button>
         </div>
@@ -106,7 +466,7 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
         {loading && <p className="text-slate-400">Carregando…</p>}
         {!loading && plans.length === 0 && (
           <div className="rounded-xl border border-dashed border-slate-700 p-8 text-center text-sm text-slate-400">
-            Ainda não há planos. Peça no chat: “crie um plano de execução para a task …”.
+            Ainda não há planos oficiais. Revise a prévia no chat e aprove a formulação final para criar o plano.
           </div>
         )}
         <div className="space-y-4">
@@ -117,37 +477,207 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
                 <span className={`rounded-full px-2 py-1 text-xs ${statusColor[plan.status]}`}>{statusLabel[plan.status]}</span>
               </div>
               {editing === plan.id ? (
-                <div className="mb-3 space-y-3">
-                  <label className="block text-sm text-slate-300">Título
-                    <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white" />
+                <div className="mb-4 space-y-4 rounded-xl border border-slate-700 bg-slate-950/60 p-4">
+                  <label className="block text-sm text-slate-300">
+                    Título
+                    <input
+                      value={editTitle}
+                      onChange={(event) => setEditTitle(event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
                   </label>
-                  <label className="block text-sm text-slate-300">Objetivo
-                    <textarea value={editObjective} onChange={(event) => setEditObjective(event.target.value)} rows={4} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white" />
+
+                  <label className="block text-sm text-slate-300">
+                    Objetivo
+                    <textarea
+                      value={editObjective}
+                      onChange={(event) => setEditObjective(event.target.value)}
+                      rows={4}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Escopo
+                    <textarea
+                      value={editScope}
+                      onChange={(event) => setEditScope(event.target.value)}
+                      rows={5}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Restrições
+                    <span className="ml-2 text-xs text-slate-500">uma por linha</span>
+                    <textarea
+                      value={editConstraints}
+                      onChange={(event) => setEditConstraints(event.target.value)}
+                      rows={5}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Critérios de aceite
+                    <span className="ml-2 text-xs text-slate-500">um por linha</span>
+                    <textarea
+                      value={editAcceptanceCriteria}
+                      onChange={(event) => setEditAcceptanceCriteria(event.target.value)}
+                      rows={7}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Validações
+                    <span className="ml-2 text-xs text-slate-500">uma por linha</span>
+                    <textarea
+                      value={editValidationSteps}
+                      onChange={(event) => setEditValidationSteps(event.target.value)}
+                      rows={7}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Notas de implementação
+                    <textarea
+                      value={editImplementationNotes}
+                      onChange={(event) => setEditImplementationNotes(event.target.value)}
+                      rows={6}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+                    />
                   </label>
                 </div>
-              ) : <p className="mb-3 text-sm text-slate-300">{plan.objective}</p>}
+              ) : (
+                <p className="mb-3 whitespace-pre-wrap text-sm text-slate-300">
+                  {plan.objective}
+                </p>
+              )}
+              {recommendations[recommendationKey(plan)] && (
+                <RecommendationCard
+                  recommendation={recommendations[recommendationKey(plan)]}
+                />
+              )}
               <details className="mb-3 text-sm text-slate-400">
                 <summary className="cursor-pointer text-sky-400">Ver critérios e validações</summary>
                 <div className="mt-2 space-y-3 border-l border-slate-700 pl-3">
-                  <div><p className="font-medium text-slate-300">Critérios de aceite</p><ul className="list-disc pl-5">{plan.acceptance_criteria.map((item) => <li key={item}>{item}</li>)}</ul></div>
-                  <div><p className="font-medium text-slate-300">Validações</p><ul className="list-disc pl-5">{plan.validation_steps.map((item) => <li key={item}>{item}</li>)}</ul></div>
+                  <div><p className="font-medium text-slate-300">Critérios de aceite</p><ul className="list-disc pl-5">{plan.acceptance_criteria.map((item) => <li key={typeof item === "string" ? item : JSON.stringify(item)}>{typeof item === "string" ? item : (item as {item?: string}).item ?? JSON.stringify(item)}</li>)}</ul></div>
+                  <div><p className="font-medium text-slate-300">Validações</p><ul className="list-disc pl-5">{plan.validation_steps.map((item) => <li key={typeof item === "string" ? item : JSON.stringify(item)}>{typeof item === "string" ? item : (item as {item?: string}).item ?? JSON.stringify(item)}</li>)}</ul></div>
                 </div>
               </details>
               <div className="flex flex-wrap gap-2">
-                {plan.status === "draft" && editing !== plan.id && <button disabled={busy === plan.id} onClick={() => beginEdit(plan)} className="rounded-lg bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-50">Editar</button>}
-                {plan.status === "draft" && editing === plan.id && <>
+                {["draft", "needs_revision"].includes(plan.status) && editing !== plan.id && <button disabled={busy === plan.id} onClick={() => beginEdit(plan)} className="rounded-lg bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-50">Editar</button>}
+                {["draft", "needs_revision"].includes(plan.status) && editing === plan.id && <>
                   <button disabled={busy === plan.id || editTitle.trim().length < 3 || editObjective.trim().length < 3} onClick={() => void saveEdit(plan)} className="rounded-lg bg-sky-600 px-3 py-2 text-sm hover:bg-sky-500 disabled:opacity-50">Salvar</button>
                   <button disabled={busy === plan.id} onClick={() => setEditing(null)} className="rounded-lg bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-50">Cancelar edição</button>
                 </>}
                 {["draft", "needs_revision"].includes(plan.status) && <button disabled={busy === plan.id} onClick={() => void approve(plan)} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm hover:bg-emerald-500 disabled:opacity-50">Aprovar plano</button>}
                 {plan.status === "draft" && <button disabled={busy === plan.id} onClick={() => setDiscardTarget(plan)} className="rounded-lg border border-red-800 px-3 py-2 text-sm text-red-300 hover:bg-red-950 disabled:opacity-50">Descartar</button>}
-                {plan.status === "approved" && <>
-                  <button disabled={busy === plan.id} onClick={() => void build(plan, "codex")} className="rounded-lg bg-sky-600 px-3 py-2 text-sm hover:bg-sky-500 disabled:opacity-50">Enviar ao Codex</button>
-                  <button disabled={busy === plan.id} onClick={() => void build(plan, "claude")} className="rounded-lg bg-violet-600 px-3 py-2 text-sm hover:bg-violet-500 disabled:opacity-50">Enviar ao Claude</button>
-                  <button disabled={busy === plan.id} onClick={() => void build(plan, "kimi")} className="rounded-lg bg-fuchsia-600 px-3 py-2 text-sm hover:bg-fuchsia-500 disabled:opacity-50">Enviar ao Kimi</button>
-                  <button disabled={busy === plan.id} onClick={() => void build(plan, "qwen")} className="rounded-lg bg-amber-600 px-3 py-2 text-sm hover:bg-amber-500 disabled:opacity-50">Enviar ao Qwen</button>
-                </>}
               </div>
+              {plan.status === "approved" && (
+                <section
+                  aria-label="Executor e revisor"
+                  className="mt-3 rounded-lg border border-slate-700 bg-slate-950/60 p-3"
+                >
+                  <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">
+                    Quem executa e quem revisa
+                  </p>
+                  <p className="mb-2 text-xs text-slate-400">Escolha quem executa e quem revisa. O modelo de cada um vem da configuração salva na aba Agentes.</p>
+                  <p className="my-2 text-sm">{reviewState[plan.id] === "required" ? "Revisão independente fortemente recomendada (risco alto). Você decide." : reviewState[plan.id] === "not_required" ? "Revisão independente não necessária inicialmente. Deseja configurar um revisor?" : "Esta task recomenda revisão. Deseja configurar um revisor?"}</p>
+                  <div className="mb-3 flex gap-2">
+                    <button type="button" aria-pressed={reviewChoice[plan.id] === true} onClick={() => setReviewChoice(current => ({ ...current, [plan.id]: true }))} className="rounded bg-slate-700 px-3 py-1">Sim</button>
+                    <button type="button" aria-pressed={reviewChoice[plan.id] === false} onClick={() => setReviewChoice(current => ({ ...current, [plan.id]: false }))} className="rounded bg-slate-700 px-3 py-1 disabled:opacity-50">Não</button>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div>
+                      <RoleSelect
+                        id={`executor-${plan.id}`}
+                        titulo="Executor"
+                        valor={roles[plan.id]?.executor}
+                        choices={executores}
+                        disabled={busy === plan.id}
+                        onChange={(agent) => setRole(plan.id, "executor", agent)}
+                      />
+                      {isCliAgent(roles[plan.id]?.executor) && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          Modelo (aba Agentes): {agentModelLabel[roles[plan.id]!.executor!] ?? "carregando…"}
+                        </p>
+                      )}
+                    </div>
+                    {reviewChoice[plan.id] !== false && <div>
+                      <RoleSelect
+                        id={`revisor-${plan.id}`}
+                        titulo="Revisor independente"
+                        valor={roles[plan.id]?.reviewer}
+                        choices={revisores}
+                        disabled={busy === plan.id}
+                        onChange={(agent) => setRole(plan.id, "reviewer", agent)}
+                      />
+                      {isCliAgent(roles[plan.id]?.reviewer) && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          Modelo (aba Agentes): {agentModelLabel[roles[plan.id]!.reviewer!] ?? "carregando…"}
+                        </p>
+                      )}
+                    </div>}
+                  </div>
+                  <div className="mt-3 rounded border border-slate-700 p-3 text-sm">
+                    <label className="flex items-center gap-2">
+                      <input type="checkbox" checked={Boolean(observerChoice[plan.id]?.enabled)}
+                        onChange={e => setObserverChoice(current => ({ ...current,
+                          [plan.id]: { enabled: e.target.checked } }))} />
+                      Observer (opcional, independente do executor e revisor)
+                    </label>
+                    {observerChoice[plan.id]?.enabled && <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <label className="text-xs text-slate-400">Agente do Observer
+                        <select aria-label="Agente do Observer" value={observerChoice[plan.id]?.agent ?? ""}
+                          onChange={e => setObserverChoice(current => ({ ...current,
+                            [plan.id]: { enabled: true, agent: e.target.value } }))}
+                          className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100">
+                          <option value="">Selecione…</option>
+                          {[...new Set(observerModels.map(row => row.agent))].map(agent =>
+                            <option key={agent} value={agent}>{agentLabel[agent as AgentName] ?? agent}</option>)}
+                        </select>
+                      </label>
+                      <ModelSelect
+                        label="Modelo do Observer"
+                        models={observerModels.filter((row) => row.agent === observerChoice[plan.id]?.agent)}
+                        value={observerChoice[plan.id]?.model}
+                        vazio="Selecione…"
+                        disabled={busy === plan.id || !observerChoice[plan.id]?.agent}
+                        onChange={(row) => setObserverChoice(current => ({ ...current, [plan.id]: {
+                          enabled: true, agent: current[plan.id]?.agent, provider: row?.provider,
+                          model: row?.model, runtime_id: row?.runtime_id } }))}
+                      />
+                    </div>}
+                  </div>
+                  {roles[plan.id]?.executor
+                    && roles[plan.id]?.executor === roles[plan.id]?.reviewer && (
+                    <p className="mt-2 text-xs text-rose-300">
+                      Executor e revisor precisam ser agentes diferentes: quem
+                      executa não aprova o próprio trabalho.
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    disabled={
+                      busy === plan.id
+                      || !roles[plan.id]?.executor
+                      || (reviewChoice[plan.id] !== false && !roles[plan.id]?.reviewer)
+                      || (reviewChoice[plan.id] !== false && Boolean(roles[plan.id]?.executor) && roles[plan.id]?.executor === roles[plan.id]?.reviewer)
+                    }
+                    onClick={() => void build(plan, roles[plan.id]?.executor)}
+                    className="mt-3 rounded-lg bg-sky-600 px-3 py-2 text-sm hover:bg-sky-500 disabled:opacity-50"
+                  >
+                    Enviar ao Build
+                  </button>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Após a execução a task vai para revisão, não direto para
+                    concluída. Runtimes Ollama offline não aparecem como opção.
+                  </p>
+                </section>
+              )}
             </article>
           ))}
         </div>
@@ -159,6 +689,20 @@ export function PlanningPanel({ onClose }: { onClose: () => void }) {
               <div className="mt-5 flex justify-end gap-2">
                 <button type="button" disabled={busy === discardTarget.id} onClick={() => setDiscardTarget(null)} className="rounded-lg bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700 disabled:opacity-50">Voltar</button>
                 <button type="button" disabled={busy === discardTarget.id} onClick={() => void discard(discardTarget)} className="rounded-lg bg-red-700 px-3 py-2 text-sm hover:bg-red-600 disabled:opacity-50">Confirmar descarte</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {premiumTarget && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-labelledby="premium-title">
+            <div className="w-full max-w-md rounded-xl border border-amber-800 bg-slate-950 p-5 shadow-2xl">
+              <h3 id="premium-title" className="text-lg font-semibold">Autorizar modelo premium?</h3>
+              <p className="mt-2 text-sm text-slate-300">{premiumTarget.message}</p>
+              {premiumTarget.model && <p className="mt-3 text-sm text-amber-300">Recomendado: {premiumTarget.model}{premiumTarget.agent ? ` (${agentLabel[premiumTarget.agent]})` : ""}</p>}
+              <p className="mt-2 text-xs text-slate-400">Esta confirmação autoriza somente o custo premium; o agente continua sendo o que você escolheu.</p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button type="button" disabled={busy === premiumTarget.plan.id} onClick={() => setPremiumTarget(null)} className="rounded-lg bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700 disabled:opacity-50">Cancelar</button>
+                <button type="button" disabled={busy === premiumTarget.plan.id} onClick={() => void build(premiumTarget.plan, premiumTarget.requestedAgent, true)} className="rounded-lg bg-amber-600 px-3 py-2 text-sm hover:bg-amber-500 disabled:opacity-50">Autorizar custo e continuar</button>
               </div>
             </div>
           </div>

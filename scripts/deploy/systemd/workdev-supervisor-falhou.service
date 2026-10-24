@@ -1,0 +1,15 @@
+[Unit]
+Description=Avisa quando a execucao do WorkDev Supervisor falha
+
+[Service]
+Type=oneshot
+User=workdev
+Group=workdev
+WorkingDirectory=/opt/workdev
+Environment=HOME=/home/workdev
+Environment=SUPERVISOR_ENV_FILE=/etc/workdev/workdev-api.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/workdev/apps/api/venv/bin/python -m scripts.supervisor.entrega
+TimeoutStartSec=60
+StandardOutput=journal
+StandardError=journal

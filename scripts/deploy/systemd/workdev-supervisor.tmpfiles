@@ -1,0 +1,1 @@
+f /run/lock/workdev-supervisor.lock 0640 workdev workdev -

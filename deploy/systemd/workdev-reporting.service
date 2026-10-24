@@ -1,0 +1,29 @@
+[Unit]
+Description=WorkDev read-only reporting MCP
+After=network-online.target workdev-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=workdev
+Group=workdev
+WorkingDirectory=/opt/workdev-runtime/current/mcp/reporting
+EnvironmentFile=/etc/workdev/workdev-reporting.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/workdev/mcp/reporting/.venv/bin/python /opt/workdev-runtime/current/mcp/reporting/server.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

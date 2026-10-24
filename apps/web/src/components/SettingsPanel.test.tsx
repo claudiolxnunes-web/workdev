@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi, describe, it, beforeEach, expect } from 'vitest';
 import SettingsPanel from './SettingsPanel';
 
@@ -57,5 +57,58 @@ describe('SettingsPanel', () => {
       expect(screen.getByText('abc123')).toBeInTheDocument();
       expect(screen.getByText('def456')).toBeInTheDocument();
     });
+  });
+
+  it('manages provider keys without rendering their values', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/ai/providers') {
+        return Promise.resolve(jsonResponse({
+          providers: [{ provider: 'openai', label: 'OpenAI', connected: false }],
+          connected: 0,
+          total: 1,
+        }));
+      }
+      return Promise.resolve(jsonResponse(healthPayload));
+    });
+
+    render(<SettingsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: /ai providers/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /configurar/i }));
+
+    const input = screen.getByLabelText(/nova chave para openai/i);
+    expect(input).toHaveAttribute('type', 'password');
+    fireEvent.change(input, { target: { value: 'chave-ultrassecreta' } });
+    fireEvent.click(screen.getByRole('button', { name: /salvar/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/ai/providers/openai/key',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    expect(screen.queryByText('chave-ultrassecreta')).not.toBeInTheDocument();
+  });
+
+  it('separates stored credentials from the physical state of agents', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/ai/providers') return Promise.resolve(jsonResponse({
+        providers: [{ provider: 'moonshot', label: 'Moonshot', connected: true }],
+        connected: 1, total: 1,
+      }));
+      if (url === '/api/agents/status') return Promise.resolve(jsonResponse({ agents: [
+        { agent: 'kimi', runtime_state: 'OFFLINE', activity_state: 'IDLE', checked_at: '2026-09-30T04:00:00Z' },
+        { agent: 'codex', runtime_state: 'ERROR', activity_state: 'IDLE', checked_at: '2026-09-30T04:00:00Z', health_reason: 'runtime_inconsistent' },
+        { agent: 'local-code', runtime_state: 'ERROR', activity_state: 'IDLE', checked_at: '2026-09-30T04:00:00Z' },
+      ] }));
+      return Promise.resolve(jsonResponse(healthPayload));
+    });
+    render(<SettingsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: /ai providers/i }));
+    expect(await screen.findByText('Chave cadastrada')).toBeInTheDocument();
+    const agents = await screen.findByRole('list', { name: 'Estado real dos agentes' });
+    expect(agents).toHaveTextContent('Kimi');
+    expect(agents).toHaveTextContent('Desligado');
+    expect(agents).toHaveTextContent('Codex');
+    expect(agents).not.toHaveTextContent('Local Code');
+    expect(agents).not.toHaveTextContent('local-code');
+    expect(agents).toHaveTextContent('sessão do agente não está ativa');
   });
 });

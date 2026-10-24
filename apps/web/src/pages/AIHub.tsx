@@ -1,61 +1,143 @@
 import { useState, useRef, useEffect } from "react";
-import { Trash2 } from "lucide-react";
-import { MessageBubble, PlanningPanel, type Msg } from "@/components/ai-hub";
+import { getOpenRouterModels, getLocalModels, type CatalogModel, sendAiChatWithConfirmation } from "../services/ai.service";
+import { Trash2, FolderGit2 } from "lucide-react";
+import {
+  MessageBubble,
+  PlanningPanel,
+  ProjectSelector,
+  ContextDivider,
+  AuthoritySelector,
+  type Msg,
+  type ProjectOption,
+  type Authority,
+} from "@/components/ai-hub";
 
 interface SessionMeta {
   id: string;
   title: string;
   updated_at: string;
+  project_slug?: string | null;
+  project_name?: string | null;
+  authority?: Authority;
 }
 
+/** Marca visual de troca de contexto, ancorada na posição do fluxo. */
+interface Divider {
+  index: number;
+  label: string;
+}
+
+// Ordem de apresentação do AI Hub; não define prioridade de roteamento.
 const MODELOS = [
-  { label: "GPT-4o", provider: "openai", model: "gpt-4o" },
+  { label: "Gemini", provider: "gemini", model: "gemini-3.5-flash", legacyLabel: "Gemini 3.5 Flash" },
   { label: "GPT-4o mini", provider: "openai", model: "gpt-4o-mini" },
-  { label: "Claude Sonnet 4.6", provider: "anthropic", model: "claude-sonnet-4-6" },
-  { label: "Claude Haiku 4.5", provider: "anthropic", model: "claude-haiku-4-5-20251001" },
-  { label: "GPT-OSS 20B (Ollama Cloud)", provider: "ollama", model: "gpt-oss:20b" },
-  { label: "Kimi K2.6", provider: "kimi", model: "kimi-k2.6" },
-  { label: "Kimi K2.7 Code", provider: "kimi", model: "kimi-k2.7-code" },
-  { label: "Kimi K3 (OpenRouter)", provider: "openrouter", model: "moonshotai/kimi-k3" },
-  { label: "Gemini 3.5 Flash", provider: "gemini", model: "gemini-3.5-flash" },
-  { label: "Nemotron Ultra 550B (free)", provider: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b:free" },
-  { label: "Qwen3 Coder", provider: "openrouter", model: "qwen/qwen3-coder" },
+  { label: "Claude Haiku", provider: "anthropic", model: "claude-haiku-4-5-20251001", legacyLabel: "Claude Haiku 4.5" },
+  { label: "OpenRouter", provider: "openrouter", model: null },
+  { label: "Local / Ollama", provider: "ollama", model: null },
 ];
 const MODELO_STORAGE_KEY = "workdev_ai_hub_modelo";
-const DEFAULT_MODELO_LABEL = "GPT-4o";
+const OPENROUTER_MODEL_STORAGE_KEY = "workdev_ai_hub_openrouter_model";
+const LOCAL_MODEL_STORAGE_KEY = "workdev_ai_hub_local_model";
+const modelKey = (m: CatalogModel) => m.runtime_id ? JSON.stringify([m.runtime_id, m.model]) : m.model;
+const PROJETO_STORAGE_KEY = "workdev_ai_hub_projeto";
+const DEFAULT_MODELO_LABEL = "Gemini";
+const AUTORIDADE_PADRAO: Authority = "plan";
 
 function loadStoredModelo() {
   try {
     const stored = localStorage.getItem(MODELO_STORAGE_KEY);
-    const found = stored && MODELOS.find((m) => m.label === stored);
+    const found = stored && MODELOS.find((m) => (m.label === stored || m.legacyLabel === stored));
     if (found) return found;
   } catch { /* localStorage indisponível (modo privado etc.) */ }
   return MODELOS.find((m) => m.label === DEFAULT_MODELO_LABEL) || MODELOS[0];
 }
 
+function loadStoredProjeto(): string | null {
+  try {
+    return localStorage.getItem(PROJETO_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+// Início da sessão "Plano para a Bancada Local": o system prompt da sessão já traz as
+// regras das micro-tarefas; aqui só se pede para começar pela ficha e pelo código real.
+const BANCADA_START_PROMPT = "Faça primeiro a triagem só com ler_task: se a task não couber na Bancada Local (discovery, várias camadas, arquitetura, migração), responda já com fora_do_alcance, sem ler código. Se couber, leia os arquivos envolvidos com vários ler_trecho na mesma rodada, fatie em micro-tarefas, valide com validar_lote_bancada e entregue o(s) lote(s) validado(s) em blocos ```json. Ao recusar, diga por quê para o operador usar o fluxo de nuvem.";
+
 export default function AIHub() {
   const [messages, setMessages] = useState<Msg[]>([]);
+  const [dividers, setDividers] = useState<Divider[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(
-    () => sessionStorage.getItem("workdev_chat_session")
+    () => new URLSearchParams(window.location.search).get("session")
+      ?? localStorage.getItem("workdev_chat_session")
   );
+  // Projeto ativo. A fonte de verdade é chat_sessions.project_id no banco; o
+  // localStorage só lembra a escolha para a PRÓXIMA conversa nova.
+  const [projectSlug, setProjectSlug] = useState<string | null>(loadStoredProjeto);
+  // Autoridade da conversa. A fonte de verdade é chat_sessions.authority;
+  // conversas novas nascem em PLAN por decisão de produto.
+  const [authority, setAuthority] = useState<Authority>(AUTORIDADE_PADRAO);
   const [input, setInput] = useState("");
   const [modelo, setModelo] = useState(loadStoredModelo);
+  const [catalogModels, setCatalogModels] = useState<CatalogModel[]>([]);
+  const [catalogModel, setCatalogModel] = useState("");
+  const [catalogStatus, setCatalogStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [catalogReload, setCatalogReload] = useState(0);
+  const [pendingStart, setPendingStart] = useState<{ id: string; messages: Msg[]; slug: string | null; mode: "1" | "bancada" } | null>(null);
+  const dynamicSource = modelo.provider === "openrouter" || modelo.provider === "ollama";
+  const localSource = modelo.provider === "ollama";
+  const modelStorageKey = localSource ? LOCAL_MODEL_STORAGE_KEY : OPENROUTER_MODEL_STORAGE_KEY;
+  const selectedEntry = dynamicSource && catalogStatus === "ready"
+    ? catalogModels.find(m => modelKey(m) === catalogModel) : undefined;
+  const selectedModel = dynamicSource ? selectedEntry?.model : modelo.model;
   const [loading, setLoading] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [showPlans, setShowPlans] = useState(false);
+  const [backlogId, setBacklogId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const autostartedRef = useRef(false);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!dynamicSource) return;
+    let active = true;
+    (localSource ? getLocalModels() : getOpenRouterModels()).then(models => {
+      if (!active) return;
+      setCatalogModels(models);
+      let stored = "";
+      try { stored = localStorage.getItem(modelStorageKey) || ""; } catch { /* ignore */ }
+      setCatalogModel(models.some(m => modelKey(m) === stored) ? stored : "");
+      setCatalogStatus("ready");
+    }).catch(() => {
+      if (active) { setCatalogModels([]); setCatalogStatus("error"); }
+    });
+    return () => { active = false; };
+  }, [modelo.provider, dynamicSource, localSource, modelStorageKey, catalogReload]);
+
+  useEffect(() => {
+    if (!pendingStart || !selectedModel || autostartedRef.current) return;
+    autostartedRef.current = true;
+    void startTaskConversation(pendingStart.id, pendingStart.messages, pendingStart.slug, pendingStart.mode);
+    // O início aguarda uma escolha válida; a ref evita duplicação após re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingStart, selectedModel, modelo.provider]);
+
+  useEffect(() => {
+    const panel = messagesRef.current;
+    if (panel) panel.scrollTop = panel.scrollHeight;
   }, [messages, loading]);
 
   useEffect(() => {
-    // Intencional: roda só no mount, lendo o sessionId inicial (sessionStorage).
+    // Intencional: roda só no mount, lendo o sessionId inicial (localStorage).
     // Incluir sessionId/restoreSession nas deps re-rodaria a cada troca de
     // sessão (restoreSession chama setSessionId), criando um loop.
     loadSessions();
-    if (sessionId) restoreSession(sessionId);
+    if (sessionId) {
+      const params = new URLSearchParams(window.location.search);
+      const autostart = params.get("autostart");
+      restoreSession(sessionId, autostart === "1" || autostart === "bancada" ? autostart : null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -66,21 +148,74 @@ export default function AIHub() {
     } catch { /* silencioso */ }
   }
 
-  async function restoreSession(id: string) {
+  async function restoreSession(id: string, autostart: "1" | "bancada" | null = null) {
+    setPendingStart(null);
     try {
       const r = await fetch(`/api/chat/sessions/${id}`);
       if (!r.ok) { newChat(); return; }
       const data = await r.json();
       setMessages(data.messages);
+      // Os divisores são marcas da sessão do navegador; ao reabrir do banco a
+      // conversa volta inteira, mas sem eles. O contexto ativo é o que importa
+      // e esse vem do backend.
+      setDividers([]);
+      setProjectSlug(data.project_slug ?? null);
+      setBacklogId(data.backlog_id ?? null);
+      setAuthority(data.authority ?? AUTORIDADE_PADRAO);
       setSessionId(id);
-      sessionStorage.setItem("workdev_chat_session", id);
+      localStorage.setItem("workdev_chat_session", id);
+      if (autostart && !autostartedRef.current) {
+        setPendingStart({ id, messages: data.messages, slug: data.project_slug ?? null, mode: autostart });
+      }
     } catch { /* silencioso */ }
   }
 
+  async function startTaskConversation(
+    id: string,
+    currentMessages: Msg[],
+    slug: string | null,
+    mode: "1" | "bancada" = "1",
+  ) {
+    if (!selectedModel) return;
+    const prompt = mode === "bancada" ? BANCADA_START_PROMPT : "Confirme sua compreensão da task, identifique lacunas e formule uma PRÉVIA do plano para revisão humana. Durante toda a revisão use apenas a prévia: não crie plan_id, não gere nova versão e não materialize plano oficial. Corrija a mesma prévia quantas vezes o usuário pedir. Só após aprovação explícita da formulação final o plano oficial poderá ser criado em draft. Aprovar o plano não envia para Build nem escolhe agente; apenas recomende o agente/modelo mais econômico e adequado, e deixe a execução manual para o usuário.";
+    const next: Msg[] = [...currentMessages, { role: "user", content: prompt }];
+    setMessages(next);
+    setLoading(true);
+    try {
+        const data = await sendAiChatWithConfirmation({
+          messages: next,
+          session_id: id,
+          provider: modelo.provider,
+          model: selectedModel,
+          ...(localSource ? { runtime_id: selectedEntry?.runtime_id } : {}),
+          project_slug: slug,
+        });
+      setMessages([
+        ...next,
+        { role: "assistant", content: data.reply || "Erro na resposta", error: !!data.error },
+      ]);
+      loadSessions();
+    } catch {
+      setMessages([
+        ...next,
+        { role: "assistant", content: "Erro ao iniciar o planejamento", error: true },
+      ]);
+    } finally {
+      setLoading(false);
+      window.history.replaceState({}, "", "/ai-hub");
+    }
+  }
+
   function newChat() {
+    setPendingStart(null);
     setMessages([]);
+    setDividers([]);
     setSessionId(null);
-    sessionStorage.removeItem("workdev_chat_session");
+    setBacklogId(null);
+    setAuthority(AUTORIDADE_PADRAO);
+    localStorage.removeItem("workdev_chat_session");
+    // O projeto ativo permanece: quem está trabalhando no Feed_BPF e abre uma
+    // conversa nova quase sempre continua no Feed_BPF.
   }
 
   async function deleteSession(id: string, e: React.MouseEvent) {
@@ -93,27 +228,81 @@ export default function AIHub() {
     } catch { /* silencioso */ }
   }
 
+  async function trocarProjeto(projeto: ProjectOption | null) {
+    const slug = projeto?.slug ?? null;
+    if (slug === projectSlug) return;
+
+    setProjectSlug(slug);
+    try {
+      if (slug) localStorage.setItem(PROJETO_STORAGE_KEY, slug);
+      else localStorage.removeItem(PROJETO_STORAGE_KEY);
+    } catch { /* ignore */ }
+
+    // Conversa em andamento: não apaga nada, só marca onde o contexto virou.
+    if (messages.length > 0) {
+      setDividers((atuais) => [
+        ...atuais,
+        { index: messages.length, label: projeto?.name ?? "Global" },
+      ]);
+    }
+
+    if (sessionId) {
+      try {
+        await fetch(`/api/chat/sessions/${sessionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project_id: projeto?.id ?? null }),
+        });
+        loadSessions();
+      } catch { /* silencioso: o próximo turno reenvia o slug mesmo assim */ }
+    }
+  }
+
+  async function trocarAutoridade(nivel: Authority) {
+    if (nivel === authority || !sessionId) return;
+    const anterior = authority;
+    setAuthority(nivel);
+    try {
+      const r = await fetch(`/api/chat/sessions/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authority: nivel }),
+      });
+      if (!r.ok) throw new Error("Falha ao alterar autoridade");
+      const data = await r.json();
+      setAuthority(data.authority ?? anterior);
+    } catch {
+      // O servidor continua sendo a fonte de verdade; desfaz o otimismo local.
+      setAuthority(anterior);
+    }
+  }
+
   async function send() {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || !selectedModel) return;
     const next: Msg[] = [...messages, { role: "user" as const, content: text }];
     setMessages(next);
     setInput("");
     setLoading(true);
     try {
-      const r = await fetch("/api/ai/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next, session_id: sessionId, provider: modelo.provider, model: modelo.model }),
-      });
-      const data = await r.json();
+        const data = await sendAiChatWithConfirmation({
+          messages: next,
+          session_id: sessionId,
+          provider: modelo.provider,
+          model: selectedModel,
+          ...(localSource ? { runtime_id: selectedEntry?.runtime_id } : {}),
+          project_slug: projectSlug,
+        });
+      if (data.authority === "observe" || data.authority === "plan") {
+        setAuthority(data.authority);
+      }
       setMessages([
         ...next,
         { role: "assistant" as const, content: data.reply || "Erro na resposta", error: !!data.error },
       ]);
       if (data.session_id) {
         setSessionId(data.session_id);
-        sessionStorage.setItem("workdev_chat_session", data.session_id);
+        localStorage.setItem("workdev_chat_session", data.session_id);
         loadSessions();
       }
     } catch {
@@ -127,9 +316,9 @@ export default function AIHub() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] gap-4">
+    <div className="flex h-[calc(100dvh-9rem)] min-h-[520px] min-w-0 max-w-full gap-3 overflow-hidden lg:gap-4">
       {showSidebar && (
-        <div className="w-64 flex flex-col bg-slate-900 border border-slate-800 rounded-xl p-3 shrink-0">
+        <div className="hidden w-56 shrink-0 flex-col rounded-xl border border-slate-800 bg-slate-900 p-3 md:flex xl:w-64">
           <button
             onClick={newChat}
             className="bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-2 text-sm mb-3 transition-colors"
@@ -150,7 +339,18 @@ export default function AIHub() {
                     : "text-slate-400 hover:bg-slate-800"
                 }`}
               >
-                <span className="flex-1 truncate" title={s.title}>{s.title}</span>
+                {s.project_name && (
+                  <FolderGit2
+                    className="h-3 w-3 shrink-0 text-blue-400"
+                    aria-label={`Projeto: ${s.project_name}`}
+                  />
+                )}
+                <span
+                  className="flex-1 truncate"
+                  title={s.project_name ? `${s.project_name} · ${s.title}` : s.title}
+                >
+                  {s.title}
+                </span>
                 <button
                   onClick={(e) => deleteSession(s.id, e)}
                   className="shrink-0 opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-opacity"
@@ -163,33 +363,64 @@ export default function AIHub() {
           </div>
         </div>
       )}
-      <div className="flex flex-col flex-1 min-w-0">
-        <div className="flex items-center gap-3 mb-4">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="mb-3 flex min-w-0 items-center gap-2 sm:gap-3">
           <button
             onClick={() => setShowSidebar(!showSidebar)}
-            className="text-slate-400 hover:text-white text-xl"
+            className="shrink-0 text-slate-400 hover:text-white text-xl"
             title="Alternar histórico"
           >
             ☰
           </button>
-          <h1 className="text-3xl font-bold">AI Hub</h1>
+          <h1 className="hidden truncate text-2xl font-bold sm:block sm:text-3xl">AI Hub</h1>
+          <ProjectSelector
+            value={projectSlug}
+            onChange={trocarProjeto}
+            disabled={loading || !!backlogId}
+          />
+          <AuthoritySelector
+            value={authority}
+            onChange={trocarAutoridade}
+            disabled={loading || !sessionId}
+          />
           <button
             onClick={() => setShowPlans(true)}
-            className="ml-auto rounded-lg border border-violet-700 bg-violet-950/60 px-3 py-2 text-sm text-violet-200 hover:bg-violet-900"
+            className="ml-auto shrink-0 rounded-lg border border-violet-700 bg-violet-950/60 px-3 py-2 text-sm text-violet-200 hover:bg-violet-900"
           >
             Planos
           </button>
+          <a
+            href="/chat-livre"
+            className="shrink-0 rounded-lg border border-emerald-700 bg-emerald-950/60 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-900"
+          >
+            Chat livre
+          </a>
         </div>
-        <div className="flex-1 min-w-0 overflow-y-auto space-y-4 bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div ref={messagesRef} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-4">
           {messages.length === 0 && (
             <p className="text-slate-500 text-sm">
-              Converse com o WorkDev. Ex: "quantos itens high estão pendentes?",
-              "cria uma task no nutrigestor: ajustar favicon", "status dos projetos"
+              {authority === "observe"
+                ? `Modo Observar: consulta e análise, sem alterar nada. Ex: "o que precisa da minha atenção?", "como está o backlog?". Mude para Planejar para registrar tasks, ADRs e planos.`
+                : projectSlug
+                ? `Conversa no contexto do projeto selecionado. Ex: "continue de onde paramos", "qual é o próximo passo?", "veja o backlog".`
+                : `Converse com o WorkDev. Ex: "como estão meus projetos?", "o que precisa da minha atenção?", "status dos projetos". Selecione um projeto acima para focar o contexto.`}
             </p>
           )}
           {messages.map((m, i) => (
-            <MessageBubble key={i} msg={m} />
+            <div key={i} className="space-y-4">
+              {dividers
+                .filter((d) => d.index === i)
+                .map((d, j) => (
+                  <ContextDivider key={`d-${i}-${j}`} label={d.label} />
+                ))}
+              <MessageBubble msg={m} />
+            </div>
           ))}
+          {dividers
+            .filter((d) => d.index >= messages.length)
+            .map((d, j) => (
+              <ContextDivider key={`d-end-${j}`} label={d.label} />
+            ))}
           {loading && (
             <div className="max-w-[75%] rounded-2xl rounded-bl-sm bg-slate-800 px-4 py-2.5 text-sm text-slate-400">
               Pensando...
@@ -197,37 +428,66 @@ export default function AIHub() {
           )}
           <div ref={endRef} />
         </div>
-        <div className="flex gap-3 mt-4">
+        <div className="mt-3 flex min-w-0 flex-wrap gap-2 sm:flex-nowrap sm:gap-3">
           <input
-            className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm"
+            className="min-w-0 flex-[1_1_100%] rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-sm sm:flex-1"
             placeholder="Pergunte ou peça algo ao WorkDev..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
           />
           <select
+            aria-label="Fonte de IA"
+            aria-describedby="ai-source-availability"
             value={modelo.label}
             onChange={(e) => {
               const next = MODELOS.find((m) => m.label === e.target.value) || MODELOS[0];
+              setCatalogStatus("loading");
+              setCatalogModel("");
+              setCatalogModels([]);
               setModelo(next);
               try { localStorage.setItem(MODELO_STORAGE_KEY, next.label); } catch { /* ignore */ }
             }}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-3 text-sm text-slate-300"
+            className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-3 text-sm text-slate-300 sm:max-w-64"
           >
             {MODELOS.map((m) => (
               <option key={m.label} value={m.label}>{m.label}</option>
             ))}
           </select>
+          {dynamicSource && (
+            <select
+              aria-label={localSource ? "Modelo local" : "Modelo OpenRouter"}
+              value={selectedEntry ? catalogModel : ""}
+              disabled={catalogStatus !== "ready" || catalogModels.length === 0}
+              onChange={e => {
+                setCatalogModel(e.target.value);
+                try { localStorage.setItem(modelStorageKey, e.target.value); } catch { /* ignore */ }
+              }}
+              className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-3 text-sm text-slate-300 sm:max-w-64"
+            >
+              <option value="">{catalogStatus === "loading" ? "Carregando modelos…" : "Selecione um modelo"}</option>
+              {catalogModels.map(m => <option key={modelKey(m)} value={modelKey(m)}>{m.label}</option>)}
+            </select>
+          )}
           <button
             onClick={send}
-            disabled={loading}
-            className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition-colors disabled:opacity-50"
+            disabled={loading || !selectedModel}
+            className="shrink-0 rounded-lg bg-blue-600 px-5 py-3 transition-colors hover:bg-blue-700 disabled:opacity-50"
           >
             Enviar
           </button>
         </div>
+        {dynamicSource && catalogStatus === "error" && (
+          <p role="alert">Não foi possível carregar os modelos {localSource ? "locais" : "OpenRouter"}. <button onClick={() => { setCatalogStatus("loading"); setCatalogReload(n => n + 1); }}>Tentar novamente</button></p>
+        )}
+        {dynamicSource && catalogStatus === "ready" && catalogModels.length === 0 && (
+          <p role="status">{localSource ? "Nenhum modelo local disponível no runtime." : "Nenhum modelo OpenRouter ativo no catálogo."}</p>
+        )}
+        <p id="ai-source-availability" className="mt-2 text-xs text-slate-400">
+          Local / Ollama lista os modelos instalados no runtime local.
+        </p>
       </div>
-      {showPlans && <PlanningPanel onClose={() => setShowPlans(false)} />}
+      {showPlans && <PlanningPanel key={backlogId ?? 'all'} backlogId={backlogId} onClose={() => setShowPlans(false)} />}
     </div>
   );
 }

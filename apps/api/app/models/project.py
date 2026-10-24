@@ -21,5 +21,20 @@ class Project(Base):
     dev_branch = Column(String(50))
     prod_branch = Column(String(50))
     stack = Column(Text)
+
+    # Sensibilidade do contexto que pode sair daqui para um runtime de
+    # inferência. `internal` (default) sai para GPU remota depois de redaction
+    # e consentimento; `restricted` nunca deixa a VPS, sem flag que contorne.
+    #
+    # A coluna existe no banco desde a migração d4a1c7e39b52. Declará-la aqui
+    # não é detalhe: enquanto o ORM não a conhecia, ler
+    # `project.context_classification` levantava AttributeError — foi o mesmo
+    # descompasso que o commit af2d334 corrigiu em AgentRun.
+    context_classification = Column(
+        String(16),
+        nullable=False,
+        server_default="internal",
+    )
+
     created_at = Column(DateTime, server_default=text("now()"))
     updated_at = Column(DateTime, server_default=text("now()"))

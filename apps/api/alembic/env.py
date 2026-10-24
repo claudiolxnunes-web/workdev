@@ -4,7 +4,7 @@ from alembic import context
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
+load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
 
 config = context.config
 config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL"))
@@ -22,6 +22,9 @@ from app.models.rfc import RFC  # noqa
 from app.models.decision import Decision  # noqa
 from app.models.chat import ChatSession, ChatMessage  # noqa
 from app.models.handoff import ExecutionPlan, AgentRun, AgentRunEvent  # noqa
+from app.models.ai_routing import AIModelCatalog, AIBudget, AICallLog  # noqa
+
+from app.models.terminal_session import TerminalSession  # noqa
 
 target_metadata = Base.metadata
 

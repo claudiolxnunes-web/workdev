@@ -5,16 +5,36 @@ import "@xterm/xterm/css/xterm.css"
 import type { AgentName } from "@/services/handoff.service"
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "busy" | "error"
-const labels: Record<ConnectionStatus, string> = {
-  connecting: "Conectando…", connected: "Conectado", disconnected: "Desconectado",
-  busy: "Em uso em outra janela", error: "Falha na conexão",
+export type OperationalStatus = "standby" | "executing" | "awaiting_approval" | "awaiting_user" | "completed" | "blocked" | "error"
+
+const OPERATION_LABEL: Record<OperationalStatus, string> = {
+  standby: "STANDBY", executing: "EXECUTANDO", awaiting_approval: "AGUARDANDO APROVAÇÃO",
+  awaiting_user: "AGUARDANDO USUÁRIO", completed: "CONCLUÍDO", blocked: "BLOQUEADO", error: "ERRO",
 }
 
-export function AgentTerminal({ agent }: { agent: AgentName }) {
+const OPERATION_STYLE: Record<OperationalStatus, string> = {
+  standby: "bg-slate-800 text-slate-200", executing: "bg-sky-900 text-sky-200",
+  awaiting_approval: "animate-pulse bg-amber-500 text-slate-950", awaiting_user: "bg-violet-900 text-violet-200",
+  completed: "bg-emerald-900 text-emerald-200", blocked: "bg-orange-900 text-orange-200",
+  error: "bg-red-900 text-red-200",
+}
+
+// Fechamento enviado pelo backend à aba cujo terminal foi assumido por outra.
+const TAKEN_OVER_CODE = 4000
+
+export function AgentTerminal({
+  agent, awaitingApproval = false, operationalStatus = "standby", takeOver = false,
+}: {
+  agent: AgentName; awaitingApproval?: boolean; operationalStatus?: OperationalStatus
+  /** Primeira conexão assume o terminal de outra aba (pedido explícito do usuário). */
+  takeOver?: boolean
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const takeOverRef = useRef(takeOver)
   const terminalRef = useRef<Terminal | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
   const historyRef = useRef<HTMLTextAreaElement>(null)
+  const selectedTextRef = useRef("")
   const [status, setStatus] = useState<ConnectionStatus>("connecting")
   const [taskRunning, setTaskRunning] = useState(false)
   const [processName, setProcessName] = useState("")
@@ -25,15 +45,24 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState("")
   const [copyFeedback, setCopyFeedback] = useState("")
+  const [prompt, setPrompt] = useState("")
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState("")
 
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+    let disposed = false
+    let reconnectAttempt = 0
+    let reconnectTimer: number | undefined
+    let resizeTimer: number | undefined
     setStatus("connecting")
+    selectedTextRef.current = ""
+    setHasSelection(false)
     const terminal = new Terminal({
       cursorBlink: true, convertEol: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-      fontSize: window.innerWidth < 640 ? 15 : 14, lineHeight: 1.2, scrollback: 20000,
+      fontSize: window.innerWidth < 640 ? 15 : 14, lineHeight: 1.2, scrollback: 100000,
       rightClickSelectsWord: true,
       theme: { background: "#020617", foreground: "#e2e8f0", cursor: "#38bdf8" },
     })
@@ -41,54 +70,107 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
     terminal.loadAddon(fitAddon)
     terminal.open(container)
     terminalRef.current = terminal
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/agents/${agent}`)
-    socketRef.current = socket
-    socket.binaryType = "arraybuffer"
-
     const fit = () => {
       try {
+        const buffer = terminal.buffer.active
+        const wasAtBottom = buffer.viewportY >= buffer.baseY
+        const previousViewport = buffer.viewportY
         fitAddon.fit()
-        if (socket.readyState === WebSocket.OPEN) {
+        if (!wasAtBottom) terminal.scrollToLine(Math.min(previousViewport, terminal.buffer.active.baseY))
+        const socket = socketRef.current
+        if (socket?.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }))
         }
       } catch { /* layout ainda não disponível */ }
     }
-    const observer = new ResizeObserver(fit)
+    const scheduleFit = () => {
+      window.clearTimeout(resizeTimer)
+      resizeTimer = window.setTimeout(fit, 120)
+    }
+    const observer = new ResizeObserver(scheduleFit)
     observer.observe(container)
-    socket.onopen = () => { setStatus("connected"); window.setTimeout(fit, 0) }
-    socket.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        terminal.write(new Uint8Array(event.data))
-        return
+
+    function connect() {
+      if (disposed) return
+      window.clearTimeout(reconnectTimer)
+      setStatus("connecting")
+      try { fitAddon.fit() } catch { /* layout ainda não disponível */ }
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+      const size = new URLSearchParams({ cols: String(terminal.cols), rows: String(terminal.rows) })
+      // Só um pedido explícito assume; a reconexão automática nunca rouba outra aba.
+      if (takeOverRef.current) size.set("takeover", "1")
+      takeOverRef.current = false
+      const socket = new WebSocket(`${protocol}//${window.location.host}/ws/agents/${agent}?${size}`)
+      socketRef.current = socket
+      socket.binaryType = "arraybuffer"
+      socket.onopen = () => {
+        if (socket !== socketRef.current || disposed) return
+        reconnectAttempt = 0
+        setStatus("connected")
+        window.setTimeout(fit, 0)
       }
-      try {
-        const message = JSON.parse(event.data)
-        if (message.type === "status") {
-          setTaskRunning(Boolean(message.running))
-          setProcessName(typeof message.process === "string" ? message.process : "")
+      socket.onmessage = (event) => {
+        if (socket !== socketRef.current || disposed) return
+        if (event.data instanceof ArrayBuffer) {
+          terminal.write(new Uint8Array(event.data))
+          return
         }
-      } catch { /* mensagem de controle desconhecida */ }
+        try {
+          const message = JSON.parse(event.data)
+          if (message.type === "status") {
+            setTaskRunning(Boolean(message.running))
+            setProcessName(typeof message.process === "string" ? message.process : "")
+          } else if (message.type === "snapshot" && typeof message.content === "string") {
+            terminal.reset()
+            if (message.content) terminal.write(`${message.content.replace(/\r?\n/g, "\r\n")}\r\n`)
+          }
+        } catch { /* mensagem de controle desconhecida */ }
+      }
+      socket.onclose = (event) => {
+        if (socket !== socketRef.current || disposed) return
+        socketRef.current = null
+        if ((event.code === 1008 && event.reason.includes("uso")) || event.code === TAKEN_OVER_CODE) {
+          setStatus("busy")
+          return
+        }
+        if (event.code === 1008 && event.reason.includes("autenticado")) {
+          window.location.reload()
+          return
+        }
+        setStatus(event.wasClean ? "disconnected" : "error")
+        const delay = Math.min(1000 * (2 ** reconnectAttempt), 10000)
+        reconnectAttempt += 1
+        reconnectTimer = window.setTimeout(connect, delay)
+      }
+      socket.onerror = () => {
+        if (socket === socketRef.current && !disposed) setStatus("error")
+      }
     }
-    socket.onclose = (event) => {
-      if (event.code === 1008 && event.reason.includes("uso")) setStatus("busy")
-      else if (event.code === 1008 && event.reason.includes("autenticado")) window.location.reload()
-      else setStatus(event.wasClean ? "disconnected" : "error")
-    }
-    socket.onerror = () => setStatus("error")
+    connect()
+
     const input = terminal.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }))
+      const socket = socketRef.current
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }))
     })
-    const selection = terminal.onSelectionChange(() => setHasSelection(terminal.hasSelection()))
+    const selection = terminal.onSelectionChange(() => {
+      const selected = terminal.getSelection()
+      if (selected) {
+        selectedTextRef.current = selected
+        setHasSelection(true)
+      }
+    })
     terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type === "keydown" && (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "c" && terminal.hasSelection()) {
-        void copyText(terminal.getSelection(), "Seleção copiada")
+      if (event.type === "keydown" && (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "c" && (terminal.hasSelection() || selectedTextRef.current)) {
+        void copyText(terminal.getSelection() || selectedTextRef.current, "Seleção copiada")
         return false
       }
       return true
     })
     return () => {
-      input.dispose(); selection.dispose(); observer.disconnect(); socket.close(); terminal.dispose()
+      disposed = true
+      window.clearTimeout(reconnectTimer)
+      window.clearTimeout(resizeTimer)
+      input.dispose(); selection.dispose(); observer.disconnect(); socketRef.current?.close(); terminal.dispose()
       terminalRef.current = null
       socketRef.current = null
     }
@@ -114,7 +196,7 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
   }
 
   async function copySelection() {
-    const selected = terminalRef.current?.getSelection() || ""
+    const selected = terminalRef.current?.getSelection() || selectedTextRef.current
     if (selected) await copyText(selected, "Seleção copiada")
   }
 
@@ -130,15 +212,17 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
   }
 
   function scrollPage(direction: "up" | "down") {
-    const socket = socketRef.current
-    if (socket?.readyState !== WebSocket.OPEN) return
-    socket.send(JSON.stringify({ type: "scroll", direction }))
+    const terminal = terminalRef.current
+    if (!terminal) return
+    if (direction === "up") terminal.scrollPages(-1)
+    else if (terminal.buffer.active.viewportY >= terminal.buffer.active.baseY) terminal.scrollToBottom()
+    else terminal.scrollPages(1)
   }
 
   async function openHistory() {
     setHistoryOpen(true); setHistoryLoading(true); setHistoryError("")
     try {
-      const response = await fetch(`/api/agents/${agent}/history?lines=10000`)
+      const response = await fetch(`/api/agents/${agent}/transcript`)
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || "Falha ao carregar histórico")
       setHistory(typeof data.content === "string" ? data.content : "")
@@ -155,6 +239,34 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
     await copyText(history, "Histórico copiado")
   }
 
+  async function sendPrompt() {
+    const text = prompt.trim()
+    if (!text || sending) return
+    setSending(true)
+    setSendError("")
+    try {
+      const response = await fetch(`/api/agents/${agent}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || "Falha ao enviar")
+      setPrompt("")
+    } catch (cause) {
+      setSendError(cause instanceof Error ? cause.message : "Falha ao enviar")
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function reconnect() {
+    // Reconectar é pedido do usuário: assume o terminal se ele estiver em outra aba.
+    takeOverRef.current = true
+    socketRef.current?.close(1000, "Reconexão solicitada")
+    setGeneration((value) => value + 1)
+  }
+
   function downloadHistory() {
     const url = URL.createObjectURL(new Blob([history], { type: "text/plain;charset=utf-8" }))
     const link = document.createElement("a")
@@ -166,58 +278,106 @@ export function AgentTerminal({ agent }: { agent: AgentName }) {
 
   const active = status === "connected"
   return (
-    <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
-      <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3 py-1 sm:px-4">
-        <div className="flex min-w-0 items-center gap-2 text-sm">
+    <section className="relative flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
+      <div className="flex shrink-0 flex-col border-b border-slate-800">
+        <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 py-1 text-sm sm:px-4">
           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${active ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-red-400"}`} />
-          <span className="truncate">{labels[status]}</span>
-          {active && (
+          <span className="truncate">
+          {status === "connecting" ? "Conectando terminal…" : status === "busy" ? "Terminal aberto em outra aba" : active ? "Terminal conectado" : "Terminal desconectado"}
+            </span>
+           {active && (
             <span className="truncate text-slate-500" title={processName || undefined}>
               • {taskRunning ? `ativo${processName ? `: ${processName}` : ""}` : "aguardando"}
             </span>
           )}
+          {!taskRunning && active && <span className="text-xs text-slate-500">Aguardando agente</span>}
+          <span className={`ml-auto shrink-0 rounded px-2 py-1 text-[10px] font-bold ${OPERATION_STYLE[operationalStatus]}`}>
+            {OPERATION_LABEL[operationalStatus]}
+          </span>
         </div>
-        <div className="flex max-w-full shrink-0 items-center gap-1 overflow-x-auto">
+        <details className="border-t border-slate-800/70 px-3 py-1"><summary className="cursor-pointer py-1 text-xs text-slate-400">Ferramentas do terminal · copiar e reconectar</summary><div className="flex w-full flex-wrap items-center gap-1 py-1">
           {copyFeedback && <span className="hidden text-xs text-emerald-400 sm:inline">{copyFeedback}</span>}
           <button
             type="button"
             disabled={!hasSelection}
             onClick={() => void copySelection()}
-            className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800 disabled:text-slate-600"
-            title="Arraste no terminal para selecionar; atalho Ctrl+Shift+C"
+            className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800 disabled:text-slate-600"
+            title={agent === "claude" ? "No Claude, use Shift + arrastar; depois Ctrl+Shift+C para copiar" : "Arraste no terminal para selecionar; atalho Ctrl+Shift+C"}
           >
             Copiar seleção
           </button>
-          <button type="button" onClick={() => void copyScreen()} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Copia tudo que está visível no terminal">
+          <button type="button" onClick={() => void copyScreen()} className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Copia tudo que está visível no terminal">
             Copiar tela
           </button>
-          <button type="button" onClick={() => scrollPage("up")} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Subir uma página no terminal">↑</button>
-          <button type="button" onClick={() => scrollPage("down")} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800" title="Descer uma página no terminal">↓</button>
-          <button type="button" onClick={() => void openHistory()} className="rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800">
-            Histórico
+          <button type="button" onClick={() => scrollPage("up")} className="min-h-8 min-w-8 shrink-0 rounded px-2 py-1 text-sm text-sky-400 hover:bg-slate-800" title="Subir uma página no terminal" aria-label="Subir uma página">↑</button>
+          <button type="button" onClick={() => scrollPage("down")} className="min-h-8 min-w-8 shrink-0 rounded px-2 py-1 text-sm text-sky-400 hover:bg-slate-800" title="Descer uma página no terminal" aria-label="Descer uma página">↓</button>
+          <button type="button" onClick={() => void openHistory()} className="min-h-8 shrink-0 rounded bg-sky-950 px-2 py-1 text-xs font-medium text-sky-300 hover:bg-sky-900">
+            Copiar conversa
           </button>
-          {!active && status !== "connecting" && (
-            <button className="shrink-0 text-sm text-sky-400 hover:text-sky-300" onClick={() => setGeneration((value) => value + 1)}>Reconectar</button>
-          )}
-        </div>
+          <button
+            type="button"
+            className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800 hover:text-sky-300 disabled:cursor-wait disabled:text-slate-600"
+            onClick={() => void reconnect()}
+            title={active ? "Refazer a conexão com o terminal" : "Reconectar ao terminal"}
+          >
+            Reconectar navegador
+          </button>
+          <span className="text-[10px] text-slate-500" title="Fechar ou reconectar o navegador não encerra o processo do agente">Sessão tmux persistente</span>
+        </div></details>
       </div>
-      <div ref={containerRef} className="agent-terminal min-h-0 flex-1 p-2 sm:p-3" />
+      {awaitingApproval && (
+        <div role="alert" className="shrink-0 border-y border-amber-500 bg-amber-400 px-3 py-3 text-sm text-slate-950 shadow-lg shadow-amber-500/20">
+          <p className="text-base font-black">⚠ AGUARDANDO APROVAÇÃO</p>
+          <p className="mt-1 text-xs font-medium">Confira as opções no terminal abaixo e responda pelo campo de mensagem. Atalhos numéricos foram removidos para evitar aprovação permanente acidental.</p>
+        </div>
+      )}
+      {status === "busy" && <div role="status" className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2 text-xs text-amber-300">
+        <span>Este terminal está aberto em outra aba.</span>
+        <button type="button" onClick={() => void reconnect()} className="rounded bg-amber-400 px-2 py-1 font-medium text-slate-950 hover:bg-amber-300">Assumir aqui</button>
+      </div>}
+      <div ref={containerRef} className="agent-terminal min-h-0 min-w-0 max-w-full flex-1 overflow-hidden p-2 sm:p-3" />
+      <div className="flex shrink-0 flex-col gap-1 border-t border-slate-800 bg-slate-950 p-2 sm:p-3">
+        <div className="flex items-end gap-2">
+          <textarea
+            value={prompt}
+            onChange={(event) => { setPrompt(event.target.value); setSendError("") }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault()
+                void sendPrompt()
+              }
+            }}
+            placeholder={`Enviar prompt para ${agent} (Enter envia, Shift+Enter quebra linha)`}
+            rows={2}
+            className="min-h-0 flex-1 resize-none rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-sky-600 focus:outline-none"
+          />
+          <button
+            type="button"
+            disabled={!prompt.trim() || sending}
+            onClick={() => void sendPrompt()}
+            className="shrink-0 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {sending ? "Enviando…" : "Enviar"}
+          </button>
+        </div>
+        {sendError && <p className="text-xs text-red-400">{sendError}</p>}
+      </div>
       {historyOpen && (
         <div className="absolute inset-0 z-20 flex flex-col bg-slate-950">
-          <div className="flex min-h-12 items-center justify-between gap-3 border-b border-slate-800 px-3">
+          <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
             <div>
-              <p className="text-sm font-semibold">Histórico do {agent}</p>
-              <p className="text-[11px] text-slate-500">Selecione qualquer trecho ou copie tudo</p>
+              <p className="text-sm font-semibold">Conversa do {agent}</p>
+              <p className="text-[11px] text-slate-500">Transcript persistente e sem códigos ANSI</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex max-w-full flex-wrap items-center gap-1 sm:gap-2">
               <button type="button" onClick={() => { if (historyRef.current) historyRef.current.scrollTop = 0 }} className="rounded px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800">Início</button>
               <button type="button" onClick={() => { const field = historyRef.current; if (field) field.scrollTop = field.scrollHeight }} className="rounded px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800">Final</button>
               <button type="button" disabled={!history} onClick={() => void copyHistory()} className="rounded bg-sky-700 px-3 py-1.5 text-xs hover:bg-sky-600 disabled:opacity-40">Copiar tudo</button>
-              <button type="button" disabled={!history} onClick={downloadHistory} className="rounded bg-slate-800 px-3 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-40">Baixar .txt</button>
+              <button type="button" disabled={!history} onClick={downloadHistory} className="rounded bg-slate-800 px-3 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-40">Baixar transcript</button>
               <button type="button" onClick={() => setHistoryOpen(false)} className="rounded px-2 py-1 text-xl text-slate-400 hover:bg-slate-800 hover:text-white" aria-label="Fechar histórico">×</button>
             </div>
           </div>
-          {historyLoading && <p className="p-4 text-sm text-slate-400">Carregando histórico do tmux…</p>}
+          {historyLoading && <p className="p-4 text-sm text-slate-400">Carregando transcript persistente…</p>}
           {historyError && <p className="m-4 rounded bg-red-950/60 p-3 text-sm text-red-300">{historyError}</p>}
           {!historyLoading && !historyError && (
             <textarea
