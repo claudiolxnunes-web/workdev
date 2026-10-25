@@ -103,3 +103,7 @@ de confiar.
 ## Contexto atualizado
 
 Veja [Terminal do Agente Local](terminal-agente-local.md) para o fluxo com MoE, Luna, broker, vigia e o estado das pendências.
+
+## Guia prático
+
+Passo a passo da Bancada e do Workspace pela interface: [GUIA_PRATICO.md](GUIA_PRATICO.md).
