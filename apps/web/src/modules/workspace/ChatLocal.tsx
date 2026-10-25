@@ -10,13 +10,14 @@ import { extrairDiff, ultimoPromptCorrecao } from "@/modules/bancada/proposta"
 import { MAX_TRECHOS, type Anexo } from "./tipos"
 
 // Chat da Bancada Local: o modelo local recebe a instrução + trechos anexados e
-// devolve uma PROPOSTA. Checagens e parecer (observer escolhido) aparecem logo abaixo, como o
+// devolve uma PROPOSTA. Com "ler o repo", ele também busca e lê arquivos por
+// conta própria (function calling, somente leitura) antes de responder. Checagens e parecer (observer escolhido) aparecem logo abaixo, como o
 // chat do VS Code — mas aqui nada é aplicado: só "Abrir no editor" e "Copiar patch".
 
 interface MensagemUsuario { tipo: "usuario"; chave: string; texto: string; anexos: Anexo[] }
 interface MensagemModelo {
   tipo: "modelo"; chave: string; id: string | null; modelo: string | null; texto: string
-  estado: "rodando" | "pronta" | "erro"; avisos: string[]; segundos?: number; tokens?: number | null
+  estado: "rodando" | "pronta" | "erro"; avisos: string[]; leituras: string[]; segundos?: number; tokens?: number | null
   erro?: string; detalhe?: PropostaDetalhe; observando?: boolean; ultimoParecer?: ResultadoParecer
 }
 type Mensagem = MensagemUsuario | MensagemModelo
@@ -30,6 +31,14 @@ function novoId(): string {
 
 function rotuloAnexo(anexo: Anexo) {
   return `${anexo.caminho.split("/").pop()} ${anexo.inicio}–${anexo.fim}`
+}
+
+function rotuloLeitura(e: EventoBancada): string {
+  const a = e.argumentos ?? {}
+  const onde = String(a.caminho ?? ".")
+  const alvo = e.nome === "ler_arquivo" ? `${onde} ${a.inicio ?? "?"}–${a.fim ?? "?"}`
+    : e.nome === "buscar_texto" ? `“${String(a.texto ?? "")}” em ${onde}` : onde
+  return `${e.nome} ${alvo} · ${e.caracteres ?? 0} caracteres${e.recusada ? " · recusada" : ""}`
 }
 
 function CartaoModelo({ mensagem, ocupado, onAbrir, onVerificar, onParecer, onReenviar }: {
@@ -56,6 +65,11 @@ function CartaoModelo({ mensagem, ocupado, onAbrir, onVerificar, onParecer, onRe
         {mensagem.segundos != null && <span>{mensagem.segundos}s · {mensagem.tokens ?? "?"} tokens</span>}
         <Selo veredito={vereditoFinal} />
       </div>
+      {mensagem.leituras.length > 0 && (
+        <ul aria-label="Leituras do modelo" className="mb-1 space-y-0.5 font-mono text-[11px] text-slate-400">
+          {mensagem.leituras.map((leitura, i) => <li key={i}>↳ {leitura}</li>)}
+        </ul>
+      )}
       {mensagem.avisos.map((aviso, i) => <p key={i} className="text-xs text-amber-300">{aviso}</p>)}
       {mensagem.texto && <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 font-mono text-xs text-slate-200">{mensagem.texto}</pre>}
       {mensagem.erro && <p role="alert" className="mt-1 text-xs text-rose-300">{mensagem.erro}</p>}
@@ -100,6 +114,7 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
   const [instrucao, setInstrucao] = useState("")
   const [esperaDiff, setEsperaDiff] = useState(true)
   const [observarSozinho, setObservarSozinho] = useState(true)
+  const [lerRepo, setLerRepo] = useState(true)
   const [maxTokens, setMaxTokens] = useState(1024)
   const [observer, setObserver] = useState<string | null>(null)
   const [ocupado, setOcupado] = useState(false)
@@ -130,6 +145,8 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
         else if (e.tipo === "token") atualizar(chave, (m) => ({ texto: m.texto + (e.texto ?? "") }))
         else if (e.tipo === "vigia") atualizar(chave, (m) => ({ avisos: [...m.avisos, `Vigia: ${(e.nomes ?? []).join(", ")} não existe nos trechos — reenviando 1 vez.`] }))
         else if (e.tipo === "reinicio") atualizar(chave, { texto: "" })
+        else if (e.tipo === "ferramenta") atualizar(chave, (m) => ({ leituras: [...m.leituras, rotuloLeitura(e)] }))
+        else if (e.tipo === "limite") atualizar(chave, (m) => ({ avisos: [...m.avisos, "Limite de leituras atingido — o modelo responde com o que já leu."] }))
         else if (e.tipo === "fim") { final = e; atualizar(chave, { estado: "pronta", id: e.id ?? null, modelo: e.modelo ?? null, segundos: e.segundos, tokens: e.tokens }) }
         else if (e.tipo === "erro") { final = e; atualizar(chave, { estado: "erro", erro: e.mensagem }) }
       })
@@ -165,9 +182,9 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
     setErro(""); setOcupado(true)
     setMensagens((atual) => [...atual,
       { tipo: "usuario", chave: `u-${id}`, texto: instrucao, anexos },
-      { tipo: "modelo", chave, id, modelo: estado?.chave ?? null, texto: "", estado: "rodando", avisos: [] }])
+      { tipo: "modelo", chave, id, modelo: estado?.chave ?? null, texto: "", estado: "rodando", avisos: [], leituras: [] }])
     const tarefa = { id, instrucao: instrucao.trim(), trechos: anexos.map((a) => [a.caminho, a.inicio, a.fim] as [string, number, number]),
-                     max_tokens: maxTokens, espera_diff: esperaDiff }
+                     max_tokens: maxTokens, espera_diff: esperaDiff, ferramentas: lerRepo }
     setInstrucao(""); onLimparAnexos()
     try {
       const final = await acompanhar(chave, (onEvento) => rodarTarefa(tarefa, onEvento))
@@ -182,7 +199,7 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
     setOcupado(true)
     setMensagens((atual) => [...atual,
       { tipo: "usuario", chave: `u-${chave}`, texto: `Correção de ${origem.id}: ${prompt}`, anexos: [] },
-      { tipo: "modelo", chave, id: null, modelo: origem.modelo, texto: "", estado: "rodando", avisos: [] }])
+      { tipo: "modelo", chave, id: null, modelo: origem.modelo, texto: "", estado: "rodando", avisos: [], leituras: [] }])
     try {
       const final = await acompanhar(chave, (onEvento) => reenviarProposta(origem.modelo!, origem.id!, prompt, onEvento))
       await depoisDoFim(chave, final)
@@ -220,7 +237,7 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
 
       <div aria-label="Conversa com o modelo local" className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
         {mensagens.length === 0 && (
-          <p className="text-xs text-slate-500">Selecione linhas no editor e clique em “Adicionar ao chat”. Escreva um pedido pequeno e bem delimitado — o modelo local só vê os trechos anexados. A resposta é uma proposta: nada é aplicado ao repositório.</p>
+          <p className="text-xs text-slate-500">Selecione linhas no editor e clique em “Adicionar ao chat”. Escreva um pedido pequeno e bem delimitado. Com “ler o repo” ligado, o modelo também busca e lê arquivos sozinho (cada leitura custa tempo de prefill); desligado, ele só vê os trechos anexados. A resposta é uma proposta: nada é aplicado ao repositório.</p>
         )}
         {mensagens.map((m) => m.tipo === "usuario" ? (
           <div key={m.chave} className="ml-6 rounded-lg bg-sky-950 p-2 text-sm text-slate-100">
@@ -255,6 +272,7 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
           placeholder="Ex.: Adicione uma docstring a load_subtasks. Saída: diff unificado e nada mais."
           className="w-full rounded bg-slate-950 p-2 text-sm text-slate-100" />
         <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-300">
+          <label className="flex items-center gap-1" title="O modelo local busca e lê arquivos do repositório antes de responder (somente leitura, até 6 voltas)"><input type="checkbox" checked={lerRepo} onChange={(e) => setLerRepo(e.target.checked)} /> ler o repo</label>
           <label className="flex items-center gap-1"><input type="checkbox" checked={esperaDiff} onChange={(e) => setEsperaDiff(e.target.checked)} /> espera diff</label>
           <label className="flex items-center gap-1" title="Checagens mecânicas + parecer do observer escolhido (~US$ 0,001)"><input type="checkbox" checked={observarSozinho} onChange={(e) => setObservarSozinho(e.target.checked)} /> verificar + parecer</label>
           <SeletorObserver valor={observer} onMudar={setObserver} desabilitado={ocupado} />

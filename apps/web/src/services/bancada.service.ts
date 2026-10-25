@@ -114,7 +114,7 @@ export const getMedicoes = () => get<{ linhas?: LinhaMedicao[] }>("/medicoes").t
 // ---------------------------------------------------------------- segunda etapa (POST, por clique)
 
 export interface EventoBancada {
-  tipo: "inicio" | "token" | "vigia" | "reinicio" | "fim" | "erro"
+  tipo: "inicio" | "token" | "vigia" | "reinicio" | "ferramenta" | "limite" | "fim" | "erro"
   texto?: string
   id?: string
   modelo?: string
@@ -126,6 +126,13 @@ export interface EventoBancada {
   tokens?: number | null
   retentativa?: boolean
   medicao?: Medicao
+  /** "ferramenta": leitura que o modelo local fez no Workspace. */
+  nome?: string
+  argumentos?: Record<string, unknown>
+  caracteres?: number
+  recusada?: boolean
+  /** "fim": quantas leituras a execução fez. */
+  leituras?: number
 }
 
 export interface NovaTarefa {
@@ -135,6 +142,8 @@ export interface NovaTarefa {
   max_tokens?: number
   exige?: Record<string, string>
   espera_diff?: boolean
+  /** Só o Workspace: o modelo local lê o repositório com function calling. */
+  ferramentas?: boolean
 }
 
 async function falha(response: Response): Promise<never> {

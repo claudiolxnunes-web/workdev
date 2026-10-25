@@ -209,3 +209,112 @@ def test_lista_observers_e_segunda_opiniao(ambiente, monkeypatch):
     corpo = ambiente.cliente.get("/api/bancada/observers").json()
     assert corpo["padrao"] == "openai/gpt-5.6-luna" and "mistralai/codestral-2508" in corpo["observers"]
     assert corpo["segunda_opiniao"] == {"id": "segunda-opiniao", "primario": "mistralai/codestral-2508", "arbitro": "openai/gpt-5.6-luna"}
+
+
+# ---------------------------------------------------------------- ferramentas (Workspace)
+
+@pytest.fixture
+def com_tools(ambiente, monkeypatch):
+    """Stream falso que registra se recebeu tools; cada volta é um item do roteiro."""
+    chamadas_tools = []
+
+    def falso_stream(mensagens, max_tokens, conhecido, vigiar, tools=None):
+        chamadas_tools.append(bool(tools))
+        ambiente.roteiro.setdefault("mensagens", []).append(list(mensagens))
+        ambiente.roteiro.setdefault("conhecido", []).append(conhecido)
+        yield from ambiente.roteiro["partes"].pop(0)
+    monkeypatch.setattr(runner, "_stream_llama", falso_stream)
+    ambiente.tools = chamadas_tools
+    return ambiente
+
+
+def _pede(nome, **args):
+    return {"id": f"c-{nome}", "type": "function", "function": {"name": nome, "arguments": json.dumps(args)}}
+
+
+def test_bancada_sem_ferramentas_nao_manda_tools(com_tools):
+    tipos = [e["tipo"] for e in eventos(rodar(com_tools.cliente))]
+    assert tipos == ["inicio", "token", "token", "fim"]
+    assert com_tools.tools == [False]
+    assert com_tools.roteiro["mensagens"][0][0]["role"] == "user"
+
+
+def test_workspace_le_com_ferramenta_e_responde(com_tools, monkeypatch):
+    from app.services import leitura_repo
+    monkeypatch.setattr(leitura_repo, "ler_arquivo", lambda c, i, f: {
+        "caminho": c, "inicio": i, "fim": f, "total_linhas": 3, "texto": "AGENT = 'x'\ndef current():\n    return AGENT"})
+    com_tools.roteiro["partes"] = [
+        [{"tipo": "tokens", "tokens": 5, "medicao": {"prefill_ms": 1000.0, "prefill_tok": 10, "cache_tok": 0, "prompt_tok": 10,
+                                                      "geracao_ms": 100.0, "geracao_tok": 5},
+          "chamadas": [_pede("ler_arquivo", caminho="apps/modulo.py", inicio=1, fim=3)]}],
+        [{"tipo": "token", "texto": "proposta\n"},
+         {"tipo": "tokens", "tokens": 9, "medicao": {"prefill_ms": 500.0, "prefill_tok": 20, "cache_tok": 10, "prompt_tok": 30,
+                                                      "geracao_ms": 200.0, "geracao_tok": 9}}],
+    ]
+    lista = eventos(rodar(com_tools.cliente, trechos=[], ferramentas=True))
+    assert [e["tipo"] for e in lista] == ["inicio", "ferramenta", "reinicio", "token", "fim"]
+    assert lista[1]["nome"] == "ler_arquivo" and lista[1]["recusada"] is False
+    assert com_tools.tools == [True, True]
+    segunda = com_tools.roteiro["mensagens"][1]
+    assert segunda[0]["role"] == "system" and segunda[-2]["tool_calls"][0]["id"] == "c-ler_arquivo"
+    assert segunda[-1]["role"] == "tool" and "def current" in segunda[-1]["content"]
+    # O vigia aceita o que o modelo leu.
+    assert "def current" in com_tools.roteiro["conhecido"][1]
+    meta = json.loads((com_tools.pasta / "tarefas" / "t1.json").read_text())
+    assert meta["ferramentas"] is True and meta["trechos"] == [["apps/modulo.py", 1, 3]]
+    assert meta["leituras"][0]["nome"] == "ler_arquivo"
+    assert lista[-1]["medicao"]["prefill_ms"] == 1500.0 and lista[-1]["leituras"] == 1
+
+
+def test_workspace_recusa_vira_resposta_ao_modelo(com_tools):
+    com_tools.roteiro["partes"] = [
+        [{"tipo": "tokens", "tokens": 1, "chamadas": [_pede("ler_arquivo", caminho=".env", inicio=1, fim=1)]}],
+        [{"tipo": "token", "texto": "FALTA: x\n"}, {"tipo": "tokens", "tokens": 2}],
+    ]
+    lista = eventos(rodar(com_tools.cliente, ferramentas=True))
+    assert lista[1]["tipo"] == "ferramenta" and lista[1]["recusada"] is True
+    assert com_tools.roteiro["mensagens"][1][-1]["content"].startswith("RECUSADO")
+
+
+def test_workspace_para_de_oferecer_ferramentas_no_limite(com_tools, monkeypatch):
+    monkeypatch.setattr(runner, "MAX_VOLTAS_FERRAMENTA", 1)
+    com_tools.roteiro["partes"] = [
+        [{"tipo": "tokens", "tokens": 1, "chamadas": [_pede("listar_pasta", caminho="apps")]}],
+        [{"tipo": "token", "texto": "ok\n"}, {"tipo": "tokens", "tokens": 2}],
+    ]
+    tipos = [e["tipo"] for e in eventos(rodar(com_tools.cliente, ferramentas=True))]
+    assert tipos == ["inicio", "ferramenta", "limite", "reinicio", "token", "fim"]
+    assert com_tools.tools == [True, False]
+    assert "Limite de leituras" in com_tools.roteiro["mensagens"][1][-1]["content"]
+
+
+def test_reenvio_mantem_ferramentas(com_tools):
+    rodar(com_tools.cliente, ferramentas=True)
+    com_tools.roteiro["partes"] = [[{"tipo": "token", "texto": "nova\n"}, {"tipo": "tokens", "tokens": 3}]]
+    resposta = com_tools.cliente.post("/api/bancada/propostas/moe/t1/reenviar", json={"prompt": "corrija"})
+    assert [e["tipo"] for e in eventos(resposta)][-1] == "fim"
+    assert com_tools.tools[-1] is True
+
+
+def test_stream_junta_tool_calls_em_pedacos(monkeypatch):
+    pedacos = [
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "a1", "function": {"name": "buscar_texto", "arguments": '{"te'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": 'xto": "x"}'}}]}}]},
+        {"choices": [{"delta": {}}], "usage": {"completion_tokens": 4}},
+    ]
+    linhas = [f"data: {json.dumps(p)}\n".encode() for p in pedacos] + [b"data: [DONE]\n"]
+
+    class Resposta:
+        def __enter__(self): return iter(linhas)
+        def __exit__(self, *a): return False
+    enviado = {}
+
+    def abrir(req, timeout):
+        enviado.update(json.loads(req.data))
+        return Resposta()
+    monkeypatch.setattr(runner.urllib.request, "urlopen", abrir)
+    monkeypatch.setattr(runner, "_modulo", lambda nome: SimpleNamespace(suspeitos=lambda *a: [], medir_timings=lambda p: {}))
+    final = list(runner._stream_llama([], 64, "", vigiar=True, tools=runner.FERRAMENTAS_WORKSPACE))[-1]
+    assert enviado["tools"] == runner.FERRAMENTAS_WORKSPACE
+    assert final["chamadas"] == [{"id": "a1", "type": "function",
+                                  "function": {"name": "buscar_texto", "arguments": '{"texto": "x"}'}}]

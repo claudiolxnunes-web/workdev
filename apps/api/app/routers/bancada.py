@@ -259,6 +259,8 @@ class Execucao(BaseModel):
     max_tokens: int = Field(default=1024, ge=64, le=runner.MAX_TOKENS)
     exige: dict[str, str] = Field(default_factory=dict)
     espera_diff: bool = False
+    # Só o chat Local do Workspace manda true: o modelo lê o repo com function calling.
+    ferramentas: bool = False
 
 
 class Reenvio(BaseModel):
@@ -342,7 +344,8 @@ def modelo(acao: str):
 def rodar(pedido: Execucao):
     try:
         plano = runner.preparar_execucao(pedido.id, pedido.instrucao, [list(t) for t in pedido.trechos],
-                                         pedido.max_tokens, pedido.exige, pedido.espera_diff)
+                                         pedido.max_tokens, pedido.exige, pedido.espera_diff,
+                                         pedido.ferramentas)
     except runner.BancadaErro as erro:
         raise _erro(erro) from erro
     return _fluxo(plano)

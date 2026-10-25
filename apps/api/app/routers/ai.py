@@ -24,7 +24,7 @@ from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.ai_routing import AICallLog, AIModelCatalog
 from app.services import autoridade, context_engine, rag_search
-from app.services import ai_cost_guard, agent_runtimes, bancada_runner
+from app.services import ai_cost_guard, agent_runtimes, bancada_runner, leitura_repo
 from app.services.backlog_status import BacklogStatusError, apply_status
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
@@ -413,6 +413,29 @@ TOOLS = [
         },
     },
     {
+        "name": "buscar_texto",
+        "description": "Procura texto literal (nao regex) nos arquivos do repositorio WorkDev, como git grep: respeita o .gitignore e pula binarios, .env, .git e credenciais. Devolve caminho, linha e o conteudo da linha (ate 80 ocorrencias). Somente leitura. Use ANTES de ler_trecho para descobrir onde algo esta, em vez de chutar caminho ou linha.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "texto": {"type": "string", "description": "texto literal, ex.: def ler_trecho"},
+                "caminho": {"type": "string", "description": "pasta ou arquivo onde procurar, relativo a raiz; padrao '.'"},
+            },
+            "required": ["texto"],
+        },
+    },
+    {
+        "name": "listar_pasta",
+        "description": "Lista arquivos e subpastas de uma pasta do repositorio WorkDev (subpasta termina com '/'). Esconde .env, .git, node_modules, venv, dist e credenciais. Somente leitura.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "caminho": {"type": "string", "description": "pasta relativa a raiz; '.' e a raiz"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "validar_lote_bancada",
         "description": "Valida um lote de micro-tarefas da Bancada Local contra os arquivos reais do repositorio: arquivo existe, linha final existe, caminho permitido, ate 10 tarefas por lote (11 a 20 sao divididas automaticamente em 2 lotes), ate 8 trechos de ate 400 linhas, max_tokens 64-4000, exige com regex valida. Ids vazios ou genericos recebem o id do lote (AAMMDD-NN-NN). Somente leitura: nao grava nem executa nada. Use antes de entregar o JSON final e entregue o plano devolvido.",
         "input_schema": {
@@ -662,6 +685,14 @@ def _ler_trecho(args: dict) -> str:
     return json.dumps(saida, ensure_ascii=False)
 
 
+def _leitura_repo(funcao, *args) -> str:
+    """buscar_texto e listar_pasta: a trava de caminhos é do leitura_repo."""
+    try:
+        return json.dumps(funcao(*args), ensure_ascii=False)
+    except leitura_repo.Recusado as e:
+        return json.dumps({"erro": str(e), "code": "leitura_recusada"}, ensure_ascii=False)
+
+
 def executar_tool(nome: str, args: dict, db: Session,
                   nivel: str = autoridade.NIVEL_PADRAO, *, backlog_id=None) -> str:
     """Executa uma tool, respeitando a autoridade da conversa.
@@ -832,6 +863,12 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
 
     if nome == "ler_trecho":
         return _ler_trecho(args)
+
+    if nome == "buscar_texto":
+        return _leitura_repo(leitura_repo.buscar_texto, args.get("texto"), args.get("caminho") or ".")
+
+    if nome == "listar_pasta":
+        return _leitura_repo(leitura_repo.listar_pasta, args.get("caminho") or ".")
 
     if nome == "validar_lote_bancada":
         return _validar_lote_bancada(args)
