@@ -46,6 +46,47 @@ bash /opt/workdev/deploy.sh <proof_id>
 
 Promove a release preparada pra `current` (symlink atômico), reinicia `workdev-api.service`, roda checagem pós-deploy, e faz rollback automático (volta pra release anterior + reinicia) se algo falhar.
 
+## Atalhos práticos `wd-*` — forma preferida de operar (decisão do operador, 2026-10-25)
+
+O operador quer deployar **sempre por este caminho**: o agente (como `workdev`) faz tudo que
+não exige root, e o operador roda **um comando curto de cada vez** como root. Os atalhos
+só encadeiam o fluxo oficial acima; não o substituem nem pulam etapas.
+
+| Comando (root) | O que faz |
+|---|---|
+| `wd-sync` | `git fetch` com a chave do root, devolve o `.git` a `workdev:workdev-runtime`, `checkout main` e `merge --ff-only origin/main` como `workdev`. Termina com `SYNC_OK` |
+| `wd-push [branch]` | publica a branch atual (ou a informada) com a chave do root e acerta o dono do `.git`. Recusa o `main`. Termina com `PUSH_OK (<branch>)` |
+| `wd-prepare` | passo 1: roda o gate e emite a prova; guarda o `proof_id` em `/run/workdev-last-proof` (só root escreve) |
+| `wd-deploy` | passos 2 e 3: `approve --actor Claudio` (ou `WD_ACTOR`) + `deploy.sh <proof_id>`; recusa prova com mais de 840 s; termina com `DEPLOY_OK` e chama `wd-verificar` |
+| `wd-verificar` | só leitura, não precisa de root: `workdev-api` ativo, PID da porta 8000 = `MainPID`, `/health` online, site 200, bundle sem `localhost:8000`. `VERIFICACAO_OK` ou sai com 1 |
+
+O `post_deploy_gate` **já roda dentro do `deploy`** (`deploy_broker.py` chama `wait_for_checks`,
+com rollback automático); não é um passo manual separado.
+
+### Roteiro de um deploy, do começo ao fim
+
+1. **Agente (`workdev`)**: valida a branch (lint, build, testes), abre o PR e faz o merge com `gh`.
+   Nunca faz push: o `workdev` só lê o GitHub.
+2. **Root**: `wd-push` (se a branch ainda não está no GitHub), depois `wd-sync` depois do merge.
+3. **Agente (`workdev`)**: `pnpm run build` em `apps/web` **a partir do `main` atualizado** e confere
+   `grep -c "localhost:8000" apps/web/dist/assets/index-*.js` = 0. O build tem que existir ANTES do `prepare`.
+4. **Root**: `wd-prepare`, e só então `wd-deploy` (a prova vale 900 s).
+5. **Agente**: confere por fora com `wd-verificar` (ou os comandos dele à mão) antes de dar o deploy por feito.
+
+### Instalação (uma vez, e de novo se um atalho mudar)
+
+Fonte versionada em `scripts/deploy/atalhos/`, destino `/usr/local/sbin/wd-*` (`root:root 0755`),
+listados em `scripts/deploy/install-manifest.txt`. **Nunca rodar os atalhos de dentro do
+repositório como root** (mesma regra do `workdev-deployctl`): o checkout é do `workdev`, que pode
+alterar o arquivo. Instalar a cópia em `/usr/local/sbin` e rodar só ela. Antes de instalar, ler o
+que mudou (`git log -p -- scripts/deploy/atalhos`), porque o root passa a executar essa cópia.
+
+### Regras do terminal do operador
+
+- O terminal quebra comandos longos ao colar: **um comando por vez**, curtos. Para qualquer coisa
+  maior, gravar num script e pedir `bash <caminho>`; os `wd-*` existem por isso.
+- Agentes não devem inventar novos fluxos de root: se faltar um atalho, propor a mudança em PR.
+
 ## Incidentes já vividos (leia antes de repetir)
 
 - **Commitar antes do `prepare`.** Ele empacota `git archive HEAD` — nada de não commitado entra na release, mesmo que já esteja salvo em disco.

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# wd-sync — atualiza o checkout local para o origin/main (fast-forward).
+# Roda como root: o fetch usa a chave SSH do root; o checkout e o merge rodam como
+# workdev para não criar arquivos com dono root. Ver docs/DEPLOY_CANONICO.md.
+set -euo pipefail
+
+[[ $EUID -eq 0 ]] || { echo "wd-sync: rode como root" >&2; exit 1; }
+
+REPO=/opt/workdev
+cd "$REPO"
+
+GIT_SSH_COMMAND="ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes" git fetch origin
+# O fetch como root cria objetos com dono root: devolver ao grupo workdev-runtime
+# (nunca workdev:workdev), senão o prepare do deploy falha ao ler o .git.
+chown -R workdev:workdev-runtime "$REPO/.git"
+
+runuser -u workdev -- git checkout main
+runuser -u workdev -- git merge --ff-only origin/main
+
+git log --oneline -1
+echo SYNC_OK
