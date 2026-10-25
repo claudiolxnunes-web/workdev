@@ -318,3 +318,29 @@ def test_stream_junta_tool_calls_em_pedacos(monkeypatch):
     assert enviado["tools"] == runner.FERRAMENTAS_WORKSPACE
     assert final["chamadas"] == [{"id": "a1", "type": "function",
                                   "function": {"name": "buscar_texto", "arguments": '{"texto": "x"}'}}]
+
+
+def test_workspace_para_de_oferecer_ferramentas_quando_o_tempo_acaba(com_tools, monkeypatch):
+    monkeypatch.setattr(runner, "MAX_TEMPO_FERRAMENTA_S", 0)
+    com_tools.roteiro["partes"] = [[{"tipo": "token", "texto": "ok\n"}, {"tipo": "tokens", "tokens": 2}]]
+    tipos = [e["tipo"] for e in eventos(rodar(com_tools.cliente, ferramentas=True))]
+    assert tipos == ["inicio", "token", "fim"]
+    assert com_tools.tools == [False]
+
+
+def test_workspace_tempo_esgotado_no_meio_avisa_o_modelo(com_tools, monkeypatch):
+    relogio = [0.0]
+    monkeypatch.setattr(runner.time, "monotonic", lambda: relogio[0])
+    original = runner._ferramenta
+
+    def leitura_demorada(chamada, raiz=None):
+        relogio[0] = 5000.0  # a leitura "levou" mais que o teto
+        return original(chamada, raiz)
+    monkeypatch.setattr(runner, "_ferramenta", leitura_demorada)
+    com_tools.roteiro["partes"] = [
+        [{"tipo": "tokens", "tokens": 1, "chamadas": [_pede("listar_pasta", caminho="apps")]}],
+        [{"tipo": "token", "texto": "ok\n"}, {"tipo": "tokens", "tokens": 2}],
+    ]
+    tipos = [e["tipo"] for e in eventos(rodar(com_tools.cliente, ferramentas=True))]
+    assert tipos == ["inicio", "ferramenta", "limite", "reinicio", "token", "fim"]
+    assert com_tools.tools == [True, False]

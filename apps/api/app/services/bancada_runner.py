@@ -239,6 +239,10 @@ def _stream_llama(mensagens: list, max_tokens: int, conhecido: str, vigiar: bool
 # Só o chat Local do Workspace liga as ferramentas; a página da Bancada roda sem.
 # A leitura é do leitura_repo, a mesma do supervisor.
 MAX_VOLTAS_FERRAMENTA = 6
+# Teto de tempo da fase de leituras (Fase 0). O timeout do urlopen é por leitura
+# de socket, não total: sem isto, 6 voltas lentas no CPU passavam de meia hora.
+# Estourado, o modelo deixa de receber ferramentas e responde com o que já leu.
+MAX_TEMPO_FERRAMENTA_S = int(os.environ.get("WORKDEV_LOCAL_MAX_TOOL_SECONDS", "1200"))
 # Teto do que as leituras somam no contexto. ~24 mil caracteres são ~6 mil
 # tokens: perto de 2 minutos de prefill na CPU. Sem teto, o problema dos 22 mil
 # tokens do harness volta pelas leituras.
@@ -421,7 +425,9 @@ def _executar(plano: dict) -> Iterator[str]:
         voltas = contexto = 0
         try:
             while True:
-                usar = plano.get("ferramentas") and voltas < MAX_VOLTAS_FERRAMENTA and contexto < MAX_CONTEXTO_FERRAMENTA
+                no_prazo = time.monotonic() - inicio < MAX_TEMPO_FERRAMENTA_S
+                usar = (plano.get("ferramentas") and voltas < MAX_VOLTAS_FERRAMENTA
+                        and contexto < MAX_CONTEXTO_FERRAMENTA and no_prazo)
                 texto, chamadas = "", []
                 extra = {"tools": FERRAMENTAS_WORKSPACE} if usar else {}
                 for evento in _stream_llama(mensagens, plano["max_tokens"], conhecido, vigiar=True, **extra):
@@ -453,7 +459,8 @@ def _executar(plano: dict) -> Iterator[str]:
                     mensagens.append({"role": "tool", "tool_call_id": chamada.get("id") or nome, "content": saida})
                     yield _sse({"tipo": "ferramenta", "nome": nome, "argumentos": args, "caracteres": len(saida),
                                 "recusada": saida.startswith(("RECUSADO", "ERRO"))})
-                if voltas >= MAX_VOLTAS_FERRAMENTA or contexto >= MAX_CONTEXTO_FERRAMENTA:
+                if (voltas >= MAX_VOLTAS_FERRAMENTA or contexto >= MAX_CONTEXTO_FERRAMENTA
+                        or time.monotonic() - inicio >= MAX_TEMPO_FERRAMENTA_S):
                     mensagens.append({"role": "user", "content": AVISO_LIMITE_FERRAMENTA})
                     yield _sse({"tipo": "limite", "voltas": voltas, "caracteres": contexto})
                 yield _sse({"tipo": "reinicio"})
