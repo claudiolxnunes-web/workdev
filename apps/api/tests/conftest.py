@@ -24,6 +24,12 @@ def _isolate_cli_model_selection(tmp_path, monkeypatch):
     monkeypatch.setenv('WORKDEV_CLI_AGENT_MODELS_FILE', str(tmp_path / 'cli-models.json'))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ai_telemetry(tmp_path, monkeypatch):
+    """A telemetria do loop de tools (tool_loop.registrar) não grava no checkout real."""
+    monkeypatch.setenv('AI_TELEMETRIA_DIR', str(tmp_path / 'ai-telemetria'))
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "tmux_ensure_real: usa o ensure_tmux_server real (com _run simulado)")
 
