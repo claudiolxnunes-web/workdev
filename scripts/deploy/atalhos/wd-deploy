@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# wd-deploy — passos 2 e 3 do deploy: aprova a prova do último wd-prepare e promove.
+# A aprovação é o ponto de decisão humana do pipeline: quem roda assume o deploy.
+# O ator vem de WD_ACTOR (padrão Claudio). Ver docs/DEPLOY_CANONICO.md.
+set -euo pipefail
+
+[[ $EUID -eq 0 ]] || { echo "wd-deploy: rode como root" >&2; exit 1; }
+
+PROOF_FILE=/run/workdev-last-proof
+[[ -s "$PROOF_FILE" ]] || { echo "wd-deploy: sem prova; rode wd-prepare primeiro" >&2; exit 1; }
+
+proof=$(<"$PROOF_FILE")
+[[ "$proof" =~ ^[0-9a-f-]{36}$ ]] || { echo "wd-deploy: prova inválida em $PROOF_FILE" >&2; exit 1; }
+
+# A prova vale 900 s; avisar cedo em vez de falhar no approve.
+idade=$(( $(date +%s) - $(stat -c %Y "$PROOF_FILE") ))
+if (( idade > 840 )); then
+  echo "wd-deploy: a prova tem ${idade}s (limite 900s); rode wd-prepare de novo" >&2
+  exit 1
+fi
+
+echo "aprovando $proof (ator: ${WD_ACTOR:-Claudio})"
+/usr/local/sbin/workdev-deployctl approve "$proof" --actor "${WD_ACTOR:-Claudio}"
+bash /opt/workdev/deploy.sh "$proof"
+rm -f "$PROOF_FILE"
+echo DEPLOY_OK
+
+# Conferência por fora, sem confiar só na saída do deploy.
+if command -v wd-verificar >/dev/null; then wd-verificar || true; fi

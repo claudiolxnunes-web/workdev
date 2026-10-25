@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# wd-prepare — passo 1 do deploy: roda o gate e emite a prova assinada.
+# Guarda o proof_id em /run (só root escreve) para o wd-deploy usar; a prova vale
+# 900 s. O build do frontend precisa existir ANTES (o fingerprint sai de
+# apps/web/dist). Ver docs/DEPLOY_CANONICO.md.
+set -euo pipefail
+
+[[ $EUID -eq 0 ]] || { echo "wd-prepare: rode como root" >&2; exit 1; }
+
+PROOF_FILE=/run/workdev-last-proof
+OUT=/run/workdev-prepare.out
+umask 077
+
+# Uma prova antiga nunca pode sobreviver a um prepare que falhou.
+rm -f "$PROOF_FILE" "$OUT"
+
+/usr/local/sbin/workdev-deployctl prepare | tee "$OUT"
+
+proof=$(grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$OUT" | tail -1 || true)
+[[ -n "$proof" ]] || { echo "wd-prepare: nenhum proof_id na saída; não aprove nada" >&2; exit 1; }
+
+printf '%s\n' "$proof" > "$PROOF_FILE"
+echo "proof_id: $proof (vale 15 min; próximo passo: wd-deploy)"

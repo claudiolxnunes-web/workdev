@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# wd-push [branch] — publica uma branch no GitHub com a chave SSH do root.
+# Sem argumento, publica a branch atual. Recusa publicar o main: ele só recebe
+# mudanças por pull request. Ver docs/DEPLOY_CANONICO.md.
+set -euo pipefail
+
+[[ $EUID -eq 0 ]] || { echo "wd-push: rode como root" >&2; exit 1; }
+
+REPO=/opt/workdev
+cd "$REPO"
+
+branch="${1:-$(runuser -u workdev -- git branch --show-current)}"
+[[ -n "$branch" ]] || { echo "wd-push: não foi possível descobrir a branch" >&2; exit 1; }
+if [[ "$branch" == "main" ]]; then
+  echo "wd-push: o main só recebe mudanças por pull request; publique uma branch de tópico" >&2
+  exit 1
+fi
+
+GIT_SSH_COMMAND="ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes" git push origin "$branch"
+chown -R workdev:workdev-runtime "$REPO/.git"
+
+echo "PUSH_OK ($branch)"
