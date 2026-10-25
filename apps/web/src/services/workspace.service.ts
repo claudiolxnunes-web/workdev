@@ -5,7 +5,13 @@ const headers: HeadersInit = { "X-API-Key": API_KEY }
 
 export interface ItemArvore { nome: string; caminho: string; tipo: "pasta" | "arquivo" }
 export interface Arvore { pasta: string; itens: ItemArvore[]; truncado: boolean }
-export interface Arquivo { caminho: string; binario: boolean; tamanho: number; texto: string; linhas: number; truncado: boolean }
+export interface Arquivo {
+  caminho: string; binario: boolean; tamanho: number; texto: string; linhas: number; truncado: boolean
+  /** Do conteúdo inteiro em disco; o salvar recusa se o arquivo mudou depois de aberto. */
+  sha256?: string | null
+  /** O texto mostrado teve chave mascarada: não é o do disco e não pode ser salvo. */
+  mascarado?: boolean
+}
 export interface Alteracao { caminho: string; estado: string; mais: number | null; menos: number | null }
 export interface Alteracoes { base: string; itens: Alteracao[]; truncado: boolean }
 export interface DiffArquivo { caminho: string; diff: string; truncado: boolean }
@@ -24,10 +30,12 @@ async function get<T>(caminho: string, params?: Record<string, string>): Promise
   return response.json() as Promise<T>
 }
 
-export const getArvore = (pasta = "") => get<Arvore>("/arvore", { pasta })
-export const getArquivo = (caminho: string) => get<Arquivo>("/arquivo", { caminho })
-export const getAlteracoes = () => get<Alteracoes>("/alteracoes")
-export const getDiff = (caminho: string) => get<DiffArquivo>("/diff", { caminho })
+// Com `sessao`, a leitura vem da cópia da sessão ativa; sem, do checkout.
+const comSessao = (params: Record<string, string>, sessao?: string | null) => (sessao ? { ...params, sessao } : params)
+export const getArvore = (pasta = "", sessao?: string | null) => get<Arvore>("/arvore", comSessao({ pasta }, sessao))
+export const getArquivo = (caminho: string, sessao?: string | null) => get<Arquivo>("/arquivo", comSessao({ caminho }, sessao))
+export const getAlteracoes = (sessao?: string | null) => get<Alteracoes>("/alteracoes", comSessao({}, sessao))
+export const getDiff = (caminho: string, sessao?: string | null) => get<DiffArquivo>("/diff", comSessao({ caminho }, sessao))
 
 export type StatusFatia = "pendente" | "rodando" | "ok" | "falhou" | "pulada"
 export interface CheckGate { nome: string; passou: boolean; motivo: string; ms: number }
@@ -75,6 +83,9 @@ export const criarSessao = (dados: { task_id?: string | null; chat_session_id?: 
   post<Sessao>("/sessao", dados)
 export const encerrarSessao = (id: string, descartarAlteracoes = false) =>
   post<Sessao>(`/sessao/${encodeURIComponent(id)}/encerrar`, { descartar_alteracoes: descartarAlteracoes })
+/** Edição do editor: grava na cópia da sessão e vira commit com o nome do operador. */
+export const salvarArquivoSessao = (id: string, caminho: string, texto: string, sha256: string) =>
+  post<{ caminho: string; commit: string; sha256: string }>(`/sessao/${encodeURIComponent(id)}/arquivo`, { caminho, texto, sha256 })
 export const aprovarPlano = (id: string, plano: unknown) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/plano`, { plano })
 export const pularFatia = (id: string, n: number) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/pular`, {})
 export const incorporarSessao = (id: string, modo: "merge" | "squash") =>

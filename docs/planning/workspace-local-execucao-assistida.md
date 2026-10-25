@@ -273,7 +273,7 @@ Cada etapa entra por branch própria, com o diff entregue para incorporação.
 | 1 Sessão e worktree | ✅ feito — `workspace_sessao.py`, barra da sessão; estado em JSON + git, sem migration | `feat/workspace-sessao` |
 | 2 Laço assistido | ✅ feito — `workspace_execucao.py`, aba Execução; uma fatia por chamada, estado gravado por etapa. Trilha no JSON da sessão (não em `AgentRunEvent`: a sessão não tem `agent_run`) | `feat/workspace-sessao` |
 | 3 Tools de leitura | ✅ feito — local e supervisor; o local lê a **cópia da sessão** | `feat/workspace-ferramentas-leitura` |
-| 4 Supervisor no lateral | ✅ feito, menos a escrita no editor (decisão 4: entra pela cópia da sessão) | PR #9 + `feat/workspace-sessao` |
+| 4 Supervisor no lateral + escrita no editor | ✅ feito — editor grava na cópia da sessão e commita com a identidade do operador (decisão 4); Explorer/editor/chat Local leem a cópia | PR #9 + `feat/workspace-sessao` |
 | 5 Plano fatiado | ✅ feito pelo "Aprovar plano" (bloco json do supervisor); `suggest_slices` não foi ligado | `feat/workspace-sessao` |
 | 6 Banco | pendente | — |
 | — Backlog (decisão 6) | ✅ fatias viram subtasks; task `doing`; subtask `done`/`blocked` | `feat/workspace-sessao` |

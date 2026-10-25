@@ -144,6 +144,8 @@ export interface NovaTarefa {
   espera_diff?: boolean
   /** Só o Workspace: o modelo local lê o repositório com function calling. */
   ferramentas?: boolean
+  /** Só o Workspace com sessão: trechos e leituras vêm da cópia da sessão. */
+  sessao?: string
 }
 
 async function falha(response: Response): Promise<never> {

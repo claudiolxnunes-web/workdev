@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react"
 import { getAlteracoes, getArvore, type Alteracoes, type ItemArvore } from "@/services/workspace.service"
 
-// Explorer: árvore do checkout (uma pasta por vez) e alterações em relação ao HEAD.
-// Só leitura; a lista vem do git, já sem .env, ignorados e caminhos bloqueados.
+// Explorer: árvore (uma pasta por vez) e alterações em relação ao HEAD — do
+// checkout ou, com `sessao`, da cópia da sessão. Só leitura; a lista vem do git,
+// já sem .env, ignorados e caminhos bloqueados.
 
-function Pasta({ caminho, nivel, onAbrir, aberto }: {
-  caminho: string; nivel: number; onAbrir: (caminho: string) => void; aberto: string | null
+function Pasta({ caminho, nivel, onAbrir, aberto, sessao }: {
+  caminho: string; nivel: number; onAbrir: (caminho: string) => void; aberto: string | null; sessao: string | null
 }) {
   const [itens, setItens] = useState<ItemArvore[] | null>(null)
   const [expandidas, setExpandidas] = useState<Set<string>>(new Set())
@@ -13,11 +14,11 @@ function Pasta({ caminho, nivel, onAbrir, aberto }: {
 
   useEffect(() => {
     let vivo = true
-    getArvore(caminho)
+    getArvore(caminho, sessao)
       .then((arvore) => { if (vivo) setItens(arvore.itens) })
       .catch((causa) => { if (vivo) setErro(causa instanceof Error ? causa.message : "falha ao listar") })
     return () => { vivo = false }
-  }, [caminho])
+  }, [caminho, sessao])
 
   function alternar(pasta: string) {
     setExpandidas((atual) => {
@@ -45,7 +46,7 @@ function Pasta({ caminho, nivel, onAbrir, aberto }: {
             <span className="truncate">{item.nome}</span>
           </button>
           {item.tipo === "pasta" && expandidas.has(item.caminho) && (
-            <Pasta caminho={item.caminho} nivel={nivel + 1} onAbrir={onAbrir} aberto={aberto} />
+            <Pasta caminho={item.caminho} nivel={nivel + 1} onAbrir={onAbrir} aberto={aberto} sessao={sessao} />
           )}
         </li>
       ))}
@@ -55,8 +56,9 @@ function Pasta({ caminho, nivel, onAbrir, aberto }: {
 
 const corEstado: Record<string, string> = { novo: "text-emerald-300", M: "text-amber-300", D: "text-rose-300", A: "text-emerald-300" }
 
-export function Explorer({ onAbrirArquivo, onAbrirDiff, aberto }: {
+export function Explorer({ onAbrirArquivo, onAbrirDiff, aberto, sessao = null }: {
   onAbrirArquivo: (caminho: string) => void; onAbrirDiff: (caminho: string) => void; aberto: string | null
+  sessao?: string | null
 }) {
   const [alteracoes, setAlteracoes] = useState<Alteracoes | null>(null)
   const [erro, setErro] = useState("")
@@ -64,9 +66,9 @@ export function Explorer({ onAbrirArquivo, onAbrirDiff, aberto }: {
 
   const carregar = useCallback(async () => {
     setErro("")
-    try { setAlteracoes(await getAlteracoes()) }
+    try { setAlteracoes(await getAlteracoes(sessao)) }
     catch (causa) { setErro(causa instanceof Error ? causa.message : "falha ao ler alterações") }
-  }, [])
+  }, [sessao])
 
   useEffect(() => {
     // Carga inicial; "Atualizar" refaz. Nada fica consultando sozinho.
@@ -77,11 +79,13 @@ export function Explorer({ onAbrirArquivo, onAbrirDiff, aberto }: {
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-900">
       <div className="flex items-center justify-between border-b border-slate-800 px-2 py-1">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Explorer</h2>
+        <h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Explorer{sessao ? <span className="ml-1 normal-case text-emerald-400">· cópia da sessão</span> : null}
+        </h2>
         <button type="button" onClick={() => { setGeracao((g) => g + 1); void carregar() }} className="rounded px-2 py-0.5 text-xs text-slate-400 hover:bg-slate-800" title="Recarregar árvore e alterações">Atualizar</button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto py-1">
-        <Pasta key={geracao} caminho="" nivel={0} onAbrir={onAbrirArquivo} aberto={aberto} />
+        <Pasta key={`${geracao}-${sessao ?? "checkout"}`} caminho="" nivel={0} onAbrir={onAbrirArquivo} aberto={aberto} sessao={sessao} />
       </div>
       <section aria-label="Alterações" className="max-h-[40%] min-h-0 overflow-auto border-t border-slate-800">
         <h2 className="sticky top-0 bg-slate-900 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">

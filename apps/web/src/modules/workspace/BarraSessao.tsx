@@ -7,8 +7,14 @@ import { criarSessao, encerrarSessao, getEstadoSessao, getSessoes, type EstadoSe
 
 type Erro = Error & { codigo?: string }
 
-export function BarraSessao({ taskId, chatSessionId, onAbrirDiff }: {
+export function BarraSessao({ taskId, chatSessionId, onAbrirDiff, onSessao, verCheckout = false, onVerCheckout, versao = 0 }: {
   taskId: string | null; chatSessionId: string | null; onAbrirDiff: (id: string) => void
+  /** Sobe quando a sessão muda fora daqui (plano, fatia, edição): a barra relê sem sumir. */
+  versao?: number
+  /** Avisa a página qual sessão está ativa (null = nenhuma). */
+  onSessao?: (id: string | null) => void
+  /** Com sessão ativa, o Explorer/editor/chat mostram a cópia; true volta ao checkout. */
+  verCheckout?: boolean; onVerCheckout?: (ver: boolean) => void
 }) {
   const [sessao, setSessao] = useState<EstadoSessao | null>(null)
   const [carregado, setCarregado] = useState(false)
@@ -20,15 +26,16 @@ export function BarraSessao({ taskId, chatSessionId, onAbrirDiff }: {
     try {
       const { ativa } = await getSessoes()
       setSessao(ativa ? await getEstadoSessao(ativa.id) : null)
+      onSessao?.(ativa?.id ?? null)
     } catch (causa) {
       setErro(causa instanceof Error ? causa.message : "falha ao ler a sessão")
     } finally { setCarregado(true) }
-  }, [])
+  }, [onSessao])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void carregar()
-  }, [carregar])
+  }, [carregar, versao])
 
   async function comecar() {
     setOcupado(true); setErro("")
@@ -56,6 +63,14 @@ export function BarraSessao({ taskId, chatSessionId, onAbrirDiff }: {
         <span className="text-slate-500" title={sessao.base}>base {sessao.base.slice(0, 7)} ({sessao.branch_origem})</span>
         <span className="text-slate-400">{sessao.commits.length} commit(s){sessao.alteracoes.length ? ` · ${sessao.alteracoes.length} alteração(ões) sem commit` : ""}</span>
         <span className="ml-auto flex gap-1">
+          {onVerCheckout && (
+            <span role="group" aria-label="Ver" className="flex overflow-hidden rounded border border-slate-700">
+              <button type="button" aria-pressed={!verCheckout} onClick={() => onVerCheckout(false)}
+                className={`px-2 py-0.5 ${!verCheckout ? "bg-emerald-900 text-emerald-100" : "text-slate-400 hover:bg-slate-800"}`}>cópia da sessão</button>
+              <button type="button" aria-pressed={verCheckout} onClick={() => onVerCheckout(true)}
+                className={`px-2 py-0.5 ${verCheckout ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-slate-800"}`}>seu checkout</button>
+            </span>
+          )}
           <button type="button" onClick={() => onAbrirDiff(sessao.id)} className="rounded bg-slate-700 px-2 py-0.5 hover:bg-slate-600">Ver diff da sessão</button>
           <button type="button" disabled={ocupado} onClick={() => void carregar()} className="rounded px-2 py-0.5 text-slate-400 hover:bg-slate-800" title="Atualizar">↻</button>
           {confirmarDescarte

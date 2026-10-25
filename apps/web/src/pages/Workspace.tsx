@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels"
 import { AgentTerminal } from "@/modules/agents/AgentTerminal"
 import { CLI_AGENTS, agentLabels, type AgentName } from "@/services/handoff.service"
@@ -85,6 +85,12 @@ export default function Workspace() {
   // Sobe a cada mudança na sessão (plano aprovado, fatia rodada): barra e painel releem.
   const [versaoSessao, setVersaoSessao] = useState(0)
   const mudouSessao = () => setVersaoSessao((v) => v + 1)
+  // Com sessão ativa, Explorer, editor e chat Local mostram a cópia da sessão —
+  // é onde o trabalho acontece. "seu checkout" volta à visão só leitura.
+  const [sessaoAtiva, setSessaoAtiva] = useState<string | null>(null)
+  const [verCheckout, setVerCheckout] = useState(false)
+  const sessaoVista = sessaoAtiva && !verCheckout ? sessaoAtiva : null
+  const avisarSessao = useCallback((id: string | null) => setSessaoAtiva(id), [])
 
   function abrir(aba: AbaEditor) {
     const chave = chaveAba(aba)
@@ -106,10 +112,10 @@ export default function Workspace() {
   }
 
   const ativo = abas.find((a) => chaveAba(a) === ativa)
-  const explorer = <Explorer aberto={ativo && (ativo.tipo === "arquivo" || ativo.tipo === "diff") ? ativo.caminho : null}
+  const explorer = <Explorer key={sessaoVista ?? "checkout"} sessao={sessaoVista} aberto={ativo && (ativo.tipo === "arquivo" || ativo.tipo === "diff") ? ativo.caminho : null}
     onAbrirArquivo={(caminho) => abrir({ tipo: "arquivo", caminho })} onAbrirDiff={(caminho) => abrir({ tipo: "diff", caminho })} />
-  const editor = <Editor abas={abas} ativa={ativa} onAtivar={setAtiva} onFechar={fechar} onAnexar={anexar} />
-  const chat = <ChatLocal anexos={anexos} onRemoverAnexo={(i) => setAnexos((atual) => atual.filter((_, j) => j !== i))}
+  const editor = <Editor abas={abas} ativa={ativa} onAtivar={setAtiva} onFechar={fechar} onAnexar={anexar} sessao={sessaoVista} onSalvo={mudouSessao} />
+  const chat = <ChatLocal anexos={anexos} onRemoverAnexo={(i) => setAnexos((atual) => atual.filter((_, j) => j !== i))} sessao={sessaoVista}
     onLimparAnexos={() => setAnexos([])} onAbrirProposta={(modelo, id, texto) => abrir({ tipo: "proposta", modelo, id, texto })} />
   // Aprovar o plano: sem sessão ativa, começa uma (ligada à task) antes.
   async function aprovar(plano: PlanoSupervisor) {
@@ -141,12 +147,15 @@ export default function Workspace() {
     </div>
   )
 
-  const barraSessao = <BarraSessao key={versaoSessao} taskId={taskId} chatSessionId={sessaoSupervisor} onAbrirDiff={(id) => abrir({ tipo: "sessao", id })} />
+  const barraSessao = <BarraSessao versao={versaoSessao} taskId={taskId} chatSessionId={sessaoSupervisor} onAbrirDiff={(id) => abrir({ tipo: "sessao", id })}
+    onSessao={avisarSessao} verCheckout={verCheckout} onVerCheckout={setVerCheckout} />
 
   const cabecalho = (
     <header className="flex shrink-0 flex-wrap items-center gap-2 pb-2">
       <h1 className="text-lg font-semibold">Workspace Local</h1>
-      <span className="text-xs text-slate-500">repositório só leitura · o modelo local só propõe, nada é aplicado</span>
+      <span className="text-xs text-slate-500">{sessaoVista
+        ? "vendo a cópia da sessão · edições e fatias viram commit no branch da sessão; seu checkout não muda"
+        : sessaoAtiva ? "vendo seu checkout · só leitura" : "seu checkout · só leitura · comece uma sessão para editar e executar"}</span>
       {desktop && (
         <button type="button" aria-pressed={painelAberto} onClick={() => setPainelAberto((v) => !v)}
           className="ml-auto rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800">

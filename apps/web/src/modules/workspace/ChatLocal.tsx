@@ -105,9 +105,11 @@ function CartaoModelo({ mensagem, ocupado, onAbrir, onVerificar, onParecer, onRe
   )
 }
 
-export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirProposta }: {
+export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirProposta, sessao = null }: {
   anexos: Anexo[]; onRemoverAnexo: (indice: number) => void; onLimparAnexos: () => void
   onAbrirProposta: (modelo: string, id: string, texto: string) => void
+  /** Cópia da sessão em vista: os trechos e as leituras do modelo vêm dela. */
+  sessao?: string | null
 }) {
   const [estado, setEstado] = useState<EstadoBancada | null>(null)
   const [mensagens, setMensagens] = useState<Mensagem[]>([])
@@ -184,7 +186,7 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
       { tipo: "usuario", chave: `u-${id}`, texto: instrucao, anexos },
       { tipo: "modelo", chave, id, modelo: estado?.chave ?? null, texto: "", estado: "rodando", avisos: [], leituras: [] }])
     const tarefa = { id, instrucao: instrucao.trim(), trechos: anexos.map((a) => [a.caminho, a.inicio, a.fim] as [string, number, number]),
-                     max_tokens: maxTokens, espera_diff: esperaDiff, ferramentas: lerRepo }
+                     max_tokens: maxTokens, espera_diff: esperaDiff, ferramentas: lerRepo, ...(sessao ? { sessao } : {}) }
     setInstrucao(""); onLimparAnexos()
     try {
       const final = await acompanhar(chave, (onEvento) => rodarTarefa(tarefa, onEvento))

@@ -173,6 +173,13 @@ roda o plano inteiro numa **cópia isolada do projeto**.
    para o branch de onde a sessão saiu, com o seu nome. Conflito é desfeito
    sozinho. **Não faz push** — depois use `wd-push`.
 7. **Ver diff da sessão** (na barra) mostra tudo o que a sessão mudou.
+8. **Editar à mão**: com a sessão ativa, Explorer, editor e chat Local mostram a
+   **cópia da sessão** (seletor **cópia da sessão | seu checkout** na barra). No
+   editor, **Editar** abre o arquivo para edição; **Salvar na sessão (commit)**
+   grava na cópia e faz um commit com o seu nome. Recusa se o arquivo mudou
+   depois de aberto, se há fatia rodando ou resto de fatia que falhou, e nunca
+   salva arquivo em que o editor mascarou uma chave (trocaria a chave real).
+   Vendo **seu checkout**, o editor é só leitura.
 
 Limites: uma sessão por vez; para começar, o checkout não pode ter alteração
 rastreada sem commit. Uma fatia que mexe em `apps/api` leva ~1–2 min só no gate
