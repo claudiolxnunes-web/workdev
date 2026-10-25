@@ -168,17 +168,25 @@ def _sse(evento: dict) -> str:
     return "data: " + json.dumps(evento, ensure_ascii=False) + "\n\n"
 
 
-def _stream_llama(mensagens: list, max_tokens: int, conhecido: str, vigiar: bool) -> Iterator[dict]:
-    """Eventos 'token' e, se o vigia agir, um 'interrompido' final."""
+def _stream_llama(mensagens: list, max_tokens: int, conhecido: str, vigiar: bool,
+                  tools: list | None = None) -> Iterator[dict]:
+    """Eventos 'token' e, se o vigia agir, um 'interrompido' final.
+
+    Com `tools`, o evento final 'tokens' traz também as `chamadas` que o modelo
+    pediu (o llama-server manda os argumentos em pedaços, por índice).
+    """
     local = _modulo("bancada_local")
     suspeitos = local.suspeitos
     corpo = {"model": ALIAS, "messages": mensagens, "max_tokens": max_tokens, "temperature": 0.2,
              "stream": True, "stream_options": {"include_usage": True},
              "chat_template_kwargs": {"enable_thinking": False}}
+    if tools:
+        corpo["tools"] = tools
     req = urllib.request.Request(LLAMA_URL + "/v1/chat/completions", data=json.dumps(corpo).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
     linha_atual, em_codigo, definidos, tokens = "", False, set(), None
     medicao: dict = {}
+    chamadas: dict[int, dict] = {}
     with urllib.request.urlopen(req, timeout=TIMEOUT) as resposta:
         for bruto in resposta:
             bruto = bruto.decode("utf-8", "replace").strip()
@@ -191,7 +199,15 @@ def _stream_llama(mensagens: list, max_tokens: int, conhecido: str, vigiar: bool
             tokens = (pedaco.get("usage") or {}).get("completion_tokens", tokens)
             if pedaco.get("timings"):
                 medicao = local.medir_timings(pedaco)
-            delta = ((pedaco.get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
+            bloco = (pedaco.get("choices") or [{}])[0].get("delta") or {}
+            for parcial in bloco.get("tool_calls") or []:
+                atual = chamadas.setdefault(int(parcial.get("index") or 0),
+                                            {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                atual["id"] = parcial.get("id") or atual["id"]
+                funcao = parcial.get("function") or {}
+                atual["function"]["name"] += funcao.get("name") or ""
+                atual["function"]["arguments"] += funcao.get("arguments") or ""
+            delta = bloco.get("content") or ""
             if not delta:
                 continue
             yield {"tipo": "token", "texto": delta}
@@ -210,7 +226,105 @@ def _stream_llama(mensagens: list, max_tokens: int, conhecido: str, vigiar: bool
                 if vigiar and ruins:
                     yield {"tipo": "interrompido", "nomes": ruins, "tokens": tokens, "medicao": medicao}
                     return
-    yield {"tipo": "tokens", "tokens": tokens, "medicao": medicao}
+    final = {"tipo": "tokens", "tokens": tokens, "medicao": medicao}
+    if chamadas:
+        final["chamadas"] = [chamadas[i] for i in sorted(chamadas)]
+    yield final
+
+
+# ---------------------------------------------------------------- ferramentas (Workspace)
+
+# Só o chat Local do Workspace liga as ferramentas; a página da Bancada roda sem.
+# A leitura é do leitura_repo, a mesma do supervisor.
+MAX_VOLTAS_FERRAMENTA = 6
+# Teto do que as leituras somam no contexto. ~24 mil caracteres são ~6 mil
+# tokens: perto de 2 minutos de prefill na CPU. Sem teto, o problema dos 22 mil
+# tokens do harness volta pelas leituras.
+MAX_CONTEXTO_FERRAMENTA = 24_000
+MAX_SAIDA_FERRAMENTA = 6000
+MAX_TRECHOS_REGISTRADOS = 16
+
+FERRAMENTAS_WORKSPACE = [
+    {"type": "function", "function": {
+        "name": "buscar_texto",
+        "description": "Procura texto literal no repositório (como git grep). Devolve caminho:linha: conteúdo. "
+                       "Use antes de ler, para achar onde algo está.",
+        "parameters": {"type": "object", "properties": {
+            "texto": {"type": "string", "description": "texto literal, ex.: def current"},
+            "caminho": {"type": "string", "description": "pasta ou arquivo; '.' é a raiz"}},
+            "required": ["texto"]}}},
+    {"type": "function", "function": {
+        "name": "listar_pasta",
+        "description": "Lista arquivos e subpastas de uma pasta do repositório.",
+        "parameters": {"type": "object", "properties": {
+            "caminho": {"type": "string", "description": "pasta relativa; '.' é a raiz"}},
+            "required": ["caminho"]}}},
+    {"type": "function", "function": {
+        "name": "ler_arquivo",
+        "description": "Lê linhas numeradas de um arquivo do repositório (no máximo 200 por chamada). "
+                       "Leia só o intervalo que precisa.",
+        "parameters": {"type": "object", "properties": {
+            "caminho": {"type": "string", "description": "caminho relativo à raiz"},
+            "inicio": {"type": "integer"}, "fim": {"type": "integer"}},
+            "required": ["caminho", "inicio", "fim"]}}},
+]
+
+SISTEMA_FERRAMENTAS = (
+    "Você pode ler o repositório com buscar_texto, listar_pasta e ler_arquivo (somente leitura). "
+    "Cada leitura custa tempo: use buscar_texto antes de ler e leia só as linhas necessárias. "
+    "Não invente nomes de arquivos, funções ou variáveis: confira no código. "
+    "Quando tiver o suficiente, responda no formato pedido e nada mais."
+)
+
+AVISO_LIMITE_FERRAMENTA = ("Limite de leituras atingido. Responda agora, no formato pedido, só com o que já "
+                           "leu. Se faltar informação, responda exatamente: FALTA: <o que falta e onde estaria>.")
+
+
+def _ferramenta(chamada: dict) -> tuple[str, dict, list | None]:
+    """Executa uma chamada do modelo: (saída em texto, argumentos, trecho lido ou None)."""
+    from app.services import leitura_repo
+    nome = (chamada.get("function") or {}).get("name") or ""
+    try:
+        args = json.loads((chamada.get("function") or {}).get("arguments") or "{}")
+        if not isinstance(args, dict):
+            raise ValueError("argumentos precisam ser objeto")
+    except ValueError as erro:
+        return f"ERRO: argumentos inválidos ({erro})", {}, None
+    try:
+        if nome == "buscar_texto":
+            r = leitura_repo.buscar_texto(args.get("texto"), args.get("caminho") or ".")
+            linhas = [f"{o['caminho']}:{o['linha']}: {o['texto']}" for o in r["ocorrencias"]]
+            saida = "\n".join(linhas) or "(nenhuma ocorrência)"
+            if r.get("truncado"):
+                saida += "\n[... mais ocorrências; restrinja a pasta]"
+            return saida, args, None
+        if nome == "listar_pasta":
+            r = leitura_repo.listar_pasta(args.get("caminho") or ".")
+            return "\n".join(r["itens"]) or "(vazia)", args, None
+        if nome == "ler_arquivo":
+            r = leitura_repo.ler_arquivo(args.get("caminho"), int(args.get("inicio") or 1),
+                                         int(args.get("fim") or leitura_repo.MAX_LINHAS_ARQUIVO))
+            corpo = "\n".join(f"{r['inicio'] + i:>5}| {l}" for i, l in enumerate(r["texto"].split("\n")))
+            saida = f"### {r['caminho']} (linhas {r['inicio']}-{r['fim']} de {r['total_linhas']})\n{corpo}"
+            return saida, args, [r["caminho"], r["inicio"], r["fim"]]
+        return f"RECUSADO: ferramenta desconhecida: {nome}", args, None
+    except leitura_repo.Recusado as erro:
+        return f"RECUSADO: {erro}", args, None
+    except (TypeError, ValueError) as erro:
+        return f"ERRO: {type(erro).__name__}: {erro}", args, None
+
+
+def _somar_medicao(total: dict, parcial: dict | None) -> dict:
+    """Soma prefill e geração de várias voltas; as taxas são recalculadas."""
+    if not parcial:
+        return total
+    if not total:
+        return dict(parcial)
+    soma = {k: round(total.get(k, 0) + parcial.get(k, 0), 1) if k.endswith("_ms") else total.get(k, 0) + parcial.get(k, 0)
+            for k in ("prefill_ms", "prefill_tok", "cache_tok", "prompt_tok", "geracao_ms", "geracao_tok")}
+    soma["tok_s_prefill"] = round(soma["prefill_tok"] / (soma["prefill_ms"] / 1000), 2) if soma["prefill_ms"] else None
+    soma["tok_s_geracao"] = round(soma["geracao_tok"] / (soma["geracao_ms"] / 1000), 2) if soma["geracao_ms"] else None
+    return soma
 
 
 def _proximo_id(base: str) -> str:
@@ -238,17 +352,22 @@ def validar_exige(exige: dict | None) -> dict:
     return {str(k): str(v) for k, v in exige.items()}
 
 
+def _com_sistema(mensagens: list, ferramentas: bool) -> list:
+    return ([{"role": "system", "content": SISTEMA_FERRAMENTAS}] + mensagens) if ferramentas else mensagens
+
+
 def preparar_execucao(ident: str, instrucao: str, trechos: list, max_tokens: int,
-                      exige: dict | None = None, espera_diff: bool = False) -> dict:
+                      exige: dict | None = None, espera_diff: bool = False,
+                      ferramentas: bool = False) -> dict:
     if not ID_VALIDO.match(ident or ""):
         raise BancadaErro(422, "id_invalido", "use letras, números, _ ou - (até 80)")
     if (pasta() / chave_modelo() / f"{ident}.txt").exists():
         raise BancadaErro(409, "id_existente", f"já existe a proposta {ident} para {chave_modelo()}")
     prompt, normalizados = montar_prompt(instrucao, trechos)
     return {"id": ident, "instrucao": instrucao.strip(), "trechos": normalizados, "prompt": prompt,
-            "mensagens": [{"role": "user", "content": prompt}],
+            "mensagens": _com_sistema([{"role": "user", "content": prompt}], ferramentas),
             "max_tokens": max(64, min(int(max_tokens or 1024), MAX_TOKENS)), "origem_de": None,
-            "exige": validar_exige(exige), "espera_diff": bool(espera_diff)}
+            "exige": validar_exige(exige), "espera_diff": bool(espera_diff), "ferramentas": bool(ferramentas)}
 
 
 def preparar_reenvio(modelo: str, ident: str, prompt_correcao: str) -> dict:
@@ -261,14 +380,17 @@ def preparar_reenvio(modelo: str, ident: str, prompt_correcao: str) -> dict:
         raise BancadaErro(422, "prompt_longo", f"prompt acima de {MAX_PROMPT_REENVIO} caracteres")
     anterior = (pasta() / modelo / f"{ident}.txt").read_text(encoding="utf-8")
     raiz = meta.get("origem_raiz") or ident
+    ferramentas = bool(meta.get("ferramentas"))
     return {"id": _proximo_id(raiz), "instrucao": meta["instrucao"], "trechos": meta["trechos"],
             "prompt": meta["prompt"],
-            "mensagens": [{"role": "user", "content": meta["prompt"]},
-                          {"role": "assistant", "content": anterior},
-                          {"role": "user", "content": prompt_correcao.strip() + "\n\n" + meta["prompt"]}],
+            "mensagens": _com_sistema([{"role": "user", "content": meta["prompt"]},
+                                       {"role": "assistant", "content": anterior},
+                                       {"role": "user", "content": prompt_correcao.strip() + "\n\n" + meta["prompt"]}],
+                                      ferramentas),
             "max_tokens": meta.get("max_tokens", 1024), "origem_de": ident, "origem_raiz": raiz,
             "prompt_correcao": prompt_correcao.strip(),
-            "exige": meta.get("exige") or {}, "espera_diff": bool(meta.get("espera_diff"))}
+            "exige": meta.get("exige") or {}, "espera_diff": bool(meta.get("espera_diff")),
+            "ferramentas": ferramentas}
 
 
 def executar(plano: dict) -> Iterator[str]:
@@ -288,21 +410,53 @@ def _executar(plano: dict) -> Iterator[str]:
         yield _sse({"tipo": "inicio", "id": plano["id"], "modelo": chave, "base": base})
         inicio, texto, tokens, retentativa, suspeitos = time.monotonic(), "", None, False, []
         medicao: dict = {}
+        # Com ferramentas, a conversa cresce a cada volta e o que o modelo leu
+        # entra no que o vigia aceita como conhecido.
+        mensagens, conhecido = list(plano["mensagens"]), plano["prompt"]
+        leituras: list[dict] = []
+        trechos = [list(t) for t in plano["trechos"]]
+        voltas = contexto = 0
         try:
-            for evento in _stream_llama(plano["mensagens"], plano["max_tokens"], plano["prompt"], vigiar=True):
-                if evento["tipo"] == "token":
-                    texto += evento["texto"]
-                    yield _sse(evento)
-                elif evento["tipo"] == "interrompido":
-                    retentativa, suspeitos = True, evento["nomes"]
-                    yield _sse({"tipo": "vigia", "nomes": suspeitos,
-                                "mensagem": "nome que não está nos trechos; reenviando 1 vez"})
-                else:
-                    tokens = evento["tokens"]
-                    medicao = evento.get("medicao") or medicao
+            while True:
+                usar = plano.get("ferramentas") and voltas < MAX_VOLTAS_FERRAMENTA and contexto < MAX_CONTEXTO_FERRAMENTA
+                texto, chamadas = "", []
+                extra = {"tools": FERRAMENTAS_WORKSPACE} if usar else {}
+                for evento in _stream_llama(mensagens, plano["max_tokens"], conhecido, vigiar=True, **extra):
+                    if evento["tipo"] == "token":
+                        texto += evento["texto"]
+                        yield _sse(evento)
+                    elif evento["tipo"] == "interrompido":
+                        retentativa, suspeitos = True, evento["nomes"]
+                        yield _sse({"tipo": "vigia", "nomes": suspeitos,
+                                    "mensagem": "nome que não está nos trechos; reenviando 1 vez"})
+                    else:
+                        tokens = evento["tokens"]
+                        medicao = _somar_medicao(medicao, evento.get("medicao")) if voltas else (evento.get("medicao") or medicao)
+                        chamadas = evento.get("chamadas") or []
+                if retentativa or not chamadas:
+                    break
+                voltas += 1
+                mensagens.append({"role": "assistant", "content": texto, "tool_calls": chamadas})
+                for chamada in chamadas:
+                    saida, args, lido = _ferramenta(chamada)
+                    saida = saida if len(saida) <= MAX_SAIDA_FERRAMENTA else (
+                        saida[:MAX_SAIDA_FERRAMENTA] + f"\n[... cortado: {len(saida) - MAX_SAIDA_FERRAMENTA} caracteres]")
+                    contexto += len(saida)
+                    conhecido += "\n" + saida
+                    if lido and lido not in trechos and len(trechos) < MAX_TRECHOS_REGISTRADOS:
+                        trechos.append(lido)
+                    nome = (chamada.get("function") or {}).get("name") or "?"
+                    leituras.append({"nome": nome, "argumentos": args, "caracteres": len(saida)})
+                    mensagens.append({"role": "tool", "tool_call_id": chamada.get("id") or nome, "content": saida})
+                    yield _sse({"tipo": "ferramenta", "nome": nome, "argumentos": args, "caracteres": len(saida),
+                                "recusada": saida.startswith(("RECUSADO", "ERRO"))})
+                if voltas >= MAX_VOLTAS_FERRAMENTA or contexto >= MAX_CONTEXTO_FERRAMENTA:
+                    mensagens.append({"role": "user", "content": AVISO_LIMITE_FERRAMENTA})
+                    yield _sse({"tipo": "limite", "voltas": voltas, "caracteres": contexto})
+                yield _sse({"tipo": "reinicio"})
             if retentativa:
                 nomes = ", ".join(f"`{n}`" for n in suspeitos)
-                mensagens = plano["mensagens"] + [
+                mensagens = mensagens + [
                     {"role": "assistant", "content": texto},
                     {"role": "user", "content": f"Pare. {nomes} não existe nos trechos fornecidos. Refaça a "
                                                 "resposta inteira usando só nomes que aparecem nos trechos abaixo. "
@@ -315,7 +469,7 @@ def _executar(plano: dict) -> Iterator[str]:
                         yield _sse(evento)
                     elif evento["tipo"] == "tokens":
                         tokens = evento["tokens"]
-                        medicao = evento.get("medicao") or medicao
+                        medicao = _somar_medicao(medicao, evento.get("medicao")) if voltas else (evento.get("medicao") or medicao)
         except (urllib.error.URLError, OSError, ValueError) as erro:
             yield _sse({"tipo": "erro", "codigo": "falha_modelo", "mensagem": f"{type(erro).__name__}: {erro}"})
             return
@@ -328,19 +482,22 @@ def _executar(plano: dict) -> Iterator[str]:
         except (OSError, ValueError):
             resumo = {}
         resumo[plano["id"]] = {"segundos": segundos, "tokens": tokens, "ok": True, "retentativa": retentativa,
-                               "suspeitos": suspeitos, "origem": "pagina", "medicao": medicao, "data": _agora()}
+                               "suspeitos": suspeitos, "origem": "pagina", "medicao": medicao,
+                               "leituras": len(leituras), "data": _agora()}
         _gravar(resumo_path, resumo)
         _gravar(pasta() / "tarefas" / f"{plano['id']}.json", {
             "id": plano["id"], "modelo": chave, "base": base, "instrucao": plano["instrucao"],
-            "trechos": plano["trechos"], "prompt": plano["prompt"], "max_tokens": plano["max_tokens"],
+            # Os trechos que o modelo leu entram aqui: verificar e parecer olham o mesmo que ele viu.
+            "trechos": trechos, "prompt": plano["prompt"], "max_tokens": plano["max_tokens"],
             "origem_de": plano.get("origem_de"), "origem_raiz": plano.get("origem_raiz"),
             "prompt_correcao": plano.get("prompt_correcao"), "exige": plano.get("exige") or {},
-            "espera_diff": bool(plano.get("espera_diff")), "data": _agora()})
+            "espera_diff": bool(plano.get("espera_diff")), "ferramentas": bool(plano.get("ferramentas")),
+            "leituras": leituras, "data": _agora()})
         registrar({"id": plano["id"], "modelo": chave, "origem": "pagina", "tipo": "execucao",
                    "segundos": segundos, "tokens": tokens, "retentativa": retentativa,
-                   "medicao": medicao, "origem_de": plano.get("origem_de")})
+                   "medicao": medicao, "origem_de": plano.get("origem_de"), "leituras": len(leituras)})
         yield _sse({"tipo": "fim", "id": plano["id"], "modelo": chave, "segundos": segundos,
-                    "tokens": tokens, "retentativa": retentativa, "medicao": medicao})
+                    "tokens": tokens, "retentativa": retentativa, "medicao": medicao, "leituras": len(leituras)})
 
 
 # ---------------------------------------------------------------- verificar / parecer

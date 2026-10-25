@@ -24,4 +24,7 @@ case "$key" in
     set -- --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --chat-template-kwargs '{"enable_thinking":false}'
     ;;
 esac
-exec /opt/llama.cpp/build/bin/llama-server -m "$model" -a "$alias" -c "$ctx" -t 8 -np 1 "$@" --no-reasoning-preserve --host 127.0.0.1 --port 8080
+# --jinja explícito: o chat Local do Workspace usa function calling (tools).
+# Já é o padrão no build atual; fixar evita que uma atualização do llama.cpp
+# desligue as ferramentas sem aviso.
+exec /opt/llama.cpp/build/bin/llama-server -m "$model" -a "$alias" -c "$ctx" -t 8 -np 1 "$@" --jinja --no-reasoning-preserve --host 127.0.0.1 --port 8080

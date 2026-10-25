@@ -182,6 +182,15 @@ protege dado nenhum. Cada fatia de banco precisa de:
 
 ## 7. Leitura pelo modelo local
 
+> **Feito em 2026-10-25** (`feat/workspace-ferramentas-leitura`): o chat Local manda
+> `ferramentas: true` e o modelo local usa `buscar_texto`, `listar_pasta` e
+> `ler_arquivo` por function calling (`--jinja`, fixado no `workdev-llama-run`).
+> A leitura é uma só para o local e o supervisor: `app/services/leitura_repo.py`,
+> contra o checkout de trabalho (não a release), com `git grep` respeitando o
+> `.gitignore`. Tetos: 6 voltas, 24 mil caracteres acumulados, 6 mil por leitura.
+> O supervisor ganhou `buscar_texto` e `listar_pasta` (nível Observar). A página
+> da Bancada segue sem ferramentas.
+
 O local recebe três tools, que já existem no `scripts/bancada_local.py`:
 `ler_arquivo`, `listar_pasta`, `buscar_texto`. Reaproveitar as três mantém uma
 implementação só e herda o que já está feito: teto de linhas por leitura,

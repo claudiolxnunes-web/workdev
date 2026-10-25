@@ -34,8 +34,10 @@ const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
   if (url.endsWith("/api/bancada/estado")) return json({ ativo: modeloLigado, chave: "moe", modelo: "Qwen MoE", memoria: { total_mb: 1, disponivel_mb: 1 }, processo_mb: null, pasta: "x", pasta_existe: true, ocupado: false })
   if (url.endsWith("/api/bancada/observers")) return json({ padrao: "openai/gpt-5.6-luna", observers: ["openai/gpt-5.6-luna", "mistralai/codestral-2508"], segunda_opiniao: { id: "segunda-opiniao", primario: "mistralai/codestral-2508", arbitro: "openai/gpt-5.6-luna" } })
   if (url.endsWith("/api/bancada/rodar")) {
-    const id = (JSON.parse(String(init?.body)) as { id: string }).id
-    return sse([{ tipo: "inicio", id, modelo: "moe", base: "abc1234" }, { tipo: "token", texto: proposta.slice(0, 20) },
+    const { id, ferramentas } = JSON.parse(String(init?.body)) as { id: string; ferramentas?: boolean }
+    const leitura = ferramentas ? [{ tipo: "ferramenta", nome: "ler_arquivo", argumentos: { caminho: "apps/api/modulo.py", inicio: 1, fim: 2 }, caracteres: 42, recusada: false },
+      { tipo: "reinicio" }] : []
+    return sse([{ tipo: "inicio", id, modelo: "moe", base: "abc1234" }, ...leitura, { tipo: "token", texto: proposta.slice(0, 20) },
       { tipo: "token", texto: proposta.slice(20) }, { tipo: "fim", id, modelo: "moe", segundos: 3.1, tokens: 40 }])
   }
   if (url.endsWith("/verificar")) return json({ achados: [], erros: 0, aprovada: true })
@@ -85,7 +87,7 @@ describe("Workspace Local", () => {
     fireEvent.click(within(screen.getByRole("region", { name: "Painel inferior" })).getByRole("button", { name: "Enviar" }))
     await waitFor(() => expect(chamadas.some((c) => c.url.endsWith("/parecer"))).toBe(true))
     const rodar = chamadas.find((c) => c.url.endsWith("/rodar"))!
-    expect(rodar.corpo).toMatchObject({ trechos: [["apps/api/modulo.py", 1, 1]], espera_diff: true, max_tokens: 1024 })
+    expect(rodar.corpo).toMatchObject({ trechos: [["apps/api/modulo.py", 1, 1]], espera_diff: true, max_tokens: 1024, ferramentas: true })
     expect((rodar.corpo as { id: string }).id).toMatch(/^ws-\d{8}-\d{6}-[a-z0-9]+$/)
     expect(chamadas.find((c) => c.url.endsWith("/parecer"))!.corpo).toEqual({ observer: "openai/gpt-5.6-luna" })
     const conversa = screen.getByLabelText("Conversa com o modelo local")
@@ -94,6 +96,21 @@ describe("Workspace Local", () => {
     expect(screen.queryByRole("list", { name: "Trechos anexados" })).not.toBeInTheDocument()
     fireEvent.click(within(conversa).getByRole("button", { name: "Abrir no editor" }))
     expect(await screen.findByLabelText(/Diff da proposta ws-/)).toHaveTextContent("+ return 2")
+  })
+
+  it("mostra as leituras do modelo e deixa desligar o ler o repo", async () => {
+    await abrirModulo()
+    fireEvent.change(screen.getByLabelText("Pedido ao modelo local"), { target: { value: "Ache current e troque o retorno." } })
+    const painel = within(screen.getByRole("region", { name: "Painel inferior" }))
+    fireEvent.click(painel.getByRole("button", { name: "Enviar" }))
+    const leituras = await screen.findByRole("list", { name: "Leituras do modelo" })
+    expect(leituras).toHaveTextContent("ler_arquivo apps/api/modulo.py 1–2 · 42 caracteres")
+    fireEvent.click(painel.getByLabelText("ler o repo"))
+    fireEvent.change(screen.getByLabelText("Pedido ao modelo local"), { target: { value: "De novo, sem ler." } })
+    await waitFor(() => expect(painel.getByRole("button", { name: "Enviar" })).not.toBeDisabled())
+    fireEvent.click(painel.getByRole("button", { name: "Enviar" }))
+    await waitFor(() => expect(chamadas.filter((c) => c.url.endsWith("/rodar")).length).toBe(2))
+    expect(chamadas.filter((c) => c.url.endsWith("/rodar"))[1].corpo).toMatchObject({ ferramentas: false })
   })
 
   it("lista alterações e abre o diff do git", async () => {

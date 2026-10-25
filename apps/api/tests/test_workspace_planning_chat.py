@@ -1,7 +1,7 @@
 """Supervisor do Workspace Local: sessão própria, sem colidir com a do AI Hub.
 
-O Workspace tem outro destino que a Bancada: aqui o modelo local EDITA arquivos
-de verdade, então o supervisor orienta em vez de micro-tarefar. A sessão criada
+O Workspace tem outro destino que a Bancada: aqui o modelo local lê o repositório
+sozinho, então o supervisor orienta em vez de micro-tarefar. A sessão criada
 para o Workspace não pode tomar a vaga da task reservada ao AI Hub
 (uq_chat_sessions_task_id).
 """
@@ -65,7 +65,8 @@ def test_workspace_nao_colide_com_a_sessao_do_ai_hub(db):
     # O prompt do supervisor é o do Workspace: orientação em fatias com gate,
     # não o micro-tarefas da Bancada.
     assert "supervisor do Workspace Local" in prompt
-    assert "fatas" in prompt
+    assert "fatias" in prompt
+    assert "NÃO edita arquivos" in prompt
     assert "validar_lote_bancada" not in prompt
 
 
