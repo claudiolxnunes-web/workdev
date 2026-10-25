@@ -23,6 +23,7 @@ com argumentos montados aqui.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import re
 import secrets
@@ -243,6 +244,59 @@ def remover_copia(meta: dict) -> None:
     if destino.exists():
         shutil.rmtree(destino, ignore_errors=True)
     _git(["worktree", "prune"], repo())
+
+
+def raiz_ativa(ident: str) -> Path:
+    """Cópia de uma sessão ativa, para o Explorer/editor/chat lerem dela."""
+    meta = _exigir(ident)
+    if meta["status"] != "ativa":
+        raise WorkspaceErro(409, "sessao_encerrada", f"a sessão {ident} não está ativa")
+    return Path(meta["caminho"])
+
+
+MAX_ARQUIVO_EDITADO = 200_000
+
+
+def salvar_arquivo(ident: str, caminho: str, texto: str, sha256_original: str) -> dict:
+    """Edição do operador no editor: grava na cópia da sessão e vira commit (decisão 4).
+
+    Mesmo espírito do `git apply --check` das fatias: só grava se o arquivo em
+    disco ainda é o que o operador abriu (sha256), se a cópia está limpa (sem
+    resto de fatia que falhou) e se nenhuma fatia está rodando. O commit sai
+    com a identidade do repositório — é o operador quem editou, não o modelo.
+    """
+    if not isinstance(texto, str) or len(texto.encode("utf-8")) > MAX_ARQUIVO_EDITADO:
+        raise WorkspaceErro(422, "arquivo_grande", f"o editor grava até {MAX_ARQUIVO_EDITADO} bytes")
+    with lock_execucao(ident):
+        meta = _exigir(ident)
+        if meta["status"] != "ativa":
+            raise WorkspaceErro(409, "sessao_encerrada", f"a sessão {ident} não está ativa")
+        if _alteracoes(meta):
+            raise WorkspaceErro(409, "sessao_com_alteracoes",
+                                "a cópia tem alteração sem commit (fatia que falhou?); repita ou pule a fatia antes")
+        copia = Path(meta["caminho"])
+        relativo = workspace._normalizar(caminho, copia)
+        if not relativo:
+            raise WorkspaceErro(422, "caminho_invalido", "informe o arquivo")
+        alvo = copia.resolve() / relativo
+        if not alvo.is_file():
+            raise WorkspaceErro(404, "arquivo_inexistente", "o editor só altera arquivo que já existe")
+        atual = alvo.read_bytes()
+        if hashlib.sha256(atual).hexdigest() != sha256_original:
+            raise WorkspaceErro(409, "arquivo_mudou", "o arquivo mudou na sessão desde que foi aberto; reabra antes de salvar")
+        novo = texto.encode("utf-8")
+        if novo == atual:
+            raise WorkspaceErro(409, "sem_mudanca", "nada mudou no arquivo")
+        if workspace.mascarar(atual.decode("utf-8", errors="replace")) != atual.decode("utf-8", errors="replace"):
+            raise WorkspaceErro(403, "arquivo_com_segredo", "o arquivo tem chave mascarada no editor; edite fora do Workspace")
+        alvo.write_bytes(novo)
+        _git_ok(["add", "--", relativo], copia, "git_add_falhou")
+        resultado = _git(["commit", "-m", f"edição manual: {relativo}\n\nFeita no editor do Workspace, sessão {ident}."], copia)
+        if resultado.returncode != 0:
+            _git(["checkout", "--", relativo], copia)
+            raise WorkspaceErro(502, "commit_falhou", (resultado.stderr or resultado.stdout).strip()[:300])
+        sha = _git_ok(["rev-parse", "HEAD"], copia, "head_indisponivel")
+        return {"caminho": relativo, "commit": sha, "sha256": hashlib.sha256(novo).hexdigest()}
 
 
 def encerrar(ident: str, descartar_alteracoes: bool = False) -> dict:

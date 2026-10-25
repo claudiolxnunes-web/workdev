@@ -125,3 +125,74 @@ def test_rotas_http(repo):
     assert cliente.get(f"/api/workspace/sessao/{ident}").json()["commits"] == []
     assert cliente.get(f"/api/workspace/sessao/{ident}/diff").json()["diff"] == ""
     assert cliente.post(f"/api/workspace/sessao/{ident}/encerrar").json()["status"] == "encerrada"
+
+
+# ---------------------------------------------------------------- editor e leitura da cópia
+
+def test_leituras_vem_da_copia_da_sessao(repo):
+    meta = sessao.criar()
+    commitar(meta, "app/mod.py", "def f():\n    return 5\n", "fatia 1")
+    (Path(meta["caminho"]) / "app" / "novo.py").write_text("Y = 1\n", encoding="utf-8")
+    copia = sessao.raiz_ativa(meta["id"])
+    assert "return 5" in workspace.ler_arquivo("app/mod.py", copia)["texto"]
+    assert "return 1" in workspace.ler_arquivo("app/mod.py")["texto"]
+    nomes = [i["caminho"] for i in workspace.arvore("app", copia)["itens"]]
+    assert "app/novo.py" in nomes and "app/novo.py" not in [i["caminho"] for i in workspace.arvore("app")["itens"]]
+    assert [i["caminho"] for i in workspace.alteracoes(copia)["itens"]] == ["app/novo.py"]
+    assert not any(i["caminho"].startswith("node_modules") for i in workspace.arvore("", copia)["itens"])
+
+
+def test_salvar_no_editor_vira_commit_do_operador(repo):
+    git(repo, "config", "user.name", "Operador")
+    git(repo, "config", "user.email", "op@x")
+    meta = sessao.criar()
+    copia = Path(meta["caminho"])
+    aberto = workspace.ler_arquivo("app/mod.py", copia)
+    r = sessao.salvar_arquivo(meta["id"], "app/mod.py", "def f():\n    return 42\n", aberto["sha256"])
+    assert (copia / "app" / "mod.py").read_text() == "def f():\n    return 42\n"
+    assert git(copia, "log", "-1", "--format=%an|%s") == "Operador|edição manual: app/mod.py"
+    assert r["commit"] == git(copia, "rev-parse", "HEAD")
+    # O checkout do operador não muda.
+    assert (repo / "app" / "mod.py").read_text() == "def f():\n    return 1\n"
+
+
+def test_salvar_recusa_arquivo_que_mudou_copia_suja_bloqueado_e_segredo(repo):
+    meta = sessao.criar()
+    copia = Path(meta["caminho"])
+    aberto = workspace.ler_arquivo("app/mod.py", copia)
+    for texto, sha, codigo in (("x\n", "0" * 64, "arquivo_mudou"), (aberto["texto"], aberto["sha256"], "sem_mudanca")):
+        with pytest.raises(WorkspaceErro) as erro:
+            sessao.salvar_arquivo(meta["id"], "app/mod.py", texto, sha)
+        assert erro.value.codigo == codigo
+    with pytest.raises(WorkspaceErro) as erro:
+        sessao.salvar_arquivo(meta["id"], ".env", "X=1\n", "0" * 64)
+    assert erro.value.codigo == "caminho_bloqueado"
+    commitar(meta, "app/chave.py", "TOKEN = 'sk-abcdefghijklmnop'\n", "chave")
+    chave = workspace.ler_arquivo("app/chave.py", copia)
+    assert chave["mascarado"] is True and "[mascarado]" in chave["texto"]
+    with pytest.raises(WorkspaceErro) as erro:
+        sessao.salvar_arquivo(meta["id"], "app/chave.py", chave["texto"] + "# x\n", chave["sha256"])
+    assert erro.value.codigo == "arquivo_com_segredo"
+    assert "sk-abcdefghijklmnop" in (copia / "app" / "chave.py").read_text()
+    (copia / "app" / "mod.py").write_text("sujo\n", encoding="utf-8")
+    with pytest.raises(WorkspaceErro) as erro:
+        sessao.salvar_arquivo(meta["id"], "app/outro.py", "x\n", "0" * 64)
+    assert erro.value.codigo == "sessao_com_alteracoes"
+
+
+def test_rotas_leem_a_copia_com_sessao(repo):
+    git(repo, "config", "user.name", "Operador")
+    git(repo, "config", "user.email", "op@x")
+    app = FastAPI()
+    app.include_router(rota.router, prefix="/api")
+    cliente = TestClient(app)
+    meta = sessao.criar()
+    commitar(meta, "app/mod.py", "def f():\n    return 8\n", "fatia")
+    assert "return 8" in cliente.get("/api/workspace/arquivo", params={"caminho": "app/mod.py", "sessao": meta["id"]}).json()["texto"]
+    assert "return 1" in cliente.get("/api/workspace/arquivo", params={"caminho": "app/mod.py"}).json()["texto"]
+    aberto = cliente.get("/api/workspace/arquivo", params={"caminho": "app/mod.py", "sessao": meta["id"]}).json()
+    salvo = cliente.post(f"/api/workspace/sessao/{meta['id']}/arquivo",
+                         json={"caminho": "app/mod.py", "texto": "def f():\n    return 9\n", "sha256": aberto["sha256"]})
+    assert salvo.status_code == 200
+    sessao.encerrar(meta["id"])
+    assert cliente.get("/api/workspace/arvore", params={"sessao": meta["id"]}).json()["detail"]["code"] == "sessao_encerrada"

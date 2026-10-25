@@ -560,7 +560,9 @@ def parecer(modelo: str, ident: str, observer: str | None = None) -> dict:
         verificacao = json.loads((pasta() / "verificacoes" / f"{ident}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         verificacao = {**verificar(modelo, ident)}
-    trechos = "\n\n".join(f"### {c} (linhas {i}-{f})\n```\n{ler_trecho(c, i, f)[0]}\n```" for c, i, f in meta["trechos"])
+    # Proposta feita na cópia de uma sessão: o observer lê os mesmos trechos, se a cópia ainda existe.
+    raiz = Path(meta["raiz"]) if meta.get("raiz") and Path(meta["raiz"]).is_dir() else None
+    trechos = "\n\n".join(f"### {c} (linhas {i}-{f})\n```\n{ler_trecho(c, i, f, raiz)[0]}\n```" for c, i, f in meta["trechos"])
     resultado = obs.observar(observer, obs.montar_mensagens(meta["instrucao"], trechos, texto, verificacao))
     _gravar(pasta() / "pareceres" / f"{ident}__{observer.replace('/', '--')}.json", {
         "id": ident, "modelo": modelo, "observer": observer, **resultado, "data": _agora()})

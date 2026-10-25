@@ -2,8 +2,10 @@
 
 As leituras do checkout são só GET: a lista vem do git e passa pelos bloqueios
 de services/workspace; o envio de tarefas ao modelo local continua nas rotas
-POST da Bancada. Os POST daqui são da sessão (services/workspace_sessao): criam
-e encerram a cópia isolada da sessão — nunca escrevem no checkout.
+POST da Bancada. Os POST daqui são da sessão (services/workspace_sessao e
+workspace_execucao): criam e encerram a cópia isolada, executam fatias, salvam
+edições do editor nela e incorporam — nada escreve no checkout, exceto o
+incorporar, que é clique do operador.
 """
 from __future__ import annotations
 
@@ -23,24 +25,32 @@ def _chamar(funcao, *args):
         raise HTTPException(erro.status, {"code": erro.codigo, "message": erro.mensagem}) from erro
 
 
+def _raiz(sessao: str | None):
+    """Com `sessao`, as leituras vêm da cópia da sessão ativa; sem, do checkout."""
+    return _chamar(workspace_sessao.raiz_ativa, sessao) if sessao else None
+
+
+SESSAO = Query(None, max_length=40)
+
+
 @router.get("/arvore")
-def arvore(pasta: str = Query("", max_length=500)):
-    return _chamar(workspace.arvore, pasta)
+def arvore(pasta: str = Query("", max_length=500), sessao: str | None = SESSAO):
+    return _chamar(workspace.arvore, pasta, _raiz(sessao))
 
 
 @router.get("/arquivo")
-def arquivo(caminho: str = Query(..., min_length=1, max_length=500)):
-    return _chamar(workspace.ler_arquivo, caminho)
+def arquivo(caminho: str = Query(..., min_length=1, max_length=500), sessao: str | None = SESSAO):
+    return _chamar(workspace.ler_arquivo, caminho, _raiz(sessao))
 
 
 @router.get("/alteracoes")
-def alteracoes():
-    return _chamar(workspace.alteracoes)
+def alteracoes(sessao: str | None = SESSAO):
+    return _chamar(workspace.alteracoes, _raiz(sessao))
 
 
 @router.get("/diff")
-def diff(caminho: str = Query(..., min_length=1, max_length=500)):
-    return _chamar(workspace.diff_arquivo, caminho)
+def diff(caminho: str = Query(..., min_length=1, max_length=500), sessao: str | None = SESSAO):
+    return _chamar(workspace.diff_arquivo, caminho, _raiz(sessao))
 
 
 # ---------------------------------------------------------------- sessão
@@ -49,6 +59,12 @@ class NovaSessao(BaseModel):
     task_id: str | None = Field(default=None, max_length=64)
     chat_session_id: str | None = Field(default=None, max_length=64)
     titulo: str | None = Field(default=None, max_length=200)
+
+
+class Edicao(BaseModel):
+    caminho: str = Field(min_length=1, max_length=500)
+    texto: str
+    sha256: str = Field(min_length=64, max_length=64)
 
 
 class Encerramento(BaseModel):
@@ -73,6 +89,11 @@ def estado_sessao(ident: str):
 @router.get("/sessao/{ident}/diff")
 def diff_sessao(ident: str):
     return _chamar(workspace_sessao.diff, ident)
+
+
+@router.post("/sessao/{ident}/arquivo")
+def salvar_arquivo(ident: str, pedido: Edicao):
+    return _chamar(workspace_sessao.salvar_arquivo, ident, pedido.caminho, pedido.texto, pedido.sha256)
 
 
 @router.post("/sessao/{ident}/encerrar")
