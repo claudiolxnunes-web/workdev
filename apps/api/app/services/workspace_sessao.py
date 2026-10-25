@@ -113,6 +113,26 @@ def _lock():
         yield
 
 
+@contextmanager
+def lock_execucao(ident: str):
+    """Uma execução de fatia por sessão; encerrar e incorporar esperam por ela."""
+    raiz().mkdir(parents=True, exist_ok=True)
+    with open(raiz() / f".execucao-{ident}.lock", "w") as arquivo:
+        try:
+            fcntl.flock(arquivo, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as erro:
+            raise WorkspaceErro(409, "fatia_em_execucao", "há uma fatia em execução nesta sessão") from erro
+        yield
+
+
+def em_execucao(ident: str) -> bool:
+    try:
+        with lock_execucao(ident):
+            return False
+    except WorkspaceErro:
+        return True
+
+
 def _todas() -> list[dict]:
     pasta = raiz() / "_sessoes"
     if not pasta.is_dir():
@@ -216,21 +236,28 @@ def diff(ident: str) -> dict:
             "nao_rastreados": novos, "truncado": truncado}
 
 
+def remover_copia(meta: dict) -> None:
+    """Tira o diretório da sessão; o branch fica."""
+    destino = Path(meta["caminho"])
+    _git(["worktree", "remove", "--force", str(destino)], repo())
+    if destino.exists():
+        shutil.rmtree(destino, ignore_errors=True)
+    _git(["worktree", "prune"], repo())
+
+
 def encerrar(ident: str, descartar_alteracoes: bool = False) -> dict:
     with _lock():
         meta = _exigir(ident)
         if meta["status"] != "ativa":
             raise WorkspaceErro(409, "sessao_encerrada", f"a sessão {ident} já está encerrada")
+        if em_execucao(ident):
+            raise WorkspaceErro(409, "fatia_em_execucao", "espere a fatia em execução terminar")
         pendentes = _alteracoes(meta)
         if pendentes and not descartar_alteracoes:
             raise WorkspaceErro(409, "sessao_com_alteracoes",
                                 f"a sessão tem {len(pendentes)} alteração(ões) sem commit; "
                                 "encerrar agora as descarta (o que já foi commitado fica no branch)")
-        destino = Path(meta["caminho"])
-        _git(["worktree", "remove", "--force", str(destino)], repo())
-        if destino.exists():
-            shutil.rmtree(destino, ignore_errors=True)
-        _git(["worktree", "prune"], repo())
+        remover_copia(meta)
         meta = {**meta, "status": "encerrada", "encerrada_em": _agora(),
                 "alteracoes_descartadas": len(pendentes)}
         _gravar_meta(meta)

@@ -8,9 +8,10 @@ e encerram a cópia isolada da sessão — nunca escrevem no checkout.
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.services import workspace, workspace_sessao
+from app.services import workspace, workspace_execucao, workspace_sessao
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
@@ -77,3 +78,41 @@ def diff_sessao(ident: str):
 @router.post("/sessao/{ident}/encerrar")
 def encerrar_sessao(ident: str, pedido: Encerramento | None = None):
     return _chamar(workspace_sessao.encerrar, ident, bool(pedido and pedido.descartar_alteracoes))
+
+
+# ---------------------------------------------------------------- execução
+
+class Plano(BaseModel):
+    plano: dict
+
+
+class Execucao(BaseModel):
+    correcao: str | None = Field(default=None, max_length=2000)
+
+
+class Incorporacao(BaseModel):
+    modo: str = Field(pattern="^(merge|squash)$")
+    mensagem: str | None = Field(default=None, max_length=4000)
+
+
+@router.post("/sessao/{ident}/plano")
+def aprovar_plano(ident: str, pedido: Plano):
+    return _chamar(workspace_execucao.aprovar_plano, ident, pedido.plano)
+
+
+@router.post("/sessao/{ident}/fatias/{n}/executar")
+def executar_fatia(ident: str, n: int, pedido: Execucao | None = None):
+    # Erros de validação chegam como evento "erro" do próprio fluxo.
+    return StreamingResponse(workspace_execucao.executar_fatia(ident, n, pedido.correcao if pedido else None),
+                             media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/sessao/{ident}/fatias/{n}/pular")
+def pular_fatia(ident: str, n: int):
+    return _chamar(workspace_execucao.pular_fatia, ident, n)
+
+
+@router.post("/sessao/{ident}/incorporar")
+def incorporar(ident: str, pedido: Incorporacao):
+    return _chamar(workspace_execucao.incorporar, ident, pedido.modo, pedido.mensagem)

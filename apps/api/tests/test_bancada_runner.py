@@ -24,7 +24,7 @@ def ambiente(tmp_path, monkeypatch):
     monkeypatch.setenv("WORKDEV_BANCADA_DIR", str(pasta))
     monkeypatch.setattr(runner, "REPO_TRABALHO", repo)
     monkeypatch.setattr(runner, "chave_modelo", lambda: "moe")
-    monkeypatch.setattr(runner, "commit_base", lambda: "abc1234")
+    monkeypatch.setattr(runner, "commit_base", lambda raiz=None: "abc1234")
     monkeypatch.setattr(runner, "llama_no_ar", lambda: True)
     roteiro = {"partes": [[{"tipo": "token", "texto": "proposta "}, {"tipo": "token", "texto": "ok\n"},
                            {"tipo": "tokens", "tokens": 7}]]}
@@ -241,7 +241,7 @@ def test_bancada_sem_ferramentas_nao_manda_tools(com_tools):
 
 def test_workspace_le_com_ferramenta_e_responde(com_tools, monkeypatch):
     from app.services import leitura_repo
-    monkeypatch.setattr(leitura_repo, "ler_arquivo", lambda c, i, f: {
+    monkeypatch.setattr(leitura_repo, "ler_arquivo", lambda c, i, f, raiz=None: {
         "caminho": c, "inicio": i, "fim": f, "total_linhas": 3, "texto": "AGENT = 'x'\ndef current():\n    return AGENT"})
     com_tools.roteiro["partes"] = [
         [{"tipo": "tokens", "tokens": 5, "medicao": {"prefill_ms": 1000.0, "prefill_tok": 10, "cache_tok": 0, "prompt_tok": 10,

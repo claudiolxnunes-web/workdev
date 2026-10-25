@@ -79,13 +79,15 @@ def registrar(linha: dict) -> None:
 
 # ---------------------------------------------------------------- tarefa
 
-def ler_trecho(caminho: str, inicio: int, fim: int) -> tuple[str, int, int]:
+def ler_trecho(caminho: str, inicio: int, fim: int, raiz: Path | None = None) -> tuple[str, int, int]:
+    """`raiz`: a cópia da sessão do Workspace; sem ela, o checkout de trabalho."""
     if not isinstance(caminho, str) or not caminho.strip():
         raise BancadaErro(422, "trecho_invalido", "caminho vazio")
-    alvo = Path(os.path.realpath(REPO_TRABALHO / caminho.strip()))
-    if REPO_TRABALHO.resolve() not in alvo.parents:
+    base = (raiz or REPO_TRABALHO).resolve()
+    alvo = Path(os.path.realpath(base / caminho.strip()))
+    if base not in alvo.parents:
         raise BancadaErro(422, "trecho_invalido", f"fora do repositório: {caminho}")
-    relativo = alvo.relative_to(REPO_TRABALHO.resolve()).as_posix().lower()
+    relativo = alvo.relative_to(base).as_posix().lower()
     for proibido in BLOQUEADOS:
         if proibido in caminho.lower() or proibido in relativo:
             raise BancadaErro(422, "trecho_bloqueado", f"caminho bloqueado ({proibido}): {caminho}")
@@ -99,7 +101,7 @@ def ler_trecho(caminho: str, inicio: int, fim: int) -> tuple[str, int, int]:
     return "\n".join(linhas[inicio - 1:fim]), inicio, fim
 
 
-def montar_prompt(instrucao: str, trechos: list) -> tuple[str, list]:
+def montar_prompt(instrucao: str, trechos: list, raiz: Path | None = None) -> tuple[str, list]:
     if not instrucao or not instrucao.strip():
         raise BancadaErro(422, "instrucao_vazia", "escreva a instrução")
     if len(instrucao) > MAX_INSTRUCAO:
@@ -108,7 +110,7 @@ def montar_prompt(instrucao: str, trechos: list) -> tuple[str, list]:
         raise BancadaErro(422, "trechos_demais", f"no máximo {MAX_TRECHOS} trechos")
     partes, normalizados = [instrucao.strip()], []
     for caminho, ini, fim in trechos:
-        texto, ini, fim = ler_trecho(caminho, ini, fim)
+        texto, ini, fim = ler_trecho(caminho, ini, fim, raiz)
         normalizados.append([caminho.strip(), ini, fim])
         partes.append(f"### {caminho.strip()} (linhas {ini}-{fim})\n```\n{texto}\n```")
     return "\n\n".join(partes), normalizados
@@ -122,8 +124,8 @@ def chave_modelo() -> str:
     return "".join(c for c in bruto if c.islower() or c.isdigit()) or "desconhecido"
 
 
-def commit_base() -> str:
-    resultado = subprocess.run(["git", "-C", str(REPO_TRABALHO), "rev-parse", "--short=12", "HEAD"],
+def commit_base(raiz: Path | None = None) -> str:
+    resultado = subprocess.run(["git", "-C", str(raiz or REPO_TRABALHO), "rev-parse", "--short=12", "HEAD"],
                                capture_output=True, text=True, timeout=10)
     if resultado.returncode != 0:
         raise BancadaErro(500, "sem_base", "não foi possível ler o HEAD do checkout de trabalho")
@@ -280,7 +282,7 @@ AVISO_LIMITE_FERRAMENTA = ("Limite de leituras atingido. Responda agora, no form
                            "leu. Se faltar informação, responda exatamente: FALTA: <o que falta e onde estaria>.")
 
 
-def _ferramenta(chamada: dict) -> tuple[str, dict, list | None]:
+def _ferramenta(chamada: dict, raiz: Path | None = None) -> tuple[str, dict, list | None]:
     """Executa uma chamada do modelo: (saída em texto, argumentos, trecho lido ou None)."""
     from app.services import leitura_repo
     nome = (chamada.get("function") or {}).get("name") or ""
@@ -292,18 +294,18 @@ def _ferramenta(chamada: dict) -> tuple[str, dict, list | None]:
         return f"ERRO: argumentos inválidos ({erro})", {}, None
     try:
         if nome == "buscar_texto":
-            r = leitura_repo.buscar_texto(args.get("texto"), args.get("caminho") or ".")
+            r = leitura_repo.buscar_texto(args.get("texto"), args.get("caminho") or ".", raiz)
             linhas = [f"{o['caminho']}:{o['linha']}: {o['texto']}" for o in r["ocorrencias"]]
             saida = "\n".join(linhas) or "(nenhuma ocorrência)"
             if r.get("truncado"):
                 saida += "\n[... mais ocorrências; restrinja a pasta]"
             return saida, args, None
         if nome == "listar_pasta":
-            r = leitura_repo.listar_pasta(args.get("caminho") or ".")
+            r = leitura_repo.listar_pasta(args.get("caminho") or ".", raiz)
             return "\n".join(r["itens"]) or "(vazia)", args, None
         if nome == "ler_arquivo":
             r = leitura_repo.ler_arquivo(args.get("caminho"), int(args.get("inicio") or 1),
-                                         int(args.get("fim") or leitura_repo.MAX_LINHAS_ARQUIVO))
+                                         int(args.get("fim") or leitura_repo.MAX_LINHAS_ARQUIVO), raiz)
             corpo = "\n".join(f"{r['inicio'] + i:>5}| {l}" for i, l in enumerate(r["texto"].split("\n")))
             saida = f"### {r['caminho']} (linhas {r['inicio']}-{r['fim']} de {r['total_linhas']})\n{corpo}"
             return saida, args, [r["caminho"], r["inicio"], r["fim"]]
@@ -358,13 +360,13 @@ def _com_sistema(mensagens: list, ferramentas: bool) -> list:
 
 def preparar_execucao(ident: str, instrucao: str, trechos: list, max_tokens: int,
                       exige: dict | None = None, espera_diff: bool = False,
-                      ferramentas: bool = False) -> dict:
+                      ferramentas: bool = False, raiz: Path | None = None) -> dict:
     if not ID_VALIDO.match(ident or ""):
         raise BancadaErro(422, "id_invalido", "use letras, números, _ ou - (até 80)")
     if (pasta() / chave_modelo() / f"{ident}.txt").exists():
         raise BancadaErro(409, "id_existente", f"já existe a proposta {ident} para {chave_modelo()}")
-    prompt, normalizados = montar_prompt(instrucao, trechos)
-    return {"id": ident, "instrucao": instrucao.strip(), "trechos": normalizados, "prompt": prompt,
+    prompt, normalizados = montar_prompt(instrucao, trechos, raiz)
+    return {"raiz": str(raiz) if raiz else None, "id": ident, "instrucao": instrucao.strip(), "trechos": normalizados, "prompt": prompt,
             "mensagens": _com_sistema([{"role": "user", "content": prompt}], ferramentas),
             "max_tokens": max(64, min(int(max_tokens or 1024), MAX_TOKENS)), "origem_de": None,
             "exige": validar_exige(exige), "espera_diff": bool(espera_diff), "ferramentas": bool(ferramentas)}
@@ -381,7 +383,7 @@ def preparar_reenvio(modelo: str, ident: str, prompt_correcao: str) -> dict:
     anterior = (pasta() / modelo / f"{ident}.txt").read_text(encoding="utf-8")
     raiz = meta.get("origem_raiz") or ident
     ferramentas = bool(meta.get("ferramentas"))
-    return {"id": _proximo_id(raiz), "instrucao": meta["instrucao"], "trechos": meta["trechos"],
+    return {"raiz": meta.get("raiz"), "id": _proximo_id(raiz), "instrucao": meta["instrucao"], "trechos": meta["trechos"],
             "prompt": meta["prompt"],
             "mensagens": _com_sistema([{"role": "user", "content": meta["prompt"]},
                                        {"role": "assistant", "content": anterior},
@@ -406,7 +408,8 @@ def _executar(plano: dict) -> Iterator[str]:
         if not llama_no_ar():
             yield _sse({"tipo": "erro", "codigo": "modelo_desligado", "mensagem": "O modelo local está desligado. Use Ligar."})
             return
-        chave, base = chave_modelo(), commit_base()
+        raiz = Path(plano["raiz"]) if plano.get("raiz") else None
+        chave, base = chave_modelo(), commit_base(raiz)
         yield _sse({"tipo": "inicio", "id": plano["id"], "modelo": chave, "base": base})
         inicio, texto, tokens, retentativa, suspeitos = time.monotonic(), "", None, False, []
         medicao: dict = {}
@@ -438,7 +441,7 @@ def _executar(plano: dict) -> Iterator[str]:
                 voltas += 1
                 mensagens.append({"role": "assistant", "content": texto, "tool_calls": chamadas})
                 for chamada in chamadas:
-                    saida, args, lido = _ferramenta(chamada)
+                    saida, args, lido = _ferramenta(chamada, raiz)
                     saida = saida if len(saida) <= MAX_SAIDA_FERRAMENTA else (
                         saida[:MAX_SAIDA_FERRAMENTA] + f"\n[... cortado: {len(saida) - MAX_SAIDA_FERRAMENTA} caracteres]")
                     contexto += len(saida)
@@ -492,6 +495,7 @@ def _executar(plano: dict) -> Iterator[str]:
             "origem_de": plano.get("origem_de"), "origem_raiz": plano.get("origem_raiz"),
             "prompt_correcao": plano.get("prompt_correcao"), "exige": plano.get("exige") or {},
             "espera_diff": bool(plano.get("espera_diff")), "ferramentas": bool(plano.get("ferramentas")),
+            "raiz": plano.get("raiz"),
             "leituras": leituras, "data": _agora()})
         registrar({"id": plano["id"], "modelo": chave, "origem": "pagina", "tipo": "execucao",
                    "segundos": segundos, "tokens": tokens, "retentativa": retentativa,

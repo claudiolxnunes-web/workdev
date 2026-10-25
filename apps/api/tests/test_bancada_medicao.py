@@ -36,7 +36,7 @@ def ambiente(tmp_path, monkeypatch):
     monkeypatch.setenv("WORKDEV_BANCADA_DIR", str(pasta))
     monkeypatch.setattr(runner, "REPO_TRABALHO", repo)
     monkeypatch.setattr(runner, "chave_modelo", lambda: "moe")
-    monkeypatch.setattr(runner, "commit_base", lambda: "abc1234")
+    monkeypatch.setattr(runner, "commit_base", lambda raiz=None: "abc1234")
     monkeypatch.setattr(runner, "llama_no_ar", lambda: True)
 
     def falso_stream(mensagens, max_tokens, conhecido, vigiar):
