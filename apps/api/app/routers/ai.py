@@ -24,7 +24,7 @@ from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.ai_routing import AICallLog, AIModelCatalog
 from app.services import autoridade, context_engine, rag_search
-from app.services import ai_cost_guard, agent_runtimes, bancada_runner
+from app.services import ai_cost_guard, agent_runtimes, bancada_runner, local_model, tool_loop
 from app.services.backlog_status import BacklogStatusError, apply_status
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
@@ -1303,10 +1303,23 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
     tools = autoridade.tools_para(nivel, TOOLS)
     input_tokens = output_tokens = 0
     usadas: set[str] = set()
-    for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
+    guarda = tool_loop.Guarda(tools, local=False)
+    try:
+        return _loop_anthropic(client, messages, db, model, system, nivel, max_output_tokens, reasoning_effort,
+                               backlog_id, tools, guarda, usadas)
+    except tool_loop.Interromper as e:
+        return ProviderResult(e.mensagem, guarda.input_tokens, guarda.output_tokens)
+
+
+def _loop_anthropic(client, messages, db, model, system, nivel, max_output_tokens, reasoning_effort,
+                    backlog_id, tools, guarda, usadas) -> ProviderResult:
+    input_tokens = output_tokens = 0
+    guarda.input_tokens = guarda.output_tokens = 0
+    for passo in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
         # max_tokens limita thinking + texto da resposta juntos: 4096 truncava
         # no meio quando o modelo pensa antes de responder. Hoje o valor vem do
         # cost guard (AI_MAX_OUTPUT_TOKENS, default 16000) em vez de fixo aqui.
+        inicio = time.monotonic()
         resp = client.messages.create(
             model=model or ANTHROPIC_MODEL,
             max_tokens=max_output_tokens,
@@ -1314,9 +1327,15 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
             system=system or SYSTEM,
             tools=tools,
             messages=messages,
+            timeout=guarda.prazo(float(os.getenv("ANTHROPIC_TIMEOUT", "120"))),
         )
         input_tokens += int(getattr(resp.usage, "input_tokens", 0) or 0)
         output_tokens += int(getattr(resp.usage, "output_tokens", 0) or 0)
+        guarda.input_tokens, guarda.output_tokens = input_tokens, output_tokens
+        _telemetria("anthropic", model or ANTHROPIC_MODEL, None, passo, inicio, getattr(resp, "usage", None),
+                    "input_tokens", "output_tokens",
+                    [b.name for b in resp.content if getattr(b, "type", None) == "tool_use"],
+                    resp.stop_reason, backlog_id)
         if resp.stop_reason == "max_tokens":
             txt = "".join(b.text for b in resp.content if b.type == "text")
             final = (txt + "\n\n[resposta truncada — limite de tokens]") \
@@ -1333,13 +1352,7 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
         for block in resp.content:
             if block.type == "tool_use":
                 usadas.add(block.name)
-                try:
-                    out = executar_tool(block.name, block.input, db, nivel, backlog_id=backlog_id)
-                except Exception as e:
-                    db.rollback()
-                    out = json.dumps({"erro": f"argumentos invalidos: "
-                                      f"{type(e).__name__} {e}"},
-                                     ensure_ascii=False)
+                out = _rodar_tool(guarda, block.name, block.input, db, nivel, backlog_id)
                 results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -1347,6 +1360,34 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
                 })
         messages.append({"role": "user", "content": results})
     return ProviderResult(mensagem_limite_de_passos(usadas), input_tokens, output_tokens)
+
+
+def _rodar_tool(guarda: "tool_loop.Guarda", nome: str, bruto, db: Session, nivel: str, backlog_id) -> str:
+    """Parse, validação e repetição antes de executar; qualquer erro volta ao modelo como resultado."""
+    args, erro = guarda.argumentos(nome, bruto)
+    if erro is None:
+        erro = guarda.repetida(nome, args)
+    if erro is not None:
+        return erro
+    try:
+        out = executar_tool(nome, args, db, nivel, backlog_id=backlog_id)
+    except Exception as e:
+        db.rollback()
+        out = json.dumps({"erro": f"argumentos invalidos: {type(e).__name__} {e}"}, ensure_ascii=False)
+    return guarda.truncar(out)
+
+
+def _telemetria(provider: str, model: str, runtime_id: str | None, passo: int, inicio: float, usage,
+                campo_entrada: str, campo_saida: str, tools: list[str], fim, backlog_id, local_llama=False) -> None:
+    segundos = round(time.monotonic() - inicio, 2)
+    saida = int(getattr(usage, campo_saida, 0) or 0)
+    tool_loop.registrar(provider=provider, model=model, runtime_id=runtime_id,
+                        modelo_local=local_model.current() if local_llama else None, passo=passo,
+                        segundos=segundos, prompt_tokens=int(getattr(usage, campo_entrada, 0) or 0),
+                        # Tokens gerados / tempo total da chamada (prefill incluso): não é a taxa de geração.
+                        completion_tokens=saida, tok_s_total=round(saida / segundos, 2) if segundos else None,
+                        tools=tools, fim=str(fim) if fim is not None else None,
+                        backlog_id=str(backlog_id) if backlog_id else None)
 
 def tools_openai(nivel: str = autoridade.NIVEL_PADRAO) -> list:
     """Mesmo catálogo filtrado da camada 1, no formato dos providers compat."""
@@ -1380,12 +1421,17 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
         else None
     )
     client = get_openai(provider, runtime_id) if runtime_id else get_openai(provider)
+    # llama-server tem um slot só: a chamada entra na fila da Bancada/Workspace.
+    llama = local_runtime is not None and local_runtime.engine == agent_runtimes.ENGINE_LLAMACPP
+    guarda = tool_loop.Guarda(autoridade.tools_para(nivel, TOOLS), local=runtime_id is not None)
+    por_chamada = float(os.getenv("WORKDEV_LOCAL_CHAT_TIMEOUT", "900")) if runtime_id \
+        else float(os.getenv("AI_PROVIDER_TIMEOUT", "30"))
+    input_tokens = output_tokens = 0
     try:
         msgs = [{"role": "system", "content": system or SYSTEM}] + messages
         tools = tools_openai(nivel)
-        input_tokens = output_tokens = 0
         usadas: set[str] = set()
-        for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
+        for passo in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
             kwargs = dict(
                 model=model or COMPAT_PROVIDERS[provider]["default_model"],
                 tools=tools,
@@ -1421,30 +1467,34 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
                 kwargs["temperature"] = 0
             if reasoning_effort and provider == "openai":
                 kwargs["reasoning_effort"] = reasoning_effort
-            resp = client.chat.completions.create(**kwargs)
+            kwargs["timeout"] = guarda.prazo(por_chamada)
+            inicio = time.monotonic()
+            with tool_loop.slot_local(llama, espera_s=min(tool_loop.ESPERA_SLOT_PADRAO, guarda.restante())):
+                kwargs["timeout"] = guarda.prazo(por_chamada)
+                resp = client.chat.completions.create(**kwargs)
             usage = getattr(resp, "usage", None)
             input_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
             output_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
             msg = resp.choices[0].message
+            _telemetria(provider, kwargs["model"], runtime_id, passo, inicio, usage, "prompt_tokens",
+                        "completion_tokens", [tc.function.name for tc in (msg.tool_calls or [])],
+                        resp.choices[0].finish_reason if hasattr(resp.choices[0], "finish_reason") else None,
+                        backlog_id, local_llama=llama)
             if not msg.tool_calls:
                 return ProviderResult(msg.content or "", input_tokens, output_tokens)
             msgs.append(msg)
             for tc in msg.tool_calls:
                 usadas.add(tc.function.name)
-                args = json.loads(tc.function.arguments or "{}")
-                try:
-                    out = executar_tool(tc.function.name, args, db, nivel, backlog_id=backlog_id)
-                except Exception as e:
-                    db.rollback()
-                    out = json.dumps({"erro": f"argumentos invalidos: "
-                                      f"{type(e).__name__} {e}"},
-                                     ensure_ascii=False)
+                # Antes o json.loads ficava fora do try: JSON quebrado derrubava a requisição.
+                out = _rodar_tool(guarda, tc.function.name, tc.function.arguments or "{}", db, nivel, backlog_id)
                 msgs.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": out,
                 })
         return ProviderResult(mensagem_limite_de_passos(usadas), input_tokens, output_tokens)
+    except tool_loop.Interromper as e:
+        return ProviderResult(e.mensagem, input_tokens, output_tokens)
     finally:
         if runtime_id:
             client.close()
