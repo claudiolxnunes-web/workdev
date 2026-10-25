@@ -4,6 +4,7 @@ import {
   ARCHIVE_REASONS,
   createBancadaPlanningSession,
   createTaskPlanningSession,
+  createWorkspacePlanningSession,
   getSubtasks,
   getTaskPlanningEligibility,
   updateSubtask,
@@ -143,15 +144,22 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
       "Não foi possível planejar a task para a Bancada Local.");
   }
 
-  async function openPlanning(create: () => Promise<{ id: string }>, autostart: string, fallback: string) {
+  // Terceiro destino: o supervisor do Workspace Local. O Workspace tem sessão
+  // própria, então não mexe na chave de "última conversa" do AI Hub.
+  async function planForWorkspace() {
+    await openPlanning(() => createWorkspacePlanningSession(item!.id), "workspace",
+      "Não foi possível planejar a task para o Workspace Local.", "/workspace");
+  }
+
+  async function openPlanning(create: () => Promise<{ id: string }>, autostart: string, fallback: string, destino = "/ai-hub") {
     if (planningRef.current) return;
     planningRef.current = true;
     setPlanning(true);
     setPlanningError("");
     try {
       const session = await create();
-      sessionStorage.setItem("workdev_chat_session", session.id);
-      navigate(`/ai-hub?session=${encodeURIComponent(session.id)}&autostart=${autostart}`);
+      if (destino === "/ai-hub") sessionStorage.setItem("workdev_chat_session", session.id);
+      navigate(`${destino}?session=${encodeURIComponent(session.id)}&autostart=${autostart}`);
     } catch (error: unknown) {
       setPlanningError(error instanceof Error && error.message ? error.message : fallback);
       planningRef.current = false;
@@ -254,6 +262,17 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
               Plano para a Bancada Local
             </button>
           : <p className="mb-4 text-sm text-slate-400">Escreva a descrição da task para planejá-la na Bancada Local.</p>)}
+        {/* Terceiro destino: o Workspace Local, onde o modelo local edita de verdade.
+            Não cria plano oficial, então não depende da elegibilidade do envio ao AI Hub. */}
+        {!editing && ["todo", "doing", "blocked"].includes(item.status) && (item.description?.trim()
+          ? <button
+              onClick={planForWorkspace}
+              disabled={planning}
+              className="mb-4 w-full rounded-lg border border-sky-700 px-4 py-2.5 font-medium text-sky-200 transition-colors hover:bg-sky-900/40 disabled:cursor-wait disabled:opacity-60"
+            >
+              Plano para o Workspace Local
+            </button>
+          : <p className="mb-4 text-sm text-slate-400">Escreva a descrição da task para planejá-la no Workspace Local.</p>)}
         {planningError && (
           <p role="alert" className="mb-4 text-sm text-red-400">{planningError}</p>
         )}

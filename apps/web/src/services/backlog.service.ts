@@ -152,6 +152,21 @@ export async function createBancadaPlanningSession(taskId: string): Promise<{ id
   return response.json();
 }
 
+/** Sessão do supervisor que fatia a task para o Workspace Local (modo Observar). */
+export async function createWorkspacePlanningSession(taskId: string): Promise<{ id: string }> {
+  const response = await fetch("/api/chat/workspace/planejar", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ task_id: taskId }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const message = errorData.detail?.message || errorData.detail || "Erro ao planejar a task para o Workspace Local";
+    throw new Error(typeof message === "string" ? message : "Erro ao planejar a task para o Workspace Local");
+  }
+  return response.json();
+}
+
 export async function createTaskPlanningSession(
   taskId: string
 ): Promise<TaskPlanningSession> {

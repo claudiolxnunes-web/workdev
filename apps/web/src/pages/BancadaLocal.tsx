@@ -7,6 +7,7 @@ import {
 } from "@/services/bancada.service"
 import { Checagens, Pareceres, Selo } from "@/modules/bancada/Resultado"
 import { SeletorObserver } from "@/modules/bancada/SeletorObserver"
+import { SeletorModeloLocal } from "@/modules/local/SeletorModeloLocal"
 import { ultimoPromptCorrecao } from "@/modules/bancada/proposta"
 import { PlanejadorModal } from "@/components/bancada/PlanejadorModal"
 
@@ -39,6 +40,11 @@ function EstadoModelo({ estado, onAcao, acaoEmCurso }: {
         <div><dt className="text-xs text-slate-500">Memória do processo</dt><dd>{mb(estado.processo_mb)}</dd></div>
         <div><dt className="text-xs text-slate-500">Memória livre</dt><dd>{mb(estado.memoria.disponivel_mb)} de {mb(estado.memoria.total_mb)}</dd></div>
       </dl>
+      {/* Todos os modelos locais ficam à mão. O padrão é o MoE de 35B; trocar
+          reinicia o llama-server e é recusado com o local-code ocupado. */}
+      <div className="mt-3 border-t border-slate-800 pt-3">
+        <SeletorModeloLocal desabilitado={acaoEmCurso || Boolean(estado.ocupado)} />
+      </div>
       {!estado.pasta_existe && <p className="mt-2 text-xs text-amber-300">Pasta da Bancada não encontrada: {estado.pasta}</p>}
     </section>
   )

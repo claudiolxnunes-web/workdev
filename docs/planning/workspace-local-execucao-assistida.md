@@ -66,6 +66,48 @@ Novo:
 O que muda no código: o painel direito deixa de ser o `ChatLocal` e passa a ser
 o chat do supervisor; o `ChatLocal` entra no centro; o `Editor` ganha escrita.
 
+### 3.1 O que já está feito (entrada no Workspace)
+
+O backlog ganhou o terceiro destino, ao lado de "Enviar ao AI Hub" e "Plano
+para a Bancada Local":
+
+- **"Plano para o Workspace Local"** (`POST /api/chat/workspace/planejar`):
+  cria uma sessão de chat em modo Observar com o prompt do supervisor
+  (`_workspace_planning_context`) e abre `/workspace?session=<id>&autostart=workspace`.
+  A sessão do Workspace **não** toma a vaga da task reservada ao AI Hub
+  (`uq_chat_sessions_task_id`) e **não** mexe na chave `workdev_chat_session`:
+  a conversa do supervisor é do Workspace, não do AI Hub.
+- **Lateral direita: `ChatSupervisor`** (`modules/workspace/ChatSupervisor.tsx`).
+  Conversa com o modelo grande, com seletor de modelo: **todos** os modelos
+  ficam à mão — os da nuvem (OpenRouter) e os locais. A escolha fica guardada.
+- **Centro: o chat do modelo local** desceu para o painel inferior, com abas
+  `Terminal | Local` no padrão do rodapé do VS Code. O chat do supervisor ficou
+  à direita, como o Copilot do VS Code.
+- **Troca do modelo local**: `GET /api/bancada/modelo/opcoes` e
+  `POST /api/bancada/modelo/trocar` (o llama-server é compartilhado pela
+  Bancada, pelo Workspace e pelo local-code). O seletor
+  (`modules/local/SeletorModeloLocal.tsx`) aparece na Bancada e no chat do
+  Workspace. O padrão segue sendo o **Qwen3.8 35B A3B MoE**; trocar reinicia o
+  llama-server e é recusado (`agent_busy`) enquanto o local-code tem trabalho
+  em andamento.
+
+### 3.2 O supervisor precisa ver o estado do trabalho
+
+O operador para uma configuração no meio da execução e pede ao supervisor para
+olhar. Isso **não** é possível hoje: o supervisor só enxerga o repositório
+(`ler_trecho`), não o que a sessão já fez.
+
+Falta uma ferramenta de leitura do estado da sessão, com o mesmo espírito de
+`ler_trecho` (somente leitura, sem escopo amplo):
+
+- `ler_estado_sessao`: o diff acumulado do worktree da sessão, os arquivos já
+  tocados, a última resposta do modelo local e o gate pendente.
+- Sem ela, o supervisor planeja no escuro: não sabe o que já foi aplicado e
+  repropõe o que já existe.
+
+Esta é a próxima peça do laço de execução (§4) e entra antes da escrita no
+editor (§5).
+
 ## 4. O laço de execução
 
 Uma fatia por vez, com a pessoa no comando:

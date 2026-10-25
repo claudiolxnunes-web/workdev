@@ -290,6 +290,44 @@ def _fluxo(plano: dict) -> StreamingResponse:
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+class TrocarModelo(BaseModel):
+    chave: str = Field(description="Chave do modelo local (moe, q27, dev, fast)")
+
+
+# Declarados ANTES de "/modelo/{acao}": o catch-all de ação viria antes e
+# engoliria estas rotas.
+@router.get("/modelo/opcoes")
+def modelo_opcoes():
+    """Os modelos locais disponíveis e qual deles está em uso agora.
+
+    O modelo em uso é o do llama-server compartilhado pela Bancada, pelo chat
+    do Workspace e pelo agente local-code: trocar aqui vale para os três.
+    """
+    from app.services import local_model
+    return {
+        "atual": local_model.current(),
+        "modelos": [{"chave": m["key"], "label": m["label"]} for m in local_model.options()],
+    }
+
+
+@router.post("/modelo/trocar")
+def modelo_trocar(pedido: TrocarModelo):
+    """Troca o modelo local em uso. O llama-server reinicia se estiver ligado.
+
+    Recusa quando o local-code está com trabalho em andamento: trocar o modelo
+    no meio de uma execução quebraria a corrida.
+    """
+    from app.database import SessionLocal
+    from app.services import local_model
+    db = SessionLocal()
+    try:
+        return local_model.switch(pedido.chave, db)
+    except local_model.SwitchError as erro:
+        raise HTTPException(409, {"code": erro.code, "message": erro.message}) from erro
+    finally:
+        db.close()
+
+
 @router.post("/modelo/{acao}")
 def modelo(acao: str):
     if acao not in ("ligar", "desligar"):

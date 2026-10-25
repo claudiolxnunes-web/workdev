@@ -139,7 +139,8 @@ def test_ligar_desligar_e_nao_desliga_ocupado(ambiente, monkeypatch):
     with runner._lock_execucao():
         assert ambiente.cliente.post("/api/bancada/modelo/desligar").status_code == 409
     assert chamadas == ["start"]
-    assert ambiente.cliente.post("/api/bancada/modelo/trocar").status_code == 404
+    # Ação desconhecida no /modelo/{acao}: 404. ("trocar" virou rota própria.)
+    assert ambiente.cliente.post("/api/bancada/modelo/inventada").status_code == 404
 
 
 def test_exige_e_espera_diff_chegam_as_checagens(ambiente, monkeypatch):

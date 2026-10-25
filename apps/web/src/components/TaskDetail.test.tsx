@@ -6,6 +6,7 @@ import TaskDetail from "./TaskDetail";
 import {
   createBancadaPlanningSession,
   createTaskPlanningSession,
+  createWorkspacePlanningSession,
   getSubtasks,
   getTaskPlanningEligibility,
 } from "../services/backlog.service";
@@ -13,6 +14,7 @@ import {
 vi.mock("../services/backlog.service", () => ({
   createBancadaPlanningSession: vi.fn(),
   createTaskPlanningSession: vi.fn(),
+  createWorkspacePlanningSession: vi.fn(),
   getSubtasks: vi.fn(),
   getTaskPlanningEligibility: vi.fn(),
   updateSubtask: vi.fn(),
@@ -147,5 +149,29 @@ describe("TaskDetail: planejamento no AI Hub", () => {
     render(<MemoryRouter><TaskDetail item={item} onClose={vi.fn()} onAdvance={vi.fn()} /></MemoryRouter>);
     fireEvent.click(await screen.findByRole('button', { name: 'Plano para a Bancada Local' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('A task não tem descrição.');
+  });
+
+  it('Plano para o Workspace Local abre o Workspace com o supervisor', async () => {
+    vi.mocked(createWorkspacePlanningSession).mockResolvedValueOnce({ id: '55555555-5555-5555-5555-555555555555' });
+    render(
+      <MemoryRouter initialEntries={['/backlog']}>
+        <Routes>
+          <Route path='/backlog' element={<TaskDetail item={item} onClose={vi.fn()} onAdvance={vi.fn()} />} />
+          <Route path='/workspace' element={<p>Workspace aberto</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Plano para o Workspace Local' }));
+    await waitFor(() => expect(screen.getByText('Workspace aberto')).toBeInTheDocument());
+    expect(createWorkspacePlanningSession).toHaveBeenCalledWith(item.id);
+    expect(createBancadaPlanningSession).not.toHaveBeenCalled();
+    // A sessão do Workspace é do supervisor: não invade a conversa do AI Hub.
+    expect(sessionStorage.getItem('workdev_chat_session')).toBeNull();
+  });
+
+  it('task sem descrição pede descrição em vez de oferecer o Workspace', async () => {
+    render(<MemoryRouter><TaskDetail item={{ ...item, description: '  ' }} onClose={vi.fn()} onAdvance={vi.fn()} /></MemoryRouter>);
+    expect(await screen.findByText('Escreva a descrição da task para planejá-la no Workspace Local.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Plano para o Workspace Local' })).not.toBeInTheDocument();
   });
 });

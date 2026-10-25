@@ -16,6 +16,11 @@ export interface EstadoBancada {
   ocupado?: boolean
 }
 
+export interface OpcoesModeloLocal {
+  atual: string | null
+  modelos: Array<{ chave: string; label: string }>
+}
+
 export interface PropostaResumo {
   id: string
   modelo: string
@@ -97,6 +102,9 @@ async function get<T>(caminho: string): Promise<T> {
 }
 
 export const getEstado = () => get<EstadoBancada>("/estado")
+export const getModelosLocais = () => get<OpcoesModeloLocal>("/modelo/opcoes")
+export const trocarModeloLocal = (chave: string) =>
+  post<{ model: string; switched: boolean; restarted: boolean }>("/modelo/trocar", { chave })
 export const getPropostas = () => get<{ propostas: PropostaResumo[] }>("/propostas").then((d) => d.propostas)
 export const getProposta = (modelo: string, id: string) =>
   get<PropostaDetalhe>(`/propostas/${encodeURIComponent(modelo)}/${encodeURIComponent(id)}`)

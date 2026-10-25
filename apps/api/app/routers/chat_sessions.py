@@ -9,7 +9,7 @@ from app.models.backlog import BacklogItem
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.project import Project
 from app.models.subtask import BacklogSubtask
-from app.schemas.chat import SessionFromTask, SessionUpdate, BancadaPlanningRequest
+from app.schemas.chat import SessionFromTask, SessionUpdate, BancadaPlanningRequest, WorkspacePlanningRequest
 from app.services import autoridade, chat_audit
 from app.services.handoff import active_plan_for_task, PLANNING_TASK_STATUSES
 
@@ -179,6 +179,78 @@ def _bancada_planning_context(task: BacklogItem | None, project: Project | None,
     return "\n".join(lines)
 
 
+def _workspace_planning_context(
+    task: BacklogItem | None, project: Project | None, prompt_livre: str | None = None
+) -> str | None:
+    """Prompt de planejamento do Workspace Local para LLM grande via OpenRouter.
+
+    Diferente da Bancada, aqui o modelo local LÊ arquivos: a fatia não precisa
+    carregar o código, precisa saber o que fazer, onde olhar e como verificar.
+    Por isso o supervisor orienta em vez de micro-tarefar.
+    """
+    if prompt_livre:
+        entrada = f"Pedido livre:\n{prompt_livre}"
+    else:
+        if not (task.description or "").strip():
+            return None  # Sinal de que a descrição está vazia
+        entrada = (f"Task ID: `{task.id}` (use ler_task para reler a ficha)\n"
+                   f"Task: {task.title}\n{task.description or ''}")
+
+    linhas = [
+        "Você é o supervisor do Workspace Local do WorkDev. O Workspace é onde o",
+        "operador trabalha com um modelo local (Qwen ~30B MoE) que EDITA arquivos de",
+        "verdade: cada fatia do seu plano é aplicada por ele, isolada, uma de cada vez.",
+        "",
+        "Seu papel é quebrar o pedido em fatias que o modelo local execute com sucesso,",
+        "e não em micro-tarefas de resposta curta. O modelo local lê arquivos, mas",
+        "erra em duas coisas: orienta pouco e inventa nomes que não existem. Sua",
+        "orientação é a defesa contra as duas.",
+        "",
+        "Regras de cada fatia:",
+        "- Objetivo único: uma mudança coerente. Nada de 'refatore o módulo'.",
+        "- ORIENTAÇÃO, não código: em 'trechos' indique os arquivos e as linhas reais",
+        "  que a fatia vai mexer ou que precisa entender ([caminho, início, fim],",
+        "  inclusivas, no máximo 200 linhas por trecho). O modelo local abre o resto.",
+        "- 'instrucao': o que o modelo local deve fazer, em uma ou duas frases, com o",
+        "  formato de saída esperado ('Saída: diff unificado (--- a/… +++ b/…)' para",
+        "  mudança de código).",
+        "- 'gate': como se verifica que a fatia deu certo (comando, teste, o que conferir",
+        "  no arquivo). Uma fatia sem gate não é auditável e não entra no plano.",
+        "- 'exige': até 5 pares {regex: explicação} com o essencial que a resposta",
+        "  precisa ACRESCENTAR (ex.: {'current\\\\(\\\\)': 'usar current() para ler a chave'}).",
+        "  É expressão regular Python, procurada só no código NOVO: linhas '+' do diff.",
+        "- 'max_tokens': o suficiente para a saída, entre 64 e 4000 (diff ~800-1500,",
+        "  alteração de configuração ~300-800).",
+        "- 'id': vazio para numeração automática ou identificador descritivo único.",
+        "- Cada fatia é INDEPENDENTE das respostas das outras: o modelo local não vê o",
+        "  que a fatia anterior produziu.",
+        "- Nunca use .env, .git, chaves, certificados, node_modules ou caminhos fora do",
+        "  repo: o Workspace recusa.",
+        "- Se o pedido precisa de decisão de arquitetura, migração de banco ou mudança",
+        "  em várias camadas de uma vez, NÃO force: devolva {\"fatas\": [],",
+        "  \"fora_do_alcance\": \"<motivo>\"}.",
+        "",
+        "Como trabalhar (você tem poucos passos de ferramenta; não os gaste à toa):",
+        "1. TRIAGEM PRIMEIRO, só com a ficha (ler_task), antes de ler qualquer código. Se a",
+        "   task pedir discovery/investigação, decisão de arquitetura, migração ou",
+        "   'mostrar antes de implementar', ela NÃO cabe: responda já com {\"fatas\": [],",
+        "   \"fora_do_alcance\": \"<motivo>\"}, sem ler código.",
+        "2. Se couber, peça VÁRIOS ler_trecho na mesma rodada (chamadas em paralelo), só dos",
+        "   arquivos que as fatias vão tocar. Confira CADA linha antes de citá-la; não",
+        "   estime linhas.",
+        "- A resposta final é só o plano, num bloco ```json, neste formato:",
+        '{"fatas": [ {"id": "...", "objetivo": "...", "instrucao": "...",',
+        '              "trechos": [["caminho", ini, fim]], "gate": ["..."],',
+        '              "exige": {"regex": "explicação"}, "max_tokens": 1200} ],',
+        ' "fora_do_alcance": "opcional"}',
+        "",
+        f"Contexto do projeto: {project.name if project else 'N/A'} ({project.slug if project else 'N/A'})",
+        "",
+        entrada,
+    ]
+    return "\n".join(linhas)
+
+
 def planning_eligibility(db: Session, task) -> dict:
     if task.status not in PLANNING_TASK_STATUSES:
         return {'eligible': False, 'code': 'task_not_eligible',
@@ -308,6 +380,73 @@ def criar_sessao_planejamento_bancada(
         title=f"Planejar Bancada: {task.title if task else 'Prompt livre'}"[:255],
         project_id=project.id if project else None,
         authority=autoridade.OBSERVE,  # Somente leitura
+    )
+    try:
+        db.add(session)
+        db.flush()
+        db.add(ChatMessageDB(
+            session_id=session.id,
+            role="system",
+            content=prompt_content,
+        ))
+        db.commit()
+        db.refresh(session)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(500, "Erro ao criar sessão de planejamento")
+
+    return {
+        **sessao_out(session, project),
+        "task_id": str(task.id) if task else None,
+        "task_title": task.title if task else None,
+    }
+
+
+@router.post("/chat/workspace/planejar", status_code=201)
+def criar_sessao_planejamento_workspace(
+    payload: WorkspacePlanningRequest, db: Session = Depends(get_db)
+):
+    """Cria uma sessão de chat para o supervisor planejar uma task do Workspace Local.
+
+    Recebe task_id ou prompt livre. Se task_id, valida que a task tem descrição.
+    Retorna uma sessão em modo OBSERVE com o prompt do supervisor.
+
+    A Bancada Local não é tocada: é outro endpoint, outro prompt e outra sessão.
+    """
+    if not payload.task_id and not payload.prompt:
+        raise HTTPException(422, "Forneça task_id ou prompt")
+
+    task = None
+    project = None
+
+    if payload.task_id:
+        task = db.query(BacklogItem).filter(
+            BacklogItem.id == payload.task_id
+        ).first()
+        if not task:
+            raise HTTPException(404, "Task não encontrada")
+        project = db.query(Project).filter(Project.id == task.project_id).first()
+
+        if not (task.description or "").strip():
+            raise HTTPException(409, {
+                "code": "descricao_vazia",
+                "message": "A task não tem descrição. Peça a descrição antes de planejar."
+            })
+    else:
+        # Prompt livre: sem projeto específico
+        project = None
+
+    prompt_content = _workspace_planning_context(task, project, payload.prompt)
+    if prompt_content is None:
+        raise HTTPException(409, "Task sem descrição")
+
+    # Sessão em modo OBSERVE (somente leitura). Sem task_id de propósito:
+    # uq_chat_sessions_task_id reserva a vaga da task para a sessão de PLAN do
+    # "Enviar ao AI Hub" — vale para o Workspace também.
+    session = ChatSession(
+        title=f"Supervisar Workspace: {task.title if task else 'Prompt livre'}"[:255],
+        project_id=project.id if project else None,
+        authority=autoridade.OBSERVE,
     )
     try:
         db.add(session)
