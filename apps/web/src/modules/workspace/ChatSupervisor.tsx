@@ -10,7 +10,7 @@ import { getLocalModels, getOpenRouterModels, sendAiChatWithConfirmation, type C
 // que localiza os arquivos e fatia o pedido antes do modelo local agir.
 
 const CHAVE_MODELO = "workdev_workspace_supervisor_model";
-const PROMPT_INICIO = "Faça primeiro a triagem só com ler_task: se a task não couber no Workspace Local (discovery, várias camadas, arquitetura, migração de banco), responda já com fora_do_alcance, sem ler código. Se couber, leia os arquivos envolvidos com vários ler_trecho na mesma rodada, fatie em fatias com objetivo único e gate próprio, e entregue o plano em um bloco ```json. Ao recusar, diga por quê para o operador usar o fluxo de nuvem.";
+const PROMPT_INICIO = "Faça primeiro a triagem só com ler_task: se a task não couber no Workspace Local (discovery, várias camadas, arquitetura, migração de banco), responda já com fora_do_alcance, sem ler código. Se couber, ache os arquivos com buscar_texto e leia os envolvidos com vários ler_trecho na mesma rodada, fatie em fatias com objetivo único e gate próprio, e entregue o plano em um bloco ```json. Ao recusar, diga por quê para o operador usar o fluxo de nuvem.";
 
 // Modelos locais têm runtime_id: a chave precisa dele, senão dois runtimes com o
 // mesmo nome de modelo colidem no seletor.
