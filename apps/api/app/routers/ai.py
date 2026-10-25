@@ -24,7 +24,8 @@ from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.ai_routing import AICallLog, AIModelCatalog
 from app.services import autoridade, context_engine, rag_search
-from app.services import ai_cost_guard, agent_runtimes, bancada_runner, leitura_repo, local_model, tool_loop
+from app.services import (ai_cost_guard, agent_runtimes, bancada_runner, leitura_repo, local_model,
+                          tool_loop, workspace_execucao)
 from app.services.backlog_status import BacklogStatusError, apply_status
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
@@ -434,6 +435,11 @@ TOOLS = [
             },
             "required": [],
         },
+    },
+    {
+        "name": "ler_estado_sessao",
+        "description": "Le o estado da sessao ativa do Workspace Local: fatias do plano aprovado (status, etapa, erro, commit, arquivos tocados), commits do branch da sessao, alteracoes sem commit e o diff --stat desde a base. Somente leitura. Use antes de replanejar ou de sugerir correcao, para nao repropor o que ja foi aplicado.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "validar_lote_bancada",
@@ -869,6 +875,13 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
 
     if nome == "listar_pasta":
         return _leitura_repo(leitura_repo.listar_pasta, args.get("caminho") or ".")
+
+    if nome == "ler_estado_sessao":
+        try:
+            return json.dumps(workspace_execucao.estado_para_supervisor(), ensure_ascii=False)
+        except Exception as e:  # noqa: BLE001 — leitura: erro vira resposta, não exceção no chat
+            return json.dumps({"erro": f"{type(e).__name__}: {e}"[:500], "code": "estado_indisponivel"},
+                              ensure_ascii=False)
 
     if nome == "validar_lote_bancada":
         return _validar_lote_bancada(args)

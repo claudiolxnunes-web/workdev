@@ -8,6 +8,9 @@ leitura, dentro de WORKDEV_BANCADA_REPO — o mesmo checkout que o Explorer e o
 
 A busca usa `git grep`: respeita o .gitignore (tmp/, dist/, venv) e pula
 binários sem precisar percorrer a árvore em Python.
+
+Toda função aceita `raiz`: na execução de uma sessão do Workspace o modelo lê a
+cópia isolada da sessão (o que as fatias anteriores já mudaram), não o checkout.
 """
 from __future__ import annotations
 
@@ -30,14 +33,14 @@ class Recusado(Exception):
     pass
 
 
-def raiz() -> Path:
-    return bancada_runner.REPO_TRABALHO.resolve()
+def raiz(outra: Path | None = None) -> Path:
+    return (outra or bancada_runner.REPO_TRABALHO).resolve()
 
 
-def caminho_seguro(relativo: str) -> Path:
+def caminho_seguro(relativo: str, base: Path | None = None) -> Path:
     local = bancada_runner._modulo("bancada_local")
     try:
-        return local.caminho_seguro(relativo, raiz())
+        return local.caminho_seguro(relativo, raiz(base))
     except local.Recusado as erro:
         raise Recusado(str(erro)) from erro
 
@@ -47,36 +50,36 @@ def _bloqueado(relativo: str) -> bool:
     return any(proibido in texto for proibido in bancada_runner.BLOQUEADOS)
 
 
-def _rel(alvo: Path) -> str:
-    return alvo.relative_to(raiz()).as_posix() or "."
+def _rel(alvo: Path, base: Path | None = None) -> str:
+    return alvo.relative_to(raiz(base)).as_posix() or "."
 
 
-def listar_pasta(caminho: str = ".") -> dict:
-    alvo = caminho_seguro(caminho or ".")
+def listar_pasta(caminho: str = ".", base: Path | None = None) -> dict:
+    alvo = caminho_seguro(caminho or ".", base)
     if not alvo.is_dir():
         raise Recusado(f"não é pasta: {caminho}")
     itens = []
     for item in sorted(alvo.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
-        nome = _rel(item)
+        nome = _rel(item, base)
         if item.name in PULAR or item.name == "node_modules" or _bloqueado(nome):
             continue
         itens.append(nome + ("/" if item.is_dir() else ""))
-    saida = {"caminho": _rel(alvo), "itens": itens[:MAX_ITENS_PASTA]}
+    saida = {"caminho": _rel(alvo, base), "itens": itens[:MAX_ITENS_PASTA]}
     if len(itens) > MAX_ITENS_PASTA:
         saida["truncado"] = True
     return saida
 
 
-def buscar_texto(texto: str, caminho: str = ".") -> dict:
+def buscar_texto(texto: str, caminho: str = ".", base: Path | None = None) -> dict:
     if not isinstance(texto, str) or not texto.strip():
         raise Recusado("texto vazio")
     if len(texto) > MAX_TEXTO_BUSCA:
         raise Recusado(f"texto acima de {MAX_TEXTO_BUSCA} caracteres")
-    alvo = caminho_seguro(caminho or ".")
+    alvo = caminho_seguro(caminho or ".", base)
     # -F literal, -I pula binário, --untracked inclui arquivo novo ainda não
     # commitado (o ignorado continua fora). -e protege texto que começa com "-".
-    comando = ["git", "-C", str(raiz()), "grep", "-n", "-I", "-F", "--untracked", "--no-color",
-               "-e", texto, "--", _rel(alvo)]
+    comando = ["git", "-C", str(raiz(base)), "grep", "-n", "-I", "-F", "--untracked", "--no-color",
+               "-e", texto, "--", _rel(alvo, base)]
     try:
         resultado = subprocess.run(comando, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired as erro:
@@ -94,14 +97,14 @@ def buscar_texto(texto: str, caminho: str = ".") -> dict:
             break
         ocorrencias.append({"caminho": arquivo, "linha": int(numero),
                             "texto": conteudo.strip()[:MAX_CHARS_LINHA]})
-    saida = {"texto": texto, "caminho": _rel(alvo), "ocorrencias": ocorrencias}
+    saida = {"texto": texto, "caminho": _rel(alvo, base), "ocorrencias": ocorrencias}
     if truncado:
         saida["truncado"] = True
     return saida
 
 
-def ler_arquivo(caminho: str, inicio: int = 1, fim: int = MAX_LINHAS_ARQUIVO) -> dict:
-    alvo = caminho_seguro(caminho)
+def ler_arquivo(caminho: str, inicio: int = 1, fim: int = MAX_LINHAS_ARQUIVO, base: Path | None = None) -> dict:
+    alvo = caminho_seguro(caminho, base)
     if not alvo.is_file():
         raise Recusado(f"não é arquivo: {caminho}")
     # Tamanho por stat antes de ler: um GGUF em models/ tem 9 GB.
@@ -116,7 +119,7 @@ def ler_arquivo(caminho: str, inicio: int = 1, fim: int = MAX_LINHAS_ARQUIVO) ->
     fim = min(len(linhas), pedido_fim, inicio + MAX_LINHAS_ARQUIVO - 1)
     if fim < inicio:
         raise Recusado(f"intervalo vazio {inicio}-{pedido_fim} em {caminho} ({len(linhas)} linhas)")
-    saida = {"caminho": _rel(alvo), "inicio": inicio, "fim": fim, "total_linhas": len(linhas),
+    saida = {"caminho": _rel(alvo, base), "inicio": inicio, "fim": fim, "total_linhas": len(linhas),
              "texto": "\n".join(linhas[inicio - 1:fim])}
     if fim < min(pedido_fim, len(linhas)):
         saida["truncado"] = True

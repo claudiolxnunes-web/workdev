@@ -1,10 +1,17 @@
-// Workspace — só GET em /api/workspace/*: árvore, arquivo, alterações e diff do checkout.
+// Workspace — leitura do checkout só por GET (árvore, arquivo, alterações, diff).
+// Os POST são da sessão: criam e encerram a cópia isolada, nunca o checkout.
 const API_KEY = import.meta.env.VITE_API_KEY || ""
 const headers: HeadersInit = { "X-API-Key": API_KEY }
 
 export interface ItemArvore { nome: string; caminho: string; tipo: "pasta" | "arquivo" }
 export interface Arvore { pasta: string; itens: ItemArvore[]; truncado: boolean }
-export interface Arquivo { caminho: string; binario: boolean; tamanho: number; texto: string; linhas: number; truncado: boolean }
+export interface Arquivo {
+  caminho: string; binario: boolean; tamanho: number; texto: string; linhas: number; truncado: boolean
+  /** Do conteúdo inteiro em disco; o salvar recusa se o arquivo mudou depois de aberto. */
+  sha256?: string | null
+  /** O texto mostrado teve chave mascarada: não é o do disco e não pode ser salvo. */
+  mascarado?: boolean
+}
 export interface Alteracao { caminho: string; estado: string; mais: number | null; menos: number | null }
 export interface Alteracoes { base: string; itens: Alteracao[]; truncado: boolean }
 export interface DiffArquivo { caminho: string; diff: string; truncado: boolean }
@@ -23,7 +30,96 @@ async function get<T>(caminho: string, params?: Record<string, string>): Promise
   return response.json() as Promise<T>
 }
 
-export const getArvore = (pasta = "") => get<Arvore>("/arvore", { pasta })
-export const getArquivo = (caminho: string) => get<Arquivo>("/arquivo", { caminho })
-export const getAlteracoes = () => get<Alteracoes>("/alteracoes")
-export const getDiff = (caminho: string) => get<DiffArquivo>("/diff", { caminho })
+// Com `sessao`, a leitura vem da cópia da sessão ativa; sem, do checkout.
+const comSessao = (params: Record<string, string>, sessao?: string | null) => (sessao ? { ...params, sessao } : params)
+export const getArvore = (pasta = "", sessao?: string | null) => get<Arvore>("/arvore", comSessao({ pasta }, sessao))
+export const getArquivo = (caminho: string, sessao?: string | null) => get<Arquivo>("/arquivo", comSessao({ caminho }, sessao))
+export const getAlteracoes = (sessao?: string | null) => get<Alteracoes>("/alteracoes", comSessao({}, sessao))
+export const getDiff = (caminho: string, sessao?: string | null) => get<DiffArquivo>("/diff", comSessao({ caminho }, sessao))
+
+export type StatusFatia = "pendente" | "rodando" | "ok" | "falhou" | "pulada"
+export interface CheckGate { nome: string; passou: boolean; motivo: string; ms: number }
+export interface Fatia {
+  n: number; id: string; objetivo: string; instrucao: string; trechos: Array<[string, number, number]>
+  gate: string[]; exige: Record<string, string>; max_tokens: number
+  status: StatusFatia; etapa: string | null; erro: string | null; tentativas: number
+  commit: string | null; subtask_id: string | null; gate_checks: CheckGate[]; arquivos?: string[]
+  proposta?: { modelo: string; id: string; segundos?: number; leituras?: number } | null
+}
+export interface Sessao {
+  id: string; status: "ativa" | "encerrada" | "incorporada"; branch: string; caminho: string; base: string
+  branch_origem: string; task_id: string | null; chat_session_id: string | null; titulo: string | null
+  criada_em: string; encerrada_em: string | null; observacao?: string; alteracoes_descartadas?: number
+  plano?: { aprovado_em: string; fatias: Fatia[] } | null
+  commit_incorporado?: string; modo_incorporacao?: "merge" | "squash"
+}
+export interface EstadoSessao extends Sessao {
+  commits: Array<{ sha: string; mensagem: string }>
+  alteracoes: Array<{ status: string; caminho: string }>
+}
+export interface DiffSessao { id: string; diff: string; nao_rastreados: string[]; truncado: boolean }
+
+async function post<T>(caminho: string, corpo: unknown): Promise<T> {
+  const response = await fetch(`/api/workspace${caminho}`, {
+    method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(corpo),
+  })
+  if (!response.ok) {
+    let mensagem = `Workspace: HTTP ${response.status}`
+    let codigo = ""
+    try {
+      const detalhe = (await response.json())?.detail
+      mensagem = typeof detalhe === "string" ? detalhe : detalhe?.message ?? mensagem
+      codigo = detalhe?.code ?? ""
+    } catch { /* corpo sem JSON */ }
+    throw Object.assign(new Error(mensagem), { codigo })
+  }
+  return response.json() as Promise<T>
+}
+
+export const getSessoes = () => get<{ ativa: Sessao | null; recentes: Sessao[] }>("/sessao")
+export const getEstadoSessao = (id: string) => get<EstadoSessao>(`/sessao/${encodeURIComponent(id)}`)
+export const getDiffSessao = (id: string) => get<DiffSessao>(`/sessao/${encodeURIComponent(id)}/diff`)
+export const criarSessao = (dados: { task_id?: string | null; chat_session_id?: string | null; titulo?: string | null }) =>
+  post<Sessao>("/sessao", dados)
+export const encerrarSessao = (id: string, descartarAlteracoes = false) =>
+  post<Sessao>(`/sessao/${encodeURIComponent(id)}/encerrar`, { descartar_alteracoes: descartarAlteracoes })
+/** Edição do editor: grava na cópia da sessão e vira commit com o nome do operador. */
+export const salvarArquivoSessao = (id: string, caminho: string, texto: string, sha256: string) =>
+  post<{ caminho: string; commit: string; sha256: string }>(`/sessao/${encodeURIComponent(id)}/arquivo`, { caminho, texto, sha256 })
+export const aprovarPlano = (id: string, plano: unknown) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/plano`, { plano })
+export const pularFatia = (id: string, n: number) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/pular`, {})
+export const incorporarSessao = (id: string, modo: "merge" | "squash") =>
+  post<Sessao>(`/sessao/${encodeURIComponent(id)}/incorporar`, { modo })
+
+/** Evento do fluxo de uma fatia: os do modelo local (token, ferramenta…) mais etapa, gate e fatia. */
+export interface EventoFatia {
+  tipo: string; n?: number; etapa?: string; status?: StatusFatia; erro?: string; commit?: string
+  texto?: string; nome?: string; argumentos?: Record<string, unknown>; caracteres?: number; recusada?: boolean
+  checks?: CheckGate[]; codigo?: string; mensagem?: string; segundos?: number; leituras?: number
+}
+
+/** Executa a fatia n; cada evento SSE chega em onEvento, na ordem. */
+export async function executarFatia(id: string, n: number, correcao: string | null, onEvento: (e: EventoFatia) => void): Promise<void> {
+  const response = await fetch(`/api/workspace/sessao/${encodeURIComponent(id)}/fatias/${n}/executar`, {
+    method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ correcao }),
+  })
+  if (!response.ok) throw new Error(`Workspace: HTTP ${response.status}`)
+  const leitor = response.body?.getReader()
+  if (!leitor) throw new Error("Workspace: resposta sem fluxo")
+  const decodificador = new TextDecoder()
+  let buffer = ""
+  for (;;) {
+    const { value, done } = await leitor.read()
+    if (value) buffer += decodificador.decode(value, { stream: true })
+    let fim = buffer.indexOf("\n\n")
+    while (fim >= 0) {
+      const bloco = buffer.slice(0, fim)
+      buffer = buffer.slice(fim + 2)
+      for (const linha of bloco.split("\n")) {
+        if (linha.startsWith("data:")) onEvento(JSON.parse(linha.slice(5).trim()) as EventoFatia)
+      }
+      fim = buffer.indexOf("\n\n")
+    }
+    if (done) break
+  }
+}

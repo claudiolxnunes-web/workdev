@@ -266,7 +266,47 @@ escrita no banco e a decisão de começar a sessão.
 
 Cada etapa entra por branch própria, com o diff entregue para incorporação.
 
-## 12. Decisões do operador (pendentes)
+**Estado em 2026-10-25:**
+
+| # | Situação | Branch |
+|---|---|---|
+| 1 Sessão e worktree | ✅ feito — `workspace_sessao.py`, barra da sessão; estado em JSON + git, sem migration | `feat/workspace-sessao` |
+| 2 Laço assistido | ✅ feito — `workspace_execucao.py`, aba Execução; uma fatia por chamada, estado gravado por etapa. Trilha no JSON da sessão (não em `AgentRunEvent`: a sessão não tem `agent_run`) | `feat/workspace-sessao` |
+| 3 Tools de leitura | ✅ feito — local e supervisor; o local lê a **cópia da sessão** | `feat/workspace-ferramentas-leitura` |
+| 4 Supervisor no lateral + escrita no editor | ✅ feito — editor grava na cópia da sessão e commita com a identidade do operador (decisão 4); Explorer/editor/chat Local leem a cópia | PR #9 + `feat/workspace-sessao` |
+| 5 Plano fatiado | ✅ feito pelo "Aprovar plano" (bloco json do supervisor); `suggest_slices` não foi ligado | `feat/workspace-sessao` |
+| 6 Banco | pendente | — |
+| — Backlog (decisão 6) | ✅ fatias viram subtasks; task `doing`; subtask `done`/`blocked` | `feat/workspace-sessao` |
+| — Supervisor vê a sessão (§3.2) | ✅ `ler_estado_sessao` | `feat/workspace-sessao` |
+
+Gate da fatia (decisão 3): roda sempre, mas são os checks fixos do projeto
+(`test_gate`), escolhidos pela área tocada — o texto `gate` do supervisor é a
+lista que o operador confere, nunca é executado. Ambiente mínimo: sem as
+credenciais da API, com `.env` e arquivo de modelos falsos.
+
+Validado com o modelo real em 2026-10-25: fatia "docstring em `_sse`" — 1 leitura,
+diff em 18 s, pytest completo dentro da cópia em 73 s, commit no branch da sessão.
+
+## 12. Decisões do operador
+
+**Decididas em 2026-10-25** (Cláudio aceitou as seis recomendações):
+
+1. Supervisor: escolha livre de modelo, com **DeepSeek Flash como padrão**;
+   trocar para Luna quando o plano sair ruim.
+2. O supervisor **não escreve no banco**: só propõe, o operador confirma.
+3. O gate entre fatias roda **sempre**, em toda fatia.
+4. A escrita no editor passa pelo worktree da sessão, com a mesma checagem, e
+   vira commit — nada grava direto no checkout.
+5. Sessão abandonada: worktree e branch **ficam para inspeção**; só são apagados
+   por ordem do operador.
+
+6. **Aprovada em 2026-10-25:** o Workspace atualiza o backlog. No "Aprovar plano" as fatias
+   viram subtasks da task (nível Planejar), a task vai para `doing` ao começar,
+   fatia que passa no gate fecha a subtask e fatia que falha a deixa `blocked`
+   com o motivo. Fechar a task continua do operador.
+
+Texto original das perguntas, para referência:
+
 
 1. O modelo do chat lateral: Luna (padrão do observer), DeepSeek Flash (mais
    barato) ou Qwen via OpenRouter? E o default?

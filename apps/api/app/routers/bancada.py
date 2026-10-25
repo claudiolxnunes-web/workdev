@@ -261,6 +261,8 @@ class Execucao(BaseModel):
     espera_diff: bool = False
     # Só o chat Local do Workspace manda true: o modelo lê o repo com function calling.
     ferramentas: bool = False
+    # Workspace com sessão ativa: trechos e leituras vêm da cópia da sessão.
+    sessao: str | None = Field(default=None, max_length=40)
 
 
 class Reenvio(BaseModel):
@@ -342,10 +344,18 @@ def modelo(acao: str):
 
 @router.post("/rodar")
 def rodar(pedido: Execucao):
+    raiz = None
+    if pedido.sessao:
+        from app.services import workspace_sessao
+        from app.services.workspace import WorkspaceErro
+        try:
+            raiz = workspace_sessao.raiz_ativa(pedido.sessao)
+        except WorkspaceErro as erro:
+            raise HTTPException(erro.status, {"code": erro.codigo, "message": erro.mensagem}) from erro
     try:
         plano = runner.preparar_execucao(pedido.id, pedido.instrucao, [list(t) for t in pedido.trechos],
                                          pedido.max_tokens, pedido.exige, pedido.espera_diff,
-                                         pedido.ferramentas)
+                                         pedido.ferramentas, raiz)
     except runner.BancadaErro as erro:
         raise _erro(erro) from erro
     return _fluxo(plano)

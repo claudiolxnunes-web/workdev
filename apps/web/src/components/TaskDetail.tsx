@@ -159,7 +159,9 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
     try {
       const session = await create();
       if (destino === "/ai-hub") sessionStorage.setItem("workdev_chat_session", session.id);
-      navigate(`${destino}?session=${encodeURIComponent(session.id)}&autostart=${autostart}`);
+      // O Workspace leva a task junto: a sessão isolada fica ligada a ela.
+      const task = destino === "/workspace" ? `&task=${encodeURIComponent(item!.id)}` : "";
+      navigate(`${destino}?session=${encodeURIComponent(session.id)}&autostart=${autostart}${task}`);
     } catch (error: unknown) {
       setPlanningError(error instanceof Error && error.message ? error.message : fallback);
       planningRef.current = false;

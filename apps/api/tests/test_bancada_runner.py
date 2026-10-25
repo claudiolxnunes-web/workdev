@@ -24,7 +24,7 @@ def ambiente(tmp_path, monkeypatch):
     monkeypatch.setenv("WORKDEV_BANCADA_DIR", str(pasta))
     monkeypatch.setattr(runner, "REPO_TRABALHO", repo)
     monkeypatch.setattr(runner, "chave_modelo", lambda: "moe")
-    monkeypatch.setattr(runner, "commit_base", lambda: "abc1234")
+    monkeypatch.setattr(runner, "commit_base", lambda raiz=None: "abc1234")
     monkeypatch.setattr(runner, "llama_no_ar", lambda: True)
     roteiro = {"partes": [[{"tipo": "token", "texto": "proposta "}, {"tipo": "token", "texto": "ok\n"},
                            {"tipo": "tokens", "tokens": 7}]]}
@@ -241,7 +241,7 @@ def test_bancada_sem_ferramentas_nao_manda_tools(com_tools):
 
 def test_workspace_le_com_ferramenta_e_responde(com_tools, monkeypatch):
     from app.services import leitura_repo
-    monkeypatch.setattr(leitura_repo, "ler_arquivo", lambda c, i, f: {
+    monkeypatch.setattr(leitura_repo, "ler_arquivo", lambda c, i, f, raiz=None: {
         "caminho": c, "inicio": i, "fim": f, "total_linhas": 3, "texto": "AGENT = 'x'\ndef current():\n    return AGENT"})
     com_tools.roteiro["partes"] = [
         [{"tipo": "tokens", "tokens": 5, "medicao": {"prefill_ms": 1000.0, "prefill_tok": 10, "cache_tok": 0, "prompt_tok": 10,
@@ -318,3 +318,29 @@ def test_stream_junta_tool_calls_em_pedacos(monkeypatch):
     assert enviado["tools"] == runner.FERRAMENTAS_WORKSPACE
     assert final["chamadas"] == [{"id": "a1", "type": "function",
                                   "function": {"name": "buscar_texto", "arguments": '{"texto": "x"}'}}]
+
+
+def test_workspace_para_de_oferecer_ferramentas_quando_o_tempo_acaba(com_tools, monkeypatch):
+    monkeypatch.setattr(runner, "MAX_TEMPO_FERRAMENTA_S", 0)
+    com_tools.roteiro["partes"] = [[{"tipo": "token", "texto": "ok\n"}, {"tipo": "tokens", "tokens": 2}]]
+    tipos = [e["tipo"] for e in eventos(rodar(com_tools.cliente, ferramentas=True))]
+    assert tipos == ["inicio", "token", "fim"]
+    assert com_tools.tools == [False]
+
+
+def test_workspace_tempo_esgotado_no_meio_avisa_o_modelo(com_tools, monkeypatch):
+    relogio = [0.0]
+    monkeypatch.setattr(runner.time, "monotonic", lambda: relogio[0])
+    original = runner._ferramenta
+
+    def leitura_demorada(chamada, raiz=None):
+        relogio[0] = 5000.0  # a leitura "levou" mais que o teto
+        return original(chamada, raiz)
+    monkeypatch.setattr(runner, "_ferramenta", leitura_demorada)
+    com_tools.roteiro["partes"] = [
+        [{"tipo": "tokens", "tokens": 1, "chamadas": [_pede("listar_pasta", caminho="apps")]}],
+        [{"tipo": "token", "texto": "ok\n"}, {"tipo": "tokens", "tokens": 2}],
+    ]
+    tipos = [e["tipo"] for e in eventos(rodar(com_tools.cliente, ferramentas=True))]
+    assert tipos == ["inicio", "ferramenta", "limite", "reinicio", "token", "fim"]
+    assert com_tools.tools == [True, False]

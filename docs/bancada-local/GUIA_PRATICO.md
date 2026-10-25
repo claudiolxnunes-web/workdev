@@ -146,7 +146,46 @@ foi testado com ferramentas).
 6. **Nova conversa** limpa o chat entre fatias. Cada envio é independente: o
    modelo vê os anexos e o que ler naquele envio, não as respostas anteriores.
 
-### 4. Explorer e Terminal
+### 4. Executar o plano (sessão + aba Execução)
+
+É o jeito automático: em vez de levar fatia por fatia ao chat Local, o Workspace
+roda o plano inteiro numa **cópia isolada do projeto**.
+
+1. Peça o plano ao supervisor. Quando a resposta trouxer o bloco de fatias,
+   aparece um cartão **"Plano com N fatia(s)"** com o botão **Aprovar plano**.
+2. **Aprovar plano** começa a sessão (se ainda não houver), grava as fatias e,
+   se veio do backlog, cria uma **subtask por fatia** na task. A aba **Execução**
+   abre sozinha.
+3. Na Execução: **Executar fatia N**, ou **Executar todas** (com **Pausar depois
+   desta**). Para cada fatia o sistema:
+   - pede o diff ao modelo local, que lê a **cópia da sessão** (vê o que as
+     fatias anteriores já mudaram);
+   - aplica com `git apply --check`;
+   - confere o `exige`;
+   - roda o **gate**: pytest se mexeu em `apps/api`; vitest, lint e build se
+     mexeu em `apps/web`;
+   - commita no branch `workspace/<sessão>`.
+4. **Falhou?** Tudo para. O cartão mostra a etapa e o motivo. Escreva uma
+   correção (opcional — o erro já vai junto) e **Repetir fatia N**, ou **Pular**.
+5. No backlog: a task vai para **doing**; cada subtask vira **done** (com o
+   commit) ou **blocked** (com o motivo). Fechar a task é sempre seu.
+6. **Incorporar**: escolha um commit só (*squash*) ou um por fatia (*merge*). Vai
+   para o branch de onde a sessão saiu, com o seu nome. Conflito é desfeito
+   sozinho. **Não faz push** — depois use `wd-push`.
+7. **Ver diff da sessão** (na barra) mostra tudo o que a sessão mudou.
+8. **Editar à mão**: com a sessão ativa, Explorer, editor e chat Local mostram a
+   **cópia da sessão** (seletor **cópia da sessão | seu checkout** na barra). No
+   editor, **Editar** abre o arquivo para edição; **Salvar na sessão (commit)**
+   grava na cópia e faz um commit com o seu nome. Recusa se o arquivo mudou
+   depois de aberto, se há fatia rodando ou resto de fatia que falhou, e nunca
+   salva arquivo em que o editor mascarou uma chave (trocaria a chave real).
+   Vendo **seu checkout**, o editor é só leitura.
+
+Limites: uma sessão por vez; para começar, o checkout não pode ter alteração
+rastreada sem commit. Uma fatia que mexe em `apps/api` leva ~1–2 min só no gate
+(a suíte inteira roda dentro da cópia).
+
+### 5. Explorer e Terminal
 - Seção **Alterações**: o que mudou no checkout em relação ao HEAD; clique para
   ver o diff. "Árvore limpa" = nada pendente.
 - Aba **Terminal**: attach na sessão tmux do agente CLI escolhido (Claude, Codex,
@@ -193,6 +232,10 @@ Mude o mínimo necessário.
 | Resposta demora minutos | Prompt grande demais: menos trechos, menos linhas; com **ler o repo**, cite arquivo/função no pedido |
 | "Limite de leituras atingido" | Pedido amplo demais: divida em fatias menores ou anexe o trecho certo |
 | Leitura com "· recusada" | Caminho bloqueado (.env, .git, credenciais) ou fora do repo — é proposital |
+| "Começar sessão" recusa (`arvore_suja`) | Há arquivo rastreado alterado sem commit: commite ou guarde antes |
+| Fatia falhou em **aplicar** | O diff não encaixou no arquivo real: Repetir (o erro vai junto) ou corrija a instrução |
+| Fatia falhou em **gate** | Teste/lint/build reprovou: a mudança fica na cópia para olhar; Repetir limpa e refaz |
+| Incorporar recusa `branch_trocado` | O checkout mudou de branch desde que a sessão começou: volte ao branch de origem |
 | `[vigia]` no fluxo | Modelo citou nome fora dos trechos; anexe o arquivo onde ele está |
 | Checagem falha no `@@` | Diff contra versão diferente do arquivo; reabra o trecho e reenvie |
 | Terminal não mostra nada | Outra aba está com a sessão: **Assumir aqui** |
