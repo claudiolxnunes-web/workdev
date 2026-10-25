@@ -527,3 +527,23 @@ Não improvisar, não redescobrir o procedimento e não executar `deploy.sh` sem
 
 A fonte canônica e atualizável é `docs/DEPLOY_CANONICO.md`.
 
+### Forma preferida do operador: aliases `wd-*` (decisão de 2026-10-25)
+
+O Cláudio quer deployar **sempre** assim: o agente faz tudo que não exige root (validar,
+abrir PR, mergear com `gh`, buildar, conferir) e o Cláudio roda **um alias curto de cada vez**
+como root. Os aliases são comandos instalados em `/usr/local/sbin` (fonte em `scripts/deploy/atalhos/`):
+
+| Alias | Quem roda | O que faz |
+|---|---|---|
+| `wd-push [branch]` | root | publica a branch atual no GitHub (o `workdev` só lê); recusa o `main` |
+| `wd-sync` | root | atualiza o `main` local para o `origin/main` e acerta o dono do `.git` |
+| `wd-prepare` | root | passo 1: gate + prova assinada (guarda o `proof_id` em `/run`) |
+| `wd-deploy` | root | passos 2 e 3: aprova como Claudio e promove; o pós-check e o rollback já rodam dentro do deploy |
+| `wd-verificar` | qualquer um | confere por fora: serviço, PID da porta 8000, `/health`, site e bundle sem `localhost:8000` |
+
+Roteiro, regras e instalação completos em `docs/DEPLOY_CANONICO.md`. O terminal do Cláudio quebra
+comandos longos ao colar: nunca peça blocos grandes, grave num script e peça `bash <caminho>`.
+Nunca rode atalhos de dentro do repositório como root; só as cópias instaladas.
+Arquivos com dono root criados por outra sessão travam o `git checkout`: corrija o dono do
+diretório (`chown -R workdev:workdev-runtime <dir>`) e avance o `main` com `git checkout -f -B main origin/main`.
+
