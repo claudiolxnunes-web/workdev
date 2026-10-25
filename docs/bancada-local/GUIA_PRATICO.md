@@ -1,6 +1,6 @@
 # Guia prático — Bancada Local e Workspace Local
 
-Estado conferido em 2026-10-25, no que está em produção (inclui o PR #9).
+Estado conferido em 2026-10-25: produção (PR #9) mais as ferramentas de leitura da branch `feat/workspace-ferramentas-leitura` ("ler o repo" e busca no supervisor), que só valem depois do deploy.
 
 ## Qual usar
 
@@ -111,12 +111,30 @@ Essa sessão é do Workspace — não ocupa a conversa da task no AI Hub.
 ### 2. Supervisor (lateral direita)
 - Seletor de modelo com **todos** os modelos: nuvem (OpenRouter) e locais. A
   escolha fica guardada.
-- Ele lê o repositório (`ler_trecho`) e devolve: quais arquivos, quais linhas e
-  qual pedido mandar ao modelo local em cada fatia.
+- Ele procura no repositório (`buscar_texto`, como um Ctrl+F no projeto todo, e
+  `listar_pasta`), lê as linhas (`ler_trecho`) e devolve: quais arquivos, quais
+  linhas e qual pedido mandar ao modelo local em cada fatia.
 - Limite atual: ele **não vê** o que você já aplicou nem o que o modelo local
   respondeu. Se aplicou algo, diga a ele (ou cole o diff).
 
 ### 3. Mandar uma fatia ao modelo local
+
+**Jeito rápido: "ler o repo" (vem marcado)**
+1. Aba **Local** (painel inferior). Confira que **ler o repo** está marcado.
+2. Escreva o pedido (pode copiar o da fatia do supervisor) e clique **Enviar**.
+   Não precisa anexar nada.
+3. O modelo procura e lê os arquivos sozinho, só leitura. Cada leitura aparece na
+   conversa, por exemplo `↳ ler_arquivo apps/api/x.py 10–60 · 2300 caracteres`.
+4. Limites: até 6 rodadas de leitura e ~24 mil caracteres por pedido. Passou
+   disso, aparece "Limite de leituras atingido" e ele responde com o que já leu.
+5. O que ele leu entra nos trechos da proposta: **Verificar** e **Parecer** olham
+   o mesmo código que ele viu.
+
+Desmarque **ler o repo** quando já anexou o trecho certo e quer resposta mais
+rápida, ou quando estiver com outro modelo local que não o MoE padrão (só o MoE
+foi testado com ferramentas).
+
+**Jeito manual: anexar trechos**
 1. **Explorer** → abra o arquivo que o supervisor indicou.
 2. No editor, clique no número da linha inicial e **Shift+clique** na final.
 3. **+ Adicionar ao chat** (máx. 400 linhas por trecho; "+ Arquivo inteiro" também
@@ -125,8 +143,8 @@ Essa sessão é do Workspace — não ocupa a conversa da task no AI Hub.
    saída fixo. Ajuste o máximo de tokens se precisar. **Enviar** ou Ctrl+Enter.
 5. Na resposta: **Abrir no editor**, **Copiar patch**, **Verificar**, **Parecer**
    e, se preciso, **Reenviar** com a correção sugerida.
-6. **Nova conversa** limpa o chat entre fatias (o modelo só vê os anexos de
-   cada envio).
+6. **Nova conversa** limpa o chat entre fatias. Cada envio é independente: o
+   modelo vê os anexos e o que ler naquele envio, não as respostas anteriores.
 
 ### 4. Explorer e Terminal
 - Seção **Alterações**: o que mudou no checkout em relação ao HEAD; clique para
@@ -161,7 +179,10 @@ Mude o mínimo necessário.
 ```
 - Um alvo por pedido. Duas mudanças = duas fatias.
 - Anexe só as linhas que importam, não o arquivo inteiro.
-- Resposta `FALTA: ...` é um bom sinal: anexe o que ele pediu e reenvie.
+- Com **ler o repo**, diga o nome da função ou do arquivo no pedido: ele acha mais
+  rápido e lê menos.
+- Resposta `FALTA: ...` é um bom sinal: anexe o que ele pediu (ou ligue **ler o
+  repo**) e reenvie.
 
 ## Problemas comuns
 
@@ -169,7 +190,9 @@ Mude o mínimo necessário.
 |---|---|
 | Enviar desabilitado | Modelo desligado: **Ligar** e aguardar carregar |
 | Troca de modelo recusada (`agent_busy`) | O `local-code` está trabalhando; espere ou pare na aba Agentes |
-| Resposta demora minutos | Prompt grande demais: menos trechos, menos linhas |
+| Resposta demora minutos | Prompt grande demais: menos trechos, menos linhas; com **ler o repo**, cite arquivo/função no pedido |
+| "Limite de leituras atingido" | Pedido amplo demais: divida em fatias menores ou anexe o trecho certo |
+| Leitura com "· recusada" | Caminho bloqueado (.env, .git, credenciais) ou fora do repo — é proposital |
 | `[vigia]` no fluxo | Modelo citou nome fora dos trechos; anexe o arquivo onde ele está |
 | Checagem falha no `@@` | Diff contra versão diferente do arquivo; reabra o trecho e reenvie |
 | Terminal não mostra nada | Outra aba está com a sessão: **Assumir aqui** |
