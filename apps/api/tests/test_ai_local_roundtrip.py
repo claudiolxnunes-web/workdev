@@ -61,12 +61,12 @@ def test_local_protocol_uses_authoritative_persistence(isolated_db, monkeypatch,
     monkeypatch.setattr(ai.agent_runtimes, "local_chat_context", lambda *args: 32768)
     kwargs = dict(model="installed-model", provider="ollama", runtime_id="local-code",
                   nivel="observe" if mode == "denied" else "plan", max_output_tokens=256)
-    if mode == "invalid_json":
-        with pytest.raises(json.JSONDecodeError):
-            ai.chat_openai([], isolated_db, **kwargs)
-    else:
-        ai.chat_openai([], isolated_db, **kwargs)
+    # JSON quebrado não derruba mais a requisição: volta ao modelo como erro da tool.
+    ai.chat_openai([], isolated_db, **kwargs)
     assert isolated_db.query(BacklogItem).count() == (1 if mode == "allowed" else 0)
+    if mode == "invalid_json":
+        erro = json.loads(requests[-1]["messages"][-1]["content"])
+        assert erro["code"] == "json_invalido" and erro["tool"] == "criar_task"
     if mode in {"allowed", "denied"}:
         result = requests[-1]["messages"][-1]
         assert result["role"] == "tool" and result["tool_call_id"] == "call-isolated"
