@@ -266,7 +266,26 @@ escrita no banco e a decisão de começar a sessão.
 
 Cada etapa entra por branch própria, com o diff entregue para incorporação.
 
-## 12. Decisões do operador (pendentes)
+## 12. Decisões do operador
+
+**Decididas em 2026-10-25** (Cláudio aceitou as seis recomendações):
+
+1. Supervisor: escolha livre de modelo, com **DeepSeek Flash como padrão**;
+   trocar para Luna quando o plano sair ruim.
+2. O supervisor **não escreve no banco**: só propõe, o operador confirma.
+3. O gate entre fatias roda **sempre**, em toda fatia.
+4. A escrita no editor passa pelo worktree da sessão, com a mesma checagem, e
+   vira commit — nada grava direto no checkout.
+5. Sessão abandonada: worktree e branch **ficam para inspeção**; só são apagados
+   por ordem do operador.
+
+6. **Aprovada em 2026-10-25:** o Workspace atualiza o backlog. No "Aprovar plano" as fatias
+   viram subtasks da task (nível Planejar), a task vai para `doing` ao começar,
+   fatia que passa no gate fecha a subtask e fatia que falha a deixa `blocked`
+   com o motivo. Fechar a task continua do operador.
+
+Texto original das perguntas, para referência:
+
 
 1. O modelo do chat lateral: Luna (padrão do observer), DeepSeek Flash (mais
    barato) ou Qwen via OpenRouter? E o default?

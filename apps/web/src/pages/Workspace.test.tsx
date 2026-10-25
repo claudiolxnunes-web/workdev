@@ -12,11 +12,28 @@ const sse = (eventos: object[]) => new Response(eventos.map((e) => `data: ${JSON
 
 const proposta = "--- a/apps/api/modulo.py\n+++ b/apps/api/modulo.py\n@@ -1,2 +1,2 @@\n def current():\n-    return 1\n+    return 2\n"
 let modeloLigado = true
+// Sessão do Workspace: null = sem sessão; "com_alteracoes" faz o encerrar pedir confirmação.
+let sessaoAtiva: { id: string; pendente: boolean } | null = null
+const estadoSessao = (id: string, pendente: boolean) => ({ id, status: "ativa", branch: `workspace/${id}`, caminho: "/x", base: "abc1234def", branch_origem: "main",
+  task_id: "t-9", chat_session_id: null, titulo: null, criada_em: "2026-10-25T00:00:00+00:00", encerrada_em: null,
+  commits: [{ sha: "aaa1111", mensagem: "fatia 1" }], alteracoes: pendente ? [{ status: "M", caminho: "apps/api/modulo.py" }] : [] })
 const chamadas: Array<{ url: string; metodo: string; corpo?: unknown }> = []
 
 const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
   const metodo = init?.method ?? "GET"
   chamadas.push({ url, metodo, corpo: init?.body ? JSON.parse(String(init.body)) : undefined })
+  if (url === "/api/workspace/sessao" && metodo === "GET") return json({ ativa: sessaoAtiva ? { id: sessaoAtiva.id } : null, recentes: [] })
+  if (url === "/api/workspace/sessao" && metodo === "POST") { sessaoAtiva = { id: "251025-120000-ab12", pendente: false }; return json(estadoSessao(sessaoAtiva.id, false)) }
+  if (url.endsWith("/encerrar")) {
+    const corpo = JSON.parse(String(init?.body)) as { descartar_alteracoes: boolean }
+    if (sessaoAtiva?.pendente && !corpo.descartar_alteracoes) {
+      return new Response(JSON.stringify({ detail: { code: "sessao_com_alteracoes", message: "a sessão tem 1 alteração(ões) sem commit" } }), { status: 409 })
+    }
+    sessaoAtiva = null
+    return json({ status: "encerrada" })
+  }
+  if (url.startsWith("/api/workspace/sessao/") && url.endsWith("/diff")) return json({ id: "s", diff: proposta, nao_rastreados: ["apps/api/novo.py"], truncado: false })
+  if (url.startsWith("/api/workspace/sessao/")) return json(estadoSessao(sessaoAtiva!.id, sessaoAtiva!.pendente))
   if (url.startsWith("/api/workspace/arvore")) {
     const pasta = new URL(url, "http://x").searchParams.get("pasta")
     return json(pasta === "apps/api"
@@ -54,6 +71,7 @@ class ResizeObserverFalso { observe() {} unobserve() {} disconnect() {} }
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", ResizeObserverFalso)
   modeloLigado = true
+  sessaoAtiva = null
   chamadas.length = 0
   fetchMock.mockClear()
   vi.stubGlobal("fetch", fetchMock)
@@ -111,6 +129,33 @@ describe("Workspace Local", () => {
     fireEvent.click(painel.getByRole("button", { name: "Enviar" }))
     await waitFor(() => expect(chamadas.filter((c) => c.url.endsWith("/rodar")).length).toBe(2))
     expect(chamadas.filter((c) => c.url.endsWith("/rodar"))[1].corpo).toMatchObject({ ferramentas: false })
+  })
+
+  it("começa a sessão ligada à task, mostra o branch e abre o diff da sessão", async () => {
+    window.history.pushState({}, "", "/workspace?session=abc&task=t-9")
+    render(<Workspace />)
+    const barra = await screen.findByRole("region", { name: "Sessão do Workspace" })
+    fireEvent.click(within(barra).getByRole("button", { name: "Começar sessão" }))
+    expect(await within(barra).findByText("workspace/251025-120000-ab12")).toBeInTheDocument()
+    expect(chamadas.find((c) => c.url === "/api/workspace/sessao" && c.metodo === "POST")!.corpo).toEqual({ task_id: "t-9", chat_session_id: "abc" })
+    expect(within(barra).getByText(/1 commit\(s\)/)).toBeInTheDocument()
+    fireEvent.click(within(barra).getByRole("button", { name: "Ver diff da sessão" }))
+    const diff = await screen.findByLabelText("Diff da sessão 251025-120000-ab12")
+    expect(diff).toHaveTextContent("+ return 2")
+    expect(diff).toHaveTextContent("apps/api/novo.py")
+    window.history.pushState({}, "", "/workspace")
+  })
+
+  it("encerrar com alteração sem commit pede confirmação antes de descartar", async () => {
+    sessaoAtiva = { id: "251025-120000-ab12", pendente: true }
+    render(<Workspace />)
+    const barra = await screen.findByRole("region", { name: "Sessão do Workspace" })
+    fireEvent.click(await within(barra).findByRole("button", { name: "Encerrar sessão" }))
+    expect(await within(barra).findByRole("alert")).toHaveTextContent("sem commit")
+    fireEvent.click(within(barra).getByRole("button", { name: /Encerrar e descartar/ }))
+    expect(await within(barra).findByRole("button", { name: "Começar sessão" })).toBeInTheDocument()
+    const encerrar = chamadas.filter((c) => c.url.endsWith("/encerrar"))
+    expect(encerrar.map((c) => c.corpo)).toEqual([{ descartar_alteracoes: false }, { descartar_alteracoes: true }])
   })
 
   it("lista alterações e abre o diff do git", async () => {

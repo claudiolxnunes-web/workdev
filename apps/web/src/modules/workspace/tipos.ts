@@ -4,6 +4,7 @@ export type AbaEditor =
   | { tipo: "arquivo"; caminho: string }
   | { tipo: "diff"; caminho: string }
   | { tipo: "proposta"; modelo: string; id: string; texto: string }
+  | { tipo: "sessao"; id: string }
 
 /** Trecho anexado ao chat: caminho real e linhas inclusivas, como a Bancada espera. */
 export interface Anexo { caminho: string; inicio: number; fim: number }
@@ -13,11 +14,14 @@ export const MAX_LINHAS_TRECHO = 400
 export const MAX_TRECHOS = 8
 
 export function chaveAba(aba: AbaEditor): string {
-  return aba.tipo === "proposta" ? `proposta:${aba.modelo}/${aba.id}` : `${aba.tipo}:${aba.caminho}`
+  if (aba.tipo === "proposta") return `proposta:${aba.modelo}/${aba.id}`
+  if (aba.tipo === "sessao") return `sessao:${aba.id}`
+  return `${aba.tipo}:${aba.caminho}`
 }
 
 export function tituloAba(aba: AbaEditor): string {
   if (aba.tipo === "proposta") return `✦ ${aba.id}`
+  if (aba.tipo === "sessao") return `⎇ sessão ${aba.id}`
   const nome = aba.caminho.split("/").pop() ?? aba.caminho
   return aba.tipo === "diff" ? `${nome} (diff)` : nome
 }

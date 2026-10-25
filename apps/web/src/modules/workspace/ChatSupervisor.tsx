@@ -10,6 +10,9 @@ import { getLocalModels, getOpenRouterModels, sendAiChatWithConfirmation, type C
 // que localiza os arquivos e fatia o pedido antes do modelo local agir.
 
 const CHAVE_MODELO = "workdev_workspace_supervisor_model";
+// Padrão do supervisor (decisão do operador, 2026-10-25): o mais barato. Troca
+// para Luna quando o plano sair ruim; a troca fica guardada.
+const MODELO_PADRAO = "deepseek/deepseek-v4-flash";
 const PROMPT_INICIO = "Faça primeiro a triagem só com ler_task: se a task não couber no Workspace Local (discovery, várias camadas, arquitetura, migração de banco), responda já com fora_do_alcance, sem ler código. Se couber, ache os arquivos com buscar_texto e leia os envolvidos com vários ler_trecho na mesma rodada, fatie em fatias com objetivo único e gate próprio, e entregue o plano em um bloco ```json. Ao recusar, diga por quê para o operador usar o fluxo de nuvem.";
 
 // Modelos locais têm runtime_id: a chave precisa dele, senão dois runtimes com o
@@ -46,7 +49,8 @@ export function ChatSupervisor({ sessionId, onSessionId }: {
         setModelos(lista);
         let guardado = "";
         try { guardado = localStorage.getItem(CHAVE_MODELO) || ""; } catch { /* sem storage */ }
-        const escolhido = lista.find((m) => chaveModelo(m) === guardado) ? guardado : (lista[0] ? chaveModelo(lista[0]) : "");
+        const padrao = lista.find((m) => m.model === MODELO_PADRAO) ?? lista[0];
+        const escolhido = lista.find((m) => chaveModelo(m) === guardado) ? guardado : (padrao ? chaveModelo(padrao) : "");
         setModelo(escolhido);
       })
       .catch(() => { if (ativo) setErro("Não foi possível carregar os modelos do supervisor."); });

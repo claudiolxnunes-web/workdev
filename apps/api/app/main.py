@@ -88,7 +88,7 @@ app.include_router(system_router, prefix="/api")
 app.include_router(busca_web_router, prefix="/api")
 # Bancada Local: só GET, lê apenas tmp/bancada (ver app/routers/bancada.py).
 app.include_router(bancada_router, prefix="/api")
-# Workspace: só GET, lista do git com bloqueios (ver app/services/workspace.py).
+# Workspace: leitura do checkout só por GET; POST só cria/encerra a sessão isolada (worktree).
 app.include_router(workspace_router, prefix="/api")
 app.include_router(terminal_router)
 app.include_router(run_terminal_router)

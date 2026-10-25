@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { getArquivo, getDiff, type Arquivo } from "@/services/workspace.service"
+import { getArquivo, getDiff, getDiffSessao, type Arquivo } from "@/services/workspace.service"
 import { extrairDiff } from "@/modules/bancada/proposta"
 import { MAX_LINHAS_TRECHO, chaveAba, tituloAba, type AbaEditor, type Anexo } from "./tipos"
 
@@ -100,6 +100,25 @@ function VistaDiff({ caminho }: { caminho: string }) {
   return <div className="h-full overflow-auto"><Diff texto={texto} rotulo={`Diff de ${caminho}`} /></div>
 }
 
+function VistaSessao({ id }: { id: string }) {
+  const [texto, setTexto] = useState<string | null>(null)
+  const [erro, setErro] = useState("")
+  useEffect(() => {
+    let vivo = true
+    getDiffSessao(id)
+      .then((d) => {
+        if (!vivo) return
+        const novos = d.nao_rastreados.length ? `\n# arquivos novos ainda sem commit: ${d.nao_rastreados.join(", ")}` : ""
+        setTexto((d.diff || "# a sessão ainda não mudou nada em relação à base") + novos + (d.truncado ? "\n… diff truncado em 200 KB" : ""))
+      })
+      .catch((causa) => { if (vivo) setErro(causa instanceof Error ? causa.message : "falha ao abrir o diff da sessão") })
+    return () => { vivo = false }
+  }, [id])
+  if (erro) return <p className="p-3 text-sm text-rose-300">{erro}</p>
+  if (texto == null) return <p className="p-3 text-sm text-slate-500">Carregando…</p>
+  return <div className="h-full overflow-auto"><Diff texto={texto} rotulo={`Diff da sessão ${id}`} /></div>
+}
+
 function VistaProposta({ aba }: { aba: Extract<AbaEditor, { tipo: "proposta" }> }) {
   const diff = extrairDiff(aba.texto)
   const [bruto, setBruto] = useState(!diff)
@@ -130,7 +149,7 @@ export function Editor({ abas, ativa, onAtivar, onFechar, onAnexar }: {
           const chave = chaveAba(aba)
           return (
             <div key={chave} className={`flex shrink-0 items-center border-r border-slate-800 text-xs ${chave === ativa ? "bg-slate-950 text-white" : "text-slate-400"}`}>
-              <button type="button" role="tab" aria-selected={chave === ativa} onClick={() => onAtivar(chave)} className="py-1.5 pl-3 pr-1" title={aba.tipo === "proposta" ? aba.id : aba.caminho}>{tituloAba(aba)}</button>
+              <button type="button" role="tab" aria-selected={chave === ativa} onClick={() => onAtivar(chave)} className="py-1.5 pl-3 pr-1" title={aba.tipo === "proposta" || aba.tipo === "sessao" ? aba.id : aba.caminho}>{tituloAba(aba)}</button>
               <button type="button" aria-label={`Fechar ${tituloAba(aba)}`} onClick={() => onFechar(chave)} className="px-2 py-1.5 text-slate-500 hover:text-white">×</button>
             </div>
           )
@@ -141,6 +160,7 @@ export function Editor({ abas, ativa, onAtivar, onFechar, onAnexar }: {
         {atual?.tipo === "arquivo" && <VistaArquivo key={atual.caminho} caminho={atual.caminho} onAnexar={onAnexar} />}
         {atual?.tipo === "diff" && <VistaDiff key={atual.caminho} caminho={atual.caminho} />}
         {atual?.tipo === "proposta" && <VistaProposta key={`${atual.modelo}/${atual.id}`} aba={atual} />}
+        {atual?.tipo === "sessao" && <VistaSessao key={atual.id} id={atual.id} />}
       </div>
     </div>
   )

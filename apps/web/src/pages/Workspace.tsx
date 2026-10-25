@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels"
 import { AgentTerminal } from "@/modules/agents/AgentTerminal"
 import { CLI_AGENTS, agentLabels, type AgentName } from "@/services/handoff.service"
+import { BarraSessao } from "@/modules/workspace/BarraSessao"
 import { ChatLocal } from "@/modules/workspace/ChatLocal"
 import { ChatSupervisor } from "@/modules/workspace/ChatSupervisor"
 import { Editor } from "@/modules/workspace/Editor"
@@ -15,8 +16,9 @@ import { chaveAba, type AbaEditor, type Anexo } from "@/modules/workspace/tipos"
 // local). O chat do supervisor fica à direita, como o Copilot do VS Code: é ele
 // que planeja, localiza os arquivos e fatia o trabalho antes do modelo local agir.
 //
-// O editor ainda é somente leitura: aplicar mudança é etapa seguinte do plano
-// docs/planning/workspace-local-execucao-assistida.md.
+// A barra da sessão abre a cópia isolada (worktree) onde as fatias vão ser
+// aplicadas. O editor ainda é somente leitura: aplicar mudança é a etapa
+// seguinte do plano docs/planning/workspace-local-execucao-assistida.md.
 
 type Aba = "explorer" | "editor" | "local" | "supervisor"
 type AbaInferior = "terminal" | "local"
@@ -74,6 +76,7 @@ export default function Workspace() {
   const [sessaoSupervisor, setSessaoSupervisor] = useState<string | null>(
     () => new URLSearchParams(window.location.search).get("session"),
   )
+  const [taskId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("task"))
 
   function abrir(aba: AbaEditor) {
     const chave = chaveAba(aba)
@@ -95,7 +98,7 @@ export default function Workspace() {
   }
 
   const ativo = abas.find((a) => chaveAba(a) === ativa)
-  const explorer = <Explorer aberto={ativo && ativo.tipo !== "proposta" ? ativo.caminho : null}
+  const explorer = <Explorer aberto={ativo && (ativo.tipo === "arquivo" || ativo.tipo === "diff") ? ativo.caminho : null}
     onAbrirArquivo={(caminho) => abrir({ tipo: "arquivo", caminho })} onAbrirDiff={(caminho) => abrir({ tipo: "diff", caminho })} />
   const editor = <Editor abas={abas} ativa={ativa} onAtivar={setAtiva} onFechar={fechar} onAnexar={anexar} />
   const chat = <ChatLocal anexos={anexos} onRemoverAnexo={(i) => setAnexos((atual) => atual.filter((_, j) => j !== i))}
@@ -120,6 +123,8 @@ export default function Workspace() {
     </div>
   )
 
+  const barraSessao = <BarraSessao taskId={taskId} chatSessionId={sessaoSupervisor} onAbrirDiff={(id) => abrir({ tipo: "sessao", id })} />
+
   const cabecalho = (
     <header className="flex shrink-0 flex-wrap items-center gap-2 pb-2">
       <h1 className="text-lg font-semibold">Workspace Local</h1>
@@ -143,6 +148,7 @@ export default function Workspace() {
     return (
       <div className="flex h-[calc(100dvh-7rem)] min-h-[480px] flex-col">
         {cabecalho}
+        {barraSessao}
         <nav role="tablist" aria-label="Painéis do workspace" className="flex shrink-0 gap-1 pb-1">
           {(Object.keys(rotulos) as Aba[]).map((aba) => (
             <button key={aba} type="button" role="tab" aria-selected={abaMovel === aba} onClick={() => setAbaMovel(aba)}
@@ -162,6 +168,7 @@ export default function Workspace() {
   return (
     <div className="flex h-[calc(100dvh-7rem)] min-h-[520px] flex-col">
       {cabecalho}
+      {barraSessao}
       <Group orientation="horizontal" id="workdev-workspace-colunas" defaultLayout={colunas.defaultLayout} onLayoutChanged={colunas.onLayoutChanged}
         className="min-h-0 flex-1 overflow-hidden rounded border border-slate-800">
         <Panel id="explorer" defaultSize="20%" minSize="160px" maxSize="45%" collapsible collapsedSize="0px">
