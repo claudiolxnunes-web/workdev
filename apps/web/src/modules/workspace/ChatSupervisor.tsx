@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getLocalModels, getOpenRouterModels, sendAiChatWithConfirmation, type CatalogModel } from "@/services/ai.service";
+import { planoDoTexto, type PlanoSupervisor } from "./plano";
 
 // Chat do supervisor do Workspace Local: o modelo grande (OpenRouter) que
 // planeja o trabalho e acompanha a execução. Fica no painel lateral, como o
@@ -21,9 +22,36 @@ const chaveModelo = (m: CatalogModel) => (m.runtime_id ? JSON.stringify([m.runti
 
 interface Mensagem { role: "user" | "assistant" | "system"; content: string; error?: boolean }
 
-export function ChatSupervisor({ sessionId, onSessionId }: {
+function PlanoNaResposta({ plano, onAprovar }: { plano: PlanoSupervisor; onAprovar: (plano: PlanoSupervisor) => Promise<void> }) {
+  const [estado, setEstado] = useState<"livre" | "enviando" | "aprovado">("livre");
+  const [erro, setErro] = useState("");
+  const objetivos = plano.fatias.map((f, i) => {
+    const objetivo = (f as { objetivo?: unknown })?.objetivo;
+    return `${i + 1}. ${typeof objetivo === "string" ? objetivo : "(sem objetivo)"}`;
+  });
+  async function aprovar() {
+    setEstado("enviando"); setErro("");
+    try { await onAprovar(plano); setEstado("aprovado"); }
+    catch (causa) { setErro(causa instanceof Error ? causa.message : "falha ao aprovar"); setEstado("livre"); }
+  }
+  return (
+    <div aria-label="Plano do supervisor" className="mt-2 rounded border border-emerald-900 bg-emerald-950/30 p-2 text-xs">
+      <p className="font-semibold text-emerald-200">Plano com {plano.fatias.length} fatia(s)</p>
+      <ul className="mt-1 space-y-0.5 text-slate-300">{objetivos.map((o) => <li key={o}>{o}</li>)}</ul>
+      <button type="button" disabled={estado !== "livre"} onClick={() => void aprovar()}
+        className="mt-2 rounded bg-emerald-700 px-3 py-1 text-white hover:bg-emerald-600 disabled:opacity-60">
+        {estado === "enviando" ? "Aprovando…" : estado === "aprovado" ? "Plano aprovado ✓" : "Aprovar plano"}
+      </button>
+      {erro && <p role="alert" className="mt-1 text-rose-300">{erro}</p>}
+    </div>
+  );
+}
+
+export function ChatSupervisor({ sessionId, onSessionId, onAprovarPlano }: {
   sessionId: string | null;
   onSessionId?: (id: string | null) => void;
+  /** Aprovar o plano de uma resposta: vira o plano da sessão (e subtasks da task). */
+  onAprovarPlano?: (plano: PlanoSupervisor) => Promise<void>;
 }) {
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
   const [entrada, setEntrada] = useState("");
@@ -158,7 +186,8 @@ export function ChatSupervisor({ sessionId, onSessionId }: {
         {mensagens.length === 0 && (
           <p className="text-xs text-slate-500">
             O supervisor planeja o trabalho: fatia a task, localiza os arquivos e diz o que cada
-            passo precisa fazer. Ele não edita nada.
+            passo precisa fazer. Ele não edita nada. Quando a resposta trouxer o plano, use
+            “Aprovar plano” e acompanhe a execução na aba Execução.
           </p>
         )}
         {mensagens.filter((m) => m.role !== "system").map((m, i) => (
@@ -169,6 +198,10 @@ export function ChatSupervisor({ sessionId, onSessionId }: {
             }`}>
               {m.content}
             </div>
+            {m.role === "assistant" && onAprovarPlano && (() => {
+              const plano = planoDoTexto(m.content);
+              return plano ? <PlanoNaResposta plano={plano} onAprovar={onAprovarPlano} /> : null;
+            })()}
           </div>
         ))}
         {carregando && <p className="text-xs text-slate-500">supervisor pensando…</p>}

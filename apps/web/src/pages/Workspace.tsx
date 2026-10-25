@@ -7,21 +7,26 @@ import { ChatLocal } from "@/modules/workspace/ChatLocal"
 import { ChatSupervisor } from "@/modules/workspace/ChatSupervisor"
 import { Editor } from "@/modules/workspace/Editor"
 import { Explorer } from "@/modules/workspace/Explorer"
+import { PainelExecucao } from "@/modules/workspace/PainelExecucao"
+import type { PlanoSupervisor } from "@/modules/workspace/plano"
+import { aprovarPlano, criarSessao, getSessoes } from "@/services/workspace.service"
 import { chaveAba, type AbaEditor, type Anexo } from "@/modules/workspace/tipos"
 
 // Workspace Local, no desenho do VS Code: Explorer | Editor (+ painel inferior)
 // | Chat do supervisor à direita.
 //
-// O painel inferior tem duas abas: Terminal (tmux) e Local (o chat com o modelo
-// local). O chat do supervisor fica à direita, como o Copilot do VS Code: é ele
-// que planeja, localiza os arquivos e fatia o trabalho antes do modelo local agir.
+// O painel inferior tem três abas: Local (o chat com o modelo local), Execução
+// (o plano aprovado rodando fatia por fatia) e Terminal (tmux). O chat do
+// supervisor fica à direita, como o Copilot do VS Code: é ele que planeja,
+// localiza os arquivos e fatia o trabalho; "Aprovar plano" leva as fatias para
+// a Execução.
 //
-// A barra da sessão abre a cópia isolada (worktree) onde as fatias vão ser
-// aplicadas. O editor ainda é somente leitura: aplicar mudança é a etapa
-// seguinte do plano docs/planning/workspace-local-execucao-assistida.md.
+// A barra da sessão abre a cópia isolada (worktree) onde as fatias são
+// aplicadas e commitadas. O editor continua somente leitura (escrita no editor
+// é etapa seguinte do plano docs/planning/workspace-local-execucao-assistida.md).
 
-type Aba = "explorer" | "editor" | "local" | "supervisor"
-type AbaInferior = "terminal" | "local"
+type Aba = "explorer" | "editor" | "local" | "execucao" | "supervisor"
+type AbaInferior = "terminal" | "local" | "execucao"
 
 // localStorage pode lançar (janela privada, site data bloqueado): sem ele o
 // layout só não é lembrado.
@@ -77,6 +82,9 @@ export default function Workspace() {
     () => new URLSearchParams(window.location.search).get("session"),
   )
   const [taskId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("task"))
+  // Sobe a cada mudança na sessão (plano aprovado, fatia rodada): barra e painel releem.
+  const [versaoSessao, setVersaoSessao] = useState(0)
+  const mudouSessao = () => setVersaoSessao((v) => v + 1)
 
   function abrir(aba: AbaEditor) {
     const chave = chaveAba(aba)
@@ -103,27 +111,37 @@ export default function Workspace() {
   const editor = <Editor abas={abas} ativa={ativa} onAtivar={setAtiva} onFechar={fechar} onAnexar={anexar} />
   const chat = <ChatLocal anexos={anexos} onRemoverAnexo={(i) => setAnexos((atual) => atual.filter((_, j) => j !== i))}
     onLimparAnexos={() => setAnexos([])} onAbrirProposta={(modelo, id, texto) => abrir({ tipo: "proposta", modelo, id, texto })} />
-  const supervisor = <ChatSupervisor sessionId={sessaoSupervisor} onSessionId={setSessaoSupervisor} />
+  // Aprovar o plano: sem sessão ativa, começa uma (ligada à task) antes.
+  async function aprovar(plano: PlanoSupervisor) {
+    const { ativa } = await getSessoes()
+    const sessao = ativa ?? await criarSessao({ task_id: taskId, chat_session_id: sessaoSupervisor })
+    await aprovarPlano(sessao.id, plano)
+    mudouSessao()
+    setAbaInferior("execucao")
+    setPainelAberto(true)
+    setAbaMovel("execucao")
+  }
+  const supervisor = <ChatSupervisor sessionId={sessaoSupervisor} onSessionId={setSessaoSupervisor} onAprovarPlano={aprovar} />
+  const execucao = <PainelExecucao versao={versaoSessao} onMudou={mudouSessao} />
 
-  // Painel inferior com duas abas, como o rodapé do VS Code: o terminal tmux
-  // e o chat com o modelo local.
+  // Painel inferior com abas, como o rodapé do VS Code.
   const painelInferior = (
     <div className="flex h-full min-h-0 flex-col bg-slate-950">
       <div role="tablist" aria-label="Painel inferior" className="flex shrink-0 items-center gap-1 border-b border-slate-800 bg-slate-900 px-2 py-1">
-        {(["local", "terminal"] as AbaInferior[]).map((aba) => (
+        {(["local", "execucao", "terminal"] as AbaInferior[]).map((aba) => (
           <button key={aba} type="button" role="tab" aria-selected={abaInferior === aba} onClick={() => setAbaInferior(aba)}
             className={`rounded px-2 py-0.5 text-[11px] uppercase tracking-wide ${abaInferior === aba ? "bg-slate-700 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-            {aba === "local" ? "Local" : "Terminal"}
+            {aba === "local" ? "Local" : aba === "execucao" ? "Execução" : "Terminal"}
           </button>
         ))}
       </div>
       <div className="min-h-0 flex-1">
-        {abaInferior === "local" ? chat : <Terminal agente={agente} onAgente={setAgente} />}
+        {abaInferior === "local" ? chat : abaInferior === "execucao" ? execucao : <Terminal agente={agente} onAgente={setAgente} />}
       </div>
     </div>
   )
 
-  const barraSessao = <BarraSessao taskId={taskId} chatSessionId={sessaoSupervisor} onAbrirDiff={(id) => abrir({ tipo: "sessao", id })} />
+  const barraSessao = <BarraSessao key={versaoSessao} taskId={taskId} chatSessionId={sessaoSupervisor} onAbrirDiff={(id) => abrir({ tipo: "sessao", id })} />
 
   const cabecalho = (
     <header className="flex shrink-0 flex-wrap items-center gap-2 pb-2">
@@ -143,6 +161,7 @@ export default function Workspace() {
       explorer: "Explorer",
       editor: "Editor",
       local: anexos.length ? `Local (${anexos.length})` : "Local",
+      execucao: "Execução",
       supervisor: "Supervisor",
     }
     return (
@@ -159,6 +178,7 @@ export default function Workspace() {
           {abaMovel === "explorer" && explorer}
           {abaMovel === "editor" && editor}
           {abaMovel === "local" && chat}
+          {abaMovel === "execucao" && execucao}
           {abaMovel === "supervisor" && supervisor}
         </div>
       </div>

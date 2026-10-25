@@ -14,6 +14,7 @@ const proposta = "--- a/apps/api/modulo.py\n+++ b/apps/api/modulo.py\n@@ -1,2 +1
 let modeloLigado = true
 // Sessão do Workspace: null = sem sessão; "com_alteracoes" faz o encerrar pedir confirmação.
 let sessaoAtiva: { id: string; pendente: boolean } | null = null
+let mensagensSupervisor: object[] = [{ role: "system", content: "supervisor" }]
 const estadoSessao = (id: string, pendente: boolean) => ({ id, status: "ativa", branch: `workspace/${id}`, caminho: "/x", base: "abc1234def", branch_origem: "main",
   task_id: "t-9", chat_session_id: null, titulo: null, criada_em: "2026-10-25T00:00:00+00:00", encerrada_em: null,
   commits: [{ sha: "aaa1111", mensagem: "fatia 1" }], alteracoes: pendente ? [{ status: "M", caminho: "apps/api/modulo.py" }] : [] })
@@ -32,6 +33,7 @@ const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     sessaoAtiva = null
     return json({ status: "encerrada" })
   }
+  if (url.endsWith("/plano")) return json(estadoSessao(sessaoAtiva!.id, false))
   if (url.startsWith("/api/workspace/sessao/") && url.endsWith("/diff")) return json({ id: "s", diff: proposta, nao_rastreados: ["apps/api/novo.py"], truncado: false })
   if (url.startsWith("/api/workspace/sessao/")) return json(estadoSessao(sessaoAtiva!.id, sessaoAtiva!.pendente))
   if (url.startsWith("/api/workspace/arvore")) {
@@ -46,7 +48,7 @@ const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
   if (url.startsWith("/api/workspace/alteracoes")) return json({ base: "abc1234", itens: [{ caminho: "apps/api/modulo.py", estado: "M", mais: 1, menos: 1 }], truncado: false })
   if (url.startsWith("/api/workspace/diff")) return json({ caminho: "apps/api/modulo.py", diff: proposta, truncado: false })
   if (url.startsWith("/api/ai/models")) return json([{ provider: "openrouter", model: "openai/gpt-5.6-luna", label: "Luna" }])
-  if (url.startsWith("/api/chat/sessions/")) return json({ id: "abc", messages: [{ role: "system", content: "supervisor" }], authority: "observe" })
+  if (url.startsWith("/api/chat/sessions/")) return json({ id: "abc", messages: mensagensSupervisor, authority: "observe" })
   if (url.endsWith("/api/ai/chat")) return json({ reply: "plano pronto", authority: "observe", session_id: "abc" })
   if (url.endsWith("/api/bancada/estado")) return json({ ativo: modeloLigado, chave: "moe", modelo: "Qwen MoE", memoria: { total_mb: 1, disponivel_mb: 1 }, processo_mb: null, pasta: "x", pasta_existe: true, ocupado: false })
   if (url.endsWith("/api/bancada/observers")) return json({ padrao: "openai/gpt-5.6-luna", observers: ["openai/gpt-5.6-luna", "mistralai/codestral-2508"], segunda_opiniao: { id: "segunda-opiniao", primario: "mistralai/codestral-2508", arbitro: "openai/gpt-5.6-luna" } })
@@ -72,6 +74,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", ResizeObserverFalso)
   modeloLigado = true
   sessaoAtiva = null
+  mensagensSupervisor = [{ role: "system", content: "supervisor" }]
   chamadas.length = 0
   fetchMock.mockClear()
   vi.stubGlobal("fetch", fetchMock)
@@ -143,6 +146,22 @@ describe("Workspace Local", () => {
     const diff = await screen.findByLabelText("Diff da sessão 251025-120000-ab12")
     expect(diff).toHaveTextContent("+ return 2")
     expect(diff).toHaveTextContent("apps/api/novo.py")
+    window.history.pushState({}, "", "/workspace")
+  })
+
+  it("aprovar o plano da resposta do supervisor começa a sessão e abre a Execução", async () => {
+    window.history.pushState({}, "", "/workspace?session=abc&task=t-9")
+    const plano = { fatias: [{ objetivo: "f retorna 2", instrucao: "x", trechos: [], gate: ["pytest"] }] }
+    mensagensSupervisor = [{ role: "system", content: "s" }, { role: "assistant", content: "Plano:\n```json\n" + JSON.stringify(plano) + "\n```" }]
+    render(<Workspace />)
+    const cartao = await screen.findByLabelText("Plano do supervisor")
+    expect(cartao).toHaveTextContent("1. f retorna 2")
+    fireEvent.click(within(cartao).getByRole("button", { name: "Aprovar plano" }))
+    expect(await within(cartao).findByRole("button", { name: "Plano aprovado ✓" })).toBeDisabled()
+    const posts = chamadas.filter((c) => c.metodo === "POST" && c.url.startsWith("/api/workspace"))
+    expect(posts.map((c) => c.url)).toEqual(["/api/workspace/sessao", "/api/workspace/sessao/251025-120000-ab12/plano"])
+    expect(posts[1].corpo).toEqual({ plano })
+    expect(screen.getByRole("tab", { name: "Execução" })).toHaveAttribute("aria-selected", "true")
     window.history.pushState({}, "", "/workspace")
   })
 
