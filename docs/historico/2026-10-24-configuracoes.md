@@ -88,8 +88,14 @@ em promoção de 88% no provedor mais barato, então não valem como preço padr
 - Vários agentes e sessões compartilham `/opt/workdev`: um commit de uma sessão pode cair
   na branch da outra. Conferir `git branch --show-current` antes de commitar.
 
-## 8. Ideias na fila (nada foi feito)
+## 8. Ideias na fila
 
-Para a bancada local, em ordem de retorno: medir prefill e geração separados (`timings` do
-llama-server), `cache_prompt`, escolha automática de trechos no "Planejar", `broker` na tela
-e speculative decoding. Detalhes em `docs/planning/retomada-2026-10-24.md`.
+Para a bancada local, em ordem de retorno: `cache_prompt`, escolha automática de
+trechos no "Planejar", `broker` na tela e speculative decoding. Detalhes em
+`docs/planning/retomada-2026-10-24.md`.
+
+**Feito no mesmo dia:** o item 1 (medir prefill e geração separados, pelo bloco
+`timings` do llama-server) — branch `feat/bancada-medicao-prefill`, ainda sem
+deploy. O que os números apontaram está em "Item 1" da retomada: o prefill é o
+gargalo (26,0 s de 31,6 s na primeira rodada, ~11 tok/s) e o KV cache já resolve o
+caso repetido (99% do prefixo reaproveitado, prefill de 26,0 s para 0,2 s).

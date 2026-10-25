@@ -21,6 +21,7 @@ Subcomandos:
   extrair <id>                       grava o diff da proposta em tmp/bancada/patches/<id>.patch
                                      e roda git apply --recount --check (nunca aplica)
   resumo                             aproveitamento por modelo e por quem avaliou
+  medicoes                           prefill x geração por modelo (do que cada execução gravou)
 
 Observer e comparar usam a OPENROUTER_API_KEY do WorkDev (lida do arquivo de
 ambiente, nunca exibida). O modelo local nunca lê arquivos nem aplica nada.
@@ -166,6 +167,93 @@ def corpo_base(mensagens: list, max_tokens: int, thinking: bool) -> dict:
     }
 
 
+# ---------------------------------------------------------------- medição (prefill x geração)
+
+def medir_timings(payload: dict) -> dict:
+    """Separa o custo de carregar o prompt do custo de gerar a resposta.
+
+    O llama-server devolve o bloco `timings` no fim da requisição (também no
+    último pedaço do stream): `prompt_ms` é o prefill, `predicted_ms` é a
+    geração. `prompt_n` é o que foi avaliado agora e `cache_n` o que veio do
+    KV cache — o prompt inteiro é a soma dos dois. Sem `timings` (servidor
+    antigo) devolve {} e nada é gravado.
+    """
+    bloco = (payload or {}).get("timings")
+    if not isinstance(bloco, dict) or not bloco:
+        return {}
+    prefill_ms = float(bloco.get("prompt_ms") or 0.0)
+    geracao_ms = float(bloco.get("predicted_ms") or 0.0)
+    prefill_tok = int(bloco.get("prompt_n") or 0)
+    cache_tok = int(bloco.get("cache_n") or 0)
+    geracao_tok = int(bloco.get("predicted_n") or 0)
+    return {
+        "prefill_ms": round(prefill_ms, 1),
+        "prefill_tok": prefill_tok,
+        "cache_tok": cache_tok,
+        "prompt_tok": prefill_tok + cache_tok,
+        "geracao_ms": round(geracao_ms, 1),
+        "geracao_tok": geracao_tok,
+        "tok_s_prefill": round(prefill_tok / (prefill_ms / 1000), 2) if prefill_ms else None,
+        "tok_s_geracao": round(geracao_tok / (geracao_ms / 1000), 2) if geracao_ms else None,
+    }
+
+
+def _sufixo_medicao(medicao: dict) -> str:
+    """Resumo curto da medição para a linha do terminal."""
+    if not medicao:
+        return ""
+    prefill = (medicao.get("prefill_ms") or 0) / 1000
+    geracao = (medicao.get("geracao_ms") or 0) / 1000
+    return f"  prefill={prefill:.1f}s geracao={geracao:.1f}s"
+
+
+def agregar_medicoes(pasta_saida: Path | None = None) -> list[dict]:
+    """Prefill x geração por modelo, somando o que cada execução gravou.
+
+    Lê os `_resumo.json` da bancada (um por modelo) e devolve uma linha por
+    modelo com o que foi medido. Execuções sem medição são ignoradas.
+    """
+    base = Path(pasta_saida) if pasta_saida else SAIDA
+    linhas = []
+    if not base.is_dir():
+        return linhas
+    for pasta in sorted(p for p in base.iterdir() if p.is_dir()):
+        resumo_path = pasta / "_resumo.json"
+        if not resumo_path.is_file():
+            continue
+        try:
+            resumo = json.loads(resumo_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(resumo, dict):
+            continue
+        itens = [v for v in resumo.values()
+                 if isinstance(v, dict) and isinstance(v.get("medicao"), dict) and v["medicao"]]
+        if not itens:
+            continue
+        prefill_ms = sum(v["medicao"].get("prefill_ms") or 0 for v in itens)
+        geracao_ms = sum(v["medicao"].get("geracao_ms") or 0 for v in itens)
+        prefill_tok = sum(v["medicao"].get("prefill_tok") or 0 for v in itens)
+        cache_tok = sum(v["medicao"].get("cache_tok") or 0 for v in itens)
+        geracao_tok = sum(v["medicao"].get("geracao_tok") or 0 for v in itens)
+        prompt_tok = prefill_tok + cache_tok
+        linhas.append({
+            "modelo": pasta.name,
+            "execucoes": len(itens),
+            "prefill_ms": round(prefill_ms, 1),
+            "prefill_medio_ms": round(prefill_ms / len(itens), 1),
+            "geracao_ms": round(geracao_ms, 1),
+            "geracao_medio_ms": round(geracao_ms / len(itens), 1),
+            "prefill_tok": prefill_tok,
+            "cache_tok": cache_tok,
+            "prompt_tok": prompt_tok,
+            "geracao_tok": geracao_tok,
+            "tok_s_geracao": round(geracao_tok / (geracao_ms / 1000), 2) if geracao_ms else None,
+            "cache_pct": round(100 * cache_tok / prompt_tok, 1) if prompt_tok else 0.0,
+        })
+    return linhas
+
+
 def pasta_modelo(chave: str) -> Path:
     destino = SAIDA / (chave if ID_VALIDO.match(chave) else "desconhecido")
     destino.mkdir(parents=True, exist_ok=True)
@@ -217,6 +305,7 @@ def cmd_rodar(args) -> int:
         inicio = time.monotonic()
         tokens = None
         extra = {}
+        medicao: dict = {}
         try:
             prompt = montar_prompt(tarefa)
             if args.stream:
@@ -224,6 +313,7 @@ def cmd_rodar(args) -> int:
                 resultado = rodar_stream(args.url, prompt, int(tarefa.get("max_tokens") or 1024),
                                          bool(tarefa.get("thinking", False)), args.timeout)
                 texto, tokens = resultado["texto"].strip(), resultado["tokens"]
+                medicao = resultado.get("medicao") or {}
                 extra = {k: resultado[k] for k in ("retentativa", "suspeitos", "ainda_suspeitos") if k in resultado}
             else:
                 resposta = chat(
@@ -237,6 +327,7 @@ def cmd_rodar(args) -> int:
                 )
                 texto = (resposta["choices"][0]["message"].get("content") or "").strip()
                 tokens = (resposta.get("usage") or {}).get("completion_tokens")
+                medicao = medir_timings(resposta)
             ok = True
         except urllib.error.HTTPError as erro:
             texto = f"ERRO: HTTP {erro.code}: {cortar(erro.read().decode('utf-8', 'replace'), 1000)}"
@@ -246,10 +337,11 @@ def cmd_rodar(args) -> int:
             ok = False
         segundos = round(time.monotonic() - inicio, 1)
         (destino / f"{tid}.txt").write_text(texto + "\n", encoding="utf-8")
-        resumo[tid] = {"segundos": segundos, "tokens": tokens, "ok": ok, **extra,
+        resumo[tid] = {"segundos": segundos, "tokens": tokens, "ok": ok, "medicao": medicao, **extra,
                        "data": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         resumo_path.write_text(json.dumps(resumo, ensure_ascii=False, indent=2))
-        print(f"  {tid:<28} {'ok  ' if ok else 'ERRO'} {segundos:>7}s  tokens={tokens}")
+        print(f"  {tid:<28} {'ok  ' if ok else 'ERRO'} {segundos:>7}s  tokens={tokens}"
+              f"{_sufixo_medicao(medicao)}")
     return 0
 
 
@@ -290,6 +382,7 @@ def _stream(url: str, corpo: dict, timeout: float, conhecido: str, vigiar: bool)
                                  headers={"Content-Type": "application/json"}, method="POST")
     texto, linha_atual, em_codigo, tokens = "", "", False, None
     definidos: set[str] = set()
+    medicao: dict = {}
     with urllib.request.urlopen(req, timeout=timeout) as resposta:
         for bruto in resposta:
             bruto = bruto.decode("utf-8", "replace").strip()
@@ -300,6 +393,8 @@ def _stream(url: str, corpo: dict, timeout: float, conhecido: str, vigiar: bool)
                 break
             pedaco = json.loads(dado)
             tokens = (pedaco.get("usage") or {}).get("completion_tokens", tokens)
+            if pedaco.get("timings"):
+                medicao = medir_timings(pedaco)
             escolhas = pedaco.get("choices") or [{}]
             delta = (escolhas[0].get("delta") or {}).get("content") or ""
             if not delta:
@@ -320,8 +415,8 @@ def _stream(url: str, corpo: dict, timeout: float, conhecido: str, vigiar: bool)
                     definidos.update(nome for nome in par if nome)
                 ruins = suspeitos(codigo, conhecido, definidos)
                 if vigiar and ruins:
-                    return {"texto": texto, "tokens": tokens, "interrompido": ruins}
-    return {"texto": texto, "tokens": tokens, "interrompido": []}
+                    return {"texto": texto, "tokens": tokens, "medicao": medicao, "interrompido": ruins}
+    return {"texto": texto, "tokens": tokens, "medicao": medicao, "interrompido": []}
 
 
 def rodar_stream(url: str, prompt: str, max_tokens: int, thinking: bool, timeout: float) -> dict:
@@ -559,6 +654,29 @@ def cmd_resumo(args) -> int:
             f"{100 * sum(r['veredito'] == v for r in itens) / total:>17.0f}%" for v in VEREDITOS)
         media = f"{sum(segs) / len(segs):.1f}s" if segs else "-"
         print(f"{modelo:<10}{quem:<30}{total:>8}{colunas}{media:>13}")
+    return 0
+
+
+def cmd_medicoes(args) -> int:
+    """Prefill x geração por modelo, a partir do que cada execução gravou."""
+    linhas = agregar_medicoes(SAIDA)
+    if not linhas:
+        print("sem medições ainda — rode uma tarefa (com o llama-server no ar) primeiro")
+        return 1
+    print(f"{'modelo':<12}{'exec':>5}{'prefill médio':>16}{'geração média':>16}{'tok/s ger.':>12}{'cache':>8}")
+    for linha in linhas:
+        print(f"{linha['modelo']:<12}{linha['execucoes']:>5}"
+              f"{linha['prefill_medio_ms'] / 1000:>14.1f}s"
+              f"{linha['geracao_medio_ms'] / 1000:>14.1f}s"
+              f"{(linha['tok_s_geracao'] or 0):>11.1f}"
+              f"{linha['cache_pct']:>7.0f}%")
+    totais = {
+        "prefill": sum(l["prefill_ms"] for l in linhas),
+        "geracao": sum(l["geracao_ms"] for l in linhas),
+        "exec": sum(l["execucoes"] for l in linhas),
+    }
+    print(f"{'TOTAL':<12}{totais['exec']:>5}{totais['prefill'] / 1000:>14.1f}s"
+          f"{totais['geracao'] / 1000:>14.1f}s")
     return 0
 
 
@@ -1287,6 +1405,9 @@ def main() -> int:
 
     s = sub.add_parser("resumo")
     s.set_defaults(func=cmd_resumo)
+
+    m = sub.add_parser("medicoes", help="prefill x geração por modelo (do que cada execução gravou)")
+    m.set_defaults(func=cmd_medicoes)
 
     v = sub.add_parser("verificar", help="checagens mecânicas (sem LLM) de uma proposta")
     v.add_argument("--caso", help="id de um caso do corpus")

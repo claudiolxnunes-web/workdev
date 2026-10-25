@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
-  getEstado, getProposta, getPropostas, getResumo, lerLote, lerLoteGravado, ligarModelo, pedirParecer, reenviarProposta,
+  getEstado, getMedicoes, getProposta, getPropostas, getResumo, lerLote, lerLoteGravado, ligarModelo, pedirParecer, reenviarProposta,
   rodarTarefa, verificarProposta,
-  type EstadoBancada, type EventoBancada, type LinhaResumo, type NovaTarefa, type PropostaDetalhe,
+  type EstadoBancada, type EventoBancada, type LinhaMedicao, type LinhaResumo, type NovaTarefa, type PropostaDetalhe,
   type PropostaResumo,
 } from "@/services/bancada.service"
 import { Checagens, Pareceres, Selo } from "@/modules/bancada/Resultado"
 import { SeletorObserver } from "@/modules/bancada/SeletorObserver"
+import { SeletorModeloLocal } from "@/modules/local/SeletorModeloLocal"
 import { ultimoPromptCorrecao } from "@/modules/bancada/proposta"
 import { PlanejadorModal } from "@/components/bancada/PlanejadorModal"
 
@@ -39,6 +40,11 @@ function EstadoModelo({ estado, onAcao, acaoEmCurso }: {
         <div><dt className="text-xs text-slate-500">Memória do processo</dt><dd>{mb(estado.processo_mb)}</dd></div>
         <div><dt className="text-xs text-slate-500">Memória livre</dt><dd>{mb(estado.memoria.disponivel_mb)} de {mb(estado.memoria.total_mb)}</dd></div>
       </dl>
+      {/* Todos os modelos locais ficam à mão. O padrão é o MoE de 35B; trocar
+          reinicia o llama-server e é recusado com o local-code ocupado. */}
+      <div className="mt-3 border-t border-slate-800 pt-3">
+        <SeletorModeloLocal desabilitado={acaoEmCurso || Boolean(estado.ocupado)} />
+      </div>
       {!estado.pasta_existe && <p className="mt-2 text-xs text-amber-300">Pasta da Bancada não encontrada: {estado.pasta}</p>}
     </section>
   )
@@ -59,6 +65,31 @@ function Aproveitamento({ linhas }: { linhas: LinhaResumo[] }) {
                 <td className="py-1">{l.modelo}</td><td className="text-slate-300">{l.avaliado_por}</td><td>{l.tarefas}</td>
                 <td>{l.aproveitada}%</td><td>{l.correcao_pequena}%</td><td>{l.descartada}%</td><td>{l.falhas}</td>
                 <td>{l.tempo_medio_s != null ? `${l.tempo_medio_s}s` : "-"}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>)}
+    </section>
+  )
+}
+
+function Medicoes({ linhas }: { linhas: LinhaMedicao[] }) {
+  return (
+    <section aria-label="Medições de prefill e geração" className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+      <h2 className="mb-1 text-sm font-semibold text-slate-300">Medições: prefill × geração</h2>
+      <p className="mb-2 text-xs text-slate-500">Prefill é o custo de carregar o prompt; geração é o custo de escrever a resposta. Cache é quanto do prompt veio reaproveitado do KV cache.</p>
+      {linhas.length === 0 ? <p className="text-sm text-slate-400">Sem medições ainda.</p> : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-left text-sm">
+            <thead className="text-xs text-slate-500"><tr>
+              <th className="py-1">Modelo</th><th>Execuções</th><th>Prefill médio</th><th>Geração média</th>
+              <th>tok/s (geração)</th><th>Cache</th></tr></thead>
+            <tbody>{linhas.map((l) => (
+              <tr key={l.modelo} className="border-t border-slate-800">
+                <td className="py-1">{l.modelo}</td><td>{l.execucoes}</td>
+                <td>{(l.prefill_medio_ms / 1000).toFixed(1)}s</td>
+                <td>{(l.geracao_medio_ms / 1000).toFixed(1)}s</td>
+                <td>{l.tok_s_geracao != null ? l.tok_s_geracao.toFixed(1) : "-"}</td>
+                <td>{l.cache_pct.toFixed(0)}%</td>
               </tr>))}</tbody>
           </table>
         </div>)}
@@ -147,6 +178,7 @@ export default function BancadaLocal() {
   const [estado, setEstado] = useState<EstadoBancada | null>(null)
   const [propostas, setPropostas] = useState<PropostaResumo[]>([])
   const [resumo, setResumo] = useState<LinhaResumo[]>([])
+  const [medicoes, setMedicoes] = useState<LinhaMedicao[]>([])
   const [selecionada, setSelecionada] = useState<{ modelo: string; id: string } | null>(null)
   const [detalhe, setDetalhe] = useState<PropostaDetalhe | null>(null)
   const [erro, setErro] = useState("")
@@ -167,6 +199,8 @@ export default function BancadaLocal() {
     try {
       const [e, p, r] = await Promise.all([getEstado(), getPropostas(), getResumo()])
       setEstado(e); setPropostas(p); setResumo(r)
+      // A API em produção pode ainda não ter o endpoint; a tela não deve cair por isso.
+      setMedicoes(await getMedicoes().catch(() => [] as LinhaMedicao[]))
     } catch (causa) { setErro(causa instanceof Error ? causa.message : "Falha ao carregar a Bancada") }
   }, [])
 
@@ -208,7 +242,12 @@ export default function BancadaLocal() {
       else if (e.tipo === "token") setSaida((atual) => atual + (e.texto ?? ""))
       else if (e.tipo === "vigia") log(`[vigia] ${(e.nomes ?? []).join(", ")} não está nos trechos — reenviando 1 vez`)
       else if (e.tipo === "reinicio") setSaida("")
-      else if (e.tipo === "fim") { final = e; log(`[fim] ${e.id} · ${e.segundos}s · ${e.tokens ?? "?"} tokens${e.retentativa ? " · com reenvio do vigia" : ""}`) }
+      else if (e.tipo === "fim") {
+        final = e
+        const m = e.medicao
+        const medicao = m ? ` · prefill ${(m.prefill_ms / 1000).toFixed(1)}s · geração ${(m.geracao_ms / 1000).toFixed(1)}s` : ""
+        log(`[fim] ${e.id} · ${e.segundos}s · ${e.tokens ?? "?"} tokens${medicao}${e.retentativa ? " · com reenvio do vigia" : ""}`)
+      }
       else if (e.tipo === "erro") { final = e; log(`[erro] ${e.mensagem}`) }
     })
     return final
@@ -300,6 +339,7 @@ export default function BancadaLocal() {
         <Fluxo linhas={linhas} saida={saida} />
       </div>
       <Aproveitamento linhas={resumo} />
+      <Medicoes linhas={medicoes} />
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
         <section aria-label="Propostas" className="rounded-lg border border-slate-800 bg-slate-900 p-4">
           <h2 className="mb-2 text-sm font-semibold text-slate-300">Propostas</h2>

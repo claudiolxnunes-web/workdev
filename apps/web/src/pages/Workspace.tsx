@@ -3,14 +3,23 @@ import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "r
 import { AgentTerminal } from "@/modules/agents/AgentTerminal"
 import { CLI_AGENTS, agentLabels, type AgentName } from "@/services/handoff.service"
 import { ChatLocal } from "@/modules/workspace/ChatLocal"
+import { ChatSupervisor } from "@/modules/workspace/ChatSupervisor"
 import { Editor } from "@/modules/workspace/Editor"
 import { Explorer } from "@/modules/workspace/Explorer"
 import { chaveAba, type AbaEditor, type Anexo } from "@/modules/workspace/tipos"
 
-// Workspace Local, no desenho do VS Code: Explorer | Editor (+ Terminal) | Chat do
-// modelo local. Só leitura do repositório; o modelo local só propõe.
+// Workspace Local, no desenho do VS Code: Explorer | Editor (+ painel inferior)
+// | Chat do supervisor à direita.
+//
+// O painel inferior tem duas abas: Terminal (tmux) e Local (o chat com o modelo
+// local). O chat do supervisor fica à direita, como o Copilot do VS Code: é ele
+// que planeja, localiza os arquivos e fatia o trabalho antes do modelo local agir.
+//
+// O editor ainda é somente leitura: aplicar mudança é etapa seguinte do plano
+// docs/planning/workspace-local-execucao-assistida.md.
 
-type Aba = "explorer" | "editor" | "chat" | "terminal"
+type Aba = "explorer" | "editor" | "local" | "supervisor"
+type AbaInferior = "terminal" | "local"
 
 // localStorage pode lançar (janela privada, site data bloqueado): sem ele o
 // layout só não é lembrado.
@@ -52,13 +61,19 @@ function Terminal({ agente, onAgente }: { agente: AgentName; onAgente: (agente: 
 export default function Workspace() {
   const desktop = useDesktop()
   const colunas = useDefaultLayout({ id: "workdev-workspace-colunas", storage: armazenamento })
-  const centro = useDefaultLayout({ id: "workdev-workspace-centro", storage: armazenamento, panelIds: ["editor", "terminal"] })
+  const centro = useDefaultLayout({ id: "workdev-workspace-centro", storage: armazenamento, panelIds: ["editor", "painel"] })
   const [abas, setAbas] = useState<AbaEditor[]>([])
   const [ativa, setAtiva] = useState<string | null>(null)
   const [anexos, setAnexos] = useState<Anexo[]>([])
-  const [terminalAberto, setTerminalAberto] = useState(false)
+  const [painelAberto, setPainelAberto] = useState(true)
+  const [abaInferior, setAbaInferior] = useState<AbaInferior>("local")
   const [agente, setAgente] = useState<AgentName>("claude")
   const [abaMovel, setAbaMovel] = useState<Aba>("explorer")
+  // A sessão do supervisor vem do backlog (?session=...) ou de uma conversa
+  // aberta dentro do próprio Workspace.
+  const [sessaoSupervisor, setSessaoSupervisor] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get("session"),
+  )
 
   function abrir(aba: AbaEditor) {
     const chave = chaveAba(aba)
@@ -85,22 +100,46 @@ export default function Workspace() {
   const editor = <Editor abas={abas} ativa={ativa} onAtivar={setAtiva} onFechar={fechar} onAnexar={anexar} />
   const chat = <ChatLocal anexos={anexos} onRemoverAnexo={(i) => setAnexos((atual) => atual.filter((_, j) => j !== i))}
     onLimparAnexos={() => setAnexos([])} onAbrirProposta={(modelo, id, texto) => abrir({ tipo: "proposta", modelo, id, texto })} />
+  const supervisor = <ChatSupervisor sessionId={sessaoSupervisor} onSessionId={setSessaoSupervisor} />
+
+  // Painel inferior com duas abas, como o rodapé do VS Code: o terminal tmux
+  // e o chat com o modelo local.
+  const painelInferior = (
+    <div className="flex h-full min-h-0 flex-col bg-slate-950">
+      <div role="tablist" aria-label="Painel inferior" className="flex shrink-0 items-center gap-1 border-b border-slate-800 bg-slate-900 px-2 py-1">
+        {(["local", "terminal"] as AbaInferior[]).map((aba) => (
+          <button key={aba} type="button" role="tab" aria-selected={abaInferior === aba} onClick={() => setAbaInferior(aba)}
+            className={`rounded px-2 py-0.5 text-[11px] uppercase tracking-wide ${abaInferior === aba ? "bg-slate-700 text-white" : "text-slate-400 hover:text-slate-200"}`}>
+            {aba === "local" ? "Local" : "Terminal"}
+          </button>
+        ))}
+      </div>
+      <div className="min-h-0 flex-1">
+        {abaInferior === "local" ? chat : <Terminal agente={agente} onAgente={setAgente} />}
+      </div>
+    </div>
+  )
 
   const cabecalho = (
     <header className="flex shrink-0 flex-wrap items-center gap-2 pb-2">
       <h1 className="text-lg font-semibold">Workspace Local</h1>
       <span className="text-xs text-slate-500">repositório só leitura · o modelo local só propõe, nada é aplicado</span>
       {desktop && (
-        <button type="button" aria-pressed={terminalAberto} onClick={() => setTerminalAberto((v) => !v)}
+        <button type="button" aria-pressed={painelAberto} onClick={() => setPainelAberto((v) => !v)}
           className="ml-auto rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800">
-          {terminalAberto ? "Fechar terminal" : "Abrir terminal"}
+          {painelAberto ? "Fechar painel" : "Abrir painel"}
         </button>
       )}
     </header>
   )
 
   if (!desktop) {
-    const rotulos: Record<Aba, string> = { explorer: "Explorer", editor: "Editor", chat: anexos.length ? `Chat (${anexos.length})` : "Chat", terminal: "Terminal" }
+    const rotulos: Record<Aba, string> = {
+      explorer: "Explorer",
+      editor: "Editor",
+      local: anexos.length ? `Local (${anexos.length})` : "Local",
+      supervisor: "Supervisor",
+    }
     return (
       <div className="flex h-[calc(100dvh-7rem)] min-h-[480px] flex-col">
         {cabecalho}
@@ -113,8 +152,8 @@ export default function Workspace() {
         <div className="min-h-0 flex-1 overflow-hidden rounded border border-slate-800">
           {abaMovel === "explorer" && explorer}
           {abaMovel === "editor" && editor}
-          {abaMovel === "chat" && chat}
-          {abaMovel === "terminal" && <Terminal agente={agente} onAgente={setAgente} />}
+          {abaMovel === "local" && chat}
+          {abaMovel === "supervisor" && supervisor}
         </div>
       </div>
     )
@@ -134,17 +173,17 @@ export default function Workspace() {
             <Panel id="editor" minSize="20%">
               <section aria-label="Editor" className="h-full min-h-0">{editor}</section>
             </Panel>
-            {terminalAberto && <>
-              <Separator aria-label="Altura do terminal" className="h-1 bg-slate-800 transition-colors hover:bg-sky-700 focus:bg-sky-700 focus:outline-none data-[separator=active]:bg-sky-600" />
-              <Panel id="terminal" defaultSize="35%" minSize="120px">
-                <section aria-label="Terminal" className="h-full min-h-0"><Terminal agente={agente} onAgente={setAgente} /></section>
+            {painelAberto && <>
+              <Separator aria-label="Altura do painel inferior" className="h-1 bg-slate-800 transition-colors hover:bg-sky-700 focus:bg-sky-700 focus:outline-none data-[separator=active]:bg-sky-600" />
+              <Panel id="painel" defaultSize="35%" minSize="120px">
+                <section aria-label="Painel inferior" className="h-full min-h-0">{painelInferior}</section>
               </Panel>
             </>}
           </Group>
         </Panel>
-        <Separator aria-label="Largura do chat" className="w-1 bg-slate-800 transition-colors hover:bg-sky-700 focus:bg-sky-700 focus:outline-none data-[separator=active]:bg-sky-600" />
-        <Panel id="chat" defaultSize="32%" minSize="280px" maxSize="60%" collapsible collapsedSize="0px">
-          <section aria-label="Chat" className="h-full min-h-0">{chat}</section>
+        <Separator aria-label="Largura do supervisor" className="w-1 bg-slate-800 transition-colors hover:bg-sky-700 focus:bg-sky-700 focus:outline-none data-[separator=active]:bg-sky-600" />
+        <Panel id="supervisor" defaultSize="30%" minSize="260px" maxSize="55%" collapsible collapsedSize="0px">
+          <section aria-label="Supervisor" className="h-full min-h-0">{supervisor}</section>
         </Panel>
       </Group>
     </div>

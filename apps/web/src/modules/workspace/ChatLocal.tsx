@@ -5,6 +5,7 @@ import {
 } from "@/services/bancada.service"
 import { Checagens, Pareceres, Selo } from "@/modules/bancada/Resultado"
 import { SeletorObserver } from "@/modules/bancada/SeletorObserver"
+import { SeletorModeloLocal } from "@/modules/local/SeletorModeloLocal"
 import { extrairDiff, ultimoPromptCorrecao } from "@/modules/bancada/proposta"
 import { MAX_TRECHOS, type Anexo } from "./tipos"
 
@@ -210,6 +211,11 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
           {mensagens.length > 0 && <button type="button" disabled={ocupado} onClick={() => setMensagens([])} className="rounded px-2 py-0.5 text-slate-400 hover:bg-slate-800 disabled:opacity-50">Nova conversa</button>}
         </span>
       </header>
+      {/* O modelo local em uso é escolha do operador: o padrão é o MoE de 35B, mas
+          todos os modelos locais ficam à mão. */}
+      <div className="border-b border-slate-800 bg-slate-900 px-3 py-1.5">
+        <SeletorModeloLocal desabilitado={ocupado || Boolean(estado?.ocupado)} aoTrocar={() => void carregarEstado()} />
+      </div>
       {erro && <p role="alert" className="px-3 pt-1 text-xs text-rose-300">{erro}</p>}
 
       <div aria-label="Conversa com o modelo local" className="min-h-0 flex-1 space-y-3 overflow-auto p-3">

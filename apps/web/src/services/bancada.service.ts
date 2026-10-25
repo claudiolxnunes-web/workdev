@@ -16,6 +16,11 @@ export interface EstadoBancada {
   ocupado?: boolean
 }
 
+export interface OpcoesModeloLocal {
+  atual: string | null
+  modelos: Array<{ chave: string; label: string }>
+}
+
 export interface PropostaResumo {
   id: string
   modelo: string
@@ -63,6 +68,33 @@ export interface LinhaResumo {
   tempo_medio_s: number | null
 }
 
+/** Medição de uma execução: prefill (carregar o prompt) x geração (gerar a resposta). */
+export interface Medicao {
+  prefill_ms: number
+  prefill_tok: number
+  cache_tok: number
+  prompt_tok: number
+  geracao_ms: number
+  geracao_tok: number
+  tok_s_prefill: number | null
+  tok_s_geracao: number | null
+}
+
+export interface LinhaMedicao {
+  modelo: string
+  execucoes: number
+  prefill_ms: number
+  prefill_medio_ms: number
+  geracao_ms: number
+  geracao_medio_ms: number
+  prefill_tok: number
+  cache_tok: number
+  prompt_tok: number
+  geracao_tok: number
+  tok_s_geracao: number | null
+  cache_pct: number
+}
+
 async function get<T>(caminho: string): Promise<T> {
   const response = await fetch(`/api/bancada${caminho}`, { headers })
   if (!response.ok) throw new Error(`Bancada: HTTP ${response.status}`)
@@ -70,10 +102,14 @@ async function get<T>(caminho: string): Promise<T> {
 }
 
 export const getEstado = () => get<EstadoBancada>("/estado")
+export const getModelosLocais = () => get<OpcoesModeloLocal>("/modelo/opcoes")
+export const trocarModeloLocal = (chave: string) =>
+  post<{ model: string; switched: boolean; restarted: boolean }>("/modelo/trocar", { chave })
 export const getPropostas = () => get<{ propostas: PropostaResumo[] }>("/propostas").then((d) => d.propostas)
 export const getProposta = (modelo: string, id: string) =>
   get<PropostaDetalhe>(`/propostas/${encodeURIComponent(modelo)}/${encodeURIComponent(id)}`)
 export const getResumo = () => get<{ linhas: LinhaResumo[] }>("/resumo").then((d) => d.linhas)
+export const getMedicoes = () => get<{ linhas?: LinhaMedicao[] }>("/medicoes").then((d) => d.linhas ?? [])
 
 // ---------------------------------------------------------------- segunda etapa (POST, por clique)
 
@@ -89,6 +125,7 @@ export interface EventoBancada {
   segundos?: number
   tokens?: number | null
   retentativa?: boolean
+  medicao?: Medicao
 }
 
 export interface NovaTarefa {

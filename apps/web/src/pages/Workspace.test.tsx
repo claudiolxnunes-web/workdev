@@ -28,6 +28,9 @@ const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
   if (url.startsWith("/api/workspace/arquivo")) return json({ caminho: "apps/api/modulo.py", binario: false, tamanho: 30, texto: "def current():\n    return 1\nX = 3\n", linhas: 3, truncado: false })
   if (url.startsWith("/api/workspace/alteracoes")) return json({ base: "abc1234", itens: [{ caminho: "apps/api/modulo.py", estado: "M", mais: 1, menos: 1 }], truncado: false })
   if (url.startsWith("/api/workspace/diff")) return json({ caminho: "apps/api/modulo.py", diff: proposta, truncado: false })
+  if (url.startsWith("/api/ai/models")) return json([{ provider: "openrouter", model: "openai/gpt-5.6-luna", label: "Luna" }])
+  if (url.startsWith("/api/chat/sessions/")) return json({ id: "abc", messages: [{ role: "system", content: "supervisor" }], authority: "observe" })
+  if (url.endsWith("/api/ai/chat")) return json({ reply: "plano pronto", authority: "observe", session_id: "abc" })
   if (url.endsWith("/api/bancada/estado")) return json({ ativo: modeloLigado, chave: "moe", modelo: "Qwen MoE", memoria: { total_mb: 1, disponivel_mb: 1 }, processo_mb: null, pasta: "x", pasta_existe: true, ocupado: false })
   if (url.endsWith("/api/bancada/observers")) return json({ padrao: "openai/gpt-5.6-luna", observers: ["openai/gpt-5.6-luna", "mistralai/codestral-2508"], segunda_opiniao: { id: "segunda-opiniao", primario: "mistralai/codestral-2508", arbitro: "openai/gpt-5.6-luna" } })
   if (url.endsWith("/api/bancada/rodar")) {
@@ -79,7 +82,7 @@ describe("Workspace Local", () => {
     fireEvent.click(screen.getByRole("button", { name: /Adicionar ao chat/ }))
     fireEvent.change(screen.getByLabelText("Pedido ao modelo local"), { target: { value: "Troque o retorno para 2. Saída: diff." } })
     await screen.findByLabelText("Observer do parecer")
-    fireEvent.click(screen.getByRole("button", { name: "Enviar" }))
+    fireEvent.click(within(screen.getByRole("region", { name: "Painel inferior" })).getByRole("button", { name: "Enviar" }))
     await waitFor(() => expect(chamadas.some((c) => c.url.endsWith("/parecer"))).toBe(true))
     const rodar = chamadas.find((c) => c.url.endsWith("/rodar"))!
     expect(rodar.corpo).toMatchObject({ trechos: [["apps/api/modulo.py", 1, 1]], espera_diff: true, max_tokens: 1024 })
@@ -105,17 +108,34 @@ describe("Workspace Local", () => {
     render(<Workspace />)
     expect(await screen.findByRole("button", { name: "Ligar" })).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText("Pedido ao modelo local"), { target: { value: "x" } })
-    expect(screen.getByRole("button", { name: "Enviar" })).toBeDisabled()
+    expect(within(screen.getByRole("region", { name: "Painel inferior" })).getByRole("button", { name: "Enviar" })).toBeDisabled()
   })
 
-  it("terminal só abre por pedido explícito e o repositório é só leitura", async () => {
+  it("o terminal fica na aba do painel inferior e o repositório é só leitura", async () => {
     render(<Workspace />)
     await screen.findByRole("region", { name: "Alterações" })
     expect(screen.queryByText(/terminal de/)).not.toBeInTheDocument()
-    expect(screen.getAllByRole("separator")).toHaveLength(2)
-    fireEvent.click(screen.getByRole("button", { name: "Abrir terminal" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Terminal" }))
     expect(screen.getByText("terminal de claude")).toBeInTheDocument()
-    expect(screen.getAllByRole("separator")).toHaveLength(3)
     for (const chamada of chamadas.filter((c) => c.url.startsWith("/api/workspace"))) expect(chamada.metodo).toBe("GET")
+  })
+
+  it("o supervisor fica na lateral direita e o modelo local no centro", async () => {
+    render(<Workspace />)
+    const lateral = screen.getByRole("region", { name: "Supervisor" })
+    expect(within(lateral).getByLabelText("Modelo do supervisor")).toBeInTheDocument()
+    expect(within(lateral).getByText(/supervisor planeja o trabalho/i)).toBeInTheDocument()
+    // O chat do modelo local desceu para o painel inferior do centro.
+    expect(within(screen.getByRole("region", { name: "Painel inferior" })).getByLabelText("Pedido ao modelo local")).toBeInTheDocument()
+    expect(within(lateral).queryByLabelText("Pedido ao modelo local")).not.toBeInTheDocument()
+  })
+
+  it("com sessão vinda do backlog, o supervisor carrega a conversa e dispara a triagem", async () => {
+    window.history.replaceState({}, "", "/workspace?session=abc&autostart=workspace")
+    render(<Workspace />)
+    const lateral = screen.getByRole("region", { name: "Supervisor" })
+    await waitFor(() => expect(chamadas.some((c) => c.url === "/api/chat/sessions/abc")).toBe(true))
+    await waitFor(() => expect(chamadas.some((c) => c.url === "/api/ai/chat")).toBe(true))
+    expect(within(lateral).getByText("plano pronto")).toBeInTheDocument()
   })
 })

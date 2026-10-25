@@ -47,6 +47,11 @@ class BancadaPlanningRequest(BaseModel):
     prompt: str | None = Field(default=None, max_length=8000, description="Prompt livre de planejamento")
 
 
+class WorkspacePlanningRequest(BaseModel):
+    task_id: UUID | None = Field(default=None, description="UUID da task do backlog")
+    prompt: str | None = Field(default=None, max_length=8000, description="Prompt livre de planejamento")
+
+
 class SessionOut(BaseModel):
     id: str
     title: str
