@@ -53,10 +53,12 @@ def amb(tmp_path, monkeypatch):
 
     gate = {"passa": True, "chamadas": []}
 
-    def gate_falso(cwd, caminhos):
+    def gate_falso(cwd, caminhos, completo=False):
         gate["chamadas"].append(caminhos)
-        return [test_gate.CheckResult(name="pytest", passed=gate["passa"], mandatory=True,
-                                      reason="ok" if gate["passa"] else "1 teste falhou")]
+        gate.setdefault("completos", []).append(completo)
+        passa = gate.get("final", gate["passa"]) if completo else gate["passa"]
+        return [test_gate.CheckResult(name="pytest", passed=passa, mandatory=True,
+                                      reason="ok" if passa else "1 teste falhou")]
     monkeypatch.setattr(ex, "_gate", gate_falso)
 
     backlog = []
@@ -248,7 +250,7 @@ def test_gate_escolhe_checks_pela_area_e_isola_o_ambiente(tmp_path, monkeypatch)
     chamados = {}
     ok = lambda nome: test_gate.CheckResult(name=nome, passed=True, mandatory=True, reason="ok")
     monkeypatch.setattr(test_gate, "_check_guardrails", lambda paths: ok("guardrails"))
-    monkeypatch.setattr(test_gate, "_check_pytest", lambda paths, env=None: chamados.setdefault("pytest", env) and ok("pytest"))
+    monkeypatch.setattr(test_gate, "_check_pytest", lambda paths, env=None, alvos=None: chamados.setdefault("pytest", env) and ok("pytest"))
     for nome in ("vitest", "lint", "build"):
         monkeypatch.setattr(test_gate, f"_check_{nome}", lambda paths, n=nome: chamados.setdefault(n, True) and ok(n))
     assert [r.name for r in ex._gate(tmp_path, ["docs/x.md"])] == ["guardrails"]
@@ -430,3 +432,45 @@ def test_medicao_preve_o_prefill_e_passa_a_usar_a_taxa_medida(amb):
     assert depois["fatias"][0]["previsto"] is None and depois["fatias"][0]["real"]["prefill_s"] == 20.0
     assert depois["fatias"][1]["previsto"]["prefill_s"] == round(depois["fatias"][1]["previsto"]["tokens"] / 20.0, 1)
     assert depois["total_local"]["prompt_tok"] == 500 and depois["total_local"]["geracao_s"] == 5.0
+
+
+# ---------------------------------------------------------------- gate em duas camadas
+
+def test_alvos_pytest_escolhe_a_area_ou_cai_na_suite_inteira(tmp_path):
+    testes = tmp_path / "apps/api/tests"
+    testes.mkdir(parents=True)
+    for nome in ("test_workspace_execucao.py", "test_workspace_banco.py", "test_outro.py"):
+        (testes / nome).write_text("", encoding="utf-8")
+    assert ex._alvos_pytest(tmp_path, ["apps/api/app/services/workspace_banco.py", "docs/x.md"]) == [
+        "tests/test_workspace_banco.py"]
+    assert ex._alvos_pytest(tmp_path, ["apps/api/tests/test_outro.py"]) == ["tests/test_outro.py"]
+    # Módulo sem teste com o nome dele: não dá para saber o que quebra, roda tudo.
+    assert ex._alvos_pytest(tmp_path, ["apps/api/app/services/sem_teste.py"]) is None
+    assert ex._alvos_pytest(tmp_path, ["apps/api/app/__init__.py"]) is None
+    assert ex._alvos_pytest(tmp_path, ["apps/web/src/x.tsx"]) is None
+
+
+def test_suite_completa_reprovada_impede_incorporar_e_so_passa_quando_aprova(amb):
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    assert amb.gate["completos"] == [False]
+    amb.gate["final"] = False
+    with pytest.raises(WorkspaceErro) as erro:
+        ex.incorporar(meta["id"], "squash")
+    assert erro.value.codigo == "gate_final_reprovado"
+    assert sessao._ler_meta(meta["id"])["status"] == "ativa"
+    assert git(amb.repo, "log", "--oneline").count("\n") == 0
+    amb.gate["final"] = True
+    assert ex.incorporar(meta["id"], "squash")["status"] == "incorporada"
+    assert amb.gate["completos"] == [False, True, True]
+
+
+def test_gate_final_aprovado_no_mesmo_head_nao_roda_de_novo(amb):
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    gravada = sessao._ler_meta(meta["id"])
+    ex._gate_final(gravada)
+    ex._gate_final(sessao._ler_meta(meta["id"]))
+    assert amb.gate["completos"] == [False, True]

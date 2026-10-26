@@ -234,13 +234,41 @@ def _env_gate() -> dict[str, str]:
             "WORKDEV_CLI_AGENT_MODELS_FILE": str(pasta / "cli-models.json")}
 
 
-def _gate(cwd: Path, caminhos: list[str]) -> list[test_gate.CheckResult]:
+def _alvos_pytest(cwd: Path, caminhos: list[str]) -> list[str] | None:
+    """Testes da área tocada, relativos a apps/api. None = suíte inteira.
+
+    Teste tocado entra direto; módulo `app/.../x.py` puxa `tests/test_*x*.py`.
+    Se algum arquivo da API não tem teste que case pelo nome, não há como saber
+    o que ele quebra: roda tudo.
+    """
+    testes = cwd / "apps/api/tests"
+    alvos: set[str] = set()
+    for caminho in caminhos:
+        if not caminho.startswith("apps/api/"):
+            continue
+        relativo = Path(caminho).relative_to("apps/api")
+        if relativo.parts[0] == "tests" and relativo.name.startswith("test_") and relativo.suffix == ".py":
+            if (cwd / caminho).exists():
+                alvos.add(str(relativo))
+            continue
+        if relativo.suffix != ".py" or relativo.stem == "__init__":
+            return None
+        achados = sorted(testes.glob(f"test_*{relativo.stem}*.py")) if testes.is_dir() else []
+        if not achados:
+            return None
+        alvos.update(str(a.relative_to(cwd / "apps/api")) for a in achados)
+    return sorted(alvos) or None
+
+
+def _gate(cwd: Path, caminhos: list[str], completo: bool = False) -> list[test_gate.CheckResult]:
+    """Gate de uma fatia: só os testes da área tocada. `completo`: suíte inteira (antes de incorporar)."""
     paths = test_gate.GatePaths(root=cwd)
     resultados = [test_gate._check_guardrails(paths)]
     if not resultados[0].passed:
         return resultados
     if any(c.startswith("apps/api/") for c in caminhos):
-        resultados.append(test_gate._check_pytest(paths, env=_env_gate()))
+        alvos = None if completo else _alvos_pytest(cwd, caminhos)
+        resultados.append(test_gate._check_pytest(paths, env=_env_gate(), alvos=alvos))
     if any(c.startswith("apps/web/") for c in caminhos):
         resultados += [test_gate._check_vitest(paths), test_gate._check_lint(paths), test_gate._check_build(paths)]
     return resultados
@@ -540,6 +568,31 @@ def pular_fatia(ident: str, n: int) -> dict:
 
 # ---------------------------------------------------------------- incorporar
 
+def _gate_final(meta: dict) -> None:
+    """Segunda camada: a suíte inteira sobre tudo que a sessão mudou, antes de incorporar.
+
+    Cada fatia rodou só os testes da área; aqui roda tudo, uma vez. O resultado
+    fica gravado com o HEAD da sessão: incorporar de novo sem commit novo não
+    repete os minutos de teste.
+    """
+    cwd = Path(meta["caminho"])
+    head = _git(["rev-parse", "HEAD"], cwd).stdout.strip()
+    anterior = meta.get("gate_final") or {}
+    if anterior.get("head") == head and anterior.get("passou"):
+        return
+    caminhos = [c for c in _git(["diff", "--name-only", meta["base"], "HEAD"], cwd).stdout.splitlines() if c]
+    resultados = _gate(cwd, caminhos, completo=True)
+    reprovados = [r for r in resultados if r.mandatory and not r.passed]
+    meta["gate_final"] = {"head": head, "passou": not reprovados, "em": _agora(),
+                          "checks": [{"nome": r.name, "passou": r.passed, "motivo": r.reason[:500],
+                                      "ms": r.duration_ms} for r in resultados]}
+    sessao._gravar_meta(meta)
+    if reprovados:
+        raise WorkspaceErro(409, "gate_final_reprovado",
+                            "a suíte completa reprovou a sessão; nada foi incorporado: "
+                            + "; ".join(f"{r.name}: {r.reason}" for r in reprovados)[:MAX_ERRO])
+
+
 def incorporar(ident: str, modo: str, mensagem: str | None = None) -> dict:
     """Leva o branch da sessão para o branch do operador. Clique do operador; nunca faz push."""
     if modo not in ("merge", "squash"):
@@ -565,6 +618,7 @@ def incorporar(ident: str, modo: str, mensagem: str | None = None) -> dict:
             raise WorkspaceErro(409, "branch_trocado",
                                 f"a sessão saiu de {meta['branch_origem']} e o checkout está em {atual}; "
                                 f"volte para {meta['branch_origem']} antes de incorporar")
+        _gate_final(meta)
         fatias = (meta.get("plano") or {}).get("fatias") or []
         titulo = meta.get("titulo") or f"sessão {ident}"
         corpo = "\n".join(f"- fatia {f['n']}: {f['objetivo']} ({f['status']})" for f in fatias)

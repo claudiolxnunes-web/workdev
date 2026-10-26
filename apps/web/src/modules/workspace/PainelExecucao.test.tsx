@@ -58,13 +58,15 @@ beforeEach(() => {
 
 describe("PainelExecucao", () => {
   it("executar todas para na primeira falha, mostra o erro e repete com correção", async () => {
-    roteiro = ["ok", "falhou"]
+    roteiro = ["ok", "falhou", "falhou", "falhou"]
     render(<PainelExecucao versao={0} onMudou={() => {}} />)
     fireEvent.click(await screen.findByRole("button", { name: "Executar todas" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "Repetir fatia 2" })).toBeEnabled())
     await screen.findByText(/Falhou em gate: pytest: 1 teste falhou/)
     const fatia2 = screen.getByLabelText("Fatia 2")
-    expect(chamadas.filter((c) => c.url.includes("/executar")).map((c) => c.url)).toEqual([
-      "/api/workspace/sessao/s1/fatias/1/executar", "/api/workspace/sessao/s1/fatias/2/executar"])
+    // A fatia 2 falhou e foi repetida sozinha 2 vezes antes de parar.
+    expect(chamadas.filter((c) => c.url.includes("/executar")).map((c) => c.url.split("/fatias/")[1])).toEqual([
+      "1/executar", "2/executar", "2/executar", "2/executar"])
     const fluxo = screen.getByRole("region", { name: "Fluxo da execução" })
     expect(fluxo).toHaveTextContent("↳ ler_arquivo app/x.py 1–9 · 90 caracteres")
     expect(fluxo).toHaveTextContent("✓ pytest")
@@ -72,8 +74,8 @@ describe("PainelExecucao", () => {
     roteiro = ["ok"]
     fireEvent.change(within(fatia2).getByLabelText("Correção da fatia 2"), { target: { value: "ajuste o teste" } })
     fireEvent.click(within(fatia2).getByRole("button", { name: "Repetir fatia 2" }))
-    await waitFor(() => expect(chamadas.filter((c) => c.url.endsWith("/2/executar"))).toHaveLength(2))
-    expect(chamadas.filter((c) => c.url.endsWith("/2/executar"))[1].corpo).toEqual({ correcao: "ajuste o teste" })
+    await waitFor(() => expect(chamadas.filter((c) => c.url.endsWith("/2/executar"))).toHaveLength(4))
+    expect(chamadas.filter((c) => c.url.endsWith("/2/executar"))[3].corpo).toEqual({ correcao: "ajuste o teste" })
     expect(await screen.findByText("2/3 fatia(s) concluída(s)")).toBeInTheDocument()
   })
 
@@ -86,6 +88,19 @@ describe("PainelExecucao", () => {
     fireEvent.click(within(secao).getByRole("button", { name: "Incorporar" }))
     expect(await screen.findByText(/Incorporado: commit beefcaf em main \(squash\)/)).toBeInTheDocument()
     expect(chamadas.find((c) => c.url.endsWith("/incorporar"))!.corpo).toEqual({ modo: "squash" })
+  })
+
+  it("repete sozinho a fatia que falhou e, desligado, para na primeira falha", async () => {
+    roteiro = ["falhou", "ok"]
+    render(<PainelExecucao versao={0} onMudou={() => {}} />)
+    fireEvent.click(await within(await screen.findByLabelText("Fatia 1")).findByRole("button", { name: "Executar fatia 1" }))
+    expect(await screen.findByText("1/3 fatia(s) concluída(s)")).toBeInTheDocument()
+    expect(screen.getByRole("region", { name: "Fluxo da execução" })).toHaveTextContent("[1] repetindo sozinho (1/2)")
+    roteiro = ["falhou"]
+    fireEvent.click(screen.getByLabelText(/repetir sozinho/))
+    fireEvent.click(await within(screen.getByLabelText("Fatia 2")).findByRole("button", { name: "Executar fatia 2" }))
+    await waitFor(() => expect(within(screen.getByLabelText("Fatia 2")).getByRole("button", { name: "Repetir fatia 2" })).toBeEnabled())
+    expect(chamadas.filter((c) => c.url.endsWith("/2/executar"))).toHaveLength(1)
   })
 
   it("pular libera a próxima fatia", async () => {

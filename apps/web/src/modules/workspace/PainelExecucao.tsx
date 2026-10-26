@@ -11,6 +11,9 @@ import { FatiaBanco } from "./FatiaBanco"
 // leva o branch da sessão para o branch de origem — clique do operador, sem push.
 
 const FECHADAS = ["ok", "pulada"]
+// Falhou: o erro da tentativa anterior já volta ao modelo como contexto, então
+// repetir sozinho custa só tempo. Passado o limite, para e espera o operador.
+const AUTO_REPETICOES = 2
 const COR: Record<string, string> = {
   pendente: "bg-slate-800 text-slate-300", rodando: "bg-sky-900 text-sky-200", ok: "bg-emerald-900 text-emerald-200",
   falhou: "bg-rose-900 text-rose-200", pulada: "bg-slate-700 text-slate-300",
@@ -108,6 +111,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
   const [modo, setModo] = useState<"squash" | "merge">("squash")
   const [incorporada, setIncorporada] = useState<string | null>(null)
   const [medicao, setMedicao] = useState<MedicaoSessao | null>(null)
+  const [autoRepetir, setAutoRepetir] = useState(true)
   const pausar = useRef(false)
   const fimLog = useRef<HTMLDivElement>(null)
 
@@ -154,10 +158,18 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
     try {
       let atual: number | null = n
       let nota = correcao
+      let repeticoes = 0
       while (atual != null) {
         const status = await rodar(sessao.id, atual, nota)
         nota = null
         const estado = await carregar()
+        if (status === "falhou" && autoRepetir && repeticoes < AUTO_REPETICOES && !pausar.current) {
+          repeticoes += 1
+          const linha = `[${atual}] repetindo sozinho (${repeticoes}/${AUTO_REPETICOES}) — o erro vai junto`
+          setLog((l) => [...l, linha])
+          continue
+        }
+        repeticoes = 0
         if (!todas || status !== "ok" || pausar.current) {
           if (pausar.current) setLog((l) => [...l, "pausado pelo operador"])
           break
@@ -190,6 +202,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
   async function incorporar() {
     if (!sessao) return
     setExecutando(true); setErro("")
+    setLog((l) => [...l, "rodando a suíte completa antes de incorporar (pode levar minutos)"])
     try {
       const final = await incorporarSessao(sessao.id, modo)
       setIncorporada(`${final.commit_incorporado?.slice(0, 7)} em ${final.branch_origem} (${final.modo_incorporacao})`)
@@ -216,6 +229,10 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
             {proxima && !executando && (
               <button type="button" onClick={() => void executar(proxima.n, null, true)} className="rounded bg-emerald-800 px-2 py-0.5 text-white hover:bg-emerald-700">Executar todas</button>
             )}
+            <label className="flex items-center gap-1 text-slate-400">
+              <input type="checkbox" checked={autoRepetir} disabled={executando} onChange={(e) => setAutoRepetir(e.target.checked)} />
+              repetir sozinho até {AUTO_REPETICOES}x quando falhar
+            </label>
             {executando && emLote && (
               <button type="button" onClick={() => { pausar.current = true }} className="rounded border border-amber-700 px-2 py-0.5 text-amber-200 hover:bg-amber-950">Pausar depois desta</button>
             )}
@@ -242,7 +259,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
               <label className="flex items-center gap-1"><input type="radio" name="modo" checked={modo === "merge"} onChange={() => setModo("merge")} /> um commit por fatia (merge)</label>
               <button type="button" onClick={() => void incorporar()} className="rounded bg-violet-700 px-2 py-0.5 text-white hover:bg-violet-600">Incorporar</button>
             </div>
-            <p className="mt-1 text-slate-500">Vai para o seu branch, com o seu nome. Não faz push.</p>
+            <p className="mt-1 text-slate-500">Antes, roda a suíte completa (cada fatia rodou só os testes da área). Vai para o seu branch, com o seu nome. Não faz push.</p>
           </section>
         )}
         {(log.length > 0 || saida) && (
