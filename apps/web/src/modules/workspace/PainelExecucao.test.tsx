@@ -17,10 +17,18 @@ const estado = () => ({ id: "s1", status: "ativa", branch: "workspace/s1", camin
   task_id: null, chat_session_id: null, titulo: null, criada_em: "", encerrada_em: null,
   plano: { aprovado_em: "", fatias: fatias.map(base) }, commits, alteracoes: [] })
 
+const medicao = () => ({ sessao: "s1", taxa_prefill_tok_s: 42, taxa_origem: "medida", total_local: {
+  prefill_s: 12.5, geracao_s: 4, prompt_tok: 600, geracao_tok: 80, leituras: 2, tentativas: 1 },
+  supervisor: { chamadas: 3, tokens_entrada: 9000, tokens_saida: 1000, custo_usd: 0.0123, segundos: 20 },
+  fatias: fatias.map((f) => f.status === "ok"
+    ? { n: f.n, status: f.status, gate_s: 3, real: { prefill_s: 12.5, geracao_s: 4, prompt_tok: 600, cache_tok: 0, geracao_tok: 80 }, previsto: null }
+    : { n: f.n, status: f.status, gate_s: 0, real: null, previsto: { tokens: 1260, prefill_s: 30 } }) })
+
 const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
   chamadas.push({ url, corpo: init?.body ? JSON.parse(String(init.body)) : undefined })
   if (url === "/api/workspace/sessao") return json({ ativa: incorporada ? null : { id: "s1" }, recentes: [] })
   if (url === "/api/workspace/sessao/s1") return json(estado())
+  if (url === "/api/workspace/sessao/s1/medicao") return json(medicao())
   const exec = url.match(/fatias\/(\d+)\/executar$/)
   if (exec) {
     const n = Number(exec[1])
@@ -123,5 +131,15 @@ describe("PainelExecucao · fatia de banco", () => {
     fireEvent.click(screen.getByRole("button", { name: /Reverter mesmo assim/ }))
     await waitFor(() => expect(chamadas.filter((c) => c.url.endsWith("/banco/reverter")).map((c) => c.corpo))
       .toEqual([{ forcar: false }, { forcar: true }]))
+  })
+
+  it("mostra o prefill previsto antes de rodar, o medido depois e o gasto da sessão", async () => {
+    roteiro = ["ok"]
+    render(<PainelExecucao versao={0} onMudou={() => {}} />)
+    const primeira = await screen.findByRole("listitem", { name: "Fatia 1" })
+    await waitFor(() => expect(within(primeira).getByText(/Contexto previsto: ~1\.260 tokens → prefill ~30s \(42 tok\/s medidos\)/)).toBeInTheDocument())
+    fireEvent.click(within(primeira).getByRole("button", { name: "Executar fatia 1" }))
+    await waitFor(() => expect(within(screen.getByRole("listitem", { name: "Fatia 1" })).getByText(/Medido: prefill 12\.5s · geração 4s · gate 3s/)).toBeInTheDocument())
+    expect(screen.getByLabelText("Gasto da sessão")).toHaveTextContent("Supervisor: 3 chamada(s) · 10.000 tokens · US$ 0.0123")
   })
 })

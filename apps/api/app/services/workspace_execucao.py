@@ -663,3 +663,81 @@ def resultado_fatia(n: int) -> dict:
             "commit": fatia.get("commit"), "arquivos": fatia.get("arquivos") or [],
             "origem_diff": origem, "diff": diff[:MAX_DIFF_SUPERVISOR],
             "diff_truncado": len(diff) > MAX_DIFF_SUPERVISOR}
+
+
+# ---------------------------------------------------------------- medição
+
+# Sem medição anterior, a taxa vem do que o guia registra para o MoE na CPU:
+# ~1.000 tokens de prompt em ~20 s. A primeira fatia medida passa a valer.
+TAXA_PREFILL_PADRAO = 50.0
+CHARS_POR_TOKEN = 3.5
+
+
+def _taxa_prefill(fatias: list[dict]) -> tuple[float, str]:
+    tok = ms = 0.0
+    for f in fatias:
+        m = (f.get("proposta") or {}).get("medicao") or {}
+        if m.get("prefill_tok") and m.get("prefill_ms"):
+            tok, ms = tok + m["prefill_tok"], ms + m["prefill_ms"]
+    if tok and ms:
+        return round(tok / (ms / 1000), 2), "medida"
+    return TAXA_PREFILL_PADRAO, "padrao"
+
+
+def _previsao(fatia: dict, raiz: Path, taxa: float) -> dict | None:
+    """Contexto que a fatia vai mandar ao modelo local, antes de rodar. Não conta as leituras."""
+    try:
+        prompt, _ = bancada_runner.montar_prompt(f"{fatia['instrucao']}\n\n{SAIDA_DIFF}", fatia["trechos"], raiz)
+    except bancada_runner.BancadaErro:
+        return None
+    tokens = int((len(prompt) + len(bancada_runner.SISTEMA_FERRAMENTAS)) / CHARS_POR_TOKEN)
+    return {"tokens": tokens, "prefill_s": round(tokens / taxa, 1)}
+
+
+def _custo_supervisor(chat_session_id: str | None) -> dict | None:
+    if not chat_session_id:
+        return None
+    from uuid import UUID
+    from sqlalchemy import func
+    from app.models.ai_routing import AICallLog
+    try:
+        with _db() as db:
+            linha = (db.query(func.count(AICallLog.id), func.sum(AICallLog.input_tokens),
+                              func.sum(AICallLog.output_tokens),
+                              func.sum(func.coalesce(AICallLog.actual_cost_usd, AICallLog.estimated_cost_usd)),
+                              func.sum(AICallLog.duration_ms))
+                     .filter(AICallLog.session_id == UUID(str(chat_session_id))).one())
+    except Exception:  # noqa: BLE001 — medição é registro: banco fora do ar não derruba o painel
+        return None
+    chamadas, entrada, saida, custo, ms = linha
+    return {"chamadas": chamadas or 0, "tokens_entrada": int(entrada or 0), "tokens_saida": int(saida or 0),
+            "custo_usd": float(custo or 0), "segundos": round((ms or 0) / 1000, 1)}
+
+
+def medicao(ident: str) -> dict:
+    """Somente leitura: o que a sessão gastou e o que cada fatia pendente deve gastar."""
+    meta = sessao._exigir(ident)
+    fatias = (meta.get("plano") or {}).get("fatias") or []
+    taxa, origem = _taxa_prefill(fatias)
+    raiz = Path(meta["caminho"])
+    total = {"prefill_s": 0.0, "geracao_s": 0.0, "prompt_tok": 0, "geracao_tok": 0, "leituras": 0, "tentativas": 0}
+    saida = []
+    for f in fatias:
+        proposta = f.get("proposta") or {}
+        m = proposta.get("medicao") or {}
+        real = None
+        if m:
+            real = {"prefill_s": round(m.get("prefill_ms", 0) / 1000, 1),
+                    "geracao_s": round(m.get("geracao_ms", 0) / 1000, 1),
+                    "prompt_tok": m.get("prompt_tok", 0), "cache_tok": m.get("cache_tok", 0),
+                    "geracao_tok": m.get("geracao_tok", 0)}
+            for chave in ("prefill_s", "geracao_s", "prompt_tok", "geracao_tok"):
+                total[chave] += real[chave]
+        total["leituras"] += int(proposta.get("leituras") or 0)
+        total["tentativas"] += int(f.get("tentativas") or 0)
+        saida.append({"n": f["n"], "status": f["status"], "real": real,
+                      "gate_s": round(sum(c.get("ms") or 0 for c in f.get("gate_checks") or []) / 1000, 1),
+                      "previsto": _previsao(f, raiz, taxa) if f["status"] not in FECHADAS else None})
+    total["prefill_s"], total["geracao_s"] = round(total["prefill_s"], 1), round(total["geracao_s"], 1)
+    return {"sessao": ident, "taxa_prefill_tok_s": taxa, "taxa_origem": origem, "fatias": saida,
+            "total_local": total, "supervisor": _custo_supervisor(meta.get("chat_session_id"))}

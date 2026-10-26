@@ -116,6 +116,11 @@ class Incorporacao(BaseModel):
     mensagem: str | None = Field(default=None, max_length=4000)
 
 
+@router.get("/sessao/{ident}/medicao")
+def medicao_sessao(ident: str):
+    return _chamar(workspace_execucao.medicao, ident)
+
+
 @router.post("/sessao/{ident}/plano")
 def aprovar_plano(ident: str, pedido: Plano):
     return _chamar(workspace_execucao.aprovar_plano, ident, pedido.plano)

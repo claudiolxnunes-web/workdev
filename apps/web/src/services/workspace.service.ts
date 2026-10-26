@@ -103,6 +103,18 @@ export const aplicarBanco = (id: string, n: number) => post<Sessao>(`/sessao/${e
 export const reverterBanco = (id: string, n: number, forcar = false) =>
   post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/banco/reverter`, { forcar })
 export const pularFatia = (id: string, n: number) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/pular`, {})
+/** Gasto da sessão: o que o modelo local já usou, o que cada fatia aberta deve usar e o custo do supervisor. */
+export interface MedicaoSessao {
+  sessao: string; taxa_prefill_tok_s: number; taxa_origem: "medida" | "padrao"
+  fatias: Array<{
+    n: number; status: StatusFatia; gate_s: number
+    real: { prefill_s: number; geracao_s: number; prompt_tok: number; cache_tok: number; geracao_tok: number } | null
+    previsto: { tokens: number; prefill_s: number } | null
+  }>
+  total_local: { prefill_s: number; geracao_s: number; prompt_tok: number; geracao_tok: number; leituras: number; tentativas: number }
+  supervisor: { chamadas: number; tokens_entrada: number; tokens_saida: number; custo_usd: number; segundos: number } | null
+}
+export const getMedicaoSessao = (id: string) => get<MedicaoSessao>(`/sessao/${encodeURIComponent(id)}/medicao`)
 export const incorporarSessao = (id: string, modo: "merge" | "squash") =>
   post<Sessao>(`/sessao/${encodeURIComponent(id)}/incorporar`, { modo })
 

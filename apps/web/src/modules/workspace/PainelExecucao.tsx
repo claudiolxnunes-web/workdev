@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
-  aplicarBanco, executarFatia, getEstadoSessao, getSessoes, incorporarSessao, pularFatia, reverterBanco, simularBanco,
-  type EstadoSessao, type EventoFatia, type Fatia,
+  aplicarBanco, executarFatia, getEstadoSessao, getMedicaoSessao, getSessoes, incorporarSessao, pularFatia, reverterBanco,
+  simularBanco, type EstadoSessao, type EventoFatia, type Fatia, type MedicaoSessao,
 } from "@/services/workspace.service"
 import { FatiaBanco } from "./FatiaBanco"
 
@@ -37,11 +37,27 @@ function linhaDoEvento(e: EventoFatia): string | null {
   return null
 }
 
+type MedidaFatia = MedicaoSessao["fatias"][number]
+
+// Na CPU o prefill é o que decide se a fatia leva segundos ou minutos: a
+// previsão aparece antes de rodar, e o medido depois.
+function LinhaMedida({ medida, taxa }: { medida?: MedidaFatia; taxa?: string }) {
+  if (!medida) return null
+  if (medida.previsto) {
+    return <p className="text-slate-500">Contexto previsto: ~{medida.previsto.tokens.toLocaleString("pt-BR")} tokens → prefill ~{medida.previsto.prefill_s}s{taxa ? ` (${taxa})` : ""}, sem contar leituras</p>
+  }
+  if (medida.real) {
+    return <p className="text-slate-500">Medido: prefill {medida.real.prefill_s}s · geração {medida.real.geracao_s}s{medida.gate_s ? ` · gate ${medida.gate_s}s` : ""} · {medida.real.prompt_tok.toLocaleString("pt-BR")} tokens de prompt</p>
+  }
+  return null
+}
+
 interface AcoesBanco { simular: (sql: string) => Promise<void>; aplicar: () => Promise<void>; reverter: (forcar: boolean) => Promise<void> }
 
-function CartaoFatia({ fatia, proxima, ocupado, onExecutar, onPular, banco }: {
+function CartaoFatia({ fatia, proxima, ocupado, onExecutar, onPular, banco, medida, taxa }: {
   fatia: Fatia; proxima: boolean; ocupado: boolean
   onExecutar: (correcao: string | null) => void; onPular: () => void; banco: AcoesBanco
+  medida?: MedidaFatia; taxa?: string
 }) {
   const [correcao, setCorrecao] = useState("")
   return (
@@ -54,6 +70,7 @@ function CartaoFatia({ fatia, proxima, ocupado, onExecutar, onPular, banco }: {
       </div>
       <p className="mt-1 text-slate-500">Conferir: {fatia.gate.join(" · ")}</p>
       {fatia.arquivos && fatia.arquivos.length > 0 && <p className="text-slate-500">Arquivos: {fatia.arquivos.join(", ")}</p>}
+      <LinhaMedida medida={medida} taxa={taxa} />
       {fatia.gate_checks.length > 0 && (
         <p className="text-slate-400">Gate: {fatia.gate_checks.map((c) => `${c.passou ? "✓" : "✗"} ${c.nome}`).join(" · ")}</p>
       )}
@@ -90,6 +107,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
   const [erro, setErro] = useState("")
   const [modo, setModo] = useState<"squash" | "merge">("squash")
   const [incorporada, setIncorporada] = useState<string | null>(null)
+  const [medicao, setMedicao] = useState<MedicaoSessao | null>(null)
   const pausar = useRef(false)
   const fimLog = useRef<HTMLDivElement>(null)
 
@@ -98,6 +116,9 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
       const { ativa } = await getSessoes()
       const estado = ativa ? await getEstadoSessao(ativa.id) : null
       setSessao(estado)
+      // Medição é registro: se falhar, o painel segue sem ela.
+      const medida = estado ? await getMedicaoSessao(estado.id).catch(() => null) : null
+      setMedicao(medida && Array.isArray(medida.fatias) ? medida : null)
       return estado
     } catch (causa) {
       setErro(causa instanceof Error ? causa.message : "falha ao ler a sessão")
@@ -178,6 +199,9 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
 
   if (!carregado) return <p className="p-3 text-xs text-slate-500">Carregando…</p>
   const abertas = fatias.filter((f) => !FECHADAS.includes(f.status)).length
+  const taxa = medicao ? `${medicao.taxa_prefill_tok_s} tok/s ${medicao.taxa_origem === "medida" ? "medidos" : "estimados"}` : undefined
+  const local = medicao?.total_local
+  const sup = medicao?.supervisor
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-950 text-xs">
       <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
@@ -197,10 +221,17 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
             )}
           </div>
         )}
+        {local && (local.prefill_s > 0 || local.geracao_s > 0 || (sup && sup.chamadas > 0)) && (
+          <p aria-label="Gasto da sessão" className="text-slate-400">
+            Modelo local: prefill {local.prefill_s}s · geração {local.geracao_s}s · {local.leituras} leitura(s) · {local.tentativas} tentativa(s)
+            {sup && sup.chamadas > 0 && <> · Supervisor: {sup.chamadas} chamada(s) · {(sup.tokens_entrada + sup.tokens_saida).toLocaleString("pt-BR")} tokens · US$ {sup.custo_usd.toFixed(4)}</>}
+          </p>
+        )}
         <ol className="space-y-2">
           {fatias.map((f) => (
             <CartaoFatia key={`${f.n}-${f.status}-${f.tentativas}`} fatia={f} proxima={f.n === proxima?.n} ocupado={executando}
-              onExecutar={(correcao) => void executar(f.n, correcao, false)} onPular={() => void pular(f.n)} banco={acoesBanco(f.n)} />
+              onExecutar={(correcao) => void executar(f.n, correcao, false)} onPular={() => void pular(f.n)} banco={acoesBanco(f.n)}
+              medida={medicao?.fatias.find((m) => m.n === f.n)} taxa={taxa} />
           ))}
         </ol>
         {sessao && sessao.commits.length > 0 && !executando && (

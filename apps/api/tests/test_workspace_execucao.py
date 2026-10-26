@@ -405,3 +405,28 @@ def test_resultado_fatia_mostra_proposta_que_falhou_e_commit_que_passou(amb):
     passou = ex.resultado_fatia(1)
     assert passou["status"] == "ok" and passou["origem_diff"] == "commit" and "+    return 2" in passou["diff"]
     assert ex.resultado_fatia(9)["code"] == "fatia_inexistente"
+
+
+# ---------------------------------------------------------------- medição
+
+def test_medicao_preve_o_prefill_e_passa_a_usar_a_taxa_medida(amb):
+    meta = nova(amb, [fatia(), fatia(objetivo="segunda")])
+    antes = ex.medicao(meta["id"])
+    assert antes["taxa_origem"] == "padrao" and antes["taxa_prefill_tok_s"] == ex.TAXA_PREFILL_PADRAO
+    previsto = antes["fatias"][0]["previsto"]
+    assert previsto["tokens"] > 0 and previsto["prefill_s"] == round(previsto["tokens"] / ex.TAXA_PREFILL_PADRAO, 1)
+    assert antes["supervisor"] is None
+
+    amb.respostas.append(DIFF_OK)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    gravada = sessao._ler_meta(meta["id"])
+    gravada["plano"]["fatias"][0]["proposta"]["medicao"] = {
+        "prefill_ms": 20000.0, "prefill_tok": 400, "cache_tok": 100, "prompt_tok": 500,
+        "geracao_ms": 5000.0, "geracao_tok": 80}
+    sessao._gravar_meta(gravada)
+
+    depois = ex.medicao(meta["id"])
+    assert depois["taxa_origem"] == "medida" and depois["taxa_prefill_tok_s"] == 20.0
+    assert depois["fatias"][0]["previsto"] is None and depois["fatias"][0]["real"]["prefill_s"] == 20.0
+    assert depois["fatias"][1]["previsto"]["prefill_s"] == round(depois["fatias"][1]["previsto"]["tokens"] / 20.0, 1)
+    assert depois["total_local"]["prompt_tok"] == 500 and depois["total_local"]["geracao_s"] == 5.0
