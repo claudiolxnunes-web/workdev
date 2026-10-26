@@ -371,3 +371,37 @@ def test_ler_schema_no_runner_so_das_tabelas_da_fatia(banco_teste):
     assert bancada_runner._ferramenta(chamada, None, ["backlog"])[0].startswith("RECUSADO")
     chamada["function"]["arguments"] = json.dumps({"tabela": "backlog"})
     assert '"priority"' in bancada_runner._ferramenta(chamada, None, ["backlog"])[0]
+
+
+# ---------------------------------------------------------------- tools do supervisor
+
+def test_validar_plano_supervisor_nao_grava_e_devolve_o_erro(amb):
+    sem_sessao = ex.validar_plano_supervisor({"fatias": [fatia()]})
+    assert sem_sessao["valido"] and sem_sessao["sessao"] is None and "aviso" in sem_sessao
+    meta = sessao.criar(task_id="t-1")
+    ok = ex.validar_plano_supervisor({"fatias": [fatia()]})
+    assert ok["valido"] and ok["sessao"] == meta["id"] and ok["fatias"][0]["trechos"] == [["app/mod.py", 1, 2]]
+    ruim = ex.validar_plano_supervisor({"fatias": [fatia(trechos=[["app/nao_existe.py", 1, 2]])]})
+    assert ruim == {"valido": False, "code": "trecho_invalido", "mensagem": ruim["mensagem"]}
+    sem_gate = ex.validar_plano_supervisor({"fatias": [fatia(gate=[])]})
+    assert sem_gate["code"] == "fatia_sem_gate"
+    # Validar não aprova: a sessão continua sem plano e sem subtasks.
+    assert not sessao.estado(meta["id"]).get("plano") and amb.backlog == []
+
+
+def test_resultado_fatia_mostra_proposta_que_falhou_e_commit_que_passou(amb):
+    assert ex.resultado_fatia(1)["code"] == "sem_sessao"
+    meta = nova(amb, [fatia(), fatia(objetivo="segunda")])
+    amb.gate["passa"] = False
+    amb.respostas.append(DIFF_OK.replace("return 2", "return 2  # sk-ant-abcdefghijklmnopqrstuvwx"))
+    eventos(ex.executar_fatia(meta["id"], 1))
+    falha = ex.resultado_fatia(1)
+    assert falha["status"] == "falhou" and falha["etapa"] == "gate" and falha["origem_diff"] == "proposta"
+    assert falha["gate_checks"][0]["passou"] is False
+    assert "sk-ant-abcdefghijklmnopqrstuvwx" not in falha["diff"]
+    amb.gate["passa"] = True
+    amb.respostas.append(DIFF_OK)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    passou = ex.resultado_fatia(1)
+    assert passou["status"] == "ok" and passou["origem_diff"] == "commit" and "+    return 2" in passou["diff"]
+    assert ex.resultado_fatia(9)["code"] == "fatia_inexistente"

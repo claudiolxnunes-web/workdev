@@ -610,3 +610,56 @@ def estado_para_supervisor() -> dict:
                        "task_id": meta.get("task_id")},
             "commits": estado["commits"], "alteracoes_sem_commit": estado["alteracoes"],
             "diff_stat": stat[:4000], "fatias": fatias}
+
+
+def validar_plano_supervisor(bruto: dict) -> dict:
+    """Somente leitura: a mesma validação do "Aprovar plano", sem gravar nada.
+
+    Valida contra a cópia da sessão ativa (é ali que as fatias vão rodar) ou,
+    sem sessão, contra o checkout. Devolve o erro como dado, não exceção: o
+    supervisor corrige e chama de novo.
+    """
+    meta = sessao.ativa()
+    raiz = Path(meta["caminho"]) if meta else sessao.repo()
+    try:
+        fatias = validar_plano(bruto, raiz)
+    except WorkspaceErro as erro:
+        return {"valido": False, "code": erro.codigo, "mensagem": erro.mensagem}
+    return {"valido": True, "sessao": meta["id"] if meta else None,
+            "fatias": [{k: f[k] for k in ("n", "tipo", "objetivo", "trechos", "gate", "max_tokens") if k in f}
+                       for f in fatias],
+            **({} if meta else {"aviso": "sem sessão ativa: validado contra o checkout; "
+                                         "o operador precisa começar a sessão antes de aprovar"})}
+
+
+MAX_DIFF_SUPERVISOR = 6000
+
+
+def resultado_fatia(n: int) -> dict:
+    """Somente leitura: o detalhe de uma fatia da sessão ativa, para o supervisor corrigir."""
+    meta = sessao.ativa()
+    if meta is None:
+        return {"erro": "nenhuma sessão ativa no Workspace", "code": "sem_sessao"}
+    fatias = (meta.get("plano") or {}).get("fatias") or []
+    fatia = next((f for f in fatias if f["n"] == n), None)
+    if fatia is None:
+        return {"erro": f"a sessão não tem fatia {n}", "code": "fatia_inexistente"}
+    cwd = Path(meta["caminho"])
+    if fatia.get("commit"):
+        diff = _git(["show", "--format=", fatia["commit"]], cwd).stdout
+        origem = "commit"
+    else:
+        diff, origem = "", None
+        proposta = fatia.get("proposta") or {}
+        arquivo = bancada_runner.pasta() / str(proposta.get("modelo") or "") / f"{proposta.get('id')}.txt"
+        if proposta.get("id") and arquivo.is_file():
+            diff, origem = arquivo.read_text(encoding="utf-8"), "proposta"
+    # O diff vai a um modelo de nuvem: mesma política de segredo do contexto canônico (ADR 012).
+    from app.services.context_redaction import redact
+    diff = redact(diff).text
+    return {"n": n, "tipo": fatia.get("tipo", "codigo"), "objetivo": fatia["objetivo"],
+            "instrucao": fatia["instrucao"], "status": fatia["status"], "etapa": fatia["etapa"],
+            "erro": fatia["erro"], "tentativas": fatia["tentativas"], "gate_checks": fatia.get("gate_checks") or [],
+            "commit": fatia.get("commit"), "arquivos": fatia.get("arquivos") or [],
+            "origem_diff": origem, "diff": diff[:MAX_DIFF_SUPERVISOR],
+            "diff_truncado": len(diff) > MAX_DIFF_SUPERVISOR}

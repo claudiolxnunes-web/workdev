@@ -442,6 +442,40 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "validar_plano_workspace",
+        "description": "Valida um plano de fatias do Workspace Local contra a copia da sessao ativa (ou o checkout, sem sessao): objetivo e instrucao presentes, gate presente, trechos com arquivo e linhas reais, exige com regex valida, fatia de banco bem formada. E a mesma validacao do botao Aprovar plano. Somente leitura: nao grava nem aprova nada. Chame antes de entregar o bloco json e corrija o que for recusado.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plano": {"type": "object", "description": "{\"fatias\": [{\"id\", \"objetivo\", \"instrucao\", \"trechos\", \"gate\", \"exige\", \"max_tokens\"}]}"},
+            },
+            "required": ["plano"],
+        },
+    },
+    {
+        "name": "ler_resultado_fatia",
+        "description": "Le o detalhe de uma fatia da sessao ativa do Workspace Local: instrucao, status, etapa e erro, checks do gate e o diff (do commit, se passou; da proposta do modelo local, se falhou). Segredos sao redigidos. Somente leitura. Use para escrever a correcao de uma fatia que falhou.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"n": {"type": "integer", "description": "numero da fatia (1, 2, ...)"}},
+            "required": ["n"],
+        },
+    },
+    {
+        "name": "ler_referencias",
+        "description": "Le o texto inteiro das referencias canonicas de um projeto: ADRs (contexto, decisao, consequencias, status), decisions e knowledge. Filtra por termo no titulo/conteudo. Segredos sao redigidos. Somente leitura. Use quando o bloco 'Contexto recuperado' citar uma referencia que restringe o plano, ou para conferir se ja existe decisao sobre o assunto.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "projeto_slug": {"type": "string", "description": "slug do projeto; opcional se task_id for informado"},
+                "task_id": {"type": "string", "description": "uuid da task; inclui as ADRs ligadas a ela"},
+                "tipo": {"type": "string", "enum": ["adr", "decision", "knowledge", "todos"], "description": "padrao: todos"},
+                "termo": {"type": "string", "description": "filtro opcional, sem diferenciar maiusculas"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "validar_lote_bancada",
         "description": "Valida um lote de micro-tarefas da Bancada Local contra os arquivos reais do repositorio: arquivo existe, linha final existe, caminho permitido, ate 10 tarefas por lote (11 a 20 sao divididas automaticamente em 2 lotes), ate 8 trechos de ate 400 linhas, max_tokens 64-4000, exige com regex valida. Ids vazios ou genericos recebem o id do lote (AAMMDD-NN-NN). Somente leitura: nao grava nem executa nada. Use antes de entregar o JSON final e entregue o plano devolvido.",
         "input_schema": {
@@ -699,6 +733,55 @@ def _leitura_repo(funcao, *args) -> str:
         return json.dumps({"erro": str(e), "code": "leitura_recusada"}, ensure_ascii=False)
 
 
+MAX_REFERENCIAS = 10
+MAX_TEXTO_REFERENCIA = 3000
+
+
+def _ler_referencias(args: dict, db: Session) -> str:
+    from app.services import referencias_projeto
+    from app.services.context_redaction import redact
+
+    task = None
+    if args.get("task_id"):
+        try:
+            task = db.get(BacklogItem, uuid.UUID(str(args["task_id"])))
+        except ValueError:
+            return json.dumps({"erro": "task_id invalido", "code": "task_id_invalido"}, ensure_ascii=False)
+    if task is not None:
+        projeto = db.get(Project, task.project_id)
+    elif args.get("projeto_slug"):
+        projeto = db.query(Project).filter(Project.slug == args["projeto_slug"]).first()
+    else:
+        return json.dumps({"erro": "informe projeto_slug ou task_id", "code": "sem_projeto"}, ensure_ascii=False)
+    if projeto is None:
+        return json.dumps({"erro": "projeto ou task nao encontrado", "code": "nao_encontrado"}, ensure_ascii=False)
+
+    dados = referencias_projeto.coletar(db, projeto.id, task.id if task else None)
+    tipo = args.get("tipo") or "todos"
+    termo = str(args.get("termo") or "").strip().lower()
+    textos = {
+        "adr": lambda r: f"Contexto: {r['context']}\nDecisao: {r['decision']}\nConsequencias: {r['consequences'] or ''}",
+        "decision": lambda r: r["description"],
+        "knowledge": lambda r: r["content"],
+    }
+    chaves = {"adr": "adrs", "decision": "decisions", "knowledge": "knowledge"}
+    saida = []
+    for nome_tipo, chave in chaves.items():
+        if tipo not in ("todos", nome_tipo):
+            continue
+        for linha in dados[chave]:
+            # Redige antes de cortar: o corte não pode partir um segredo ao meio.
+            texto = redact(textos[nome_tipo](linha) or "").text
+            if termo and termo not in f"{linha['title']} {texto}".lower():
+                continue
+            saida.append({"tipo": nome_tipo, "id": linha["id"], "titulo": linha["title"],
+                          **({"status": linha["status"]} if nome_tipo == "adr" else {}),
+                          "texto": texto[:MAX_TEXTO_REFERENCIA],
+                          "truncado": len(texto) > MAX_TEXTO_REFERENCIA})
+    return json.dumps({"projeto": projeto.slug, "referencias": saida[:MAX_REFERENCIAS],
+                       "total": len(saida)}, ensure_ascii=False)
+
+
 def executar_tool(nome: str, args: dict, db: Session,
                   nivel: str = autoridade.NIVEL_PADRAO, *, backlog_id=None) -> str:
     """Executa uma tool, respeitando a autoridade da conversa.
@@ -885,6 +968,23 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
 
     if nome == "validar_lote_bancada":
         return _validar_lote_bancada(args)
+
+    if nome == "validar_plano_workspace":
+        plano = args.get("plano")
+        if not isinstance(plano, dict):
+            return json.dumps({"valido": False, "code": "plano_invalido", "mensagem": "plano precisa ser objeto"},
+                              ensure_ascii=False)
+        return json.dumps(workspace_execucao.validar_plano_supervisor(plano), ensure_ascii=False)
+
+    if nome == "ler_resultado_fatia":
+        try:
+            n = int(args.get("n"))
+        except (TypeError, ValueError):
+            return json.dumps({"erro": "n precisa ser inteiro", "code": "n_invalido"}, ensure_ascii=False)
+        return json.dumps(workspace_execucao.resultado_fatia(n), ensure_ascii=False)
+
+    if nome == "ler_referencias":
+        return _ler_referencias(args, db)
 
     if nome == "registrar_conhecimento":
         pid = None

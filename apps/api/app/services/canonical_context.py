@@ -75,6 +75,19 @@ def build_prompt(context: dict, *, suffix: str = "") -> str:
     return "\n\n".join(partes)
 
 
+def planning_block(context: dict) -> str:
+    """Bloco canônico para o supervisor do Workspace, já redigido.
+
+    O supervisor é um modelo de nuvem e o Workspace não tem `agent_run`, então
+    não há `context_egress.prepare` para redigir e contar: a redação acontece
+    aqui. O bloco vai ao supervisor, não ao modelo local — na CPU cada trecho a
+    mais custa segundos de prefill em toda fatia; cabe ao supervisor levar à
+    instrução da fatia só o que a ADR ou a decision exige.
+    """
+    bloco = canonical_block(context)
+    return redact(bloco).text if bloco else ""
+
+
 def build_local_prompt(context: dict, *, suffix: str = "") -> PromptMontado:
     """Prompt do agente para entrega local, com a política de segredo aplicada.
 
