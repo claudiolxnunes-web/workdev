@@ -129,6 +129,31 @@ def executar_fatia(ident: str, n: int, pedido: Execucao | None = None):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+class SqlBanco(BaseModel):
+    sql: str = Field(min_length=1, max_length=4000)
+
+
+class Reversao(BaseModel):
+    forcar: bool = False
+
+
+@router.post("/sessao/{ident}/fatias/{n}/banco/simular")
+def simular_banco(ident: str, n: int, pedido: SqlBanco):
+    """SQL editado pelo operador: valida e simula (rollback). Nada é gravado."""
+    return _chamar(workspace_execucao.simular_banco, ident, n, pedido.sql)
+
+
+@router.post("/sessao/{ident}/fatias/{n}/banco/aplicar")
+def aplicar_banco(ident: str, n: int):
+    """Clique do operador: grava no banco o que foi simulado."""
+    return _chamar(workspace_execucao.aplicar_banco, ident, n)
+
+
+@router.post("/sessao/{ident}/fatias/{n}/banco/reverter")
+def reverter_banco(ident: str, n: int, pedido: Reversao | None = None):
+    return _chamar(workspace_execucao.reverter_banco, ident, n, bool(pedido and pedido.forcar))
+
+
 @router.post("/sessao/{ident}/fatias/{n}/pular")
 def pular_fatia(ident: str, n: int):
     return _chamar(workspace_execucao.pular_fatia, ident, n)

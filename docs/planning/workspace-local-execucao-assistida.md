@@ -180,6 +180,21 @@ protege dado nenhum. Cada fatia de banco precisa de:
 - caminho de reversão explícito, ou idempotência para repetir sem duplicar;
 - registro na trilha de auditoria da sessão.
 
+### 6.1 Decisões do operador para as fatias de banco (2026-10-25)
+
+- **Só dados:** INSERT, UPDATE e DELETE. CREATE/ALTER/DROP e afins são recusados e
+  viram fatia de código com migration do Alembic (aplicada só com confirmação).
+- **Só as tabelas de registro:** `projects`, `backlog`, `backlog_subtasks`,
+  `knowledge`, `decisions`, `adrs`, `rfcs`.
+- **No máximo 50 linhas** por fatia.
+- O modelo lê só a **estrutura** das tabelas, nunca os dados.
+- Fluxo: o modelo propõe o SQL → **simulação** (transação, "antes", verificação,
+  rollback) → o operador clica **Aplicar** (refaz na transação; recusa se o
+  conjunto de linhas mudou desde a simulação) → "antes" e "depois" gravados →
+  **Reverter** restaura a partir do "antes", recusando se a linha mudou depois.
+- INSERT cria o nó no Engineering Graph; DELETE deixa nó órfão (pendência
+  conhecida do cascade Postgres → grafo).
+
 ## 7. Leitura pelo modelo local
 
 > **Feito em 2026-10-25** (`feat/workspace-ferramentas-leitura`): o chat Local manda
@@ -275,7 +290,7 @@ Cada etapa entra por branch própria, com o diff entregue para incorporação.
 | 3 Tools de leitura | ✅ feito — local e supervisor; o local lê a **cópia da sessão** | `feat/workspace-ferramentas-leitura` |
 | 4 Supervisor no lateral + escrita no editor | ✅ feito — editor grava na cópia da sessão e commita com a identidade do operador (decisão 4); Explorer/editor/chat Local leem a cópia | PR #9 + `feat/workspace-sessao` |
 | 5 Plano fatiado | ✅ feito pelo "Aprovar plano" (bloco json do supervisor); `suggest_slices` não foi ligado | `feat/workspace-sessao` |
-| 6 Banco | pendente | — |
+| 6 Banco | ✅ feito — `workspace_banco.py`: fatia `tipo: banco`, simulação com rollback, aplicar com trava e confirmação, reverter com trava; decisões em §6.1 | `feat/workspace-fatias-banco` |
 | — Backlog (decisão 6) | ✅ fatias viram subtasks; task `doing`; subtask `done`/`blocked` | `feat/workspace-sessao` |
 | — Supervisor vê a sessão (§3.2) | ✅ `ler_estado_sessao` | `feat/workspace-sessao` |
 

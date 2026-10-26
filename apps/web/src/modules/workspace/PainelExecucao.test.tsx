@@ -86,3 +86,42 @@ describe("PainelExecucao", () => {
     expect(await within(await screen.findByLabelText("Fatia 2")).findByRole("button", { name: "Executar fatia 2" })).toBeInTheDocument()
   })
 })
+
+describe("PainelExecucao · fatia de banco", () => {
+  it("mostra a simulação, aplica com confirmação e oferece forçar o reverter quando a linha mudou", async () => {
+    const sim = { comando: "UPDATE", tabela: "backlog", linhas: 1, ids: ["1"], passou: true, sql: "UPDATE backlog SET priority = 'high' WHERE id = '1'",
+      antes: [{ id: "1", title: "A", priority: "low" }], depois: [{ id: "1", title: "A", priority: "high" }],
+      verificacoes: [{ consulta: "SELECT true", passou: true, valor: true }] }
+    let status = "simulada"
+    let reverter = 0
+    const banco = () => ({ ...base({ n: 1, objetivo: "subir", status, etapa: null, erro: null, tentativas: 1, commit: null }),
+      tipo: "banco", tabelas: ["backlog"], verificacao: ["SELECT true"], sql: sim.sql, simulacao: sim,
+      banco: status === "ok" ? { comando: "UPDATE", tabela: "backlog", linhas: 1, aplicado_em: "agora", trilha: "/x" } : null })
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      chamadas.push({ url, corpo: init?.body ? JSON.parse(String(init.body)) : undefined })
+      if (url === "/api/workspace/sessao") return json({ ativa: { id: "s1" }, recentes: [] })
+      if (url === "/api/workspace/sessao/s1") return json({ ...estado(), plano: { aprovado_em: "", fatias: [banco()] } })
+      if (url.endsWith("/banco/aplicar")) { status = "ok"; return json({}) }
+      if (url.endsWith("/banco/reverter")) {
+        reverter += 1
+        if (reverter === 1) return json({ detail: { code: "linha_mudou", message: "1 linha(s) mudaram depois da aplicação" } }, 409)
+        status = "revertida"; return json({})
+      }
+      throw new Error(`rota inesperada ${url}`)
+    }))
+    render(<PainelExecucao versao={0} onMudou={() => {}} />)
+    const simulacao = await screen.findByLabelText("Simulação da fatia 1")
+    expect(simulacao).toHaveTextContent("1 linha(s) · passou · nada foi gravado")
+    expect(simulacao).toHaveTextContent("~ A: priority low → high")
+    fireEvent.click(screen.getByRole("button", { name: "Aplicar no banco" }))
+    expect(chamadas.some((c) => c.url.endsWith("/banco/aplicar"))).toBe(false)
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar: gravar 1 linha(s) em backlog" }))
+    expect(await screen.findByText(/Gravado: UPDATE em backlog/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Reverter no banco" }))
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar: restaurar 1 linha(s)" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("mudaram depois da aplicação")
+    fireEvent.click(screen.getByRole("button", { name: /Reverter mesmo assim/ }))
+    await waitFor(() => expect(chamadas.filter((c) => c.url.endsWith("/banco/reverter")).map((c) => c.corpo))
+      .toEqual([{ forcar: false }, { forcar: true }]))
+  })
+})

@@ -185,7 +185,31 @@ Limites: uma sessão por vez; para começar, o checkout não pode ter alteraçã
 rastreada sem commit. Uma fatia que mexe em `apps/api` leva ~1–2 min só no gate
 (a suíte inteira roda dentro da cópia).
 
-### 5. Explorer e Terminal
+### 5. Fatias de banco (mudar dados do WorkDev)
+
+Quando a task pede mudar **dados** (não código), o supervisor pode planejar uma
+fatia `"tipo": "banco"`. Ela é diferente das outras: **nunca grava sozinha**.
+
+1. **Executar fatia N**: o modelo local lê a estrutura das tabelas liberadas
+   (`ler_schema`, nunca os dados) e propõe **um** comando SQL.
+2. O sistema valida e **simula**: roda numa transação, guarda o "antes", roda a
+   verificação da fatia e desfaz tudo. A fatia para em **simulada** e o cartão
+   mostra quantas linhas, a verificação (✓/✗) e o que muda em cada linha.
+3. Não gostou? Edite o SQL no cartão e **Simular (sem gravar)** de novo, ou
+   **Pedir outro SQL ao modelo**.
+4. **Aplicar no banco** → **Confirmar: gravar N linha(s)**. Refaz na transação e
+   só grava se as linhas forem as mesmas da simulação e a verificação passar.
+   "Antes" e "depois" ficam na trilha da sessão.
+5. **Reverter no banco** → **Confirmar**: restaura do "antes". Se alguém mexeu
+   na linha depois, ele recusa e oferece **Reverter mesmo assim**.
+
+Regras (decisões de 2026-10-25): só INSERT/UPDATE/DELETE (estrutura é migration
+do Alembic, fatia de código); só `projects`, `backlog`, `backlog_subtasks`,
+`knowledge`, `decisions`, `adrs`, `rfcs`; no máximo **50 linhas**; UPDATE e
+DELETE sempre com WHERE; um comando por fatia; a simulação vale 15 min. DELETE
+deixa nó órfão no Engineering Graph (pendência conhecida).
+
+### 6. Explorer e Terminal
 - Seção **Alterações**: o que mudou no checkout em relação ao HEAD; clique para
   ver o diff. "Árvore limpa" = nada pendente.
 - Aba **Terminal**: attach na sessão tmux do agente CLI escolhido (Claude, Codex,

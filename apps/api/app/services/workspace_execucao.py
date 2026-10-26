@@ -21,6 +21,11 @@ Regras:
 
 Uma fatia por chamada, estado gravado a cada etapa: recarregar a página no meio
 não perde nada, e o "executar todas" da tela é só chamar a próxima.
+
+Fatia de banco (`"tipo": "banco"`, etapa 6): o modelo propõe um comando SQL, o
+sistema valida e **simula** (transação + rollback) e a fatia para em `simulada`.
+Gravar é clique do operador ("Aplicar no banco"); reverter também. Regras em
+`workspace_banco`.
 """
 from __future__ import annotations
 
@@ -31,7 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from app.services import bancada_runner, build_worktree, test_gate, workspace, workspace_sessao as sessao
+from app.services import bancada_runner, build_worktree, test_gate, workspace, workspace_banco, workspace_sessao as sessao
 from app.services.workspace import WorkspaceErro
 
 MAX_FATIAS = 20
@@ -108,11 +113,29 @@ def validar_plano(bruto: dict, raiz: Path) -> list[dict]:
             max_tokens = max(64, min(int(fatia.get("max_tokens") or 1500), bancada_runner.MAX_TOKENS))
         except (TypeError, ValueError):
             max_tokens = 1500
+        tipo = str(fatia.get("tipo") or "codigo").strip().lower()
+        if tipo not in ("codigo", "banco"):
+            raise WorkspaceErro(422, "fatia_invalida", f"fatia {n}: tipo '{tipo}' desconhecido (codigo ou banco)")
+        extra_banco = {}
+        if tipo == "banco":
+            tabelas = fatia.get("tabelas") if isinstance(fatia.get("tabelas"), list) else []
+            tabelas = [str(t).strip().lower() for t in tabelas if str(t).strip()]
+            fora = [t for t in tabelas if t not in workspace_banco.TABELAS]
+            if not tabelas or fora:
+                raise WorkspaceErro(422, "tabela_nao_permitida",
+                                    f"fatia {n}: tabelas liberadas: {', '.join(workspace_banco.TABELAS)}"
+                                    + (f" (fora: {', '.join(fora)})" if fora else " (nenhuma informada)"))
+            verificacao = fatia.get("verificacao")
+            verificacao = [verificacao] if isinstance(verificacao, str) else verificacao if isinstance(verificacao, list) else []
+            if not verificacao:
+                raise WorkspaceErro(422, "sem_verificacao", f"fatia {n}: fatia de banco precisa de 'verificacao' (SELECT)")
+            verificacao = [workspace_banco.validar_verificacao(v) for v in verificacao][:workspace_banco.MAX_VERIFICACOES]
+            extra_banco = {"tabelas": tabelas, "verificacao": verificacao, "sql": None, "simulacao": None, "banco": None}
         ident = re.sub(r"[^A-Za-z0-9_-]", "-", str(fatia.get("id") or "")).strip("-")[:24] or f"f{n}"
         if ident in ids:
             ident = f"{ident}-{n}"
         ids.add(ident)
-        saida.append({"n": n, "id": ident, "objetivo": objetivo[:300],
+        saida.append({**extra_banco, "tipo": tipo, "n": n, "id": ident, "objetivo": objetivo[:300],
                       "instrucao": instrucao[:bancada_runner.MAX_INSTRUCAO - 1000], "trechos": normalizados,
                       "gate": gate[:10], "exige": exige, "max_tokens": max_tokens,
                       "status": "pendente", "etapa": None, "erro": None, "tentativas": 0,
@@ -291,6 +314,9 @@ def _executar_fatia(ident: str, n: int, correcao: str | None) -> Iterator[str]:
 
         yield _sse({"tipo": "fatia", "n": n, "status": "rodando", "etapa": "modelo",
                     "tentativa": fatia["tentativas"]})
+        if fatia.get("tipo") == "banco":
+            yield from _fatia_banco(meta, fatia, n, ident, cwd, correcao, etapa, falhar)
+            return
 
         # 1. modelo local, lendo a cópia da sessão
         instrucao = fatia["instrucao"]
@@ -357,6 +383,145 @@ def _executar_fatia(ident: str, n: int, correcao: str | None) -> Iterator[str]:
         _backlog("marcar_subtask", fatia["subtask_id"], "done",
                  f"Commit {sha[:7]} no branch {meta['branch']} · gate ok")
         yield _sse({"tipo": "fatia", "n": n, "status": "ok", "commit": sha})
+
+
+# ---------------------------------------------------------------- fatias de banco
+
+SAIDA_SQL = ("Saída: UM comando SQL (INSERT, UPDATE ou DELETE) num bloco ```sql e nada mais. "
+             "Use ler_schema para conferir os nomes das colunas antes de escrever. "
+             "UPDATE e DELETE sempre com WHERE. Nada de CREATE, ALTER, DROP, RETURNING ou comentários.")
+
+
+def extrair_sql(texto: str) -> str | None:
+    blocos = re.findall(r"```sql\s*\n(.*?)```", texto, re.DOTALL | re.IGNORECASE)
+    if blocos:
+        return blocos[-1].strip()
+    limpo = texto.strip()
+    return limpo if re.match(r"^(insert|update|delete)\b", limpo, re.IGNORECASE) else None
+
+
+def _resumo_simulacao(s: dict) -> str:
+    if s["linhas"] == 0:
+        return "o comando não pega nenhuma linha"
+    if s["linhas"] > workspace_banco.MAX_LINHAS:
+        return f"o comando pega {s['linhas']} linhas; o limite é {workspace_banco.MAX_LINHAS}"
+    falhas = [v for v in s["verificacoes"] if not v["passou"]]
+    if falhas:
+        v = falhas[0]
+        return f"verificação não passou: {v['consulta']} → {v.get('erro') or v['valor']}"
+    return f"{s['linhas']} linha(s), verificação ok"
+
+
+def _simular_na_fatia(fatia: dict, sql: str) -> tuple[bool, str]:
+    """Valida e simula; grava na fatia. (passou, motivo)."""
+    try:
+        simulacao = workspace_banco.simular(sql, fatia["verificacao"], fatia["tabelas"])
+    except WorkspaceErro as erro:
+        fatia.update(sql=sql, simulacao=None)
+        return False, erro.mensagem
+    fatia.update(sql=simulacao["sql"], simulacao=simulacao)
+    return simulacao["passou"], _resumo_simulacao(simulacao)
+
+
+def _fatia_banco(meta, fatia, n, ident, cwd, correcao, etapa, falhar) -> Iterator[str]:
+    instrucao = (fatia["instrucao"] + "\n" + SAIDA_SQL + f"\nTabelas liberadas: {', '.join(fatia['tabelas'])}."
+                 + "\nVerificação que vai rodar depois do comando: " + " | ".join(fatia["verificacao"]))
+    if correcao:
+        instrucao += f"\n\nA tentativa anterior falhou. Correção pedida pelo operador: {correcao}"
+    elif fatia.get("erro_anterior"):
+        instrucao += f"\n\nA tentativa anterior falhou: {fatia['erro_anterior']}"
+    pid = f"ws-{ident}-{fatia['id']}-t{fatia['tentativas']}"[:80]
+    try:
+        plano = bancada_runner.preparar_execucao(pid, instrucao, fatia["trechos"], fatia["max_tokens"],
+                                                 {}, False, True, cwd, fatia["tabelas"])
+    except bancada_runner.BancadaErro as erro:
+        yield falhar("modelo", erro.mensagem)
+        return
+    final = None
+    for bruto in bancada_runner.executar(plano):
+        evento = json.loads(bruto[5:])
+        if evento["tipo"] in ("fim", "erro"):
+            final = evento
+        yield _sse({**evento, "n": n})
+    if not final or final["tipo"] == "erro":
+        yield falhar("modelo", (final or {}).get("mensagem") or "o modelo local não respondeu")
+        return
+    texto = (bancada_runner.pasta() / final["modelo"] / f"{pid}.txt").read_text(encoding="utf-8")
+    fatia["proposta"] = {"modelo": final["modelo"], "id": pid, "segundos": final.get("segundos"),
+                         "leituras": final.get("leituras", 0), "medicao": final.get("medicao")}
+    yield etapa("simular")
+    sql = extrair_sql(texto)
+    if sql is None:
+        motivo = texto.strip()[:500] if texto.strip().startswith("FALTA") else "a resposta não trouxe um comando SQL"
+        yield falhar("simular", motivo)
+        return
+    passou, motivo = _simular_na_fatia(fatia, sql)
+    if not passou:
+        yield falhar("simular", motivo)
+        return
+    fatia.update(status="simulada", etapa=None, erro=None)
+    sessao._gravar_meta(meta)
+    yield _sse({"tipo": "fatia", "n": n, "status": "simulada", "linhas": fatia["simulacao"]["linhas"],
+                "sql": fatia["sql"]})
+
+
+def _fatia_de_banco(meta: dict, n: int, estados: tuple[str, ...]) -> dict:
+    fatias = (meta.get("plano") or {}).get("fatias") or []
+    if not 1 <= n <= len(fatias) or fatias[n - 1].get("tipo") != "banco":
+        raise WorkspaceErro(404, "fatia_inexistente", f"a fatia {n} não é de banco")
+    fatia = fatias[n - 1]
+    if fatia["status"] not in estados:
+        raise WorkspaceErro(409, "estado_invalido", f"a fatia {n} está {fatia['status']}")
+    return fatia
+
+
+def simular_banco(ident: str, n: int, sql: str) -> dict:
+    """O operador edita o SQL e simula de novo. Nada é gravado."""
+    with sessao.lock_execucao(ident):
+        meta = sessao._exigir(ident)
+        _fatia_aberta(meta, n)
+        fatia = _fatia_de_banco(meta, n, ("pendente", "falhou", "simulada", "revertida"))
+        passou, motivo = _simular_na_fatia(fatia, sql)
+        fatia.update(status="simulada" if passou else "falhou", etapa=None if passou else "simular",
+                     erro=None if passou else motivo, terminada_em=_agora())
+        sessao._gravar_meta(meta)
+        return meta
+
+
+def aplicar_banco(ident: str, n: int) -> dict:
+    """Clique do operador: grava no banco o que foi simulado (decisão 2)."""
+    with sessao.lock_execucao(ident):
+        meta = sessao._exigir(ident)
+        if meta["status"] != "ativa":
+            raise WorkspaceErro(409, "sessao_encerrada", f"a sessão {ident} não está ativa")
+        fatia = _fatia_de_banco(meta, n, ("simulada",))
+        aplicacao = workspace_banco.aplicar(fatia["simulacao"], fatia["verificacao"], fatia["tabelas"])
+        arquivo = workspace_banco.trilha(sessao.raiz() / "_sessoes", ident, n, "aplicado", aplicacao)
+        workspace_banco.sincronizar_grafo(aplicacao)
+        fatia.update(status="ok", etapa=None, erro=None, terminada_em=_agora(),
+                     banco={"comando": aplicacao["comando"], "tabela": aplicacao["tabela"],
+                            "linhas": aplicacao["linhas"], "aplicado_em": aplicacao["aplicado_em"],
+                            "trilha": str(arquivo)})
+        sessao._gravar_meta(meta)
+        _backlog("marcar_subtask", fatia["subtask_id"], "done",
+                 f"{aplicacao['comando']} em {aplicacao['tabela']}: {aplicacao['linhas']} linha(s) · trilha {arquivo.name}")
+        return meta
+
+
+def reverter_banco(ident: str, n: int, forcar: bool = False) -> dict:
+    with sessao.lock_execucao(ident):
+        meta = sessao._exigir(ident)
+        fatia = _fatia_de_banco(meta, n, ("ok",))
+        if not fatia.get("banco"):
+            raise WorkspaceErro(409, "nada_aplicado", f"a fatia {n} não foi aplicada no banco")
+        aplicacao = json.loads(Path(fatia["banco"]["trilha"]).read_text(encoding="utf-8"))
+        resultado = workspace_banco.reverter(aplicacao, forcar)
+        arquivo = workspace_banco.trilha(sessao.raiz() / "_sessoes", ident, n, "revertido", resultado)
+        fatia.update(status="revertida", etapa=None, terminada_em=_agora(),
+                     banco={**fatia["banco"], "revertido_em": resultado["revertido_em"], "trilha_reversao": str(arquivo)})
+        sessao._gravar_meta(meta)
+        _backlog("marcar_subtask", fatia["subtask_id"], "todo", f"Revertida no banco · trilha {arquivo.name}")
+        return meta
 
 
 def pular_fatia(ident: str, n: int) -> dict:
@@ -435,9 +600,11 @@ def estado_para_supervisor() -> dict:
         return {"sessao": None, "aviso": "nenhuma sessão ativa no Workspace"}
     estado = sessao.estado(meta["id"])
     stat = _git(["diff", "--stat", meta["base"]], Path(meta["caminho"])).stdout.strip()
-    fatias = [{"n": f["n"], "objetivo": f["objetivo"], "status": f["status"], "etapa": f["etapa"],
-               "erro": (f["erro"] or "")[:600] or None, "commit": (f["commit"] or "")[:7] or None,
-               "arquivos": f.get("arquivos") or [], "tentativas": f["tentativas"]}
+    fatias = [{"n": f["n"], "tipo": f.get("tipo", "codigo"), "objetivo": f["objetivo"], "status": f["status"],
+               "etapa": f["etapa"], "erro": (f["erro"] or "")[:600] or None, "commit": (f["commit"] or "")[:7] or None,
+               "arquivos": f.get("arquivos") or [], "tentativas": f["tentativas"],
+               **({"sql": f.get("sql"), "linhas_simuladas": (f.get("simulacao") or {}).get("linhas"),
+                   "banco": f.get("banco")} if f.get("tipo") == "banco" else {})}
               for f in (meta.get("plano") or {}).get("fatias") or []]
     return {"sessao": {"id": meta["id"], "branch": meta["branch"], "base": meta["base"][:7],
                        "task_id": meta.get("task_id")},
