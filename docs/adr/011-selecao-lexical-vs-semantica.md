@@ -1,6 +1,6 @@
 # ADR 011 — Seleção de referência: lexical no Build, semântica no AI Hub
 
-Status: proposed no banco (ratificação do Cláudio pendente); implementada em `feat/referencias-canonicas-fase2`.
+Status: accepted (ratificado pelo Cláudio em 2026-10-26); implementada em `feat/referencias-canonicas-fase2`.
 Registro: `adrs.id = 1cc6ac67-677b-4a68-a825-c44b8554446e`.
 Achado que motiva: `docs/AGENT_REFERENCE_CONTEXT_AUDIT.md`, achado Médio #5.
 

@@ -1,6 +1,6 @@
 # ADR 012 — A política de segredo vale também para a entrega local
 
-Status: proposed no banco (ratificação do Cláudio pendente); implementada em `feat/referencias-canonicas-fase2`.
+Status: accepted (ratificado pelo Cláudio em 2026-10-26); implementada em `feat/referencias-canonicas-fase2`.
 Registro: `adrs.id = 09d2df7b-186b-4a22-9fbc-17cd8caf68c0`.
 Achado que motiva: `docs/AGENT_REFERENCE_CONTEXT_AUDIT.md`, achado Alto #3.
 

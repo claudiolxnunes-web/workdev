@@ -1,6 +1,6 @@
 # ADR 013 — O revisor trabalha com escopo mínimo, sem contexto canônico
 
-Status: proposed no banco (ratificação do Cláudio pendente); implementada em `feat/referencias-canonicas-fase2`.
+Status: accepted (ratificado pelo Cláudio em 2026-10-26); implementada em `feat/referencias-canonicas-fase2`.
 Registro: `adrs.id = 2670dac6-ada6-464e-b994-f267744e7832`.
 Achado que motiva: `docs/AGENT_REFERENCE_CONTEXT_AUDIT.md`, achado Médio #5
 (escopo do revisor) e achados Baixo #1 e #2.

@@ -1,6 +1,6 @@
 # ADR 014 — O agente manual recebe as referências por endpoint, não por montagem
 
-Status: proposed no banco (ratificação do Cláudio pendente); implementada em `feat/referencias-canonicas-fase2`.
+Status: accepted (ratificado pelo Cláudio em 2026-10-26); implementada em `feat/referencias-canonicas-fase2`.
 Registro: `adrs.id = 3badbda0-cb1c-4512-ac3a-3e2b02f1d423`.
 Achado que motiva: `docs/AGENT_REFERENCE_CONTEXT_AUDIT.md`, achado Alto #2.
 

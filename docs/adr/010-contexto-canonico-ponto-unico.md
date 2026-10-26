@@ -1,6 +1,6 @@
 # ADR 010 — Contexto canônico: um único ponto de montagem
 
-Status: proposed no banco (ratificação do Cláudio pendente); implementada em `feat/referencias-canonicas-fase2`.
+Status: accepted (ratificado pelo Cláudio em 2026-10-26); implementada em `feat/referencias-canonicas-fase2`.
 Registro: `adrs.id = 7c4a4961-0930-4291-8910-67870a331694`.
 Task: auditoria das referências canônicas (Fase 1) → Fase 2.
 Achado que motiva: `docs/AGENT_REFERENCE_CONTEXT_AUDIT.md`, achados Alto #1 e Alto #2.
