@@ -38,7 +38,9 @@ class TestInstrucoesDeEnvelope:
             build_worker, "build_context", lambda db, run: {"task": {}}
         )
         monkeypatch.setattr(
-            build_worker, "augment_prompt", lambda ctx: "CONTEXTO DO BUILD"
+            build_worker.canonical_context,
+            "build_prompt",
+            lambda ctx, *, suffix="": "CONTEXTO DO BUILD" + suffix,
         )
 
         prompt = build_worker.build_prompt(None, SimpleNamespace(id=uuid4()))

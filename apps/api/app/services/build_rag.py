@@ -11,6 +11,12 @@ Decisões que este módulo materializa:
   não recebe ferramenta, nem comando, nem caminho de repositório.
 - **Corte explícito.** Cada trecho tem tamanho máximo e o conjunto tem
   quantidade máxima, para o prompt não virar despejo de banco.
+
+Este módulo **seleciona e renderiza**; ele não monta o prompt. A montagem é do
+`canonical_context`, ponto único de entrega (ADR 010) — a separação é
+deliberada: a seleção é critério de relevância, a montagem é contrato de
+entrega, e misturar as duas foi o que deixou o AUTO entregar prompt sem
+referência canônica sem que nada aparecesse nos logs.
 """
 
 import re
@@ -145,14 +151,3 @@ def render_snippets(snippets: list[dict]) -> str:
         )
 
     return "\n".join(blocos)
-
-
-def augment_prompt(context: dict) -> str:
-    """Prompt do Build com os trechos recuperados anexados como texto."""
-    prompt = context.get("prompt") or ""
-    bloco = render_snippets(select_snippets(context))
-
-    if not bloco:
-        return prompt
-
-    return f"{prompt}\n\n{bloco}\n"

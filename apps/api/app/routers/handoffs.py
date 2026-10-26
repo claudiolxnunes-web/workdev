@@ -30,12 +30,18 @@ from app.schemas.handoff import (
     RunUpdate,
     SubtaskProgress,
 )
-from app.services import agent_runtimes, build_jobs, context_egress
+from app.services import (
+    agent_runtimes,
+    build_jobs,
+    build_rag,
+    canonical_context,
+    context_egress,
+    context_redaction,
+)
 from app.services.observer_selection import current as observer_current
 from app.services.run_pause import active_pause
 from app.services.build_executor import build_enabled
 from app.services.agent_runtimes import LOCAL_AGENT_REMOVED, RETIRED_AGENT_IDS, is_ollama_agent
-from app.services.build_rag import augment_prompt
 from app.services.plan_granularity import assess as assess_plan_granularity
 from app.services.engineering_graph import graph_sync
 from app.services.ollama_driver import (
@@ -1072,12 +1078,29 @@ def send_to_build(
             db,
             run,
         )
+        # O bloco canônico (ADR, knowledge, decisions) entra no prompt do
+        # AUTO pelo mesmo caminho dos outros despachos. Antes ele não entrava
+        # — o AUTO entregava `context["prompt"]` cru, e o agente recebia um
+        # plano sem nenhuma decisão do projeto (ADR 010).
+        #
+        # A entrega local é redigida: o texto não sai da VPS, mas chega a um
+        # modelo, e o contexto canônico é texto do operador (ADR 012).
+        montado = canonical_context.build_local_prompt(context)
+        if montado.redacted:
+            add_run_event(
+                db,
+                run,
+                "build.context_redacted",
+                context_redaction.summary(montado.redaction),
+                {"runtime_id": run.agent, "counts": dict(montado.redaction.counts)},
+            )
+            db.commit()
         background.add_task(
             _run_auto_agent,
             run.id,
             run.agent,
             run.model,
-            context["prompt"],
+            montado.text,
         )
 
     result = _run_out(
@@ -1225,6 +1248,56 @@ def get_agent_context(
         ) from error
 
 
+@router.get("/runs/{run_id}/references")
+def get_run_references(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Referências canônicas que o Build receberia, para o agente manual.
+
+    O agente conduzido na tmux não tem montagem de prompt: o operador digita
+    o que quiser, e o que ele não digita não chega ao agente. Este endpoint
+    devolve o mesmo recorte que o Build recebe — mesmo `build_context`, mesma
+    seleção — para o operador não precisar carregar ADR, knowledge e
+    decisions na mão (ADR 014).
+
+    O texto sai redigido, pela mesma política do bloco entregue ao agente
+    (ADR 012): o operador vai colar isso no terminal, e terminal não é lugar
+    para segredo em claro.
+    """
+    try:
+        context = build_context(
+            db,
+            _get_run(
+                db,
+                run_id,
+            ),
+        )
+    except HandoffError as error:
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+    snippets = build_rag.select_snippets(context)
+    bloco = canonical_context.canonical_block(context)
+
+    return {
+        "run_id": str(run_id),
+        "snippets": [
+            {
+                "source": item.get("source"),
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "text": context_redaction.redact(item.get("text") or "").text,
+                "score": item.get("score"),
+            }
+            for item in snippets
+        ],
+        "block": context_redaction.redact(bloco).text,
+    }
+
+
 @router.post('/runs/{run_id}/start', status_code=202)
 def start_workspace_run(run_id: UUID, background: BackgroundTasks, db: Session = Depends(get_db)):
     from app.services.agent_workspace import audit
@@ -1241,7 +1314,19 @@ def start_workspace_run(run_id: UUID, background: BackgroundTasks, db: Session =
         return dispatch_run_to_ollama(run_id, background, db)
     context = build_context(db, run)
     audit('start_run', agent=run.agent, run_id=run.id)
-    background.add_task(_run_auto_agent, run.id, run.agent, run.model, context['prompt'], True)
+    # Mesmo caminho de montagem do AUTO: bloco canônico incluído e política de
+    # segredo aplicada na entrega local (ADR 010 e ADR 012).
+    montado = canonical_context.build_local_prompt(context)
+    if montado.redacted:
+        add_run_event(
+            db,
+            run,
+            "build.context_redacted",
+            context_redaction.summary(montado.redaction),
+            {"runtime_id": run.agent, "counts": dict(montado.redaction.counts)},
+        )
+        db.commit()
+    background.add_task(_run_auto_agent, run.id, run.agent, run.model, montado.text, True)
     return {'run_id': str(run.id), 'status': run.status, 'accepted': True}
 
 
@@ -1671,8 +1756,10 @@ def dispatch_run_to_ollama(
         raise HTTPException(409, str(error)) from error
 
     # O prompt sai daqui com os trechos recuperados já embutidos em texto: a
-    # recuperação acontece na VPS, o runtime só lê.
-    prompt = augment_prompt(context)
+    # recuperação acontece na VPS, o runtime só lê. A montagem é a mesma dos
+    # demais despachos (ADR 010); a redaction, nesta rota, é a do egresso
+    # remoto, logo abaixo.
+    prompt = canonical_context.build_prompt(context)
 
     # Política de egresso ANTES de abrir o job, e não depois: uma recusa entre
     # o open_job e o envio deixaria uma linha órfã em `queued`, que o índice

@@ -4,7 +4,7 @@ import subprocess
 
 from app.models.handoff import AgentBuildJob, AgentRun
 from app.services import agent_lifecycle as lifecycle, build_jobs, local_code_channel as channel
-from app.services import local_model
+from app.services import canonical_context, context_redaction, local_model
 from app.services.handoff import add_run_event, build_context, update_run, HandoffError
 from app.services.run_pause import RunPaused
 
@@ -43,7 +43,17 @@ def dispatch(db, job, run):
                 build_jobs.fail_job(db, job, error='Entrega anterior incerta; reconciliação necessária')
                 db.commit()
                 return None
-            prompt = build_context(db, run)['prompt']
+            # Mesmo caminho de montagem dos demais despachos: o bloco
+            # canônico (ADR, knowledge, decisions) entra no prompt, e a
+            # política de segredo vale para a entrega local (ADR 010/012).
+            context = build_context(db, run)
+            montado = canonical_context.build_local_prompt(context)
+            if montado.redacted:
+                add_run_event(db, run, 'build.context_redacted',
+                              context_redaction.summary(montado.redaction),
+                              {'runtime_id': channel.AGENT,
+                               'counts': dict(montado.redaction.counts)})
+            prompt = montado.text
             from app.services.review_scope import capture_start_base
             capture_start_base(db, run)
             # Modelo físico real servido agora pelo llama.cpp (prod/dev/fast).

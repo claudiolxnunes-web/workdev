@@ -90,3 +90,55 @@ def test_real_sdk_decodes_decisions_json(transport,monkeypatch):
         assert result['model']=='typesafe/jev-1.13-20260917'
         assert seen==['https://openrouter.ai/api/alpha/decisions']
     finally: client.close()
+
+
+def test_contexto_remoto_redige_antes_de_sair(transport, monkeypatch):
+    """O payload que chega ao provedor é o redigido.
+
+    A guarda de egresso devolve o texto redigido, mas o retorno era
+    descartado e o payload original saía — redaction que só existia no papel.
+    """
+    from app.services import agent_runtimes, context_egress
+
+    client, db = transport
+    monkeypatch.setattr(
+        agent_runtimes,
+        'get_runtime',
+        lambda runtime_id: SimpleNamespace(kind=agent_runtimes.KIND_GPU),
+    )
+
+    capturado = {}
+
+    def _prepare(db, run, runtime_id, prompt):
+        capturado['prompt'] = prompt
+        return SimpleNamespace(prompt=prompt, remote=True, classification='internal')
+
+    monkeypatch.setattr(context_egress, 'prepare', _prepare)
+
+    client.chat.completions.create.return_value = SimpleNamespace(
+        model='actual', usage=None,
+        choices=[SimpleNamespace(message=SimpleNamespace(content='{}'))],
+    )
+
+    adaptive_ai.call(
+        db,
+        config=adaptive_config.AdaptiveConfig(),
+        selection=adaptive_config.ObserverModel(
+            provider='gemini', model='flash', runtime_id='gpu-hostinger',
+        ),
+        task_type='run_observer',
+        project_id=uuid4(),
+        body={
+            'system': 'read-only',
+            'context': 'a chave sk-abcdefghijklmnop123 apareceu no log',
+        },
+        audit_context={'run_id': str(uuid4())},
+    )
+
+    enviado = client.chat.completions.create.call_args.kwargs
+    conteudo = enviado['messages'][1]['content']
+
+    assert 'sk-abcdefghijklmnop123' not in conteudo
+    assert '[REDACTED:' in conteudo
+    # A guarda recebeu o mesmo texto que saiu.
+    assert 'sk-abcdefghijklmnop123' not in capturado['prompt']

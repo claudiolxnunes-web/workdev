@@ -163,7 +163,12 @@ def consentimento(runtime_id):
 
 
 class TestRuntimeLocalEIsento:
-    def test_local_nao_passa_por_redaction_nem_consentimento(self):
+    def test_local_redige_mas_nao_exige_consentimento(self):
+        """Loopback não sai da máquina; o texto, mesmo assim, chega a um modelo.
+
+        A política de segredo vale dos dois lados (ADR 012). O que o loopback
+        não exige é consentimento — não há egresso para consentir.
+        """
         db = FakeDb(projeto=projeto())
 
         decisao = context_egress.prepare(
@@ -171,9 +176,23 @@ class TestRuntimeLocalEIsento:
         )
 
         assert decisao.remote is False
-        assert decisao.redaction is None
-        # Loopback: o texto não deixa a máquina, então nada é retirado.
-        assert "sk-abcdefghijklmnop123" in decisao.prompt
+        assert decisao.classification == "internal"
+        # O consentimento não é exigido no loopback: a decisão sai sem evento.
+        assert decisao.redaction is not None
+        assert decisao.redaction.redacted
+        assert "sk-abcdefghijklmnop123" not in decisao.prompt
+        assert "[REDACTED:" in decisao.prompt
+
+    def test_local_nao_altera_texto_limpo(self):
+        db = FakeDb(projeto=projeto())
+
+        decisao = context_egress.prepare(
+            db, run_falsa(), "local-code", "Contexto do ADR: separar PLAN e BUILD."
+        )
+
+        assert decisao.prompt == "Contexto do ADR: separar PLAN e BUILD."
+        assert decisao.redaction is not None
+        assert not decisao.redaction.redacted
 
     def test_criterio_e_o_kind_nao_o_nome(self):
         assert context_egress.is_remote("local-code") is False

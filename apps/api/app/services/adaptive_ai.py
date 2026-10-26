@@ -55,6 +55,15 @@ def call(db, *, config, selection, task_type, project_id, body, run_cost=Decimal
             run = db.get(AgentRun, UUID((audit_context or {})['run_id']))
             if run is None:
                 raise ValueError('Runtime remoto exige uma run identificada')
+            # O texto que sai passa pela política de segredo ANTES da guarda:
+            # a guarda redige e devolve o prompt, mas o retorno dela era
+            # descartado e o payload original saía — redaction que só
+            # existia no papel. Redigir aqui e entregar o texto redigido à
+            # guarda mantém a checagem e o envio falando do mesmo conteúdo.
+            body = {
+                chave: (redact(valor).text if isinstance(valor, str) else valor)
+                for chave, valor in body.items()
+            }
             prepare(db, run, selection.runtime_id, json.dumps(body))
         if estimate is None:
             raise ai_cost_guard.CostGuardError('unknown_price', 'Preço do modelo obrigatório para observer limitado')
