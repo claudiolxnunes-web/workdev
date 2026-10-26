@@ -30,7 +30,7 @@ from app.services.build_executor import (
     outcome_payload,
     persist_outcome,
 )
-from app.services.build_rag import augment_prompt
+from app.services import canonical_context
 from app.services.handoff import (
     HandoffError,
     add_run_event,
@@ -116,7 +116,10 @@ def claim_next_job(db: Session) -> AgentBuildJob | None:
 def build_prompt(db: Session, run: AgentRun) -> str:
     """Prompt de Build acrescido do contrato de envelope."""
     contexto = build_context(db, run)
-    return augment_prompt(contexto) + "\n" + ENVELOPE_INSTRUCTIONS
+    return canonical_context.build_prompt(
+        contexto,
+        suffix=ENVELOPE_INSTRUCTIONS,
+    )
 
 
 async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:

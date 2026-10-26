@@ -113,6 +113,74 @@ def test_worker_uses_cli_and_never_http_for_local_code(cli, queue_db, monkeypatc
     assert channel.read()['run_id'] == str(run_id)
 
 
+def test_prompt_gravado_carrega_o_bloco_canonico(cli, queue_db, monkeypatch):
+    """Fronteira do `local-code`: o arquivo entregue ao agente tem canônico.
+
+    Antes da Fase 2 o `local-code` gravava `context['prompt']` cru — plano,
+    projeto e task, sem nenhuma ADR, knowledge ou decision, e sem nenhum
+    registro de que isso era uma escolha (ADR 010).
+    """
+    contexto = {
+        'prompt': 'Plano aprovado de teste',
+        'task': {
+            'title': 'Despachar o Build para o runtime Ollama',
+            'description': 'Abrir o job de despacho do Build',
+        },
+        'plan': {
+            'objective': 'Despacho do Build para o runtime Ollama',
+            'scope': 'driver e health check',
+            'acceptance_criteria': [],
+        },
+        'adrs': [],
+        'knowledge': [{
+            'id': 'k-1',
+            'title': 'Despacho do Build para o runtime Ollama',
+            'content': 'O job de despacho abre na VPS principal.',
+        }],
+        'decisions': [],
+    }
+    monkeypatch.setattr(build, 'build_context', lambda db, run: contexto)
+    monkeypatch.setattr(channel, 'send_marker', deliver_and_ack)
+    run_id, job_id = queue_db.new()
+    with queue_db.factory() as db:
+        build.dispatch(db, db.get(queue_db.Job, job_id), db.get(queue_db.Run, run_id))
+    prompt = (channel.root() / f'{run_id}.txt').read_text(encoding='utf-8')
+    assert '## Contexto recuperado (somente leitura)' in prompt
+    assert 'O job de despacho abre na VPS principal.' in prompt
+
+
+def test_prompt_gravado_nao_carrega_segredo(cli, queue_db, monkeypatch):
+    """A entrega local é redigida (ADR 012): o arquivo não leva chave em claro."""
+    contexto = {
+        'prompt': 'Plano aprovado de teste',
+        'task': {
+            'title': 'Despachar o Build para o runtime Ollama',
+            'description': 'Abrir o job de despacho do Build',
+        },
+        'plan': {
+            'objective': 'Despacho do Build para o runtime Ollama',
+            'scope': 'driver e health check',
+            'acceptance_criteria': [],
+        },
+        'adrs': [],
+        'knowledge': [{
+            'id': 'k-1',
+            'title': 'Despacho do Build para o runtime Ollama',
+            'content': ('Use postgresql://workdev:senhasecreta@127.0.0.1:5432'
+                        '/workdev no job de despacho do Build.'),
+        }],
+        'decisions': [],
+    }
+    monkeypatch.setattr(build, 'build_context', lambda db, run: contexto)
+    monkeypatch.setattr(channel, 'send_marker', deliver_and_ack)
+    run_id, job_id = queue_db.new()
+    with queue_db.factory() as db:
+        build.dispatch(db, db.get(queue_db.Job, job_id), db.get(queue_db.Run, run_id))
+    prompt = (channel.root() / f'{run_id}.txt').read_text(encoding='utf-8')
+    assert 'senhasecreta' not in prompt
+    assert '[REDACTED:' in prompt
+
+
 def test_restart_recovers_receipt_without_redelivery(cli, queue_db, monkeypatch):
     run_id, job_id = queue_db.new()
     def accepted_then_timeout(data):

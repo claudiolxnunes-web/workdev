@@ -5,7 +5,7 @@ Fatia 8 — RAG por trechos textuais (sem embeddings) montado na VPS principal.
 
 import unittest
 
-from app.services import build_rag
+from app.services import build_rag, canonical_context
 
 
 def _context(**overrides):
@@ -151,6 +151,12 @@ class PlainTextContractTest(unittest.TestCase):
             self.assertNotIn("vector", snippet)
 
     def test_augmented_prompt_carries_the_text_and_marks_it_read_only(self):
+        """A montagem do prompt é do `canonical_context` (ADR 010).
+
+        O contrato é o mesmo de antes — o bloco entra no prompt e é marcado
+        como somente-leitura — mas a montagem deixou de ser do `build_rag`,
+        que agora só seleciona e renderiza.
+        """
         context = _context(
             knowledge=[
                 {
@@ -161,7 +167,7 @@ class PlainTextContractTest(unittest.TestCase):
             ],
         )
 
-        prompt = build_rag.augment_prompt(context)
+        prompt = canonical_context.build_prompt(context)
 
         self.assertIn(context["prompt"], prompt)
         self.assertIn("Endpoint Ollama responde em /api/tags.", prompt)
@@ -175,7 +181,7 @@ class PlainTextContractTest(unittest.TestCase):
         context = _context()
 
         self.assertEqual(
-            build_rag.augment_prompt(context),
+            canonical_context.build_prompt(context),
             context["prompt"],
         )
 
