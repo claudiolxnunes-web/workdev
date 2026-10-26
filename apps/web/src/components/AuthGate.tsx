@@ -6,9 +6,32 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [accessKey, setAccessKey] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
+  const [expirou, setExpirou] = useState(false)
 
   useEffect(() => {
     fetch("/api/auth/me").then((response) => setAuthenticated(response.ok)).catch(() => setAuthenticated(false))
+  }, [])
+
+  // A sessão vale 12 h (WORKDEV_SESSION_TTL_SECONDS) e só era conferida ao abrir.
+  // Com a aba aberta mais que isso, as telas seguiam consultando a cada 5–10 s,
+  // recebiam 401 para sempre e mostravam "indisponível" sem pedir login. Agora
+  // qualquer 401 de /api derruba para o login; as telas saem de cena e o polling
+  // para junto, voltando depois de entrar.
+  useEffect(() => {
+    const original = window.fetch
+    const vigiado: typeof window.fetch = async (...args) => {
+      const resposta = await original(...args)
+      const alvo = args[0]
+      const url = typeof alvo === "string" ? alvo : alvo instanceof URL ? alvo.pathname : alvo.url
+      const caminho = url.startsWith("http") ? new URL(url).pathname : url
+      if (resposta.status === 401 && caminho.startsWith("/api/") && !caminho.startsWith("/api/auth/")) {
+        setExpirou(true)
+        setAuthenticated(false)
+      }
+      return resposta
+    }
+    window.fetch = vigiado
+    return () => { if (window.fetch === vigiado) window.fetch = original }
   }, [])
 
   async function handleLogin(event: FormEvent) {
@@ -26,6 +49,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         throw new Error(body?.detail || "Não foi possível entrar")
       }
       setAuthenticated(true)
+      setExpirou(false)
       setAccessKey("")
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Não foi possível entrar")
@@ -48,7 +72,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
           className="mx-auto mb-4 h-32 w-32 object-contain"
         />
         <h1 className="text-2xl font-bold">WorkDev Core</h1>
-        <p className="mt-1 text-sm text-slate-400">Entre para acessar seu ambiente de engenharia.</p>
+        {expirou
+          ? <p role="status" className="mt-1 text-sm text-amber-300">Sua sessão expirou. Entre de novo para continuar.</p>
+          : <p className="mt-1 text-sm text-slate-400">Entre para acessar seu ambiente de engenharia.</p>}
         <label className="mt-6 block text-sm font-medium" htmlFor="access-key">Chave de acesso</label>
         <input id="access-key" type="password" autoComplete="current-password" value={accessKey}
           onChange={(event) => setAccessKey(event.target.value)}
