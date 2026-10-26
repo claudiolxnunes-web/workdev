@@ -257,3 +257,117 @@ def test_gate_escolhe_checks_pela_area_e_isola_o_ambiente(tmp_path, monkeypatch)
     assert "SUPABASE_SECRET_KEY" not in env and Path(env["WORKDEV_API_ENV_FILE"]).read_text().endswith("/fake\n")
     assert env["WORKDEV_CLI_AGENT_MODELS_FILE"].startswith(str(tmp_path))
     assert [r.name for r in ex._gate(tmp_path, ["apps/web/src/x.tsx"])] == ["guardrails", "vitest", "lint", "build"]
+
+
+# ---------------------------------------------------------------- fatias de banco
+
+@pytest.fixture
+def banco_teste(tmp_path, monkeypatch):
+    from uuid import uuid4
+
+    from sqlalchemy import JSON, MetaData, create_engine, text
+    from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.schema import DefaultClause
+
+    from app.models.backlog import BacklogItem
+    from app.models.project import Project
+    from app.services import workspace_banco
+    engine = create_engine(f"sqlite:///{tmp_path}/banco.db")
+    metadata = MetaData()
+    for model in (Project, BacklogItem):
+        tabela = model.__table__.to_metadata(metadata)
+        for coluna in tabela.columns:
+            if isinstance(coluna.type, JSONB):
+                coluna.type = JSON()
+            if coluna.server_default is not None:
+                valor = str(coluna.server_default.arg).replace("gen_random_uuid()", "(lower(hex(randomblob(16))))")
+                coluna.server_default = DefaultClause(text(valor.replace("now()", "CURRENT_TIMESTAMP").replace("::jsonb", "")))
+    metadata.create_all(engine)
+    monkeypatch.setattr(workspace_banco, "_engine", lambda: engine)
+    monkeypatch.setattr(workspace_banco, "sincronizar_grafo", lambda aplicacao: None)
+    with sessionmaker(bind=engine)() as s:
+        p = Project(id=uuid4(), name="P", slug="p", type="web", status="active")
+        s.add(p)
+        s.flush()
+        for t in ("a", "b"):
+            s.add(BacklogItem(id=uuid4(), project_id=p.id, title=t, description="d", status="todo", priority="low"))
+        s.commit()
+
+    def prioridades():
+        with engine.connect() as c:
+            return sorted(r[0] for r in c.execute(text("SELECT priority FROM backlog")))
+    return prioridades
+
+
+SQL_OK = "```sql\nUPDATE backlog SET priority = 'high' WHERE priority = 'low'\n```"
+
+
+def fatia_banco(**extra):
+    return {"tipo": "banco", "objetivo": "subir prioridade", "instrucao": "Suba para high o que está low.",
+            "tabelas": ["backlog"], "verificacao": ["SELECT count(*) = 2 FROM backlog WHERE priority = 'high'"],
+            "gate": ["conferir no backlog"], **extra}
+
+
+def test_plano_valida_fatia_de_banco(amb):
+    meta = sessao.criar()
+    for ruim, codigo in ((fatia_banco(tabelas=["ai_budgets"]), "tabela_nao_permitida"),
+                         (fatia_banco(tabelas=[]), "tabela_nao_permitida"),
+                         (fatia_banco(verificacao=[]), "sem_verificacao"),
+                         (fatia_banco(verificacao=["DELETE FROM backlog WHERE true"]), "verificacao_invalida"),
+                         (fatia_banco(tipo="shell"), "fatia_invalida")):
+        with pytest.raises(WorkspaceErro) as erro:
+            ex.aprovar_plano(meta["id"], {"fatias": [ruim]})
+        assert erro.value.codigo == codigo
+
+
+def test_fatia_de_banco_simula_para_espera_o_operador_aplica_e_reverte(amb, banco_teste):
+    meta = nova(amb, [fatia_banco(), fatia()])
+    amb.respostas.append(SQL_OK)
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+    assert lista[-1]["status"] == "simulada" and lista[-1]["linhas"] == 2
+    assert banco_teste() == ["low", "low"]                      # simulação não grava
+    assert amb.pedidos[0]["tabelas_banco"] == ["backlog"]        # o modelo recebe ler_schema só da tabela
+    assert amb.gate["chamadas"] == []                           # fatia de banco não roda o gate de código
+    # A próxima fatia espera a de banco ser aplicada.
+    assert eventos(ex.executar_fatia(meta["id"], 2))[-1]["codigo"] == "fatia_fora_de_ordem"
+    estado = ex.aplicar_banco(meta["id"], 1)
+    assert banco_teste() == ["high", "high"]
+    f1 = estado["plano"]["fatias"][0]
+    assert f1["status"] == "ok" and f1["banco"]["linhas"] == 2 and Path(f1["banco"]["trilha"]).is_file()
+    assert amb.backlog[-1][:3] == ("marcar_subtask", "sub-1", "done")
+    revertido = ex.reverter_banco(meta["id"], 1)
+    assert banco_teste() == ["low", "low"] and revertido["plano"]["fatias"][0]["status"] == "revertida"
+
+
+def test_simulacao_reprovada_falha_e_operador_corrige_o_sql(amb, banco_teste):
+    meta = nova(amb, [fatia_banco()])
+    amb.respostas.append("```sql\nUPDATE backlog SET priority = 'high' WHERE title = 'a'\n```")
+    final = eventos(ex.executar_fatia(meta["id"], 1))[-1]
+    assert final["status"] == "falhou" and final["etapa"] == "simular" and "verificação não passou" in final["erro"]
+    with pytest.raises(WorkspaceErro):
+        ex.aplicar_banco(meta["id"], 1)
+    estado = ex.simular_banco(meta["id"], 1, "UPDATE backlog SET priority = 'high' WHERE priority = 'low'")
+    assert estado["plano"]["fatias"][0]["status"] == "simulada"
+    ex.aplicar_banco(meta["id"], 1)
+    assert banco_teste() == ["high", "high"]
+
+
+@pytest.mark.parametrize("resposta,trecho", [
+    ("```sql\nALTER TABLE backlog ADD COLUMN x int\n```", "só INSERT, UPDATE ou DELETE"),
+    ("```sql\nUPDATE backlog SET priority = 'x'\n```", "sem WHERE"),
+    ("não sei fazer", "não trouxe um comando SQL"),
+])
+def test_sql_proibido_ou_ausente_falha_sem_tocar_no_banco(amb, banco_teste, resposta, trecho):
+    meta = nova(amb, [fatia_banco()])
+    amb.respostas.append(resposta)
+    final = eventos(ex.executar_fatia(meta["id"], 1))[-1]
+    assert final["status"] == "falhou" and trecho in final["erro"]
+    assert banco_teste() == ["low", "low"]
+
+
+def test_ler_schema_no_runner_so_das_tabelas_da_fatia(banco_teste):
+    chamada = {"function": {"name": "ler_schema", "arguments": json.dumps({"tabela": "projects"})}}
+    assert bancada_runner._ferramenta(chamada, None, ["backlog"])[0].startswith("RECUSADO")
+    chamada["function"]["arguments"] = json.dumps({"tabela": "backlog"})
+    assert '"priority"' in bancada_runner._ferramenta(chamada, None, ["backlog"])[0]

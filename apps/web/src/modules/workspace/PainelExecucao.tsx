@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
-  executarFatia, getEstadoSessao, getSessoes, incorporarSessao, pularFatia,
+  aplicarBanco, executarFatia, getEstadoSessao, getSessoes, incorporarSessao, pularFatia, reverterBanco, simularBanco,
   type EstadoSessao, type EventoFatia, type Fatia,
 } from "@/services/workspace.service"
+import { FatiaBanco } from "./FatiaBanco"
 
 // Execução do plano aprovado, uma fatia por vez, na cópia isolada da sessão:
 // o modelo local propõe o diff, o sistema aplica, roda o gate fixo do projeto e
@@ -13,12 +14,13 @@ const FECHADAS = ["ok", "pulada"]
 const COR: Record<string, string> = {
   pendente: "bg-slate-800 text-slate-300", rodando: "bg-sky-900 text-sky-200", ok: "bg-emerald-900 text-emerald-200",
   falhou: "bg-rose-900 text-rose-200", pulada: "bg-slate-700 text-slate-300",
+  simulada: "bg-amber-900 text-amber-200", revertida: "bg-slate-700 text-slate-300",
 }
 
 function linhaDoEvento(e: EventoFatia): string | null {
   const n = e.n ? `[${e.n}] ` : ""
   if (e.tipo === "fatia" && e.status === "rodando") return `${n}começou${e.etapa ? "" : ""}`
-  if (e.tipo === "etapa") return `${n}${e.etapa === "aplicar" ? "aplicando o diff na cópia" : e.etapa === "gate" ? "rodando o gate (testes do projeto)" : "commitando no branch da sessão"}`
+  if (e.tipo === "etapa") return `${n}${e.etapa === "aplicar" ? "aplicando o diff na cópia" : e.etapa === "gate" ? "rodando o gate (testes do projeto)" : e.etapa === "simular" ? "validando e simulando o SQL (rollback)" : "commitando no branch da sessão"}`
   if (e.tipo === "ferramenta") {
     const a = e.argumentos ?? {}
     const alvo = e.nome === "ler_arquivo" ? `${a.caminho} ${a.inicio}–${a.fim}` : e.nome === "buscar_texto" ? `“${a.texto}”` : String(a.caminho ?? ".")
@@ -28,15 +30,18 @@ function linhaDoEvento(e: EventoFatia): string | null {
   if (e.tipo === "limite") return `${n}limite de leituras atingido`
   if (e.tipo === "fim") return `${n}modelo respondeu em ${e.segundos ?? "?"}s · ${e.leituras ?? 0} leitura(s)`
   if (e.tipo === "gate") return (e.checks ?? []).map((c) => `${n}${c.passou ? "✓" : "✗"} ${c.nome} — ${c.motivo.split("\n")[0]}`).join("\n")
+  if (e.tipo === "fatia" && e.status === "simulada") return `${n}⏸ simulado (nada gravado): ${(e as { linhas?: number }).linhas ?? "?"} linha(s) — confira e clique em Aplicar no banco`
   if (e.tipo === "fatia" && e.status === "ok") return `${n}✓ ok · commit ${(e.commit ?? "").slice(0, 7)}`
   if (e.tipo === "fatia" && e.status === "falhou") return `${n}✗ falhou em ${e.etapa}: ${e.erro}`
   if (e.tipo === "erro") return `${n}erro: ${e.mensagem}`
   return null
 }
 
-function CartaoFatia({ fatia, proxima, ocupado, onExecutar, onPular }: {
+interface AcoesBanco { simular: (sql: string) => Promise<void>; aplicar: () => Promise<void>; reverter: (forcar: boolean) => Promise<void> }
+
+function CartaoFatia({ fatia, proxima, ocupado, onExecutar, onPular, banco }: {
   fatia: Fatia; proxima: boolean; ocupado: boolean
-  onExecutar: (correcao: string | null) => void; onPular: () => void
+  onExecutar: (correcao: string | null) => void; onPular: () => void; banco: AcoesBanco
 }) {
   const [correcao, setCorrecao] = useState("")
   return (
@@ -52,6 +57,10 @@ function CartaoFatia({ fatia, proxima, ocupado, onExecutar, onPular }: {
       {fatia.gate_checks.length > 0 && (
         <p className="text-slate-400">Gate: {fatia.gate_checks.map((c) => `${c.passou ? "✓" : "✗"} ${c.nome}`).join(" · ")}</p>
       )}
+      {fatia.tipo === "banco" && (
+        <FatiaBanco fatia={fatia} proxima={proxima || fatia.status === "ok"} ocupado={ocupado}
+          onSimular={banco.simular} onAplicar={banco.aplicar} onReverter={banco.reverter} />
+      )}
       {fatia.status === "falhou" && <>
         <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-rose-950/40 p-1.5 text-rose-200">Falhou em {fatia.etapa}: {fatia.erro}</pre>
         <textarea aria-label={`Correção da fatia ${fatia.n}`} value={correcao} onChange={(e) => setCorrecao(e.target.value)} rows={2}
@@ -62,7 +71,7 @@ function CartaoFatia({ fatia, proxima, ocupado, onExecutar, onPular }: {
         <div className="mt-1 flex gap-2">
           <button type="button" disabled={ocupado} onClick={() => onExecutar(correcao.trim() || null)}
             className="rounded bg-sky-700 px-2 py-0.5 text-white hover:bg-sky-600 disabled:opacity-50">
-            {fatia.status === "falhou" ? `Repetir fatia ${fatia.n}` : `Executar fatia ${fatia.n}`}
+            {fatia.status === "falhou" ? `Repetir fatia ${fatia.n}` : fatia.status === "simulada" || fatia.status === "revertida" ? `Pedir outro SQL ao modelo` : `Executar fatia ${fatia.n}`}
           </button>
           <button type="button" disabled={ocupado} onClick={onPular} className="rounded border border-slate-700 px-2 py-0.5 hover:bg-slate-800 disabled:opacity-50">Pular</button>
         </div>
@@ -147,6 +156,16 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
     finally { await carregar(); onMudou() }
   }
 
+  /** Ações de banco da fatia n: erro sobe para o cartão mostrar (e oferecer forçar). */
+  function acoesBanco(n: number): AcoesBanco {
+    const depois = async () => { await carregar(); onMudou() }
+    return {
+      simular: async (sql) => { if (sessao) { await simularBanco(sessao.id, n, sql); setLog((l) => [...l, `[${n}] simulado de novo (nada gravado)`]); await depois() } },
+      aplicar: async () => { if (sessao) { await aplicarBanco(sessao.id, n); setLog((l) => [...l, `[${n}] ✓ gravado no banco`]); await depois() } },
+      reverter: async (forcar) => { if (sessao) { await reverterBanco(sessao.id, n, forcar); setLog((l) => [...l, `[${n}] revertido no banco`]); await depois() } },
+    }
+  }
+
   async function incorporar() {
     if (!sessao) return
     setExecutando(true); setErro("")
@@ -181,7 +200,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
         <ol className="space-y-2">
           {fatias.map((f) => (
             <CartaoFatia key={`${f.n}-${f.status}-${f.tentativas}`} fatia={f} proxima={f.n === proxima?.n} ocupado={executando}
-              onExecutar={(correcao) => void executar(f.n, correcao, false)} onPular={() => void pular(f.n)} />
+              onExecutar={(correcao) => void executar(f.n, correcao, false)} onPular={() => void pular(f.n)} banco={acoesBanco(f.n)} />
           ))}
         </ol>
         {sessao && sessao.commits.length > 0 && !executando && (

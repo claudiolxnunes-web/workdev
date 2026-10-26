@@ -333,9 +333,9 @@ def test_workspace_tempo_esgotado_no_meio_avisa_o_modelo(com_tools, monkeypatch)
     monkeypatch.setattr(runner.time, "monotonic", lambda: relogio[0])
     original = runner._ferramenta
 
-    def leitura_demorada(chamada, raiz=None):
+    def leitura_demorada(chamada, raiz=None, tabelas=None):
         relogio[0] = 5000.0  # a leitura "levou" mais que o teto
-        return original(chamada, raiz)
+        return original(chamada, raiz, tabelas)
     monkeypatch.setattr(runner, "_ferramenta", leitura_demorada)
     com_tools.roteiro["partes"] = [
         [{"tipo": "tokens", "tokens": 1, "chamadas": [_pede("listar_pasta", caminho="apps")]}],

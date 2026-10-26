@@ -275,6 +275,13 @@ FERRAMENTAS_WORKSPACE = [
             "required": ["caminho", "inicio", "fim"]}}},
 ]
 
+# Fatia de banco do Workspace: o modelo vê a estrutura das tabelas liberadas, nunca os dados.
+FERRAMENTA_SCHEMA = {"type": "function", "function": {
+    "name": "ler_schema",
+    "description": "Mostra as colunas, os tipos e as chaves estrangeiras de uma tabela liberada para esta "
+                   "fatia. Não mostra linhas.",
+    "parameters": {"type": "object", "properties": {"tabela": {"type": "string"}}, "required": ["tabela"]}}}
+
 SISTEMA_FERRAMENTAS = (
     "Você pode ler o repositório com buscar_texto, listar_pasta e ler_arquivo (somente leitura). "
     "Cada leitura custa tempo: use buscar_texto antes de ler e leia só as linhas necessárias. "
@@ -286,7 +293,8 @@ AVISO_LIMITE_FERRAMENTA = ("Limite de leituras atingido. Responda agora, no form
                            "leu. Se faltar informação, responda exatamente: FALTA: <o que falta e onde estaria>.")
 
 
-def _ferramenta(chamada: dict, raiz: Path | None = None) -> tuple[str, dict, list | None]:
+def _ferramenta(chamada: dict, raiz: Path | None = None,
+                tabelas: list | None = None) -> tuple[str, dict, list | None]:
     """Executa uma chamada do modelo: (saída em texto, argumentos, trecho lido ou None)."""
     from app.services import leitura_repo
     nome = (chamada.get("function") or {}).get("name") or ""
@@ -304,6 +312,16 @@ def _ferramenta(chamada: dict, raiz: Path | None = None) -> tuple[str, dict, lis
             if r.get("truncado"):
                 saida += "\n[... mais ocorrências; restrinja a pasta]"
             return saida, args, None
+        if nome == "ler_schema":
+            tabela = str(args.get("tabela") or "").strip().lower()
+            if not tabelas or tabela not in tabelas:
+                return f"RECUSADO: tabela fora das liberadas para esta fatia: {', '.join(tabelas or []) or 'nenhuma'}", args, None
+            from app.services import workspace_banco
+            from app.services.workspace import WorkspaceErro
+            try:
+                return json.dumps(workspace_banco.ler_schema(tabela), ensure_ascii=False), args, None
+            except WorkspaceErro as erro:
+                return f"RECUSADO: {erro.mensagem}", args, None
         if nome == "listar_pasta":
             r = leitura_repo.listar_pasta(args.get("caminho") or ".", raiz)
             return "\n".join(r["itens"]) or "(vazia)", args, None
@@ -364,13 +382,14 @@ def _com_sistema(mensagens: list, ferramentas: bool) -> list:
 
 def preparar_execucao(ident: str, instrucao: str, trechos: list, max_tokens: int,
                       exige: dict | None = None, espera_diff: bool = False,
-                      ferramentas: bool = False, raiz: Path | None = None) -> dict:
+                      ferramentas: bool = False, raiz: Path | None = None,
+                      tabelas_banco: list | None = None) -> dict:
     if not ID_VALIDO.match(ident or ""):
         raise BancadaErro(422, "id_invalido", "use letras, números, _ ou - (até 80)")
     if (pasta() / chave_modelo() / f"{ident}.txt").exists():
         raise BancadaErro(409, "id_existente", f"já existe a proposta {ident} para {chave_modelo()}")
     prompt, normalizados = montar_prompt(instrucao, trechos, raiz)
-    return {"raiz": str(raiz) if raiz else None, "id": ident, "instrucao": instrucao.strip(), "trechos": normalizados, "prompt": prompt,
+    return {"raiz": str(raiz) if raiz else None, "tabelas_banco": list(tabelas_banco or []) or None, "id": ident, "instrucao": instrucao.strip(), "trechos": normalizados, "prompt": prompt,
             "mensagens": _com_sistema([{"role": "user", "content": prompt}], ferramentas),
             "max_tokens": max(64, min(int(max_tokens or 1024), MAX_TOKENS)), "origem_de": None,
             "exige": validar_exige(exige), "espera_diff": bool(espera_diff), "ferramentas": bool(ferramentas)}
@@ -387,7 +406,7 @@ def preparar_reenvio(modelo: str, ident: str, prompt_correcao: str) -> dict:
     anterior = (pasta() / modelo / f"{ident}.txt").read_text(encoding="utf-8")
     raiz = meta.get("origem_raiz") or ident
     ferramentas = bool(meta.get("ferramentas"))
-    return {"raiz": meta.get("raiz"), "id": _proximo_id(raiz), "instrucao": meta["instrucao"], "trechos": meta["trechos"],
+    return {"raiz": meta.get("raiz"), "tabelas_banco": meta.get("tabelas_banco"), "id": _proximo_id(raiz), "instrucao": meta["instrucao"], "trechos": meta["trechos"],
             "prompt": meta["prompt"],
             "mensagens": _com_sistema([{"role": "user", "content": meta["prompt"]},
                                        {"role": "assistant", "content": anterior},
@@ -429,7 +448,8 @@ def _executar(plano: dict) -> Iterator[str]:
                 usar = (plano.get("ferramentas") and voltas < MAX_VOLTAS_FERRAMENTA
                         and contexto < MAX_CONTEXTO_FERRAMENTA and no_prazo)
                 texto, chamadas = "", []
-                extra = {"tools": FERRAMENTAS_WORKSPACE} if usar else {}
+                extra = {"tools": FERRAMENTAS_WORKSPACE + ([FERRAMENTA_SCHEMA] if plano.get("tabelas_banco") else [])} \
+                    if usar else {}
                 for evento in _stream_llama(mensagens, plano["max_tokens"], conhecido, vigiar=True, **extra):
                     if evento["tipo"] == "token":
                         texto += evento["texto"]
@@ -447,7 +467,7 @@ def _executar(plano: dict) -> Iterator[str]:
                 voltas += 1
                 mensagens.append({"role": "assistant", "content": texto, "tool_calls": chamadas})
                 for chamada in chamadas:
-                    saida, args, lido = _ferramenta(chamada, raiz)
+                    saida, args, lido = _ferramenta(chamada, raiz, plano.get("tabelas_banco"))
                     saida = saida if len(saida) <= MAX_SAIDA_FERRAMENTA else (
                         saida[:MAX_SAIDA_FERRAMENTA] + f"\n[... cortado: {len(saida) - MAX_SAIDA_FERRAMENTA} caracteres]")
                     contexto += len(saida)
@@ -502,7 +522,7 @@ def _executar(plano: dict) -> Iterator[str]:
             "origem_de": plano.get("origem_de"), "origem_raiz": plano.get("origem_raiz"),
             "prompt_correcao": plano.get("prompt_correcao"), "exige": plano.get("exige") or {},
             "espera_diff": bool(plano.get("espera_diff")), "ferramentas": bool(plano.get("ferramentas")),
-            "raiz": plano.get("raiz"),
+            "raiz": plano.get("raiz"), "tabelas_banco": plano.get("tabelas_banco"),
             "leituras": leituras, "data": _agora()})
         registrar({"id": plano["id"], "modelo": chave, "origem": "pagina", "tipo": "execucao",
                    "segundos": segundos, "tokens": tokens, "retentativa": retentativa,

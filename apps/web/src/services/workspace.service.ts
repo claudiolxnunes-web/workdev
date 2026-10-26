@@ -37,7 +37,13 @@ export const getArquivo = (caminho: string, sessao?: string | null) => get<Arqui
 export const getAlteracoes = (sessao?: string | null) => get<Alteracoes>("/alteracoes", comSessao({}, sessao))
 export const getDiff = (caminho: string, sessao?: string | null) => get<DiffArquivo>("/diff", comSessao({ caminho }, sessao))
 
-export type StatusFatia = "pendente" | "rodando" | "ok" | "falhou" | "pulada"
+export type StatusFatia = "pendente" | "rodando" | "ok" | "falhou" | "pulada" | "simulada" | "revertida"
+export type LinhaBanco = Record<string, unknown>
+export interface SimulacaoBanco {
+  comando: "INSERT" | "UPDATE" | "DELETE"; tabela: string; linhas: number; ids: string[]
+  antes: LinhaBanco[]; depois: LinhaBanco[]; passou: boolean; sql: string
+  verificacoes: Array<{ consulta: string; passou: boolean; valor: unknown; erro?: string }>
+}
 export interface CheckGate { nome: string; passou: boolean; motivo: string; ms: number }
 export interface Fatia {
   n: number; id: string; objetivo: string; instrucao: string; trechos: Array<[string, number, number]>
@@ -45,6 +51,10 @@ export interface Fatia {
   status: StatusFatia; etapa: string | null; erro: string | null; tentativas: number
   commit: string | null; subtask_id: string | null; gate_checks: CheckGate[]; arquivos?: string[]
   proposta?: { modelo: string; id: string; segundos?: number; leituras?: number } | null
+  /** Fatia de banco: SQL proposto, simulação (rollback) e o que foi aplicado. */
+  tipo?: "codigo" | "banco"; tabelas?: string[]; verificacao?: string[]; sql?: string | null
+  simulacao?: SimulacaoBanco | null
+  banco?: { comando: string; tabela: string; linhas: number; aplicado_em: string; trilha: string; revertido_em?: string } | null
 }
 export interface Sessao {
   id: string; status: "ativa" | "encerrada" | "incorporada"; branch: string; caminho: string; base: string
@@ -87,6 +97,11 @@ export const encerrarSessao = (id: string, descartarAlteracoes = false) =>
 export const salvarArquivoSessao = (id: string, caminho: string, texto: string, sha256: string) =>
   post<{ caminho: string; commit: string; sha256: string }>(`/sessao/${encodeURIComponent(id)}/arquivo`, { caminho, texto, sha256 })
 export const aprovarPlano = (id: string, plano: unknown) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/plano`, { plano })
+export const simularBanco = (id: string, n: number, sql: string) =>
+  post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/banco/simular`, { sql })
+export const aplicarBanco = (id: string, n: number) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/banco/aplicar`, {})
+export const reverterBanco = (id: string, n: number, forcar = false) =>
+  post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/banco/reverter`, { forcar })
 export const pularFatia = (id: string, n: number) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/pular`, {})
 export const incorporarSessao = (id: string, modo: "merge" | "squash") =>
   post<Sessao>(`/sessao/${encodeURIComponent(id)}/incorporar`, { modo })
