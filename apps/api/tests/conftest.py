@@ -4,6 +4,9 @@ AdaptiveConfig, nao importa o que estiver ligado em producao. Um teste que
 precisa dela ligada faz o proprio monkeypatch.setattr(adaptive_config, 'load',
 lambda: config) (como ja faz test_adaptive_supervision.py), que sobrescreve
 este default sem problema."""
+import urllib.parse
+import urllib.request
+
 import pytest
 
 from app.services import adaptive_config
@@ -56,3 +59,25 @@ def _isolate_live_tmux_sessions(monkeypatch):
     codex/claude no servidor. Testes que exercitam o bloqueio sobrescrevem."""
     from app.routers import handoffs
     monkeypatch.setattr(handoffs, "_standby_session_alive", lambda agent: False)
+
+
+@pytest.fixture(autouse=True)
+def _nunca_chamar_a_api_real(monkeypatch):
+    """Nenhum teste fala com a API de produção em 127.0.0.1:8000.
+
+    Achado em 2026-10-26: test_deploy_pipeline rodava o pipeline inteiro e o
+    _persist_deployment_outcome fazia POST real em /api/deployments/outcomes —
+    3 por rodada da suíte, inclusive no gate do prepare. Como workdev dava 401
+    (a chave em /etc/workdev-deploy/api.key é ilegível); como root, gravaria
+    deploys falsos no banco e sujaria o DORA. Teste que precisa de HTTP
+    monkeypatcha urlopen por cima desta trava, como os de contrato já fazem.
+    """
+    original = urllib.request.urlopen
+
+    def urlopen_vigiado(alvo, *args, **kwargs):
+        url = alvo.full_url if isinstance(alvo, urllib.request.Request) else str(alvo)
+        destino = urllib.parse.urlsplit(url)
+        if destino.hostname in ("127.0.0.1", "localhost", "0.0.0.0") and destino.port == 8000:
+            raise RuntimeError(f"teste tentou chamar a API real: {url}")
+        return original(alvo, *args, **kwargs)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen_vigiado)
