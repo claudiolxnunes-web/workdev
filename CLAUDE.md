@@ -182,25 +182,34 @@ WorkDev que mudou.
 
 ## workdev-api.service
 
-> ⚠️ Atualizado em 2026-08-20. A versão anterior desta seção dizia `User=root` e
-> apontava o env para `/opt/workdev/apps/api/.env` — as duas coisas ficaram falsas
-> depois do commit `7d14fab feat(agents): run workdev services unprivileged`.
-> Seguir a nota velha faz `pytest` e qualquer script quebrarem com
-> `PermissionError` no `.env`.
+> ⚠️ Corrigido em 2026-10-26 (conferido com `systemctl show workdev-api`). Até então
+> esta seção dizia que o unit não tinha `EnvironmentFile` e que
+> `/opt/workdev/apps/api/.env` era resíduo não lido. **As duas coisas eram falsas:**
+> é desse arquivo que a API recebe a `DATABASE_URL` de produção. Apagá-lo "como
+> lixo" impede a API de subir.
 
 - Roda **sem privilégio**: `User=workdev`, `Group=workdev`,
   `SupplementaryGroups=workdev-runtime`, `NoNewPrivileges=true`
-- Unit SEM `EnvironmentFile` — o dotenv é carregado pela app, mas o **caminho vem
-  da variável de ambiente** `WORKDEV_API_ENV_FILE`, setada via `Environment=` no unit:
-  ```python
-  # app/main.py e app/database.py
-  load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
-  ```
-- **Arquivo real do env: `/etc/workdev/workdev-api.env`** (`workdev:workdev 600`)
-- `/opt/workdev/apps/api/.env` é **resíduo** (`root:root 600`, ilegível pelo user
-  `workdev`). Não é lido pelo serviço. Se `WORKDEV_API_ENV_FILE` não estiver setada,
-  o `load_dotenv(None)` cai no auto-discovery, acha esse resíduo e estoura
-  `PermissionError` — foi exatamente o que aconteceu em 2026-08-20
+- **As variáveis chegam por DOIS caminhos**, e os dois são necessários:
+  1. **`EnvironmentFile=/opt/workdev/apps/api/.env`**, no drop-in
+     `/etc/systemd/system/workdev-api.service.d/20-environment.conf`. O systemd lê
+     esse arquivo **como root, antes de baixar para `workdev`**, por isso ele pode
+     ser `root:root 600` e mesmo assim chegar ao processo. **É daqui que vem a
+     `DATABASE_URL`.** `ignore_errors=no`: se o arquivo sumir, a API **não sobe**.
+  2. **dotenv da app**, com o caminho em `WORKDEV_API_ENV_FILE` (setada via
+     `Environment=` no unit): `/etc/workdev/workdev-api.env` (`root:root 640` + ACL
+     de leitura para o `workdev`). **Não tem `DATABASE_URL`.**
+     ```python
+     # app/main.py e app/database.py
+     load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
+     ```
+     O `load_dotenv` não sobrescreve o que o systemd já colocou no ambiente.
+- Se `WORKDEV_API_ENV_FILE` não estiver setada (script ou `pytest` rodado à mão), o
+  `load_dotenv(None)` cai no auto-discovery, acha `apps/api/.env` (ilegível para o
+  `workdev`) e estoura `PermissionError` — foi o que aconteceu em 2026-08-20. Por
+  isso os testes usam um `.env` falso (abaixo), nunca o real.
+- **Nunca apagar nem mover `/opt/workdev/apps/api/.env`.** Para trocar a credencial
+  do banco: editar esse arquivo como root e `systemctl restart workdev-api`.
 - `WORKDEV_WEB_DIST=/opt/workdev-runtime/current/apps/web/dist` e
   `WorkingDirectory=/opt/workdev-runtime/current/apps/api` — produção **não serve
   de `/opt/workdev`**, serve da release promovida (ver seção Deploy)
@@ -208,7 +217,8 @@ WorkDev que mudou.
 - ExecStart: `/opt/workdev/apps/api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`
 - `PrivateTmp=false` de propósito: o Agent Hub precisa enxergar o socket tmux em
   `/tmp/tmux-<uid>`. Um /tmp privado esconderia o socket do processo da API
-- Rodar a suíte de testes como `workdev` (o `.env` residual não é legível):
+- Rodar a suíte de testes como `workdev`, com `.env` falso (o `apps/api/.env` real é
+  root e tem a credencial de produção — teste não usa):
   ```
   printf 'DATABASE_URL=postgresql+psycopg://u:p@127.0.0.1:5432/fake\n' > /tmp/test.env
   cd /opt/workdev/apps/api
@@ -216,10 +226,13 @@ WorkDev que mudou.
   ```
   (DSN falso basta: os testes não conectam, mas `app/database.py` cria o engine na
   importação. O `-p no:cacheprovider` não é mais necessário desde 2026-10-02.)
-- Teste de carga de uma variável (NÃO usar `/proc/PID/environ` — dá 0 mesmo funcionando):
+- Teste de carga de uma variável do **dotenv** (as de `/etc/workdev/workdev-api.env`
+  não aparecem em `/proc/PID/environ`, porque o dotenv carrega dentro do processo):
   ```
   /opt/workdev/apps/api/venv/bin/python -c "from dotenv import load_dotenv; import os; load_dotenv('/etc/workdev/workdev-api.env'); v=os.getenv('VAR'); print('OK', len(v)) if v else print('AUSENTE')"
   ```
+  As do `EnvironmentFile` (`apps/api/.env`, como a `DATABASE_URL`) só o root lê;
+  `systemctl show -p EnvironmentFiles workdev-api` mostra de onde vêm sem mostrar valores.
 - GITHUB_TOKEN: fine-grained, All repos, Contents+Metadata Read-only, sem expiracao
 
 ## Deploy — pipeline com prova assinada
