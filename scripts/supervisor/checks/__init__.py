@@ -18,6 +18,7 @@ from . import (
     deploy_drift,
     knowledge_drift,
     plan_without_execution,
+    token_usage,
 )
 
 
@@ -27,6 +28,7 @@ REGISTRO = {
     "deploy_drift": deploy_drift,
     "knowledge_drift": knowledge_drift,
     "agent_health": agent_health,
+    "token_usage": token_usage,
 }
 
 __all__ = ["REGISTRO", *sorted(REGISTRO)]

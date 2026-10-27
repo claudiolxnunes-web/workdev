@@ -97,6 +97,7 @@ CHECKS_ATIVOS = (
     "deploy_drift",
     "knowledge_drift",
     "agent_health",
+    "token_usage",
 )
 
 
@@ -306,3 +307,32 @@ def normalizar_prioridade(valor: str | None) -> str | None:
     if not valor:
         return None
     return PRIORIDADES.get(valor.strip().lower())
+
+
+# --------------------------------------------------------------------------
+# token_usage
+# --------------------------------------------------------------------------
+
+# Transcripts do Claude Code: uma linha JSON por evento, com `message.usage`.
+TOKEN_USAGE_TRANSCRIPTS_DIR = Path(os.environ.get(
+    "TOKEN_USAGE_TRANSCRIPTS_DIR", Path.home() / ".claude/projects"))
+
+# Config do cliente. Lido apenas para `oauthAccount` (metadados de plano) —
+# nenhum campo de credencial é tocado.
+TOKEN_USAGE_CONTA_FILE = Path(os.environ.get(
+    "TOKEN_USAGE_CONTA_FILE", Path.home() / ".claude.json"))
+
+TOKEN_USAGE_DIAS = 3
+
+# billingType que significa "cada turno de agente custa dinheiro".
+TOKEN_USAGE_BILLING_PAGO = ("prepaid", "credits", "api")
+
+# `oauthAccount` é cache: fora desta validade o check não afirma modalidade,
+# só pede reconferência. Cache de 2 dias já apontou prepaid numa conta Pro.
+TOKEN_USAGE_CACHE_VALIDO_HORAS = 24
+
+# Faixas de tokens de escrita (input + output + cache_creation) por dia.
+# Base empírica de 2026-09-09 a 2026-09-16: entre 1,2M e 5,0M por dia.
+# Abaixo do piso não há achado: dia normal não vira alerta.
+TOKEN_USAGE_PISO_DIARIO = 6_000_000
+TOKEN_USAGE_TETO_DIARIO = ((8_000_000, "6-8M"), (12_000_000, "8-12M"), (None, "12M+"))
