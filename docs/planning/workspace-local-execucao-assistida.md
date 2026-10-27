@@ -245,7 +245,7 @@ Nada abaixo é tocado por este plano:
 - o `validar_lote_bancada` do AI Hub, que continua planejando para a Bancada;
 - o `local-code` da aba Agentes, que segue como está.
 
-## 10. ADR em rascunho (010)
+## 10. ADR em rascunho (registrada como ADR 015)
 
 **Decisão.** O Workspace Local passa a executar planos fatiados, com o modelo
 local aplicando cada fatia num worktree isolado da sessão e o operador
@@ -293,6 +293,18 @@ Cada etapa entra por branch própria, com o diff entregue para incorporação.
 | 6 Banco | ✅ feito — `workspace_banco.py`: fatia `tipo: banco`, simulação com rollback, aplicar com trava e confirmação, reverter com trava; decisões em §6.1 | `feat/workspace-fatias-banco` |
 | — Backlog (decisão 6) | ✅ fatias viram subtasks; task `doing`; subtask `done`/`blocked` | `feat/workspace-sessao` |
 | — Supervisor vê a sessão (§3.2) | ✅ `ler_estado_sessao` | `feat/workspace-sessao` |
+
+**Fechamento em 2026-10-26** (branch `feat/workspace-supervisor-acoes`, ADR 015):
+
+| Item | Situação |
+|---|---|
+| Supervisor valida o plano, lê o resultado da fatia e as referências canônicas | ✅ `validar_plano_workspace`, `ler_resultado_fatia`, `ler_referencias` (Observar) |
+| Contexto canônico no Workspace | ✅ no prompt do supervisor (redigido); não no modelo local, de propósito |
+| Medição (§8) | ✅ `GET /sessao/{id}/medicao`: previsão de prefill por fatia, medido, custo do supervisor |
+| Repetição automática | ✅ até 2 vezes, desligável |
+| Gate em duas camadas | ✅ testes da área por fatia; suíte completa antes de incorporar |
+| Sessões anteriores | ✅ lista e apagar branch com confirmação |
+| `suggest_slices` | ⏸ não ligado: `validar_plano` + `validar_plano_workspace` cobrem a validação |
 
 Gate da fatia (decisão 3): roda sempre, mas são os checks fixos do projeto
 (`test_gate`), escolhidos pela área tocada — o texto `gate` do supervisor é a

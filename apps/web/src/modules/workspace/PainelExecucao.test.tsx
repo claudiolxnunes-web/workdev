@@ -10,6 +10,7 @@ let fatias: F[] = []
 let commits: Array<{ sha: string; mensagem: string }> = []
 let roteiro: string[] = []
 let incorporada = false
+let anteriores: Array<{ id: string; status: string; branch: string; branch_origem: string; titulo: string | null; nao_incorporados: number }> = []
 const chamadas: Array<{ url: string; corpo?: unknown }> = []
 
 const base = (f: F) => ({ id: `f${f.n}`, instrucao: "x", trechos: [], gate: ["pytest"], exige: {}, max_tokens: 800, subtask_id: null, gate_checks: [], ...f })
@@ -29,6 +30,8 @@ const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
   if (url === "/api/workspace/sessao") return json({ ativa: incorporada ? null : { id: "s1" }, recentes: [] })
   if (url === "/api/workspace/sessao/s1") return json(estado())
   if (url === "/api/workspace/sessao/s1/medicao") return json(medicao())
+  if (url === "/api/workspace/sessao/anteriores") return json(anteriores)
+  if (url.endsWith("/apagar-branch")) { anteriores = anteriores.filter((x) => !url.includes(x.id)); return json({}) }
   const exec = url.match(/fatias\/(\d+)\/executar$/)
   if (exec) {
     const n = Number(exec[1])
@@ -52,7 +55,7 @@ const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
 
 beforeEach(() => {
   fatias = [1, 2, 3].map((n) => ({ n, objetivo: `objetivo ${n}`, status: "pendente", etapa: null, erro: null, tentativas: 0, commit: null }))
-  commits = []; roteiro = []; incorporada = false; chamadas.length = 0
+  commits = []; roteiro = []; incorporada = false; chamadas.length = 0; anteriores = []
   vi.stubGlobal("fetch", fetchMock)
 })
 
@@ -101,6 +104,22 @@ describe("PainelExecucao", () => {
     fireEvent.click(await within(screen.getByLabelText("Fatia 2")).findByRole("button", { name: "Executar fatia 2" }))
     await waitFor(() => expect(within(screen.getByLabelText("Fatia 2")).getByRole("button", { name: "Repetir fatia 2" })).toBeEnabled())
     expect(chamadas.filter((c) => c.url.endsWith("/2/executar"))).toHaveLength(1)
+  })
+
+  it("lista as sessões anteriores e só apaga o branch com confirmação, avisando dos commits perdidos", async () => {
+    anteriores = [{ id: "velha", status: "encerrada", branch: "workspace/velha", branch_origem: "main", titulo: "tentativa", nao_incorporados: 2 }]
+    const confirmar = vi.fn((mensagem: string) => mensagem.length < 0)
+    vi.stubGlobal("confirm", confirmar)
+    render(<PainelExecucao versao={0} onMudou={() => {}} />)
+    const secao = await screen.findByLabelText("Sessões anteriores")
+    expect(secao).toHaveTextContent("2 commit(s) fora de main")
+    fireEvent.click(within(secao).getByRole("button", { name: "Apagar branch" }))
+    expect(confirmar.mock.calls[0][0]).toMatch(/NÃO estão em main/)
+    expect(chamadas.some((c) => c.url.endsWith("/apagar-branch"))).toBe(false)
+    confirmar.mockReturnValue(true)
+    fireEvent.click(within(secao).getByRole("button", { name: "Apagar branch" }))
+    await waitFor(() => expect(screen.queryByLabelText("Sessões anteriores")).not.toBeInTheDocument())
+    expect(chamadas.find((c) => c.url.endsWith("/apagar-branch"))!.corpo).toEqual({ perder_commits: true })
   })
 
   it("pular libera a próxima fatia", async () => {

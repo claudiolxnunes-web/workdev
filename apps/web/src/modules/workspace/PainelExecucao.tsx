@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
-  aplicarBanco, executarFatia, getEstadoSessao, getMedicaoSessao, getSessoes, incorporarSessao, pularFatia, reverterBanco,
-  simularBanco, type EstadoSessao, type EventoFatia, type Fatia, type MedicaoSessao,
+  apagarBranchSessao, aplicarBanco, executarFatia, getSessoesAnteriores, getEstadoSessao, getMedicaoSessao, getSessoes, incorporarSessao, pularFatia, reverterBanco,
+  simularBanco, type EstadoSessao, type EventoFatia, type Fatia, type MedicaoSessao, type SessaoAnterior,
 } from "@/services/workspace.service"
 import { FatiaBanco } from "./FatiaBanco"
 
@@ -53,6 +53,46 @@ function LinhaMedida({ medida, taxa }: { medida?: MedidaFatia; taxa?: string }) 
     return <p className="text-slate-500">Medido: prefill {medida.real.prefill_s}s · geração {medida.real.geracao_s}s{medida.gate_s ? ` · gate ${medida.gate_s}s` : ""} · {medida.real.prompt_tok.toLocaleString("pt-BR")} tokens de prompt</p>
   }
   return null
+}
+
+// Decisão 5: sessão encerrada deixa o branch para inspeção; apagar é ordem do
+// operador, com aviso explícito quando há commit que não foi incorporado.
+function SessoesAnteriores({ versao }: { versao: number }) {
+  const [lista, setLista] = useState<SessaoAnterior[]>([])
+  const [erro, setErro] = useState("")
+  const carregar = useCallback(() => {
+    getSessoesAnteriores().then((l) => setLista(Array.isArray(l) ? l : [])).catch(() => setLista([]))
+  }, [])
+  useEffect(() => { carregar() }, [carregar, versao])
+  if (lista.length === 0) return null
+
+  async function apagar(s: SessaoAnterior) {
+    const perde = (s.nao_incorporados ?? 0) > 0
+    const aviso = perde
+      ? `${s.branch} tem ${s.nao_incorporados} commit(s) que NÃO estão em ${s.branch_origem}. Apagar perde esse trabalho. Apagar mesmo assim?`
+      : `Apagar o branch ${s.branch}? Tudo dele já está em ${s.branch_origem}.`
+    if (!window.confirm(aviso)) return
+    setErro("")
+    try { await apagarBranchSessao(s.id, perde); carregar() }
+    catch (causa) { setErro(causa instanceof Error ? causa.message : "falha ao apagar o branch") }
+  }
+
+  return (
+    <details aria-label="Sessões anteriores" className="rounded border border-slate-800 bg-slate-900 p-2">
+      <summary className="cursor-pointer text-slate-300">Sessões anteriores com branch preservado ({lista.length})</summary>
+      <ul className="mt-1 space-y-1">
+        {lista.map((s) => (
+          <li key={s.id} className="flex flex-wrap items-center gap-2">
+            <code className="text-slate-300">{s.branch}</code>
+            <span className="text-slate-500">{s.status}{s.titulo ? ` · ${s.titulo}` : ""}</span>
+            {(s.nao_incorporados ?? 0) > 0 && <span className="text-amber-300">{s.nao_incorporados} commit(s) fora de {s.branch_origem}</span>}
+            <button type="button" onClick={() => void apagar(s)} className="rounded border border-rose-800 px-2 py-0.5 text-rose-200 hover:bg-rose-950">Apagar branch</button>
+          </li>
+        ))}
+      </ul>
+      {erro && <p role="alert" className="text-rose-300">{erro}</p>}
+    </details>
+  )
 }
 
 interface AcoesBanco { simular: (sql: string) => Promise<void>; aplicar: () => Promise<void>; reverter: (forcar: boolean) => Promise<void> }
@@ -270,6 +310,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
           </section>
         )}
         {erro && <p role="alert" className="text-rose-300">{erro}</p>}
+        {!executando && <SessoesAnteriores versao={versao} />}
       </div>
     </div>
   )

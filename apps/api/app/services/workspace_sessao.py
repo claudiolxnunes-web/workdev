@@ -316,3 +316,52 @@ def encerrar(ident: str, descartar_alteracoes: bool = False) -> dict:
                 "alteracoes_descartadas": len(pendentes)}
         _gravar_meta(meta)
         return meta
+
+
+def anteriores(limite: int = 20) -> list[dict]:
+    """Sessões encerradas ou incorporadas cujo branch ainda existe (decisão 5: ficam para inspeção).
+
+    `nao_incorporados`: commits do branch da sessão que o branch de origem não tem —
+    apagar o branch com isso perde o trabalho.
+    """
+    saida = []
+    for meta in _todas():
+        if meta["status"] == "ativa" or meta.get("branch_apagado_em"):
+            continue
+        if _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{meta['branch']}"], repo()).returncode != 0:
+            continue
+        contagem = _git(["rev-list", "--count", f"{meta['branch_origem']}..{meta['branch']}"], repo()).stdout.strip()
+        saida.append({"id": meta["id"], "status": meta["status"], "branch": meta["branch"],
+                      "branch_origem": meta["branch_origem"], "titulo": meta.get("titulo"),
+                      "task_id": meta.get("task_id"), "criada_em": meta["criada_em"],
+                      "encerrada_em": meta.get("encerrada_em"),
+                      "nao_incorporados": int(contagem) if contagem.isdigit() else None})
+        if len(saida) >= limite:
+            break
+    return saida
+
+
+def apagar_branch(ident: str, perder_commits: bool = False) -> dict:
+    """Apaga o branch de uma sessão encerrada. Só por ordem do operador.
+
+    Recusa se o branch tem commit que o branch de origem não tem, a menos que o
+    operador confirme a perda (`perder_commits`). O registro da sessão fica.
+    """
+    with _lock():
+        meta = _exigir(ident)
+        if meta["status"] == "ativa":
+            raise WorkspaceErro(409, "sessao_ativa", "encerre ou incorpore a sessão antes de apagar o branch")
+        if meta.get("branch_apagado_em"):
+            raise WorkspaceErro(409, "branch_ja_apagado", f"o branch {meta['branch']} já foi apagado")
+        if _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{meta['branch']}"], repo()).returncode != 0:
+            raise WorkspaceErro(404, "branch_inexistente", f"o branch {meta['branch']} não existe")
+        contagem = _git(["rev-list", "--count", f"{meta['branch_origem']}..{meta['branch']}"], repo()).stdout.strip()
+        if contagem not in ("", "0") and not perder_commits:
+            raise WorkspaceErro(409, "commits_nao_incorporados",
+                                f"{meta['branch']} tem {contagem} commit(s) fora de {meta['branch_origem']}; "
+                                "apagar perde esse trabalho")
+        sha = _git_ok(["rev-parse", meta["branch"]], repo(), "branch_inexistente")
+        _git_ok(["branch", "-D", meta["branch"]], repo(), "branch_nao_apagado")
+        meta = {**meta, "branch_apagado_em": _agora(), "branch_apagado_sha": sha}
+        _gravar_meta(meta)
+        return meta

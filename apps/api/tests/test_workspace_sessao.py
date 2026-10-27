@@ -196,3 +196,40 @@ def test_rotas_leem_a_copia_com_sessao(repo):
     assert salvo.status_code == 200
     sessao.encerrar(meta["id"])
     assert cliente.get("/api/workspace/arvore", params={"sessao": meta["id"]}).json()["detail"]["code"] == "sessao_encerrada"
+
+
+# ---------------------------------------------------------------- sessões anteriores
+
+def test_anteriores_lista_branch_preservado_e_apagar_pede_confirmacao_se_perde_commit(repo):
+    meta = sessao.criar(titulo="com trabalho")
+    commitar(meta, "app/mod.py", "def f():\n    return 2\n", "fatia 1")
+    with pytest.raises(WorkspaceErro) as ativa:
+        sessao.apagar_branch(meta["id"])
+    assert ativa.value.codigo == "sessao_ativa"
+    sessao.encerrar(meta["id"])
+    [anterior] = sessao.anteriores()
+    assert anterior["id"] == meta["id"] and anterior["nao_incorporados"] == 1
+    with pytest.raises(WorkspaceErro) as perde:
+        sessao.apagar_branch(meta["id"])
+    assert perde.value.codigo == "commits_nao_incorporados"
+    assert git(repo, "branch", "--list", meta["branch"])
+    apagada = sessao.apagar_branch(meta["id"], perder_commits=True)
+    assert apagada["branch_apagado_sha"] and not git(repo, "branch", "--list", meta["branch"])
+    # O registro da sessão fica; ela só sai da lista de anteriores.
+    assert sessao.anteriores() == [] and sessao._ler_meta(meta["id"])["status"] == "encerrada"
+    with pytest.raises(WorkspaceErro) as de_novo:
+        sessao.apagar_branch(meta["id"])
+    assert de_novo.value.codigo == "branch_ja_apagado"
+
+
+def test_apagar_branch_sem_commit_novo_dispensa_confirmacao_e_rotas(repo):
+    app = FastAPI()
+    app.include_router(rota.router, prefix="/api")
+    cliente = TestClient(app)
+    ident = cliente.post("/api/workspace/sessao", json={}).json()["id"]
+    cliente.post(f"/api/workspace/sessao/{ident}/encerrar")
+    lista = cliente.get("/api/workspace/sessao/anteriores").json()
+    assert [s["id"] for s in lista] == [ident] and lista[0]["nao_incorporados"] == 0
+    resposta = cliente.post(f"/api/workspace/sessao/{ident}/apagar-branch", json={})
+    assert resposta.status_code == 200 and resposta.json()["branch_apagado_em"]
+    assert cliente.get("/api/workspace/sessao/anteriores").json() == []

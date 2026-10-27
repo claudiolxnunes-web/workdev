@@ -81,6 +81,21 @@ def criar_sessao(pedido: NovaSessao):
     return _chamar(workspace_sessao.criar, pedido.task_id, pedido.chat_session_id, pedido.titulo)
 
 
+class ApagarBranch(BaseModel):
+    perder_commits: bool = False
+
+
+# Antes de "/sessao/{ident}": senão "anteriores" vira identificador de sessão.
+@router.get("/sessao/anteriores")
+def sessoes_anteriores():
+    return _chamar(workspace_sessao.anteriores)
+
+
+@router.post("/sessao/{ident}/apagar-branch")
+def apagar_branch_sessao(ident: str, pedido: ApagarBranch | None = None):
+    return _chamar(workspace_sessao.apagar_branch, ident, bool(pedido and pedido.perder_commits))
+
+
 @router.get("/sessao/{ident}")
 def estado_sessao(ident: str):
     return _chamar(workspace_sessao.estado, ident)

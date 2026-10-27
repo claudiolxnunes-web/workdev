@@ -103,6 +103,15 @@ export const aplicarBanco = (id: string, n: number) => post<Sessao>(`/sessao/${e
 export const reverterBanco = (id: string, n: number, forcar = false) =>
   post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/banco/reverter`, { forcar })
 export const pularFatia = (id: string, n: number) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/pular`, {})
+/** Sessão encerrada ou incorporada cujo branch ainda existe (fica para inspeção até o operador apagar). */
+export interface SessaoAnterior {
+  id: string; status: "encerrada" | "incorporada"; branch: string; branch_origem: string; titulo: string | null
+  task_id: string | null; criada_em: string; encerrada_em: string | null; nao_incorporados: number | null
+}
+export const getSessoesAnteriores = () => get<SessaoAnterior[]>("/sessao/anteriores")
+export const apagarBranchSessao = (id: string, perderCommits: boolean) =>
+  post<Sessao>(`/sessao/${encodeURIComponent(id)}/apagar-branch`, { perder_commits: perderCommits })
+
 /** Gasto da sessão: o que o modelo local já usou, o que cada fatia aberta deve usar e o custo do supervisor. */
 export interface MedicaoSessao {
   sessao: string; taxa_prefill_tok_s: number; taxa_origem: "medida" | "padrao"
