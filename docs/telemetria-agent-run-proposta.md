@@ -1,5 +1,10 @@
 # Telemetria por AgentRun — auditoria do schema e proposta
 
+> Escrito em 2026-09-08, na branch `task/d6fb67a5-agent-choice`, que não foi
+> incorporada (a escolha de agente entrou na `main` por outro caminho). Trazido
+> em 2026-10-27 só como registro: o schema citado abaixo pode ter mudado desde
+> então — confira antes de usar como base.
+
 Task `d6fb67a5-e311-4924-8d2f-8e48c17cb5c0`. **Nada aqui foi aplicado.** O plano
 aprovado v3 restringe: "Não executar a migration de telemetria automaticamente
 se ela for necessária; criar proposta isolada." Este documento é a proposta.
