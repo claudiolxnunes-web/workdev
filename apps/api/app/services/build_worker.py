@@ -31,6 +31,7 @@ from app.services.build_executor import (
     persist_outcome,
 )
 from app.services import canonical_context
+from app.services import agent_telemetry
 from app.services.handoff import (
     HandoffError,
     add_run_event,
@@ -245,6 +246,17 @@ async def process_job(db: Session, job: AgentBuildJob) -> BuildOutcome | None:
         return None
 
     response_text = resultado.get('response') or ''
+    # Telemetria de consumo: o runtime devolveu a contagem de tokens, e ela
+    # vira linha com origem declarada. Sem número oficial, nenhuma linha é
+    # gravada — melhor ausência do que estimativa sem base.
+    agent_telemetry.registrar_despacho(
+        db,
+        run,
+        resultado,
+        runtime_id=job.runtime_id,
+        agent=run.agent,
+        model=job.model,
+    )
     job.payload = {**(job.payload or {}), 'held_response': response_text}
     db.commit()
     return _apply_response(db, run, job, response_text)

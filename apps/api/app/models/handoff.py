@@ -1,6 +1,6 @@
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text,
-    UniqueConstraint, text,
+    Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, Integer,
+    Numeric, String, Text, UniqueConstraint, text,
 )
 
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -127,6 +127,12 @@ class AgentRun(Base):
 
     model = Column(String(120))
 
+    # Provedor escolhido no roteamento (anthropic, openrouter, ollama…).
+    # Nulo nas runs históricas: a escolha já era auditável pelo evento
+    # `build.queued`, mas não por coluna. O consumo por run vive em
+    # `agent_run_telemetry`.
+    provider = Column(String(60))
+
     # Chave do modelo físico servido pelo llama.cpp no despacho do local-code
     # (moe/q27/dev/fast, via local_model.current()). `model` continua gravando o
     # alias estável workdev-qwen; esta coluna só é preenchida para
@@ -252,6 +258,94 @@ class AgentRunEvent(Base):
     __table_args__ = (
         Index("ix_agent_run_events_run_id", "run_id"),
         Index("ix_agent_run_events_created_at", "created_at"),
+    )
+
+
+class AgentRunTelemetry(Base):
+    """Consumo de tokens e custo de uma chamada de provedor dentro de uma run.
+
+    Uma linha por chamada, não por run: uma execução pode acionar mais de um
+    provedor, e somar tudo na linha da run esconderia a composição.
+
+    Duas colunas sustentam a honestidade do dado:
+
+    - `source` diz de onde veio o número — `official` (veio da API do
+      provedor ou do runtime) ou `estimated` (derivado do transcript e do
+      preço de catálogo). Sem ela, um estimado apareceria ao lado de um
+      faturado como se fossem a mesma coisa.
+    - `cost_class` diz o que o número significa em dinheiro — `local`
+      (runtime próprio), `free_quota`, `included_plan` (já pago por
+      assinatura) ou `paid_api` (cobrança por token).
+
+    Nenhum campo guarda segredo: só contagens, dinheiro e nomes de modelo.
+    """
+
+    __tablename__ = "agent_run_telemetry"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Desnormalizados de propósito: o relatório de consumo é por task e por
+    # projeto, e nenhuma dessas queries deveria depender de join com a run.
+    backlog_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("backlog.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    project_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    agent = Column(String(40), nullable=False)
+    provider = Column(String(60), nullable=False)
+    model = Column(String(120), nullable=False)
+
+    input_tokens = Column(Integer)
+    cached_input_tokens = Column(Integer)
+    output_tokens = Column(Integer)
+    total_tokens = Column(Integer)
+
+    estimated_cost = Column(Numeric(12, 6))
+    actual_cost = Column(Numeric(12, 6))
+    currency = Column(String(3), nullable=False, server_default="USD")
+
+    # 'official'  = o número veio da API do provedor ou do runtime
+    # 'estimated' = número derivado do transcript e do preço de catálogo
+    source = Column(String(16), nullable=False)
+    # local | free_quota | included_plan | paid_api
+    cost_class = Column(String(20), nullable=False)
+
+    recorded_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('official', 'estimated')",
+            name="ck_agent_run_telemetry_source",
+        ),
+        CheckConstraint(
+            "cost_class IN ('local', 'free_quota', 'included_plan', 'paid_api')",
+            name="ck_agent_run_telemetry_cost_class",
+        ),
+        Index("ix_agent_run_telemetry_run_id", "run_id"),
+        Index("ix_agent_run_telemetry_agent", "agent", "recorded_at"),
+        Index("ix_agent_run_telemetry_project", "project_id", "recorded_at"),
     )
 
 

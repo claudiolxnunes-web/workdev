@@ -9,9 +9,10 @@ ou no status dizia isso: era falha silenciosa.
 
 A regra agora é uma só — **todo prompt de agente passa por aqui**.
 
-O módulo não decide o que é canônico (isso é do `build_rag`), não consulta o
-banco (isso é do `build_context`) e não decide o que pode sair da máquina (isso
-é do `context_egress`). Ele monta, no lugar certo, e aplica a política de
+O módulo não decide o que é canônico (isso é do `build_rag`, com o
+complemento semântico do `semantic_complement`), não consulta o banco (isso
+é do `build_context`) e não decide o que pode sair da máquina (isso é do
+`context_egress`). Ele monta, no lugar certo, e aplica a política de
 segredo quando a entrega é local.
 
 Duas portas, porque a política de egresso é diferente nos dois casos:
@@ -29,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.services import build_rag
+from app.services import build_rag, semantic_complement
 from app.services.context_redaction import RedactionResult, redact
 
 
@@ -45,14 +46,34 @@ class PromptMontado:
         return self.redaction.redacted
 
 
-def canonical_block(context: dict) -> str:
+def select_snippets(
+    context: dict,
+    *,
+    semantico: bool = True,
+) -> list[dict]:
+    """Trechos canônicos do prompt: o piso lexical e, se der, o complemento.
+
+    O piso é o `build_rag` (lexical, sem rede, sem custo). O complemento
+    semântico entra depois, com os mesmos tetos de trecho e de caractere
+    (ADR 011, decisão 3). Se o RAG não responder, o resultado é exatamente o
+    piso — nunca menos que o piso.
+    """
+    trechos = build_rag.select_snippets(context)
+
+    if semantico:
+        trechos = trechos + semantic_complement.completar(context, trechos)
+
+    return trechos
+
+
+def canonical_block(context: dict, *, semantico: bool = True) -> str:
     """Bloco de trechos canônicos (ADR, knowledge, decision), em texto plano.
 
     Vazio quando nada casa com o vocabulário da task/plano — e nesse caso o
     prompt sai sem bloco, e não com um bloco vazio.
     """
     return build_rag.render_snippets(
-        build_rag.select_snippets(context)
+        select_snippets(context, semantico=semantico)
     )
 
 
@@ -84,7 +105,10 @@ def planning_block(context: dict) -> str:
     mais custa segundos de prefill em toda fatia; cabe ao supervisor levar à
     instrução da fatia só o que a ADR ou a decision exige.
     """
-    bloco = canonical_block(context)
+    # Aqui o semântico não entra: o supervisor é um modelo de nuvem com
+    # contexto curto por desenho, e cada trecho a mais custa segundos de
+    # prefill em toda fatia. O piso lexical basta para o recorte.
+    bloco = canonical_block(context, semantico=False)
     return redact(bloco).text if bloco else ""
 
 

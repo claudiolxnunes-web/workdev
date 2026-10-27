@@ -310,4 +310,8 @@ async def dispatch(
         "thinking": thinking[:MAX_RESPONSE_CHARS],
         "truncated": truncated,
         "duration_ms": int((time.monotonic() - started) * 1000),
+        # Contagem que o próprio runtime devolveu no evento final. É o que
+        # permite registrar telemetria de consumo sem estimar nada.
+        "input_tokens": payload.get("prompt_eval_count"),
+        "output_tokens": payload.get("eval_count"),
     }

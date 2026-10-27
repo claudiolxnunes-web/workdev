@@ -20,6 +20,7 @@ from app.models.backlog import BacklogItem
 from app.models.subtask import BacklogSubtask
 from app.models.knowledge import KnowledgeEntry
 from app.models.adr import ADR
+from app.models.decision import Decision
 from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.ai_routing import AICallLog, AIModelCatalog
@@ -476,6 +477,30 @@ TOOLS = [
         },
     },
     {
+        "name": "listar_adrs",
+        "description": "Lista as ADRs de um projeto: titulo, status e data, sem o texto integral. Filtro opcional por projeto; sem o filtro, lista as ADRs de todos os projetos. Somente leitura. Use quando precisar saber que decisoes arquiteturales existem — o texto (contexto, decisao, consequencias) fica com ler_referencias.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "projeto_slug": {"type": "string", "description": "opcional; slug do projeto"},
+                "limite": {"type": "integer", "description": "numero maximo de ADRs; padrao 20, maximo 50"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "listar_decisoes",
+        "description": "Lista as decisoes registradas de um projeto: titulo e data, sem a descricao. Filtro opcional por projeto; sem o filtro, lista as decisoes de todos os projetos. Somente leitura. Use quando precisar saber que decisoes existem — o texto fica com ler_referencias.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "projeto_slug": {"type": "string", "description": "opcional; slug do projeto"},
+                "limite": {"type": "integer", "description": "numero maximo de decisoes; padrao 20, maximo 50"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "validar_lote_bancada",
         "description": "Valida um lote de micro-tarefas da Bancada Local contra os arquivos reais do repositorio: arquivo existe, linha final existe, caminho permitido, ate 10 tarefas por lote (11 a 20 sao divididas automaticamente em 2 lotes), ate 8 trechos de ate 400 linhas, max_tokens 64-4000, exige com regex valida. Ids vazios ou genericos recebem o id do lote (AAMMDD-NN-NN). Somente leitura: nao grava nem executa nada. Use antes de entregar o JSON final e entregue o plano devolvido.",
         "input_schema": {
@@ -737,6 +762,92 @@ def _leitura_repo(funcao, *args) -> str:
 
 MAX_REFERENCIAS = 10
 MAX_TEXTO_REFERENCIA = 3000
+# Listagem de referências: o modelo precisa de um índice (o que existe), não do
+# texto. O texto integral fica com `ler_referencias`.
+LISTAGEM_REFERENCIAS_PADRAO = 20
+MAX_LISTAGEM_REFERENCIAS = 50
+
+
+def _limite_listagem(args: dict) -> int:
+    """Limite de itens de uma listagem, com teto duro.
+
+    Entrada inválida não derruba a tool: cai no padrão.
+    """
+    try:
+        limite = int(args.get("limite") or LISTAGEM_REFERENCIAS_PADRAO)
+    except (TypeError, ValueError):
+        limite = LISTAGEM_REFERENCIAS_PADRAO
+    return max(1, min(limite, MAX_LISTAGEM_REFERENCIAS))
+
+
+def _data_registro(valor) -> str | None:
+    if valor is None:
+        return None
+    try:
+        return valor.date().isoformat()
+    except AttributeError:
+        return str(valor)[:10]
+
+
+def _listar_adrs(args: dict, db: Session) -> str:
+    """Índice de ADRs: título, status e data. Nunca o corpo da ADR."""
+    slug = args.get("projeto_slug")
+    if slug:
+        projeto = db.query(Project).filter(Project.slug == slug).first()
+        if projeto is None:
+            return json.dumps({"erro": "projeto não encontrado", "code": "nao_encontrado"},
+                              ensure_ascii=False)
+    consulta = db.query(ADR, Project.name, Project.slug).join(
+        Project, Project.id == ADR.project_id
+    )
+    if slug:
+        consulta = consulta.filter(Project.slug == slug)
+    linhas = (
+        consulta.order_by(ADR.created_at.desc()).limit(_limite_listagem(args)).all()
+    )
+    referencias = [
+        {
+            "id": str(adr.id),
+            "titulo": adr.title,
+            "status": adr.status,
+            "data": _data_registro(adr.created_at),
+            "projeto": nome_projeto,
+            "projeto_slug": slug_projeto,
+        }
+        for adr, nome_projeto, slug_projeto in linhas
+    ]
+    return json.dumps({"referencias": referencias, "total": len(referencias)},
+                      ensure_ascii=False)
+
+
+def _listar_decisoes(args: dict, db: Session) -> str:
+    """Índice de decisões: título e data. A descrição fica com `ler_referencias`."""
+    slug = args.get("projeto_slug")
+    if slug:
+        projeto = db.query(Project).filter(Project.slug == slug).first()
+        if projeto is None:
+            return json.dumps({"erro": "projeto não encontrado", "code": "nao_encontrado"},
+                              ensure_ascii=False)
+    consulta = db.query(Decision, Project.name, Project.slug).join(
+        Project, Project.id == Decision.project_id
+    )
+    if slug:
+        consulta = consulta.filter(Project.slug == slug)
+    linhas = (
+        consulta.order_by(Decision.created_at.desc()).limit(_limite_listagem(args)).all()
+    )
+    referencias = [
+        {
+            "id": str(decisao.id),
+            "titulo": decisao.title,
+            "data": _data_registro(decisao.created_at),
+            "projeto": nome_projeto,
+            "projeto_slug": slug_projeto,
+        }
+        for decisao, nome_projeto, slug_projeto in linhas
+    ]
+    return json.dumps({"referencias": referencias, "total": len(referencias)},
+                      ensure_ascii=False)
 
 
 def _ler_referencias(args: dict, db: Session) -> str:
@@ -990,6 +1101,12 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
 
     if nome == "ler_referencias":
         return _ler_referencias(args, db)
+
+    if nome == "listar_adrs":
+        return _listar_adrs(args, db)
+
+    if nome == "listar_decisoes":
+        return _listar_decisoes(args, db)
 
     if nome == "registrar_conhecimento":
         pid = None

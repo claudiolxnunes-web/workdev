@@ -78,7 +78,7 @@ def _dsn() -> str:
     )
 
 
-def _embedding(texto: str) -> list[float]:
+def _embedding(texto: str, timeout: float | None = None) -> list[float]:
     chave = os.getenv("OPENAI_API_KEY")
     if not chave:
         raise RagSearchUnavailable("rag:openai_api_key_ausente")
@@ -89,10 +89,16 @@ def _embedding(texto: str) -> list[float]:
 
     texto = texto[:MAX_QUERY_CHARS]
 
+    # O timeout do ambiente é o teto; o timeout explícito (caminho do Build,
+    # onde o semântico é complemento) só pode apertar, nunca afrouxar.
+    limite = float(os.getenv("RAG_EMBEDDING_TIMEOUT", "60"))
+    if timeout is not None:
+        limite = min(limite, float(timeout))
+
     try:
         cliente = OpenAI(
             api_key=chave,
-            timeout=float(os.getenv("RAG_EMBEDDING_TIMEOUT", "60")),
+            timeout=limite,
             max_retries=int(os.getenv("AI_PROVIDER_MAX_RETRIES", "0")),
         )
         resposta = cliente.embeddings.create(
@@ -115,8 +121,14 @@ def search(
     termo: str,
     *,
     limit: int = DEFAULT_LIMIT,
+    timeout: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Busca semanticamente no índice RAG do WorkDev."""
+    """Busca semanticamente no índice RAG do WorkDev.
+
+    `timeout` limita a espera pelo embedding. Quem chama pode apertar o teto
+    (o Build trata a busca semântica como complemento e não pode ficar
+    esperando por serviço externo); ninguém pode afrouxar.
+    """
 
     termo = (termo or "").strip()
     if not termo:
@@ -124,7 +136,7 @@ def search(
 
     limit = max(1, min(int(limit), MAX_LIMIT))
 
-    vetor = _vector_literal(_embedding(termo))
+    vetor = _vector_literal(_embedding(termo, timeout=timeout))
 
     sql = """
         SELECT

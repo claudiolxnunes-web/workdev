@@ -295,6 +295,7 @@ class MontagemTest(unittest.TestCase):
             "coletar_planos": [],
             "coletar_execucoes": [],
             "coletar_adrs": [],
+            "coletar_decisoes": [],
             "coletar_knowledge": [],
         }
         with patch.multiple(ce, **{nome: Mock(return_value=valor)
@@ -303,7 +304,7 @@ class MontagemTest(unittest.TestCase):
 
         for chave in ("projeto", "backlog_por_status", "backlog_aberto",
                       "em_andamento", "planos", "execucoes", "adrs",
-                      "knowledge"):
+                      "decisoes", "knowledge"):
             self.assertIn(chave, contexto)
         self.assertEqual(contexto["escopo"], ce.ESCOPO_PROJETO)
         self.assertEqual(contexto["projeto"]["slug"], "feed-bpf")

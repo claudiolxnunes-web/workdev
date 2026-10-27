@@ -33,6 +33,18 @@ def _isolate_ai_telemetry(tmp_path, monkeypatch):
     monkeypatch.setenv('AI_TELEMETRIA_DIR', str(tmp_path / 'ai-telemetria'))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_semantic_complement(monkeypatch):
+    """O complemento semântico do Build (ADR 011) fica desligado na suíte.
+
+    Sem isto, toda montagem de prompt chamaria o RAG de verdade — embedding
+    pago, latência de rede e um resultado que depende do índice externo. O
+    piso lexical é o que a suíte precisa enxergar; o complemento tem suíte
+    própria, com o `rag_search` mockado.
+    """
+    monkeypatch.setenv('WORKDEV_SEMANTIC_COMPLEMENT', '0')
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "tmux_ensure_real: usa o ensure_tmux_server real (com _run simulado)")
 
