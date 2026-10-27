@@ -180,9 +180,13 @@ def _bancada_planning_context(task: BacklogItem | None, project: Project | None,
 
 
 def _workspace_planning_context(
-    task: BacklogItem | None, project: Project | None, prompt_livre: str | None = None
+    task: BacklogItem | None, project: Project | None, prompt_livre: str | None = None,
+    referencias: str = "",
 ) -> str | None:
     """Prompt de planejamento do Workspace Local para LLM grande via OpenRouter.
+
+    `referencias` é o bloco canônico do projeto (ADR, knowledge, decisions),
+    já redigido por `canonical_context.planning_block`.
 
     Diferente da Bancada, aqui o modelo local LÊ arquivos: a fatia não precisa
     carregar o código, precisa saber o que fazer, onde olhar e como verificar.
@@ -253,6 +257,15 @@ def _workspace_planning_context(
         "fatia que falhou, chame ler_estado_sessao ANTES: ele mostra o que já foi",
         "aplicado e commitado na sessão, e o erro de cada fatia. Não reproponha o que já",
         "está feito.",
+        "Referências canônicas: o bloco 'Contexto recuperado' abaixo (quando existir) traz",
+        "os trechos de ADR, knowledge e decision que casam com a task. Para o texto",
+        "inteiro de uma ADR ou decision, use ler_referencias. O modelo local NÃO recebe",
+        "esse bloco: se uma ADR ou decision restringe a fatia, escreva a restrição na",
+        "própria 'instrucao' (ex.: 'não use o IP de bridge; use 127.0.0.1').",
+        "Antes de entregar o plano, chame validar_plano_workspace com ele e corrija o que",
+        "for recusado: é a mesma validação do botão Aprovar plano.",
+        "Se uma fatia falhou, ler_resultado_fatia mostra a etapa, o erro, os checks do",
+        "gate e o diff proposto — use para reescrever a instrução da correção.",
         "2. Se não souber onde está, use buscar_texto (literal, como git grep) ou",
         "   listar_pasta para achar arquivo e linha — não chute caminho.",
         "3. Então peça VÁRIOS ler_trecho na mesma rodada (chamadas em paralelo), só dos",
@@ -268,6 +281,8 @@ def _workspace_planning_context(
         "",
         entrada,
     ]
+    if referencias:
+        linhas += ["", referencias]
     return "\n".join(linhas)
 
 
@@ -456,7 +471,13 @@ def criar_sessao_planejamento_workspace(
         # Prompt livre: sem projeto específico
         project = None
 
-    prompt_content = _workspace_planning_context(task, project, payload.prompt)
+    referencias = ""
+    if task is not None and project is not None:
+        from app.services import canonical_context, referencias_projeto
+        contexto = referencias_projeto.coletar(db, project.id, task.id)
+        contexto["task"] = {"title": task.title, "description": task.description}
+        referencias = canonical_context.planning_block(contexto)
+    prompt_content = _workspace_planning_context(task, project, payload.prompt, referencias)
     if prompt_content is None:
         raise HTTPException(409, "Task sem descrição")
 

@@ -1,6 +1,6 @@
 # Guia prático — Bancada Local e Workspace Local
 
-Estado conferido em 2026-10-25: produção (PR #9) mais as ferramentas de leitura da branch `feat/workspace-ferramentas-leitura` ("ler o repo" e busca no supervisor), que só valem depois do deploy.
+Estado conferido em 2026-10-26: produção até o PR #14 (sessão, laço de fatias, leituras, fatias de banco), mais a branch `feat/workspace-supervisor-acoes` (ferramentas novas do supervisor, medição, repetição automática, gate em duas camadas, sessões anteriores), que só vale depois do deploy. Contrato: ADR 015.
 
 ## Qual usar
 
@@ -9,10 +9,11 @@ Estado conferido em 2026-10-25: produção (PR #9) mais as ferramentas de leitur
 | Rodar um lote de micro-tarefas, medir o modelo local, comparar observers | **Bancada** (`/bancada`) |
 | Navegar no código, conversar com um supervisor e mandar trechos ao modelo local, no estilo VS Code | **Workspace** (`/workspace`) |
 
-Nos dois casos **nada é aplicado ao repositório**. O modelo local devolve uma
-*proposta* (diff ou JSON); quem aplica é você, à mão (ver "Aplicar uma proposta").
-O Workspace com escrita (worktree por sessão, laço fatia → gate) ainda é plano:
-`docs/planning/workspace-local-execucao-assistida.md`.
+Na **Bancada** e no **chat Local** do Workspace nada é aplicado: o modelo local
+devolve uma *proposta* (diff ou JSON) e quem aplica é você (ver "Aplicar uma
+proposta"). Na **aba Execução** do Workspace o sistema aplica cada fatia de um
+plano aprovado numa cópia isolada da sessão, roda o gate e commita no branch da
+sessão; levar isso para o seu branch (incorporar) é sempre um clique seu.
 
 ## Antes de começar: o modelo local
 
@@ -114,8 +115,16 @@ Essa sessão é do Workspace — não ocupa a conversa da task no AI Hub.
 - Ele procura no repositório (`buscar_texto`, como um Ctrl+F no projeto todo, e
   `listar_pasta`), lê as linhas (`ler_trecho`) e devolve: quais arquivos, quais
   linhas e qual pedido mandar ao modelo local em cada fatia.
-- Limite atual: ele **não vê** o que você já aplicou nem o que o modelo local
-  respondeu. Se aplicou algo, diga a ele (ou cole o diff).
+- Ele **vê a sessão**: `ler_estado_sessao` (fatias, commits, diff --stat) e
+  `ler_resultado_fatia` (erro, checks do gate e diff de uma fatia). Pare a
+  execução e peça "olhe a fatia 2 e reescreva a instrução".
+- Antes de entregar o plano, ele roda `validar_plano_workspace` (a mesma
+  validação do Aprovar plano), então o cartão não deve falhar ao aprovar.
+- **Referências canônicas**: vindo do backlog, o prompt dele já traz os trechos
+  de ADR/knowledge/decision que casam com a task; `ler_referencias` lê o texto
+  inteiro. O modelo local **não** recebe esse bloco (custaria prefill em toda
+  fatia): o supervisor escreve a restrição na instrução da fatia.
+- Ele **não** aprova, executa, grava no banco nem incorpora: isso é botão seu.
 
 ### 3. Mandar uma fatia ao modelo local
 
@@ -162,17 +171,26 @@ roda o plano inteiro numa **cópia isolada do projeto**.
      fatias anteriores já mudaram);
    - aplica com `git apply --check`;
    - confere o `exige`;
-   - roda o **gate**: pytest se mexeu em `apps/api`; vitest, lint e build se
-     mexeu em `apps/web`;
+   - roda o **gate**: pytest **só dos testes da área** se mexeu em `apps/api`
+     (`tests/test_*<módulo>*.py`; módulo sem teste correspondente roda a suíte
+     inteira); vitest, lint e build se mexeu em `apps/web`;
    - commita no branch `workspace/<sessão>`.
-4. **Falhou?** Tudo para. O cartão mostra a etapa e o motivo. Escreva uma
-   correção (opcional — o erro já vai junto) e **Repetir fatia N**, ou **Pular**.
+4. **Falhou?** Com **repetir sozinho** marcado (padrão), a fatia é repetida até
+   2 vezes com o erro junto. Se ainda falhar, tudo para: o cartão mostra a
+   etapa e o motivo. Escreva uma correção (opcional) e **Repetir fatia N**, ou
+   **Pular**, ou peça ao supervisor para olhar.
 5. No backlog: a task vai para **doing**; cada subtask vira **done** (com o
    commit) ou **blocked** (com o motivo). Fechar a task é sempre seu.
-6. **Incorporar**: escolha um commit só (*squash*) ou um por fatia (*merge*). Vai
+6. **Incorporar**: antes, roda a **suíte completa** sobre tudo que a sessão mudou
+   (pode levar minutos); reprovada (`gate_final_reprovado`), nada é
+   incorporado. Escolha um commit só (*squash*) ou um por fatia (*merge*). Vai
    para o branch de onde a sessão saiu, com o seu nome. Conflito é desfeito
    sozinho. **Não faz push** — depois use `wd-push`.
 7. **Ver diff da sessão** (na barra) mostra tudo o que a sessão mudou.
+   **Medição**: cada fatia aberta mostra o contexto previsto e o prefill
+   estimado ("~1.260 tokens → ~25 s"); depois de rodar, o medido. No topo, o
+   gasto da sessão: prefill/geração do modelo local e chamadas, tokens e US$
+   do supervisor.
 8. **Editar à mão**: com a sessão ativa, Explorer, editor e chat Local mostram a
    **cópia da sessão** (seletor **cópia da sessão | seu checkout** na barra). No
    editor, **Editar** abre o arquivo para edição; **Salvar na sessão (commit)**
@@ -182,8 +200,13 @@ roda o plano inteiro numa **cópia isolada do projeto**.
    Vendo **seu checkout**, o editor é só leitura.
 
 Limites: uma sessão por vez; para começar, o checkout não pode ter alteração
-rastreada sem commit. Uma fatia que mexe em `apps/api` leva ~1–2 min só no gate
-(a suíte inteira roda dentro da cópia).
+rastreada sem commit.
+
+**Sessões anteriores**: encerrar uma sessão apaga a cópia, mas o branch
+`workspace/<sessão>` fica para inspeção. A seção **Sessões anteriores** (fim da
+aba Execução) lista esses branches e avisa quantos commits não foram
+incorporados; **Apagar branch** pede confirmação e, se há commit fora do seu
+branch, avisa que esse trabalho se perde.
 
 ### 5. Fatias de banco (mudar dados do WorkDev)
 
@@ -259,6 +282,7 @@ Mude o mínimo necessário.
 | "Começar sessão" recusa (`arvore_suja`) | Há arquivo rastreado alterado sem commit: commite ou guarde antes |
 | Fatia falhou em **aplicar** | O diff não encaixou no arquivo real: Repetir (o erro vai junto) ou corrija a instrução |
 | Fatia falhou em **gate** | Teste/lint/build reprovou: a mudança fica na cópia para olhar; Repetir limpa e refaz |
+| Incorporar recusa `gate_final_reprovado` | A suíte completa reprovou: veja o motivo, corrija com uma fatia nova ou edite na sessão, e incorpore de novo |
 | Incorporar recusa `branch_trocado` | O checkout mudou de branch desde que a sessão começou: volte ao branch de origem |
 | `[vigia]` no fluxo | Modelo citou nome fora dos trechos; anexe o arquivo onde ele está |
 | Checagem falha no `@@` | Diff contra versão diferente do arquivo; reabra o trecho e reenvie |

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
-  aplicarBanco, executarFatia, getEstadoSessao, getSessoes, incorporarSessao, pularFatia, reverterBanco, simularBanco,
-  type EstadoSessao, type EventoFatia, type Fatia,
+  apagarBranchSessao, aplicarBanco, executarFatia, getSessoesAnteriores, getEstadoSessao, getMedicaoSessao, getSessoes, incorporarSessao, pularFatia, reverterBanco,
+  simularBanco, type EstadoSessao, type EventoFatia, type Fatia, type MedicaoSessao, type SessaoAnterior,
 } from "@/services/workspace.service"
 import { FatiaBanco } from "./FatiaBanco"
 
@@ -11,6 +11,9 @@ import { FatiaBanco } from "./FatiaBanco"
 // leva o branch da sessão para o branch de origem — clique do operador, sem push.
 
 const FECHADAS = ["ok", "pulada"]
+// Falhou: o erro da tentativa anterior já volta ao modelo como contexto, então
+// repetir sozinho custa só tempo. Passado o limite, para e espera o operador.
+const AUTO_REPETICOES = 2
 const COR: Record<string, string> = {
   pendente: "bg-slate-800 text-slate-300", rodando: "bg-sky-900 text-sky-200", ok: "bg-emerald-900 text-emerald-200",
   falhou: "bg-rose-900 text-rose-200", pulada: "bg-slate-700 text-slate-300",
@@ -37,11 +40,67 @@ function linhaDoEvento(e: EventoFatia): string | null {
   return null
 }
 
+type MedidaFatia = MedicaoSessao["fatias"][number]
+
+// Na CPU o prefill é o que decide se a fatia leva segundos ou minutos: a
+// previsão aparece antes de rodar, e o medido depois.
+function LinhaMedida({ medida, taxa }: { medida?: MedidaFatia; taxa?: string }) {
+  if (!medida) return null
+  if (medida.previsto) {
+    return <p className="text-slate-500">Contexto previsto: ~{medida.previsto.tokens.toLocaleString("pt-BR")} tokens → prefill ~{medida.previsto.prefill_s}s{taxa ? ` (${taxa})` : ""}, sem contar leituras</p>
+  }
+  if (medida.real) {
+    return <p className="text-slate-500">Medido: prefill {medida.real.prefill_s}s · geração {medida.real.geracao_s}s{medida.gate_s ? ` · gate ${medida.gate_s}s` : ""} · {medida.real.prompt_tok.toLocaleString("pt-BR")} tokens de prompt</p>
+  }
+  return null
+}
+
+// Decisão 5: sessão encerrada deixa o branch para inspeção; apagar é ordem do
+// operador, com aviso explícito quando há commit que não foi incorporado.
+function SessoesAnteriores({ versao }: { versao: number }) {
+  const [lista, setLista] = useState<SessaoAnterior[]>([])
+  const [erro, setErro] = useState("")
+  const carregar = useCallback(() => {
+    getSessoesAnteriores().then((l) => setLista(Array.isArray(l) ? l : [])).catch(() => setLista([]))
+  }, [])
+  useEffect(() => { carregar() }, [carregar, versao])
+  if (lista.length === 0) return null
+
+  async function apagar(s: SessaoAnterior) {
+    const perde = (s.nao_incorporados ?? 0) > 0
+    const aviso = perde
+      ? `${s.branch} tem ${s.nao_incorporados} commit(s) que NÃO estão em ${s.branch_origem}. Apagar perde esse trabalho. Apagar mesmo assim?`
+      : `Apagar o branch ${s.branch}? Tudo dele já está em ${s.branch_origem}.`
+    if (!window.confirm(aviso)) return
+    setErro("")
+    try { await apagarBranchSessao(s.id, perde); carregar() }
+    catch (causa) { setErro(causa instanceof Error ? causa.message : "falha ao apagar o branch") }
+  }
+
+  return (
+    <details aria-label="Sessões anteriores" className="rounded border border-slate-800 bg-slate-900 p-2">
+      <summary className="cursor-pointer text-slate-300">Sessões anteriores com branch preservado ({lista.length})</summary>
+      <ul className="mt-1 space-y-1">
+        {lista.map((s) => (
+          <li key={s.id} className="flex flex-wrap items-center gap-2">
+            <code className="text-slate-300">{s.branch}</code>
+            <span className="text-slate-500">{s.status}{s.titulo ? ` · ${s.titulo}` : ""}</span>
+            {(s.nao_incorporados ?? 0) > 0 && <span className="text-amber-300">{s.nao_incorporados} commit(s) fora de {s.branch_origem}</span>}
+            <button type="button" onClick={() => void apagar(s)} className="rounded border border-rose-800 px-2 py-0.5 text-rose-200 hover:bg-rose-950">Apagar branch</button>
+          </li>
+        ))}
+      </ul>
+      {erro && <p role="alert" className="text-rose-300">{erro}</p>}
+    </details>
+  )
+}
+
 interface AcoesBanco { simular: (sql: string) => Promise<void>; aplicar: () => Promise<void>; reverter: (forcar: boolean) => Promise<void> }
 
-function CartaoFatia({ fatia, proxima, ocupado, onExecutar, onPular, banco }: {
+function CartaoFatia({ fatia, proxima, ocupado, onExecutar, onPular, banco, medida, taxa }: {
   fatia: Fatia; proxima: boolean; ocupado: boolean
   onExecutar: (correcao: string | null) => void; onPular: () => void; banco: AcoesBanco
+  medida?: MedidaFatia; taxa?: string
 }) {
   const [correcao, setCorrecao] = useState("")
   return (
@@ -54,6 +113,7 @@ function CartaoFatia({ fatia, proxima, ocupado, onExecutar, onPular, banco }: {
       </div>
       <p className="mt-1 text-slate-500">Conferir: {fatia.gate.join(" · ")}</p>
       {fatia.arquivos && fatia.arquivos.length > 0 && <p className="text-slate-500">Arquivos: {fatia.arquivos.join(", ")}</p>}
+      <LinhaMedida medida={medida} taxa={taxa} />
       {fatia.gate_checks.length > 0 && (
         <p className="text-slate-400">Gate: {fatia.gate_checks.map((c) => `${c.passou ? "✓" : "✗"} ${c.nome}`).join(" · ")}</p>
       )}
@@ -90,6 +150,8 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
   const [erro, setErro] = useState("")
   const [modo, setModo] = useState<"squash" | "merge">("squash")
   const [incorporada, setIncorporada] = useState<string | null>(null)
+  const [medicao, setMedicao] = useState<MedicaoSessao | null>(null)
+  const [autoRepetir, setAutoRepetir] = useState(true)
   const pausar = useRef(false)
   const fimLog = useRef<HTMLDivElement>(null)
 
@@ -98,6 +160,9 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
       const { ativa } = await getSessoes()
       const estado = ativa ? await getEstadoSessao(ativa.id) : null
       setSessao(estado)
+      // Medição é registro: se falhar, o painel segue sem ela.
+      const medida = estado ? await getMedicaoSessao(estado.id).catch(() => null) : null
+      setMedicao(medida && Array.isArray(medida.fatias) ? medida : null)
       return estado
     } catch (causa) {
       setErro(causa instanceof Error ? causa.message : "falha ao ler a sessão")
@@ -133,10 +198,18 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
     try {
       let atual: number | null = n
       let nota = correcao
+      let repeticoes = 0
       while (atual != null) {
         const status = await rodar(sessao.id, atual, nota)
         nota = null
         const estado = await carregar()
+        if (status === "falhou" && autoRepetir && repeticoes < AUTO_REPETICOES && !pausar.current) {
+          repeticoes += 1
+          const linha = `[${atual}] repetindo sozinho (${repeticoes}/${AUTO_REPETICOES}) — o erro vai junto`
+          setLog((l) => [...l, linha])
+          continue
+        }
+        repeticoes = 0
         if (!todas || status !== "ok" || pausar.current) {
           if (pausar.current) setLog((l) => [...l, "pausado pelo operador"])
           break
@@ -169,6 +242,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
   async function incorporar() {
     if (!sessao) return
     setExecutando(true); setErro("")
+    setLog((l) => [...l, "rodando a suíte completa antes de incorporar (pode levar minutos)"])
     try {
       const final = await incorporarSessao(sessao.id, modo)
       setIncorporada(`${final.commit_incorporado?.slice(0, 7)} em ${final.branch_origem} (${final.modo_incorporacao})`)
@@ -178,6 +252,9 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
 
   if (!carregado) return <p className="p-3 text-xs text-slate-500">Carregando…</p>
   const abertas = fatias.filter((f) => !FECHADAS.includes(f.status)).length
+  const taxa = medicao ? `${medicao.taxa_prefill_tok_s} tok/s ${medicao.taxa_origem === "medida" ? "medidos" : "estimados"}` : undefined
+  const local = medicao?.total_local
+  const sup = medicao?.supervisor
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-950 text-xs">
       <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
@@ -192,15 +269,26 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
             {proxima && !executando && (
               <button type="button" onClick={() => void executar(proxima.n, null, true)} className="rounded bg-emerald-800 px-2 py-0.5 text-white hover:bg-emerald-700">Executar todas</button>
             )}
+            <label className="flex items-center gap-1 text-slate-400">
+              <input type="checkbox" checked={autoRepetir} disabled={executando} onChange={(e) => setAutoRepetir(e.target.checked)} />
+              repetir sozinho até {AUTO_REPETICOES}x quando falhar
+            </label>
             {executando && emLote && (
               <button type="button" onClick={() => { pausar.current = true }} className="rounded border border-amber-700 px-2 py-0.5 text-amber-200 hover:bg-amber-950">Pausar depois desta</button>
             )}
           </div>
         )}
+        {local && (local.prefill_s > 0 || local.geracao_s > 0 || (sup && sup.chamadas > 0)) && (
+          <p aria-label="Gasto da sessão" className="text-slate-400">
+            Modelo local: prefill {local.prefill_s}s · geração {local.geracao_s}s · {local.leituras} leitura(s) · {local.tentativas} tentativa(s)
+            {sup && sup.chamadas > 0 && <> · Supervisor: {sup.chamadas} chamada(s) · {(sup.tokens_entrada + sup.tokens_saida).toLocaleString("pt-BR")} tokens · US$ {sup.custo_usd.toFixed(4)}</>}
+          </p>
+        )}
         <ol className="space-y-2">
           {fatias.map((f) => (
             <CartaoFatia key={`${f.n}-${f.status}-${f.tentativas}`} fatia={f} proxima={f.n === proxima?.n} ocupado={executando}
-              onExecutar={(correcao) => void executar(f.n, correcao, false)} onPular={() => void pular(f.n)} banco={acoesBanco(f.n)} />
+              onExecutar={(correcao) => void executar(f.n, correcao, false)} onPular={() => void pular(f.n)} banco={acoesBanco(f.n)}
+              medida={medicao?.fatias.find((m) => m.n === f.n)} taxa={taxa} />
           ))}
         </ol>
         {sessao && sessao.commits.length > 0 && !executando && (
@@ -211,7 +299,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
               <label className="flex items-center gap-1"><input type="radio" name="modo" checked={modo === "merge"} onChange={() => setModo("merge")} /> um commit por fatia (merge)</label>
               <button type="button" onClick={() => void incorporar()} className="rounded bg-violet-700 px-2 py-0.5 text-white hover:bg-violet-600">Incorporar</button>
             </div>
-            <p className="mt-1 text-slate-500">Vai para o seu branch, com o seu nome. Não faz push.</p>
+            <p className="mt-1 text-slate-500">Antes, roda a suíte completa (cada fatia rodou só os testes da área). Vai para o seu branch, com o seu nome. Não faz push.</p>
           </section>
         )}
         {(log.length > 0 || saida) && (
@@ -222,6 +310,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
           </section>
         )}
         {erro && <p role="alert" className="text-rose-300">{erro}</p>}
+        {!executando && <SessoesAnteriores versao={versao} />}
       </div>
     </div>
   )

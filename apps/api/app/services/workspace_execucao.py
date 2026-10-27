@@ -234,13 +234,41 @@ def _env_gate() -> dict[str, str]:
             "WORKDEV_CLI_AGENT_MODELS_FILE": str(pasta / "cli-models.json")}
 
 
-def _gate(cwd: Path, caminhos: list[str]) -> list[test_gate.CheckResult]:
+def _alvos_pytest(cwd: Path, caminhos: list[str]) -> list[str] | None:
+    """Testes da área tocada, relativos a apps/api. None = suíte inteira.
+
+    Teste tocado entra direto; módulo `app/.../x.py` puxa `tests/test_*x*.py`.
+    Se algum arquivo da API não tem teste que case pelo nome, não há como saber
+    o que ele quebra: roda tudo.
+    """
+    testes = cwd / "apps/api/tests"
+    alvos: set[str] = set()
+    for caminho in caminhos:
+        if not caminho.startswith("apps/api/"):
+            continue
+        relativo = Path(caminho).relative_to("apps/api")
+        if relativo.parts[0] == "tests" and relativo.name.startswith("test_") and relativo.suffix == ".py":
+            if (cwd / caminho).exists():
+                alvos.add(str(relativo))
+            continue
+        if relativo.suffix != ".py" or relativo.stem == "__init__":
+            return None
+        achados = sorted(testes.glob(f"test_*{relativo.stem}*.py")) if testes.is_dir() else []
+        if not achados:
+            return None
+        alvos.update(str(a.relative_to(cwd / "apps/api")) for a in achados)
+    return sorted(alvos) or None
+
+
+def _gate(cwd: Path, caminhos: list[str], completo: bool = False) -> list[test_gate.CheckResult]:
+    """Gate de uma fatia: só os testes da área tocada. `completo`: suíte inteira (antes de incorporar)."""
     paths = test_gate.GatePaths(root=cwd)
     resultados = [test_gate._check_guardrails(paths)]
     if not resultados[0].passed:
         return resultados
     if any(c.startswith("apps/api/") for c in caminhos):
-        resultados.append(test_gate._check_pytest(paths, env=_env_gate()))
+        alvos = None if completo else _alvos_pytest(cwd, caminhos)
+        resultados.append(test_gate._check_pytest(paths, env=_env_gate(), alvos=alvos))
     if any(c.startswith("apps/web/") for c in caminhos):
         resultados += [test_gate._check_vitest(paths), test_gate._check_lint(paths), test_gate._check_build(paths)]
     return resultados
@@ -540,6 +568,31 @@ def pular_fatia(ident: str, n: int) -> dict:
 
 # ---------------------------------------------------------------- incorporar
 
+def _gate_final(meta: dict) -> None:
+    """Segunda camada: a suíte inteira sobre tudo que a sessão mudou, antes de incorporar.
+
+    Cada fatia rodou só os testes da área; aqui roda tudo, uma vez. O resultado
+    fica gravado com o HEAD da sessão: incorporar de novo sem commit novo não
+    repete os minutos de teste.
+    """
+    cwd = Path(meta["caminho"])
+    head = _git(["rev-parse", "HEAD"], cwd).stdout.strip()
+    anterior = meta.get("gate_final") or {}
+    if anterior.get("head") == head and anterior.get("passou"):
+        return
+    caminhos = [c for c in _git(["diff", "--name-only", meta["base"], "HEAD"], cwd).stdout.splitlines() if c]
+    resultados = _gate(cwd, caminhos, completo=True)
+    reprovados = [r for r in resultados if r.mandatory and not r.passed]
+    meta["gate_final"] = {"head": head, "passou": not reprovados, "em": _agora(),
+                          "checks": [{"nome": r.name, "passou": r.passed, "motivo": r.reason[:500],
+                                      "ms": r.duration_ms} for r in resultados]}
+    sessao._gravar_meta(meta)
+    if reprovados:
+        raise WorkspaceErro(409, "gate_final_reprovado",
+                            "a suíte completa reprovou a sessão; nada foi incorporado: "
+                            + "; ".join(f"{r.name}: {r.reason}" for r in reprovados)[:MAX_ERRO])
+
+
 def incorporar(ident: str, modo: str, mensagem: str | None = None) -> dict:
     """Leva o branch da sessão para o branch do operador. Clique do operador; nunca faz push."""
     if modo not in ("merge", "squash"):
@@ -565,6 +618,7 @@ def incorporar(ident: str, modo: str, mensagem: str | None = None) -> dict:
             raise WorkspaceErro(409, "branch_trocado",
                                 f"a sessão saiu de {meta['branch_origem']} e o checkout está em {atual}; "
                                 f"volte para {meta['branch_origem']} antes de incorporar")
+        _gate_final(meta)
         fatias = (meta.get("plano") or {}).get("fatias") or []
         titulo = meta.get("titulo") or f"sessão {ident}"
         corpo = "\n".join(f"- fatia {f['n']}: {f['objetivo']} ({f['status']})" for f in fatias)
@@ -610,3 +664,134 @@ def estado_para_supervisor() -> dict:
                        "task_id": meta.get("task_id")},
             "commits": estado["commits"], "alteracoes_sem_commit": estado["alteracoes"],
             "diff_stat": stat[:4000], "fatias": fatias}
+
+
+def validar_plano_supervisor(bruto: dict) -> dict:
+    """Somente leitura: a mesma validação do "Aprovar plano", sem gravar nada.
+
+    Valida contra a cópia da sessão ativa (é ali que as fatias vão rodar) ou,
+    sem sessão, contra o checkout. Devolve o erro como dado, não exceção: o
+    supervisor corrige e chama de novo.
+    """
+    meta = sessao.ativa()
+    raiz = Path(meta["caminho"]) if meta else sessao.repo()
+    try:
+        fatias = validar_plano(bruto, raiz)
+    except WorkspaceErro as erro:
+        return {"valido": False, "code": erro.codigo, "mensagem": erro.mensagem}
+    return {"valido": True, "sessao": meta["id"] if meta else None,
+            "fatias": [{k: f[k] for k in ("n", "tipo", "objetivo", "trechos", "gate", "max_tokens") if k in f}
+                       for f in fatias],
+            **({} if meta else {"aviso": "sem sessão ativa: validado contra o checkout; "
+                                         "o operador precisa começar a sessão antes de aprovar"})}
+
+
+MAX_DIFF_SUPERVISOR = 6000
+
+
+def resultado_fatia(n: int) -> dict:
+    """Somente leitura: o detalhe de uma fatia da sessão ativa, para o supervisor corrigir."""
+    meta = sessao.ativa()
+    if meta is None:
+        return {"erro": "nenhuma sessão ativa no Workspace", "code": "sem_sessao"}
+    fatias = (meta.get("plano") or {}).get("fatias") or []
+    fatia = next((f for f in fatias if f["n"] == n), None)
+    if fatia is None:
+        return {"erro": f"a sessão não tem fatia {n}", "code": "fatia_inexistente"}
+    cwd = Path(meta["caminho"])
+    if fatia.get("commit"):
+        diff = _git(["show", "--format=", fatia["commit"]], cwd).stdout
+        origem = "commit"
+    else:
+        diff, origem = "", None
+        proposta = fatia.get("proposta") or {}
+        arquivo = bancada_runner.pasta() / str(proposta.get("modelo") or "") / f"{proposta.get('id')}.txt"
+        if proposta.get("id") and arquivo.is_file():
+            diff, origem = arquivo.read_text(encoding="utf-8"), "proposta"
+    # O diff vai a um modelo de nuvem: mesma política de segredo do contexto canônico (ADR 012).
+    from app.services.context_redaction import redact
+    diff = redact(diff).text
+    return {"n": n, "tipo": fatia.get("tipo", "codigo"), "objetivo": fatia["objetivo"],
+            "instrucao": fatia["instrucao"], "status": fatia["status"], "etapa": fatia["etapa"],
+            "erro": fatia["erro"], "tentativas": fatia["tentativas"], "gate_checks": fatia.get("gate_checks") or [],
+            "commit": fatia.get("commit"), "arquivos": fatia.get("arquivos") or [],
+            "origem_diff": origem, "diff": diff[:MAX_DIFF_SUPERVISOR],
+            "diff_truncado": len(diff) > MAX_DIFF_SUPERVISOR}
+
+
+# ---------------------------------------------------------------- medição
+
+# Sem medição anterior, a taxa vem do que o guia registra para o MoE na CPU:
+# ~1.000 tokens de prompt em ~20 s. A primeira fatia medida passa a valer.
+TAXA_PREFILL_PADRAO = 50.0
+CHARS_POR_TOKEN = 3.5
+
+
+def _taxa_prefill(fatias: list[dict]) -> tuple[float, str]:
+    tok = ms = 0.0
+    for f in fatias:
+        m = (f.get("proposta") or {}).get("medicao") or {}
+        if m.get("prefill_tok") and m.get("prefill_ms"):
+            tok, ms = tok + m["prefill_tok"], ms + m["prefill_ms"]
+    if tok and ms:
+        return round(tok / (ms / 1000), 2), "medida"
+    return TAXA_PREFILL_PADRAO, "padrao"
+
+
+def _previsao(fatia: dict, raiz: Path, taxa: float) -> dict | None:
+    """Contexto que a fatia vai mandar ao modelo local, antes de rodar. Não conta as leituras."""
+    try:
+        prompt, _ = bancada_runner.montar_prompt(f"{fatia['instrucao']}\n\n{SAIDA_DIFF}", fatia["trechos"], raiz)
+    except bancada_runner.BancadaErro:
+        return None
+    tokens = int((len(prompt) + len(bancada_runner.SISTEMA_FERRAMENTAS)) / CHARS_POR_TOKEN)
+    return {"tokens": tokens, "prefill_s": round(tokens / taxa, 1)}
+
+
+def _custo_supervisor(chat_session_id: str | None) -> dict | None:
+    if not chat_session_id:
+        return None
+    from uuid import UUID
+    from sqlalchemy import func
+    from app.models.ai_routing import AICallLog
+    try:
+        with _db() as db:
+            linha = (db.query(func.count(AICallLog.id), func.sum(AICallLog.input_tokens),
+                              func.sum(AICallLog.output_tokens),
+                              func.sum(func.coalesce(AICallLog.actual_cost_usd, AICallLog.estimated_cost_usd)),
+                              func.sum(AICallLog.duration_ms))
+                     .filter(AICallLog.session_id == UUID(str(chat_session_id))).one())
+    except Exception:  # noqa: BLE001 — medição é registro: banco fora do ar não derruba o painel
+        return None
+    chamadas, entrada, saida, custo, ms = linha
+    return {"chamadas": chamadas or 0, "tokens_entrada": int(entrada or 0), "tokens_saida": int(saida or 0),
+            "custo_usd": float(custo or 0), "segundos": round((ms or 0) / 1000, 1)}
+
+
+def medicao(ident: str) -> dict:
+    """Somente leitura: o que a sessão gastou e o que cada fatia pendente deve gastar."""
+    meta = sessao._exigir(ident)
+    fatias = (meta.get("plano") or {}).get("fatias") or []
+    taxa, origem = _taxa_prefill(fatias)
+    raiz = Path(meta["caminho"])
+    total = {"prefill_s": 0.0, "geracao_s": 0.0, "prompt_tok": 0, "geracao_tok": 0, "leituras": 0, "tentativas": 0}
+    saida = []
+    for f in fatias:
+        proposta = f.get("proposta") or {}
+        m = proposta.get("medicao") or {}
+        real = None
+        if m:
+            real = {"prefill_s": round(m.get("prefill_ms", 0) / 1000, 1),
+                    "geracao_s": round(m.get("geracao_ms", 0) / 1000, 1),
+                    "prompt_tok": m.get("prompt_tok", 0), "cache_tok": m.get("cache_tok", 0),
+                    "geracao_tok": m.get("geracao_tok", 0)}
+            for chave in ("prefill_s", "geracao_s", "prompt_tok", "geracao_tok"):
+                total[chave] += real[chave]
+        total["leituras"] += int(proposta.get("leituras") or 0)
+        total["tentativas"] += int(f.get("tentativas") or 0)
+        saida.append({"n": f["n"], "status": f["status"], "real": real,
+                      "gate_s": round(sum(c.get("ms") or 0 for c in f.get("gate_checks") or []) / 1000, 1),
+                      "previsto": _previsao(f, raiz, taxa) if f["status"] not in FECHADAS else None})
+    total["prefill_s"], total["geracao_s"] = round(total["prefill_s"], 1), round(total["geracao_s"], 1)
+    return {"sessao": ident, "taxa_prefill_tok_s": taxa, "taxa_origem": origem, "fatias": saida,
+            "total_local": total, "supervisor": _custo_supervisor(meta.get("chat_session_id"))}

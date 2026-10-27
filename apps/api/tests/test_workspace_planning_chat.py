@@ -13,7 +13,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.schema import DefaultClause
 
+from app.models.adr import ADR
 from app.models.backlog import BacklogItem
+from app.models.decision import Decision
+from app.models.knowledge import KnowledgeEntry
 from app.models.chat import ChatMessage, ChatSession
 from app.models.handoff import ExecutionPlan
 from app.models.project import Project
@@ -27,7 +30,8 @@ from app.services import autoridade
 def db(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path}/chat.db")
     metadata = MetaData()
-    for model in (Project, BacklogItem, BacklogSubtask, ChatSession, ChatMessage, ExecutionPlan):
+    for model in (Project, BacklogItem, BacklogSubtask, ChatSession, ChatMessage, ExecutionPlan,
+                  ADR, Decision, KnowledgeEntry):
         table = model.__table__.to_metadata(metadata)
         for column in table.columns:
             if isinstance(column.type, JSONB):

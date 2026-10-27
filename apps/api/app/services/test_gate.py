@@ -204,11 +204,14 @@ def _run_command(cmd: list[str], cwd: Path, timeout: int = 300,
         return -1, "", str(e), duration
 
 
-def _check_pytest(paths: GatePaths = DEFAULT_PATHS, env: dict[str, str] | None = None) -> CheckResult:
+def _check_pytest(paths: GatePaths = DEFAULT_PATHS, env: dict[str, str] | None = None,
+                  alvos: list[str] | None = None) -> CheckResult:
     """Executar pytest no ambiente correto da API.
 
     `env`: a sessão do Workspace passa um ambiente com `.env` e arquivos de
     estado falsos, para a suíte não ler credencial nem gravar estado real.
+    `alvos`: arquivos de teste (relativos a apps/api) para rodar só a área
+    tocada; sem alvos, roda a suíte inteira.
     """
     venv = paths.api_venv
 
@@ -221,7 +224,7 @@ def _check_pytest(paths: GatePaths = DEFAULT_PATHS, env: dict[str, str] | None =
         )
 
     exit_code, stdout, stderr, duration = _run_command(
-        [str(venv), "-m", "pytest", "-v", "--tb=short"],
+        [str(venv), "-m", "pytest", "-v", "--tb=short", *(alvos or [])],
         paths.api_dir,
         timeout=300,
         env=env,
@@ -232,7 +235,8 @@ def _check_pytest(paths: GatePaths = DEFAULT_PATHS, env: dict[str, str] | None =
             name="pytest",
             passed=True,
             mandatory=True,
-            reason="Todos testes Python passaram",
+            reason=(f"Testes da área passaram ({len(alvos)} arquivo(s))" if alvos
+                    else "Todos testes Python passaram"),
             duration_ms=duration,
         )
 

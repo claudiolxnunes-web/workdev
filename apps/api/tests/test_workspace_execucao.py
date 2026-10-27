@@ -53,10 +53,12 @@ def amb(tmp_path, monkeypatch):
 
     gate = {"passa": True, "chamadas": []}
 
-    def gate_falso(cwd, caminhos):
+    def gate_falso(cwd, caminhos, completo=False):
         gate["chamadas"].append(caminhos)
-        return [test_gate.CheckResult(name="pytest", passed=gate["passa"], mandatory=True,
-                                      reason="ok" if gate["passa"] else "1 teste falhou")]
+        gate.setdefault("completos", []).append(completo)
+        passa = gate.get("final", gate["passa"]) if completo else gate["passa"]
+        return [test_gate.CheckResult(name="pytest", passed=passa, mandatory=True,
+                                      reason="ok" if passa else "1 teste falhou")]
     monkeypatch.setattr(ex, "_gate", gate_falso)
 
     backlog = []
@@ -248,7 +250,7 @@ def test_gate_escolhe_checks_pela_area_e_isola_o_ambiente(tmp_path, monkeypatch)
     chamados = {}
     ok = lambda nome: test_gate.CheckResult(name=nome, passed=True, mandatory=True, reason="ok")
     monkeypatch.setattr(test_gate, "_check_guardrails", lambda paths: ok("guardrails"))
-    monkeypatch.setattr(test_gate, "_check_pytest", lambda paths, env=None: chamados.setdefault("pytest", env) and ok("pytest"))
+    monkeypatch.setattr(test_gate, "_check_pytest", lambda paths, env=None, alvos=None: chamados.setdefault("pytest", env) and ok("pytest"))
     for nome in ("vitest", "lint", "build"):
         monkeypatch.setattr(test_gate, f"_check_{nome}", lambda paths, n=nome: chamados.setdefault(n, True) and ok(n))
     assert [r.name for r in ex._gate(tmp_path, ["docs/x.md"])] == ["guardrails"]
@@ -371,3 +373,104 @@ def test_ler_schema_no_runner_so_das_tabelas_da_fatia(banco_teste):
     assert bancada_runner._ferramenta(chamada, None, ["backlog"])[0].startswith("RECUSADO")
     chamada["function"]["arguments"] = json.dumps({"tabela": "backlog"})
     assert '"priority"' in bancada_runner._ferramenta(chamada, None, ["backlog"])[0]
+
+
+# ---------------------------------------------------------------- tools do supervisor
+
+def test_validar_plano_supervisor_nao_grava_e_devolve_o_erro(amb):
+    sem_sessao = ex.validar_plano_supervisor({"fatias": [fatia()]})
+    assert sem_sessao["valido"] and sem_sessao["sessao"] is None and "aviso" in sem_sessao
+    meta = sessao.criar(task_id="t-1")
+    ok = ex.validar_plano_supervisor({"fatias": [fatia()]})
+    assert ok["valido"] and ok["sessao"] == meta["id"] and ok["fatias"][0]["trechos"] == [["app/mod.py", 1, 2]]
+    ruim = ex.validar_plano_supervisor({"fatias": [fatia(trechos=[["app/nao_existe.py", 1, 2]])]})
+    assert ruim == {"valido": False, "code": "trecho_invalido", "mensagem": ruim["mensagem"]}
+    sem_gate = ex.validar_plano_supervisor({"fatias": [fatia(gate=[])]})
+    assert sem_gate["code"] == "fatia_sem_gate"
+    # Validar não aprova: a sessão continua sem plano e sem subtasks.
+    assert not sessao.estado(meta["id"]).get("plano") and amb.backlog == []
+
+
+def test_resultado_fatia_mostra_proposta_que_falhou_e_commit_que_passou(amb):
+    assert ex.resultado_fatia(1)["code"] == "sem_sessao"
+    meta = nova(amb, [fatia(), fatia(objetivo="segunda")])
+    amb.gate["passa"] = False
+    amb.respostas.append(DIFF_OK.replace("return 2", "return 2  # sk-ant-abcdefghijklmnopqrstuvwx"))
+    eventos(ex.executar_fatia(meta["id"], 1))
+    falha = ex.resultado_fatia(1)
+    assert falha["status"] == "falhou" and falha["etapa"] == "gate" and falha["origem_diff"] == "proposta"
+    assert falha["gate_checks"][0]["passou"] is False
+    assert "sk-ant-abcdefghijklmnopqrstuvwx" not in falha["diff"]
+    amb.gate["passa"] = True
+    amb.respostas.append(DIFF_OK)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    passou = ex.resultado_fatia(1)
+    assert passou["status"] == "ok" and passou["origem_diff"] == "commit" and "+    return 2" in passou["diff"]
+    assert ex.resultado_fatia(9)["code"] == "fatia_inexistente"
+
+
+# ---------------------------------------------------------------- medição
+
+def test_medicao_preve_o_prefill_e_passa_a_usar_a_taxa_medida(amb):
+    meta = nova(amb, [fatia(), fatia(objetivo="segunda")])
+    antes = ex.medicao(meta["id"])
+    assert antes["taxa_origem"] == "padrao" and antes["taxa_prefill_tok_s"] == ex.TAXA_PREFILL_PADRAO
+    previsto = antes["fatias"][0]["previsto"]
+    assert previsto["tokens"] > 0 and previsto["prefill_s"] == round(previsto["tokens"] / ex.TAXA_PREFILL_PADRAO, 1)
+    assert antes["supervisor"] is None
+
+    amb.respostas.append(DIFF_OK)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    gravada = sessao._ler_meta(meta["id"])
+    gravada["plano"]["fatias"][0]["proposta"]["medicao"] = {
+        "prefill_ms": 20000.0, "prefill_tok": 400, "cache_tok": 100, "prompt_tok": 500,
+        "geracao_ms": 5000.0, "geracao_tok": 80}
+    sessao._gravar_meta(gravada)
+
+    depois = ex.medicao(meta["id"])
+    assert depois["taxa_origem"] == "medida" and depois["taxa_prefill_tok_s"] == 20.0
+    assert depois["fatias"][0]["previsto"] is None and depois["fatias"][0]["real"]["prefill_s"] == 20.0
+    assert depois["fatias"][1]["previsto"]["prefill_s"] == round(depois["fatias"][1]["previsto"]["tokens"] / 20.0, 1)
+    assert depois["total_local"]["prompt_tok"] == 500 and depois["total_local"]["geracao_s"] == 5.0
+
+
+# ---------------------------------------------------------------- gate em duas camadas
+
+def test_alvos_pytest_escolhe_a_area_ou_cai_na_suite_inteira(tmp_path):
+    testes = tmp_path / "apps/api/tests"
+    testes.mkdir(parents=True)
+    for nome in ("test_workspace_execucao.py", "test_workspace_banco.py", "test_outro.py"):
+        (testes / nome).write_text("", encoding="utf-8")
+    assert ex._alvos_pytest(tmp_path, ["apps/api/app/services/workspace_banco.py", "docs/x.md"]) == [
+        "tests/test_workspace_banco.py"]
+    assert ex._alvos_pytest(tmp_path, ["apps/api/tests/test_outro.py"]) == ["tests/test_outro.py"]
+    # Módulo sem teste com o nome dele: não dá para saber o que quebra, roda tudo.
+    assert ex._alvos_pytest(tmp_path, ["apps/api/app/services/sem_teste.py"]) is None
+    assert ex._alvos_pytest(tmp_path, ["apps/api/app/__init__.py"]) is None
+    assert ex._alvos_pytest(tmp_path, ["apps/web/src/x.tsx"]) is None
+
+
+def test_suite_completa_reprovada_impede_incorporar_e_so_passa_quando_aprova(amb):
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    assert amb.gate["completos"] == [False]
+    amb.gate["final"] = False
+    with pytest.raises(WorkspaceErro) as erro:
+        ex.incorporar(meta["id"], "squash")
+    assert erro.value.codigo == "gate_final_reprovado"
+    assert sessao._ler_meta(meta["id"])["status"] == "ativa"
+    assert git(amb.repo, "log", "--oneline").count("\n") == 0
+    amb.gate["final"] = True
+    assert ex.incorporar(meta["id"], "squash")["status"] == "incorporada"
+    assert amb.gate["completos"] == [False, True, True]
+
+
+def test_gate_final_aprovado_no_mesmo_head_nao_roda_de_novo(amb):
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    gravada = sessao._ler_meta(meta["id"])
+    ex._gate_final(gravada)
+    ex._gate_final(sessao._ler_meta(meta["id"]))
+    assert amb.gate["completos"] == [False, True]
