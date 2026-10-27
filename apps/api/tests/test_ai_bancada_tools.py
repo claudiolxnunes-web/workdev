@@ -139,7 +139,8 @@ def _db_com(task=None, projeto=None, subtasks=()):
 def _task(descricao):
     return SimpleNamespace(id=uuid.uuid4(), project_id=uuid.uuid4(),
                            title="Ajustar X", description=descricao,
-                           status="todo", priority="high", type="feature")
+                           status="todo", priority="high", type="feature",
+                           archived_reason=None, archived_at=None)
 
 
 def test_ler_task_devolve_ficha_completa():
@@ -154,6 +155,8 @@ def test_ler_task_devolve_ficha_completa():
     assert "aviso" not in r
     assert r["projeto"] == {"nome": "WorkDev Core", "slug": "workdev-core"}
     assert r["status"] == "todo"
+    assert r["archived_reason"] is None
+    assert r["archived_at"] is None
     assert r["subtasks"] == [{"ordem": 1, "titulo": "passo 1",
                               "status": "todo", "descricao": None}]
 
