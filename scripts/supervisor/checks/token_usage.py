@@ -56,6 +56,11 @@ MARCAS_LIMITE = (
     "credit balance is too low",
 )
 
+# Valores de `error` que o cliente grava nos eventos `isApiErrorMessage`. É a
+# fonte confiável: o texto da recusa varia com o provedor (em 2026-10-27 vinha
+# em português, "Voce atingiu o limite de uso...", e nenhuma marca acima casava).
+ERROS_DE_LIMITE = ("rate_limit", "billing_error")
+
 
 def coletar(contexto: Contexto) -> list[Fato]:
     agora = contexto.agora
@@ -94,7 +99,10 @@ def _modalidade(conta: dict[str, Any], agora: datetime) -> list[Fato]:
         return []
     billing = conta.get("billingType")
     assento = conta.get("seatTier")
-    if billing not in config.TOKEN_USAGE_BILLING_PAGO and assento:
+    # Só o billingType decide. `seatTier` é None também em assinatura individual
+    # ativa (`stripe_subscription`, conferido em 2026-10-27), então usá-lo como
+    # sinal geraria alerta high falso sempre que o cache estivesse fresco.
+    if billing not in config.TOKEN_USAGE_BILLING_PAGO:
         return []
 
     idade_horas = _idade_do_cache_horas(conta.get("profileFetchedAt"), agora)
@@ -268,9 +276,15 @@ def _marca_de_limite(evento: dict[str, Any]) -> str | None:
     Varrer o evento inteiro casaria com o `total_tokens_reminder` que o
     próprio cliente injeta — foi o que produziu 33 falsos positivos quando
     esta fonte foi medida pela primeira vez.
+
+    O campo estruturado `error` dos eventos `isApiErrorMessage` vem primeiro.
+    O texto só vale em mensagem do assistente: mensagem do usuário costuma
+    trazer log colado, que cita a recusa sem ela ter acontecido.
     """
+    if evento.get("isApiErrorMessage") and evento.get("error") in ERROS_DE_LIMITE:
+        return evento["error"]
     mensagem = evento.get("message")
-    if not isinstance(mensagem, dict):
+    if not isinstance(mensagem, dict) or mensagem.get("role") == "user":
         return None
     conteudo = mensagem.get("content")
     if isinstance(conteudo, list):

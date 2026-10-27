@@ -61,6 +61,14 @@ class ModalidadeTest(unittest.TestCase):
 
         self.assertEqual(fatos, [])
 
+    def test_assinatura_individual_sem_seat_tier_nao_alerta(self):
+        # Formato real de uma conta Pro/Max individual: seatTier vem None.
+        fatos = token_usage.avaliar(
+            {"conta": {"billingType": "stripe_subscription", "seatTier": None,
+                       "profileFetchedAt": ms(AGORA - timedelta(hours=1))}}, AGORA)
+
+        self.assertEqual(fatos, [])
+
     def test_conta_ausente_nao_quebra(self):
         self.assertEqual(token_usage.avaliar({}, AGORA), [])
 
@@ -150,6 +158,26 @@ class DeteccaoDeLimiteTest(unittest.TestCase):
             {"type": "text", "text": "Claude usage limit reached. Resets at 5pm."}]}}
 
         self.assertEqual(token_usage._marca_de_limite(evento), "usage limit reached")
+
+    def test_erro_estruturado_de_limite_e_detectado_em_qualquer_idioma(self):
+        evento = {"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit",
+                  "message": {"role": "assistant", "content": [{"type": "text", "text":
+                      "API Error: Request rejected (429) · Voce atingiu o limite de uso"}]}}
+
+        self.assertEqual(token_usage._marca_de_limite(evento), "rate_limit")
+
+    def test_erro_de_api_que_nao_e_limite_nao_conta(self):
+        evento = {"isApiErrorMessage": True, "error": "authentication_failed",
+                  "message": {"role": "assistant", "content": [{"type": "text", "text":
+                      "Please run /login"}]}}
+
+        self.assertIsNone(token_usage._marca_de_limite(evento))
+
+    def test_log_colado_pelo_usuario_nao_e_limite(self):
+        evento = {"message": {"role": "user", "content":
+                  "olha esse log: Claude usage limit reached. Resets at 5pm."}}
+
+        self.assertIsNone(token_usage._marca_de_limite(evento))
 
     def test_soma_ignora_evento_sem_usage(self):
         acumulado = {}
