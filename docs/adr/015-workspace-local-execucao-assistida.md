@@ -1,6 +1,6 @@
 # ADR 015 — O Workspace Local executa planos fatiados; a Bancada continua só propondo
 
-Status: proposed (aguarda ratificação do Cláudio).
+Status: accepted (ratificado pelo Cláudio em 2026-10-27); implementada em `feat/workspace-supervisor-acoes`.
 Plano de origem: `docs/planning/workspace-local-execucao-assistida.md` (o rascunho
 dele se chamava "ADR 010"; o número foi tomado pela ADR do contexto canônico).
 
