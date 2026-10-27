@@ -30,10 +30,18 @@ from app.schemas.handoff import (
     RunUpdate,
     SubtaskProgress,
 )
-from app.services import agent_runtimes, build_jobs, context_egress
+from app.services import (
+    agent_runtimes,
+    build_jobs,
+    build_rag,
+    canonical_context,
+    context_egress,
+    context_redaction,
+)
+from app.services.observer_selection import current as observer_current
+from app.services.run_pause import active_pause
 from app.services.build_executor import build_enabled
-from app.services.agent_runtimes import is_ollama_agent
-from app.services.build_rag import augment_prompt
+from app.services.agent_runtimes import LOCAL_AGENT_REMOVED, RETIRED_AGENT_IDS, is_ollama_agent
 from app.services.plan_granularity import assess as assess_plan_granularity
 from app.services.engineering_graph import graph_sync
 from app.services.ollama_driver import (
@@ -174,6 +182,10 @@ def _run_out(
         "reviewer_agent": run.reviewer_agent,
         "review_attempts": run.review_attempts or 0,
         "model": run.model,
+        # Modelo físico servido pelo llama.cpp no despacho do local-code
+        # (prod/dev/fast). NULL para os demais agentes; `model` segue com o
+        # alias estável.
+        "local_model_key": run.local_model_key,
         "reasoning_effort": run.reasoning_effort,
         "complexity": run.complexity,
         "complexity_score": run.complexity_score,
@@ -204,6 +216,8 @@ def _run_out(
         "dispatch_state": run.dispatch_state or "idle",
         "dispatch_attempts": run.dispatch_attempts or 0,
         "last_dispatch_at": run.last_dispatch_at,
+        "observer": observer_current(db, run.id),
+        "pause": active_pause(db, run.id),
     }
 
 
@@ -800,6 +814,55 @@ def plan_review_policy(plan_id: UUID, agent: str | None = None, db: Session = De
             "message": "A classificação final será reavaliada pelo backend com o diff e os gates da execução."}
 
 
+def _standby_session_alive(agent: str) -> bool:
+    """Sondagem física da sessão standby do agente (ponto único para isolar em testes)."""
+    from app.routers.terminal import ALLOWED_SESSIONS
+    from app.services import agent_operability
+    state = agent_operability.resolve(agent, standby_session=ALLOWED_SESSIONS.get(agent), run_id=None)
+    return bool(state.session_exists)
+
+
+def _session_warning(agent: str, model: str) -> dict | None:
+    """Alerta quando a sessão viva roda outro modelo que o selecionado.
+
+    A escolha é do operador e segue valendo: o envio não é bloqueado nem o
+    modelo trocado. O alerta apenas informa que a sessão atual não carrega o
+    modelo escolhido até o agente ser reiniciado na aba Agentes.
+    """
+    from app.services import cli_agent_models
+    active = cli_agent_models.describe(agent)["active"]
+    if active == model:
+        return None
+    if not _standby_session_alive(agent):
+        return None
+    if active is None:
+        message = (f"{agent} tem sessão ativa sem modelo registrado; a aba Agentes seleciona {model}. "
+                   "Reinicie o agente para garantir que a sessão rode esse modelo.")
+    else:
+        message = (f"{agent} está rodando {active}, mas a aba Agentes seleciona {model}. "
+                   "Reinicie o agente para aplicar a troca; o envio segue com a sua escolha.")
+    return {"code": "model_requires_new_session", "severity": "warning", "message": message,
+            "details": {"agent": agent, "selected": model, "active": active}}
+
+
+def _resolve_cli_agent_model(agent: str, warnings: list[dict]) -> str:
+    """Resolve o modelo persistido na aba Agentes para um agente CLI.
+
+    Usado para executor e revisor. Seleção que não existe mais no catálogo não
+    pode ser executada e continua bloqueando, sem fallback silencioso; sessão
+    viva em outro modelo só gera alerta em ``warnings``.
+    """
+    from app.services import cli_agent_models
+    try:
+        model, _ = cli_agent_models.validate_selected(agent)
+    except ValueError as error:
+        raise HTTPException(409, {"code": "invalid_model_selection", "message": str(error)}) from error
+    warning = _session_warning(agent, model)
+    if warning:
+        warnings.append(warning)
+    return model
+
+
 @router.post(
     "/plans/{plan_id}/build",
     status_code=201,
@@ -826,30 +889,28 @@ def send_to_build(
         "Seleção manual pelo usuário"
     )
 
-    if payload.use_default_executor and agent is None:
-        from app.services.config_service import config_service
-        from app.services.agent_router import resolve_execution_selection
-        preference = config_service.get_setting("agents.executor")
-        if not preference:
-            raise HTTPException(409, {"code": "executor_default_missing", "message": "Configure o Executor padrão na aba Agentes ou escolha um executor para esta execução"})
-        try:
-            selected = resolve_execution_selection(db, preference)
-        except AgentRoutingError as exc:
-            raise HTTPException(409, {"code": exc.code, "message": exc.message}) from exc
-        agent, model = selected["agent"], selected["model"]
-        routing_reason = "Executor padrão da aba Agentes (fonte e modelo validados no envio)"
+    from app.services import cli_agent_models
+    # Alertas não bloqueiam: a escolha do operador (agentes e modelos) prevalece.
+    warnings: list[dict] = []
+    if payload.routing_mode == "manual" and agent in cli_agent_models.MODELS and model is None:
+        # O seletor da aba Agentes é persistente. Resolver aqui — antes do gate
+        # de modelos permitidos abaixo — garante que o modelo da aba passe
+        # pelo mesmo controle de custo que um modelo escolhido explicitamente
+        # no envio; fixar a escolha na run evita que uma troca posterior
+        # altere o modelo de execuções antigas.
+        model = _resolve_cli_agent_model(agent, warnings)
 
     if payload.review_requested is not None and payload.routing_mode == "manual":
         task, _project = _task_project(db, plan.backlog_id)
         assessment = classify_task(task, plan, load_subtasks(db, plan.backlog_id))
         complexity, complexity_score = assessment.level, assessment.score
-        from app.services.review_policy import classify_risk
-        risk = classify_risk([], "", complexity)
-        if payload.review_requested is False and risk.sensitive:
-            raise HTTPException(409, {"code": "review_required", "message": "A política canônica exige revisão independente para este escopo"})
+        # A recomendação de revisão é só recomendação: o operador decide em
+        # qualquer risco, e a escolha fica auditada em build.review_preference.
 
     reviewer_selection = None
     if payload.reviewer_selection:
+        # Seleção explícita (envio legado): validada contra o catálogo de
+        # execução, não contra a aba Agentes — nunca sobrescrita abaixo.
         from app.services.agent_router import resolve_execution_selection
         try:
             reviewer_selection = resolve_execution_selection(db, payload.reviewer_selection)
@@ -860,35 +921,46 @@ def send_to_build(
         if payload.reviewer and payload.reviewer != reviewer_selection["agent"]:
             raise HTTPException(409, "Fonte e modelo não pertencem ao revisor informado")
         payload.reviewer = reviewer_selection["agent"]
+    elif payload.reviewer and payload.routing_mode == "manual" and payload.reviewer in cli_agent_models.MODELS:
+        # Tela de planos não oferece mais seletor de modelo para o revisor:
+        # mesma resolução central do executor, pela configuração da aba
+        # Agentes do agente escolhido como revisor.
+        reviewer_model = _resolve_cli_agent_model(payload.reviewer, warnings)
+        reviewer_selection = {
+            "agent": payload.reviewer,
+            "model": reviewer_model,
+            "provider": cli_agent_models.PROVIDERS.get(payload.reviewer),
+            "review_capable": True,
+        }
+
+    observer_selection = None
+    if payload.observer_enabled:
+        from app.services.agent_router import resolve_execution_selection
+        try:
+            observer_selection = resolve_execution_selection(db, payload.observer_selection)
+        except AgentRoutingError as exc:
+            raise HTTPException(409, {'code': exc.code, 'message': exc.message}) from exc
 
     if payload.routing_mode == "manual" and model:
-        # O usuário escolhe o modelo, mas só entre os permitidos do agente.
-        # O catálogo inteiro nunca é opção de envio.
+        # O modelo é escolha do operador: nada aqui bloqueia o envio, só avisa.
+        if agent in cli_agent_models.MODELS and model not in dict(cli_agent_models.MODELS[agent]):
+            warnings.append({
+                "code": "model_unsupported_by_cli",
+                "severity": "warning",
+                "message": (f"O modelo {model} não consta no catálogo da CLI de {agent}; "
+                            "o envio segue com a sua escolha, mas a execução pode falhar ao iniciar."),
+                "details": {"agent": agent, "model": model,
+                            "supported_models": [m for m, _ in cli_agent_models.MODELS[agent]]},
+            })
         allowed = allowed_models_for_agent(db, agent)
-
-        if allowed and model not in {
-            row.provider_model_id for row in allowed
-        }:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "model_not_allowed_for_agent",
-                    "message": (
-                        f"O modelo {model} não está configurado para "
-                        f"{agent}."
-                    ),
-                    "details": {
-                        "agent": agent,
-                        "allowed_models": [
-                            {
-                                "model": row.provider_model_id,
-                                "model_label": row.display_name,
-                            }
-                            for row in allowed
-                        ],
-                    },
-                },
-            )
+        if allowed and model not in {row.provider_model_id for row in allowed}:
+            warnings.append({
+                "code": "model_not_allowed_for_agent",
+                "severity": "warning",
+                "message": f"O modelo {model} não está na lista configurada para {agent}; o envio segue com a sua escolha.",
+                "details": {"agent": agent, "model": model,
+                            "allowed_models": [row.provider_model_id for row in allowed]},
+            })
 
     if payload.routing_mode == "manual" and is_ollama_agent(agent):
         # Endpoint indisponível não vira run pendurada: recusa antes de criar
@@ -950,6 +1022,10 @@ def send_to_build(
             decision.reason
         )
 
+    provider = (
+        decision.provider if payload.routing_mode == "auto" else cli_agent_models.PROVIDERS.get(agent)
+    )
+
     try:
         run, event = queue_build(
             db,
@@ -957,6 +1033,7 @@ def send_to_build(
             agent,
             reviewer=payload.reviewer,
             model=model,
+            provider=provider,
             reasoning_effort=(
                 reasoning_effort
             ),
@@ -972,12 +1049,19 @@ def send_to_build(
             ),
             **({"review_requested": payload.review_requested} if payload.review_requested is not None else {}),
             **({"reviewer_selection": reviewer_selection} if reviewer_selection else {}),
+            **({'observer_enabled': True, 'observer_selection': observer_selection}
+              if payload.observer_enabled else {}),
         )
     except HandoffError as error:
         raise HTTPException(
             409,
             str(error),
         ) from error
+
+    for warning in warnings:
+        add_run_event(db, run, "build.warning", warning["message"], warning)
+    if warnings:
+        db.commit()
 
     _sync_run(
         background,
@@ -994,18 +1078,38 @@ def send_to_build(
             db,
             run,
         )
+        # O bloco canônico (ADR, knowledge, decisions) entra no prompt do
+        # AUTO pelo mesmo caminho dos outros despachos. Antes ele não entrava
+        # — o AUTO entregava `context["prompt"]` cru, e o agente recebia um
+        # plano sem nenhuma decisão do projeto (ADR 010).
+        #
+        # A entrega local é redigida: o texto não sai da VPS, mas chega a um
+        # modelo, e o contexto canônico é texto do operador (ADR 012).
+        montado = canonical_context.build_local_prompt(context)
+        if montado.redacted:
+            add_run_event(
+                db,
+                run,
+                "build.context_redacted",
+                context_redaction.summary(montado.redaction),
+                {"runtime_id": run.agent, "counts": dict(montado.redaction.counts)},
+            )
+            db.commit()
         background.add_task(
             _run_auto_agent,
             run.id,
             run.agent,
             run.model,
-            context["prompt"],
+            montado.text,
         )
 
-    return _run_out(
+    result = _run_out(
         db,
         run,
     )
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 @router.get("/runs")
 def list_runs(
@@ -1059,6 +1163,71 @@ def get_agent_run(
     )
 
 
+class RunResume(BaseModel):
+    reason: str
+
+
+@router.post('/runs/{run_id}/resume')
+def resume_observer_pause(run_id: UUID, payload: RunResume,
+                          db: Session = Depends(get_db)):
+    """Explicit authenticated operator action; never triggered by the worker."""
+    from app.services.run_pause import resume_paused_run, RunPaused
+    if not payload.reason.strip():
+        raise HTTPException(422, 'Motivo da retomada é obrigatório')
+    try:
+        run = resume_paused_run(db, run_id, actor='authenticated_operator',
+                                reason=payload.reason.strip())
+    except RunPaused as error:
+        raise HTTPException(409, str(error)) from error
+    from app.services.build_worker import continue_paused_outcome
+    try:
+        continue_paused_outcome(db, run)
+    except HandoffError as error:
+        raise HTTPException(409, str(error)) from error
+    if run.agent == 'local-code':
+        from app.services.local_code_build import continue_paused_delivery
+        try:
+            continue_paused_delivery(db, run)
+        except HandoffError as error:
+            raise HTTPException(409, str(error)) from error
+    return _run_out(db, run)
+
+
+class RunObserverChoice(BaseModel):
+    enabled: bool
+    selection: dict[str, str] | None = None
+
+
+@router.put('/runs/{run_id}/observer')
+def configure_run_observer(run_id: UUID, payload: RunObserverChoice,
+                           background: BackgroundTasks, db: Session = Depends(get_db)):
+    """An explicit operator choice changes observation, never resumes a PAUSE."""
+    run = _get_run(db, run_id)
+    if run.status not in {'queued', 'running', 'blocked'}:
+        raise HTTPException(409, 'Observer só pode ser alterado durante Run ativa')
+    selected = None
+    if payload.enabled:
+        if not payload.selection:
+            raise HTTPException(422, 'Fonte e modelo do Observer são obrigatórios')
+        from app.services.agent_router import resolve_execution_selection
+        try:
+            selected = resolve_execution_selection(db, payload.selection)
+        except AgentRoutingError as error:
+            raise HTTPException(409, {'code': error.code, 'message': error.message}) from error
+    event = add_run_event(db, run, 'observer.configured',
+        'Observer ligado' if payload.enabled else 'Observer desligado',
+        {'enabled': payload.enabled,
+         'provider': selected.get('provider') if selected else None,
+         'model': selected.get('model') if selected else None,
+         'runtime_id': selected.get('runtime_id') if selected else None})
+    if payload.enabled:
+        from app.services.observer_workspace import baseline
+        baseline(db, run)
+    db.commit()
+    _sync_run(background, db, run, event)
+    return _run_out(db, run)
+
+
 @router.get("/runs/{run_id}/context")
 def get_agent_context(
     run_id: UUID,
@@ -1079,16 +1248,85 @@ def get_agent_context(
         ) from error
 
 
+@router.get("/runs/{run_id}/references")
+def get_run_references(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Referências canônicas que o Build receberia, para o agente manual.
+
+    O agente conduzido na tmux não tem montagem de prompt: o operador digita
+    o que quiser, e o que ele não digita não chega ao agente. Este endpoint
+    devolve o mesmo recorte que o Build recebe — mesmo `build_context`, mesma
+    seleção — para o operador não precisar carregar ADR, knowledge e
+    decisions na mão (ADR 014).
+
+    O texto sai redigido, pela mesma política do bloco entregue ao agente
+    (ADR 012): o operador vai colar isso no terminal, e terminal não é lugar
+    para segredo em claro.
+    """
+    try:
+        context = build_context(
+            db,
+            _get_run(
+                db,
+                run_id,
+            ),
+        )
+    except HandoffError as error:
+        raise HTTPException(
+            409,
+            str(error),
+        ) from error
+
+    snippets = build_rag.select_snippets(context)
+    bloco = canonical_context.canonical_block(context)
+
+    return {
+        "run_id": str(run_id),
+        "snippets": [
+            {
+                "source": item.get("source"),
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "text": context_redaction.redact(item.get("text") or "").text,
+                "score": item.get("score"),
+            }
+            for item in snippets
+        ],
+        "block": context_redaction.redact(bloco).text,
+    }
+
+
 @router.post('/runs/{run_id}/start', status_code=202)
 def start_workspace_run(run_id: UUID, background: BackgroundTasks, db: Session = Depends(get_db)):
     from app.services.agent_workspace import audit
     from app.routers.terminal import STANDBY_COMMANDS
     run = _get_run(db, run_id)
+    from app.services.run_pause import assert_run_can_continue, RunPaused
+    try:
+        assert_run_can_continue(db, run_id)
+    except RunPaused as error:
+        raise HTTPException(409, str(error)) from error
     if run.status != 'queued' or run.agent not in STANDBY_COMMANDS:
         raise HTTPException(409, 'Somente Run CLI aguardando pode iniciar sessão isolada')
+    if run.agent == 'local-code':
+        return dispatch_run_to_ollama(run_id, background, db)
     context = build_context(db, run)
     audit('start_run', agent=run.agent, run_id=run.id)
-    background.add_task(_run_auto_agent, run.id, run.agent, run.model, context['prompt'], True)
+    # Mesmo caminho de montagem do AUTO: bloco canônico incluído e política de
+    # segredo aplicada na entrega local (ADR 010 e ADR 012).
+    montado = canonical_context.build_local_prompt(context)
+    if montado.redacted:
+        add_run_event(
+            db,
+            run,
+            "build.context_redacted",
+            context_redaction.summary(montado.redaction),
+            {"runtime_id": run.agent, "counts": dict(montado.redaction.counts)},
+        )
+        db.commit()
+    background.add_task(_run_auto_agent, run.id, run.agent, run.model, montado.text, True)
     return {'run_id': str(run.id), 'status': run.status, 'accepted': True}
 
 
@@ -1202,6 +1440,8 @@ def update_agent_run(
             AgentRunEvent.event_type == "build.review_preference").order_by(AgentRunEvent.created_at.desc()).first()
         if preference is not None and isinstance(preference.payload, dict):
             decision = with_user_preference(decision, preference.payload.get("requested"), run.reviewer_agent, run.agent)
+        from app.services.adaptive_review import request_observation
+        decision = request_observation(db, run, decision, diff)
         persist_decision(db, run, decision, len(diff.files), changed_lines(diff.text))
         if decision.decision == 'NO_REVIEW_GATE_FAIL':
             run, event = update_run(db, run, {
@@ -1324,7 +1564,13 @@ async def _consume_dispatch_job(
     db = SessionLocal()
     try:
         job = db.query(AgentBuildJob).filter(AgentBuildJob.id == job_id).first()
-        if job is None or job.state != "queued":
+        if job is None or job.state != "queued" or job.runtime_id == "local-code":
+            return
+        from app.services.run_pause import assert_run_can_continue, RunPaused
+        try:
+            assert_run_can_continue(db, run_id)
+        except RunPaused:
+            db.rollback()
             return
         build_jobs.start_job(db, job)
         db.commit()
@@ -1339,6 +1585,8 @@ async def _consume_dispatch_job(
     # isolado: duas cópias divergiriam, e é justamente o parcial que sobra
     # quando a geração morre no meio.
     try:
+        with SessionLocal() as checkpoint_db:
+            assert_run_can_continue(checkpoint_db, run_id)
         result = await dispatch_to_ollama(
             runtime_id,
             prompt,
@@ -1347,6 +1595,13 @@ async def _consume_dispatch_job(
         )
     except OllamaDispatchError as falha:
         erro = falha
+    except RunPaused:
+        with SessionLocal() as checkpoint_db:
+            queued = checkpoint_db.get(AgentBuildJob, job_id)
+            if queued and queued.state == 'running':
+                queued.state = 'queued'
+                checkpoint_db.commit()
+        return
 
     db = SessionLocal()
     try:
@@ -1444,6 +1699,15 @@ def dispatch_run_to_ollama(
     vivo, e a recusa vem do índice parcial do banco, não de um `if` daqui.
     """
     run = _get_run(db, run_id)
+    from app.services.run_pause import assert_run_can_continue, RunPaused
+    try:
+        assert_run_can_continue(db, run_id)
+    except RunPaused as error:
+        raise HTTPException(409, str(error)) from error
+
+    if run.agent in RETIRED_AGENT_IDS:
+        # Runs antigas do local-code só aceitam continue e stop; envio novo não.
+        raise HTTPException(409, {'code': 'local_agent_removed', 'message': LOCAL_AGENT_REMOVED})
 
     if not is_ollama_agent(run.agent):
         raise HTTPException(
@@ -1492,8 +1756,10 @@ def dispatch_run_to_ollama(
         raise HTTPException(409, str(error)) from error
 
     # O prompt sai daqui com os trechos recuperados já embutidos em texto: a
-    # recuperação acontece na VPS, o runtime só lê.
-    prompt = augment_prompt(context)
+    # recuperação acontece na VPS, o runtime só lê. A montagem é a mesma dos
+    # demais despachos (ADR 010); a redaction, nesta rota, é a do egresso
+    # remoto, logo abaixo.
+    prompt = canonical_context.build_prompt(context)
 
     # Política de egresso ANTES de abrir o job, e não depois: uma recusa entre
     # o open_job e o envio deixaria uma linha órfã em `queued`, que o índice
@@ -1786,6 +2052,8 @@ def create_run_event(
         run_id,
     )
 
+    if payload.event_type.startswith(('observer.', 'routing.jev_', 'runtime.')):
+        raise HTTPException(403, 'Policy and runtime audit evidence is backend-owned')
     event = add_run_event(
         db,
         run,
@@ -1827,6 +2095,11 @@ def update_run_subtask(
         db,
         run_id,
     )
+    from app.services.run_pause import assert_run_can_continue, RunPaused
+    try:
+        assert_run_can_continue(db, run_id)
+    except RunPaused as error:
+        raise HTTPException(409, str(error)) from error
 
     subtask = db.query(
         BacklogSubtask

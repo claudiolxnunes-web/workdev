@@ -27,12 +27,17 @@ class BacklogUpdate(BaseModel):
     effort: Optional[int] = None
     sprint: Optional[str] = None
     rank: Optional[int] = None
+    # Só valem junto com status="archived"; não são colunas gravadas direto.
+    archived_reason: Optional[str] = None
+    archived_note: Optional[str] = None
 
 
 class BacklogOut(BacklogCreate):
     id: UUID
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
+    archived_reason: Optional[str] = None
 
     class Config:
         from_attributes = True

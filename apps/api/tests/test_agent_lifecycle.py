@@ -27,6 +27,7 @@ def registro_isolado(tmp_path, monkeypatch):
         agent_lifecycle, "GROUPS_FILE", tmp_path / "agent-groups.json"
     )
     monkeypatch.setenv("AGENTS_HEALTH_STATE", str(tmp_path / "status.json"))
+    monkeypatch.setattr(agent_lifecycle, "_llama_service", lambda action: True)
     # Identidade, operações e snapshot são isolados em disco.
     yield
 
@@ -84,7 +85,7 @@ class TestModeloCompartilhado:
 
     def test_modelo_de_agente_cli_e_none(self):
         """Codex/Claude/Kimi falam com API remota; nada residente aqui."""
-        for agente in ("codex", "claude", "kimi", "qwen", "gemini"):
+        for agente in ("codex", "claude", "kimi", "openrouter", "gemini"):
             assert agent_lifecycle.model_for_agent(agente) is None
 
     def test_runtime_ollama_tem_modelo(self):
@@ -492,6 +493,19 @@ class TestDescarregamentoAssincrono:
     def test_stop_reporta_que_ainda_esta_residente(self, monkeypatch):
         """O motivo precisa dizer a verdade para o operador."""
         monkeypatch.setattr(
+            "app.services.agent_runtimes.get_runtime",
+            lambda _a: type(
+                "FakeRuntime",
+                (),
+                {"engine": "ollama", "kind": "local", "id": "local-code"},
+            )(),
+        )
+        monkeypatch.setattr(
+            agent_lifecycle,
+            "endpoint_for",
+            lambda _a: ("http://x:11434", {}),
+        )
+        monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
             lambda a, s, known_pgid=None, db=None: AgentState(
@@ -650,13 +664,21 @@ class TestLiberacaoDeMemoria:
         resultado = agent_lifecycle.stop("local-code", None)
 
         assert resultado["model_unloaded"] is True
-        assert resultado["model_reason"] == "descarregado"
+        assert resultado["model_reason"] == "serviço llama.cpp desligado"
 
 
 class TestLigarRuntimeOllama:
     """Achado P1: `POST /start` devolvia 409 e o 'Ligar' do plano não existia."""
 
     def test_carrega_o_modelo_quando_nao_esta_carregado(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.agent_runtimes.get_runtime",
+            lambda _a: type(
+                "FakeRuntime",
+                (),
+                {"engine": "ollama", "kind": "local", "id": "local-code"},
+            )(),
+        )
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
@@ -684,6 +706,14 @@ class TestLigarRuntimeOllama:
 
     def test_modelo_ja_carregado_e_idempotente(self, monkeypatch):
         monkeypatch.setattr(
+            "app.services.agent_runtimes.get_runtime",
+            lambda _a: type(
+                "FakeRuntime",
+                (),
+                {"engine": "ollama", "kind": "local", "id": "local-code"},
+            )(),
+        )
+        monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
             lambda a, s, known_pgid=None, db=None: AgentState(
@@ -704,6 +734,14 @@ class TestLigarRuntimeOllama:
         assert carregou == []
 
     def test_falha_ao_carregar_vira_erro_de_dominio(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.agent_runtimes.get_runtime",
+            lambda _a: type(
+                "FakeRuntime",
+                (),
+                {"engine": "ollama", "kind": "local", "id": "local-code"},
+            )(),
+        )
         monkeypatch.setattr(
             agent_lifecycle,
             "read_state",
@@ -729,7 +767,7 @@ class TestSerializacao:
 
     def test_agentes_diferentes_nao_se_bloqueiam(self):
         with agent_lifecycle.agent_lock('kimi'):
-            with agent_lifecycle.agent_lock('qwen'):
+            with agent_lifecycle.agent_lock('openrouter'):
                 assert agent_lifecycle.GROUPS_FILE.parent.joinpath('lifecycle/kimi.lock').exists()
 
     def test_start_concorrente_cria_uma_sessao_so(self, monkeypatch):
@@ -1023,7 +1061,7 @@ class TestEscopoLocal:
         agent_lifecycle.ensure_local_scope("local-code")
 
     def test_agentes_cli_continuam_permitidos(self):
-        for agente in ("codex", "claude", "kimi", "qwen", "gemini"):
+        for agente in ("codex", "claude", "kimi", "openrouter", "gemini"):
             agent_lifecycle.ensure_local_scope(agente)
 
     def test_sondar_remoto_continua_liberado(self):
@@ -1445,3 +1483,149 @@ class TestRecuperacaoNaoApaga:
 
         assert agent_lifecycle.remember_group("kimi", 4242) is True
         assert agent_lifecycle.recall_groups("kimi") == [4242]
+
+
+class TestLlamacppHibrido:
+    @pytest.fixture
+    def runtime(self, monkeypatch):
+        from app.services import agent_runtimes
+        from unittest.mock import Mock
+
+        monkeypatch.setattr(agent_runtimes, "get_runtime", lambda agent: SimpleNamespace(
+            engine=agent_runtimes.ENGINE_LLAMACPP, kind=agent_runtimes.KIND_LOCAL,
+        ))
+        events = []
+        service = Mock(side_effect=lambda action: events.append(action) or action != "is-active")
+        run = Mock(side_effect=lambda args, timeout=10: (
+            events.append(args[1]) or SimpleNamespace(returncode=0, stderr="")
+        ))
+        read = Mock()
+        monkeypatch.setattr(agent_lifecycle, "_llama_service", service)
+        monkeypatch.setattr(agent_lifecycle, "_run", run)
+        monkeypatch.setattr(agent_lifecycle, "read_state", read)
+        monkeypatch.setattr(agent_lifecycle.time, "sleep", lambda seconds: None)
+        return SimpleNamespace(events=events, service=service, run=run, read=read)
+
+    def state(self, model=False, cli=False, session="local-code"):
+        return AgentState(
+            agent="local-code", session=session, model_loaded=model,
+            session_exists=cli, current_process="node" if cli else "",
+        )
+
+    @pytest.mark.parametrize("model,cli", [(False, False), (True, False), (False, True), (True, True)])
+    def test_start_hibrido(self, runtime, model, cli):
+        runtime.read.side_effect = [
+            self.state(model, cli),
+            *([self.state(False, cli), self.state(True, cli)] if not model else []),
+            *([self.state(True, True)] if not cli else []),
+        ]
+        launcher = ["/opt/workdev/scripts/start_local_agent.sh"]
+
+        result = agent_lifecycle.start("local-code", "local-code", launcher)
+
+        assert runtime.events == ([] if model else ["is-active", "start"]) + ([] if cli else ["new-session"])
+        assert result["started"] is not (model and cli)
+        assert result["already_running"] is (model and cli)
+        assert result["state"]["model_loaded"] is True
+        if cli:
+            runtime.run.assert_not_called()
+        else:
+            runtime.run.assert_called_once_with([
+                "tmux", "new-session", "-d", "-s", "local-code",
+                "-c", "/opt/workdev", *launcher,
+            ], 15)
+        assert runtime.read.call_count == 1 + (2 if not model else 0) + (0 if cli else 1)
+
+    @pytest.mark.parametrize("model,service_active", [(False, False), (True, True), (False, True)])
+    @pytest.mark.parametrize("failure", ["returncode", "exception"])
+    def test_falha_tmux_rollback_somente_servico_iniciado(self, runtime, model, service_active, failure):
+        import subprocess
+        runtime.read.side_effect = [self.state(model), self.state(True)]
+        runtime.service.side_effect = lambda action: runtime.events.append(action) or (service_active if action == "is-active" else True)
+        if failure == "exception":
+            runtime.run.side_effect = subprocess.TimeoutExpired("tmux", 15)
+            expected = subprocess.TimeoutExpired
+        else:
+            runtime.run.side_effect = None
+            runtime.run.return_value = SimpleNamespace(returncode=1, stderr="tmux falhou")
+            expected = agent_lifecycle.LifecycleError
+
+        with pytest.raises(expected):
+            agent_lifecycle.start("local-code", "local-code", ["launcher"])
+
+        assert runtime.events == ([] if model else ["is-active"] + ([] if service_active else ["start", "stop"]))
+
+    @pytest.mark.parametrize("model", [False, True])
+    def test_headless(self, runtime, model):
+        runtime.read.side_effect = [self.state(model, session=None), self.state(True, session=None)]
+        result = agent_lifecycle.start("local-code", None, None)
+        assert result["started"] is not model
+        assert result["already_running"] is model
+        assert result["state"]["model_loaded"] is True
+        runtime.run.assert_not_called()
+        assert runtime.events == ([] if model else ["is-active", "start"])
+
+    def test_repara_shell_apos_health(self, runtime):
+        shell = self.state(False, True)
+        shell.current_process = "bash"
+        ready = self.state(True, True)
+        ready.current_process = "bash"
+        runtime.read.side_effect = [shell, ready, self.state(True, True)]
+        agent_lifecycle.start("local-code", "local-code", ["launcher"])
+        assert runtime.events == ["is-active", "start", "kill-session", "new-session"]
+
+    def test_timeout_health_nao_cria_cli_e_faz_rollback(self, runtime, monkeypatch):
+        from unittest.mock import Mock
+        runtime.read.return_value = self.state()
+        monkeypatch.setattr(agent_lifecycle.time, "monotonic", Mock(side_effect=[0, 601]))
+        with pytest.raises(agent_lifecycle.LifecycleError) as exc:
+            agent_lifecycle.start("local-code", "local-code", ["launcher"])
+        assert exc.value.code == "runtime_start_timeout"
+        runtime.run.assert_not_called()
+        assert runtime.events == ["is-active", "start", "stop"]
+
+
+class TestTimeoutTmuxNaoViraErro:
+    """Achado 29/set/2026: tmux lento após restart da API derrubava o Qwen.
+
+    `subprocess.run(timeout=5)` sem captura de `TimeoutExpired` fazia a
+    exceção subir até o healthcheck, que publicava ERROR com
+    `reason=TimeoutExpired` para um agente vivo. Estas leituras degradam para
+    o valor conservador em vez de explodir.
+    """
+
+    def _explode(self, monkeypatch):
+        import subprocess
+
+        def timeout(*_a, **_k):
+            raise subprocess.TimeoutExpired("tmux", 5)
+
+        monkeypatch.setattr(agent_lifecycle, "_run", timeout)
+
+    def test_session_exists_timeout_nao_nega_sessao(self, monkeypatch):
+        self._explode(monkeypatch)
+
+        assert agent_lifecycle.session_exists("openrouter") is True
+
+    def test_pane_pid_timeout_devolve_none(self, monkeypatch):
+        self._explode(monkeypatch)
+
+        assert agent_lifecycle.pane_pid("openrouter") is None
+
+    def test_current_process_timeout_devolve_vazio(self, monkeypatch):
+        self._explode(monkeypatch)
+
+        assert agent_lifecycle.current_process("openrouter") == ""
+
+    def test_read_state_com_tmux_lento_nao_e_offline(self, monkeypatch):
+        """Sessão presumida viva sem PID conhecido: ignorância, não OFFLINE."""
+        self._explode(monkeypatch)
+
+        estado = agent_lifecycle.read_state("openrouter", "openrouter")
+
+        assert estado.session_exists is True
+        assert estado.pane_pid is None
+        assert estado.offline is False
+
+
+from tests.test_runtime_state_audit import audit_store  # noqa: F401 -- isolated audit database fixture

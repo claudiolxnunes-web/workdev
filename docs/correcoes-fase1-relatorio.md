@@ -130,7 +130,7 @@ python3 scripts/test_fase1_correcoes.py
 
 ```bash
 # 1. Worktree isolado
-./scripts/create_task_worktree.sh test-123 qwen
+./scripts/create_task_worktree.sh test-123 openrouter
 git worktree list
 # Verificar: develop permanece em /opt/workdev, task em .workdev/worktrees/task-test-123
 

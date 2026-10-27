@@ -126,6 +126,13 @@ class AgentRun(Base):
     dispatch_token = Column(UUID(as_uuid=True))
 
     model = Column(String(120))
+
+    # Chave do modelo físico servido pelo llama.cpp no despacho do local-code
+    # (moe/q27/dev/fast, via local_model.current()). `model` continua gravando o
+    # alias estável workdev-qwen; esta coluna só é preenchida para
+    # agent = 'local-code' e fica NULL nos demais.
+    local_model_key = Column(String(32))
+
     reasoning_effort = Column(String(16))
     complexity = Column(String(16))
     complexity_score = Column(Integer)

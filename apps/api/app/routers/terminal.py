@@ -11,12 +11,14 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.auth import websocket_is_authenticated
 from app.database import SessionLocal
-from app.services import agent_lifecycle, agent_snapshot, agent_runtimes
+from app.routers.ai import get_db
+from app.services import agent_lifecycle, agent_operability, agent_snapshot, agent_runtimes, cli_agent_models
 from app.services.agent_activity import approval_lines
 from app.services.terminal_transcript import clean_terminal_text, read_transcript
 
@@ -28,25 +30,71 @@ router = APIRouter(tags=["agents"])
 # principal é PLAN → recomendação → escolha do usuário → envio ao agente
 # escolhido, que trabalha aqui. Sessões dinâmicas por execução pertencem apenas
 # ao runtime AUTO, que é opt-in (ver `_auto_runtime_enabled` em routers/handoffs).
-ALLOWED_SESSIONS = {
-    "claude": "code",
-    "codex": "codex",
-    "kimi": "kimi",
-    "qwen": "qwen",
-    "gemini": "gemini",
-}
+ALLOWED_SESSIONS = agent_operability.CLI_SESSIONS
 STANDBY_COMMANDS = {
     "claude": ["/opt/workdev/scripts/start_claude_agent.sh"],
     "codex": ["/opt/workdev/scripts/start_codex_agent.sh"],
     "kimi": ["/opt/workdev/scripts/start_kimi_agent.sh"],
     "qwen": ["/opt/workdev/scripts/start_qwen_agent.sh"],
+    "grok": ["/opt/workdev/scripts/start_grok_agent.sh"],
+    "deepseek": ["/opt/workdev/scripts/start_deepseek_agent.sh"],
     "gemini": ["/opt/workdev/scripts/start_gemini_agent.sh"],
 }
-_active_connections: set[str] = set()
+
+
+class CliModelSelection(BaseModel):
+    model: str
+
+
+@router.get("/api/cli-agent-models/{agent}")
+def get_cli_agent_model(agent: str):
+    try:
+        return cli_agent_models.describe(agent)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+class CliEffortSelection(BaseModel):
+    effort: str | None = None
+
+
+@router.put("/api/cli-agent-models/{agent}/effort")
+def select_cli_agent_effort(agent: str, payload: CliEffortSelection):
+    if agent not in cli_agent_models.EFFORTS:
+        raise HTTPException(status_code=404, detail="Este agente não tem seletor de esforço")
+    snapshot = agent_snapshot.read_snapshot([agent], _HEALTH_STATE_FILE)
+    if snapshot["agents"][0].get("activity_state") == "BUSY":
+        raise HTTPException(status_code=409, detail="Aguarde a tarefa terminar para trocar o esforço")
+    try:
+        cli_agent_models.choose_effort(agent, payload.effort)
+        return cli_agent_models.describe(agent)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.put("/api/cli-agent-models/{agent}")
+def select_cli_agent_model(agent: str, payload: CliModelSelection):
+    if agent not in cli_agent_models.MODELS:
+        raise HTTPException(status_code=404, detail="Agente sem seleção de modelo")
+    snapshot = agent_snapshot.read_snapshot([agent], _HEALTH_STATE_FILE)
+    state = snapshot["agents"][0]
+    if state.get("activity_state") == "BUSY":
+        raise HTTPException(status_code=409, detail="Aguarde a tarefa terminar para trocar o modelo")
+    try:
+        cli_agent_models.choose(agent, payload.model)
+        return cli_agent_models.describe(agent)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+_active_connections: dict[str, WebSocket] = {}
+# Fechamento enviado à aba que perdeu o terminal: ela não reconecta sozinha.
+TAKEN_OVER_CODE = 4000
 _connections_lock = asyncio.Lock()
 _SHELL_PROCESSES = {"bash", "dash", "fish", "sh", "tmux", "zsh"}
-_PROCESS_LABELS = {"qwen": "qwen-code"}
+_PROCESS_LABELS = {"qwen": "qwen-code", "grok": "qwen-code", "deepseek": "qwen-code", "openrouter": "qwen-code"}
 _HEALTH_STATE_FILE = Path(os.getenv("AGENTS_HEALTH_STATE", "/var/lib/agents-healthcheck/status.json"))
+# Limite empírico do tmux para send-keys -l com um único argumento:
+# ~16KB. 12KB deixa folga segura.
+_SEND_KEYS_CHUNK_BYTES = 12_000
 
 
 def _session_target(session: str) -> str:
@@ -76,18 +124,46 @@ class AgentSendRequest(BaseModel):
     text: str
 
 
+def _chunk_text(text: str, limit: int) -> list[str]:
+    """Divide text em partes de até *limit* bytes (UTF-8), sem quebrar
+    caracteres multibyte. A divisão é por linhas, e linhas que excedem
+    *limit* sozinhas são quebradas por caractere."""
+    chunks: list[str] = []
+    for line in text.splitlines(keepends=True):
+        encoded = line.encode("utf-8")
+        if len(encoded) > limit:
+            # Linha mais longa que o limite: quebrar por caractere.
+            for ch in line:
+                ce = ch.encode("utf-8")
+                if not chunks or len(chunks[-1].encode("utf-8")) + len(ce) > limit:
+                    chunks.append(ch)
+                else:
+                    chunks[-1] += ch
+            continue
+        if chunks:
+            cur = (chunks[-1] + line).encode("utf-8")
+            if len(cur) > limit:
+                chunks.append(line)
+            else:
+                chunks[-1] = cur.decode("utf-8")
+        else:
+            chunks.append(line)
+    return chunks if chunks else [""]
+
+
 def _send_text(session: str, text: str) -> None:
     stripped = text.rstrip("\n")
     if stripped:
-        literal = subprocess.run(
-            ["tmux", "send-keys", "-t", _pane_target(session), "-l", "--", stripped],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        if literal.returncode != 0:
-            raise RuntimeError(literal.stderr.strip() or "Sessão tmux indisponível")
+        for chunk in _chunk_text(stripped, _SEND_KEYS_CHUNK_BYTES):
+            literal = subprocess.run(
+                ["tmux", "send-keys", "-t", _pane_target(session), "-l", "--", chunk],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if literal.returncode != 0:
+                raise RuntimeError(literal.stderr.strip() or "Sessão tmux indisponível")
     enter = subprocess.run(
         ["tmux", "send-keys", "-t", _pane_target(session), "Enter"],
         capture_output=True,
@@ -100,14 +176,37 @@ def _send_text(session: str, text: str) -> None:
 
 
 @router.post("/api/agents/{agent}/send")
-async def agent_send(agent: str, payload: AgentSendRequest):
-    session = ALLOWED_SESSIONS.get(agent)
-    if not session:
+async def agent_send(agent: str, payload: AgentSendRequest, db: Session = Depends(get_db)):
+    standby = ALLOWED_SESSIONS.get(agent)
+    if not standby:
         raise HTTPException(status_code=404, detail="Agente inválido")
     try:
-        await asyncio.to_thread(_send_text, session, payload.text)
+        session = _require_session(agent, db, "send")
+    except agent_operability.OperabilityDenied as error:
+        raise _denial_http(error) from None
+    try:
+        from app.services.run_pause import checked_work_unit, RunPaused
+        work = agent_lifecycle.active_work(db, agent)
+        if work and work.get('run_id'):
+            def _checked_send():
+                with checked_work_unit(work['run_id']):
+                    _send_text(session, payload.text)
+            await asyncio.to_thread(_checked_send)
+        else:
+            await asyncio.to_thread(_send_text, session, payload.text)
+    except RunPaused as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        # A sessão existia na resolução e morreu antes do send-keys. Erro
+        # estruturado e snapshot reconciliado na hora: a aba não pode seguir
+        # anunciando um agente que acabou de perder o canal.
+        after = _explain_denial(agent, _resolve_operability(agent, db), db)
+        agent_operability.reconcile_snapshot(after, db=db)
+        raise HTTPException(status_code=503, detail={
+            "code": "agent_send_failed", "message": str(error),
+            "health_reason": after.health_reason, "session_source": after.session_source,
+            "state": after.as_dict(),
+        }) from error
     return {"agent": agent, "sent": True}
 
 
@@ -115,10 +214,17 @@ async def agent_send(agent: str, payload: AgentSendRequest):
 async def agent_history(
     agent: str,
     lines: int = Query(default=10000, ge=100, le=100000),
+    db: Session = Depends(get_db),
 ):
-    session = ALLOWED_SESSIONS.get(agent)
-    if not session:
+    standby = ALLOWED_SESSIONS.get(agent)
+    if not standby:
         raise HTTPException(status_code=404, detail="Agente inválido")
+    try:
+        # Histórico é leitura do painel: basta o terminal ser anexável, mesmo
+        # que só haja shell. Ver a casca é como o operador diagnostica.
+        session = _require_session(agent, db, "terminal")
+    except agent_operability.OperabilityDenied as error:
+        raise _denial_http(error) from None
     try:
         content = await asyncio.to_thread(_capture_history, session, lines)
     except (RuntimeError, subprocess.TimeoutExpired) as error:
@@ -156,17 +262,22 @@ def _requested_terminal_size(websocket: WebSocket) -> tuple[int, int]:
     return max(5, min(rows, 300)), max(10, min(cols, 500))
 
 
-async def _claim(session: str) -> bool:
+async def _claim(session: str, websocket: WebSocket | None = None,
+                 takeover: bool = False) -> tuple[bool, WebSocket | None]:
+    """Um visualizador por sessão. Com takeover, a aba nova assume e devolve a antiga."""
     async with _connections_lock:
-        if session in _active_connections:
-            return False
-        _active_connections.add(session)
-        return True
+        previous = _active_connections.get(session)
+        if previous is not None and not takeover:
+            return False, None
+        _active_connections[session] = websocket
+        return True, previous
 
 
-async def _release(session: str) -> None:
+async def _release(session: str, websocket: WebSocket | None = None) -> None:
     async with _connections_lock:
-        _active_connections.discard(session)
+        # Quem foi assumido não pode apagar o registro de quem assumiu.
+        if _active_connections.get(session) is websocket:
+            del _active_connections[session]
 
 
 async def _read_pty(master_fd: int) -> bytes:
@@ -217,7 +328,7 @@ def _start_gemini_headless_runtime(
 
     command = [
         *STANDBY_COMMANDS[agent],
-        *(["--model", model] if model else []),
+        "--model", model or cli_agent_models.selected(agent),
         "--prompt",
         prompt,
     ]
@@ -230,8 +341,10 @@ def _start_gemini_headless_runtime(
         with agent_lifecycle.run_lock(run_id), agent_lifecycle.agent_lock(agent):
             if agent_lifecycle.run_binding(agent, run_id):
                 raise RuntimeError('Run já possui execução; não reenviar prompt')
-            process = subprocess.Popen(command, cwd='/opt/workdev', stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE, text=True, start_new_session=True)
+            from app.services.run_pause import checked_work_unit
+            with checked_work_unit(run_id):
+                process = subprocess.Popen(command, cwd='/opt/workdev', stdout=subprocess.PIPE,
+                                           stderr=subprocess.PIPE, text=True, start_new_session=True)
             try:
                 agent_lifecycle.bind_run_process(agent, run_id, process.pid)
             except Exception:
@@ -255,7 +368,7 @@ def _start_gemini_headless_runtime(
         "returncode": result.returncode,
     }
 
-def _start_standby_session(agent: str, session: str) -> bool:
+def _start_standby_session(agent: str, session: str, model: str | None = None) -> bool:
     current_process = _current_process(session)
     if current_process and current_process not in _SHELL_PROCESSES:
         return False
@@ -267,10 +380,11 @@ def _start_standby_session(agent: str, session: str) -> bool:
             timeout=3,
             check=False,
         )
+    agent_lifecycle.ensure_tmux_server()  # servidor tmux só no workdev-agents.service
     result = subprocess.run(
         [
             "tmux", "new-session", "-d", "-s", session,
-            "-c", "/opt/workdev", *STANDBY_COMMANDS[agent],
+            "-c", "/opt/workdev", *cli_agent_models.launcher(agent, STANDBY_COMMANDS[agent], model),
         ],
         capture_output=True,
         text=True,
@@ -310,7 +424,81 @@ def _standby_session(agent: str) -> str:
 
 def _auto_session(agent: str, run_id) -> str:
     _standby_session(agent)
-    return f"auto-{agent}-{run_id}"
+    return agent_snapshot.auto_session_name(agent, run_id)
+
+
+def _resolve_operability(agent: str, db) -> agent_operability.OperationalState:
+    """Resolvedor canônico aplicado aos agentes CLI deste router.
+
+    AUTO primeiro quando há run física em curso (runtime AUTO, opt-in), depois
+    standby. Quem decide é sempre a sondagem, nunca o nome esperado.
+    """
+    run_id = None
+    if db is not None:
+        work = agent_lifecycle.active_work(db, agent)
+        run_id = (work or {}).get('run_id')
+    return agent_operability.resolve(
+        agent, standby_session=ALLOWED_SESSIONS.get(agent), run_id=run_id,
+    )
+
+
+def _explain_denial(agent: str, state, db) -> agent_operability.OperationalState:
+    """Enriquece a recusa com o processo sobrevivente, sem sondar tmux de novo.
+
+    É o "Codex App Server vivo sem tmux": o operador precisa ler
+    `daemon_alive_without_session` e não um genérico "sessão indisponível".
+    """
+    from dataclasses import replace
+
+    try:
+        physical = agent_lifecycle.read_state(agent, ALLOWED_SESSIONS.get(agent), db=db)
+    except Exception:  # noqa: BLE001 - diagnóstico não pode esconder a recusa
+        return state
+    daemon = bool(physical.group_pids)
+    if not daemon or state.session_exists:
+        return replace(state, daemon_alive=daemon)
+    return replace(state, daemon_alive=True,
+                   health_reason=agent_operability.REASON_DAEMON_ONLY)
+
+
+def _require_session(agent: str, db, operation: str) -> str:
+    """Autoriza a operação pelo estado FÍSICO atual ou recusa com motivo.
+
+    Nunca devolve um nome de sessão "esperado": só o que a sondagem confirmou
+    utilizável agora. Na recusa, o snapshot é reconciliado imediatamente para
+    que a aba pare de anunciar disponibilidade que já não existe.
+    """
+    state = _resolve_operability(agent, db)
+    try:
+        return state.require(operation)
+    except agent_operability.OperabilityDenied:
+        detailed = _explain_denial(agent, state, db)
+        agent_operability.reconcile_snapshot(detailed, db=db)
+        raise agent_operability.OperabilityDenied(detailed, operation) from None
+
+
+def _denial_http(error: agent_operability.OperabilityDenied) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "agent_not_operational",
+            "message": f"{error.state.agent}: sem sessão física utilizável para {error.operation}",
+            "health_reason": error.state.health_reason,
+            "session_source": error.state.session_source,
+            "state": error.state.as_dict(),
+        },
+    )
+
+
+def _live_session(agent: str, session: str, db) -> str:
+    """Adapter histórico: hoje delega ao resolvedor canônico.
+
+    Antes devolvia a sessão standby às cegas quando não havia run AUTO viva —
+    inclusive quando essa sessão não existia. O `tmux send-keys` estourava
+    depois, e o /status seguia dizendo ONLINE. Agora, sem sessão física
+    comprovada, nada é devolvido: levanta OperabilityDenied.
+    """
+    return _require_session(agent, db, "send")
 
 def _start_agent_runtime(
     agent: str,
@@ -328,8 +516,8 @@ def _start_agent_runtime(
             model,
         )
 
-    started = (_start_standby_session(agent, session) if run_id else
-        agent_lifecycle.start(agent, session, STANDBY_COMMANDS[agent])['started'])
+    started = (_start_standby_session(agent, session, model) if run_id else
+        agent_lifecycle.start(agent, session, cli_agent_models.launcher(agent, STANDBY_COMMANDS[agent], model))['started'])
 
     if run_id is not None:
         agent_lifecycle.bind_run(agent, run_id, session)
@@ -372,6 +560,14 @@ def _start_agent_runtime(
 
 
 def start_agent_runtime(agent, prompt, timeout_seconds=15.0, model=None, run_id=None):
+    # Compatibilidade: runs legadas gravadas como 'openrouter' vão para o
+    # agente do prefixo do modelo gravado; sem modelo, o Qwen histórico.
+    if run_id is not None and agent == 'openrouter':
+        prefix = (model or '').split('/', 1)[0]
+        agent = {'x-ai': 'grok', 'deepseek': 'deepseek'}.get(prefix, 'qwen')
+        model = model or cli_agent_models.DEFAULTS[agent]
+    if agent == 'local-code' and run_id is not None:
+        raise RuntimeError('local-code usa a fila persistente; sessão AUTO recusada')
     if agent == 'gemini' and run_id is not None:
         return _start_gemini_headless_runtime(agent, prompt, model, run_id)
     if run_id is None:
@@ -384,7 +580,9 @@ def start_agent_runtime(agent, prompt, timeout_seconds=15.0, model=None, run_id=
             if agent_lifecycle.process_starttime(binding['pid']) != binding['starttime']:
                 raise RuntimeError('Identidade da Run indisponível; relançamento recusado')
             return {'agent': agent, 'session': binding['session'], 'started': False}
-        return _start_agent_runtime(agent, prompt, timeout_seconds, model, run_id)
+        from app.services.run_pause import checked_work_unit
+        with checked_work_unit(run_id):
+            return _start_agent_runtime(agent, prompt, timeout_seconds, model, run_id)
 
 
 def stop_agent_runtime(agent: str, run_id) -> bool:
@@ -393,8 +591,8 @@ def stop_agent_runtime(agent: str, run_id) -> bool:
 
 
 def auto_runtime_running(agent: str, run_id) -> bool:
-    process = _current_process(_auto_session(agent, run_id))
-    return bool(process and process not in _SHELL_PROCESSES)
+    probe = agent_operability.probe_session(_auto_session(agent, run_id))
+    return probe.determinate and probe.attachable and probe.agent_process
 
 
 def _finalize_auto_runtime(agent: str, run_id) -> dict:
@@ -433,14 +631,21 @@ def finalize_auto_runtime(agent: str, run_id) -> dict:
         return _finalize_auto_runtime(agent, run_id)
 
 
-def _lifecycle_session(agent: str) -> str:
+def _lifecycle_session(agent: str) -> str | None:
     """Sessão do agente para o ciclo de vida.
 
-    Runtime Ollama (`local-code`, `gpu-*`) não tem sessão tmux: ele é um
-    endpoint HTTP. Ligar/desligar ali é sobre o MODELO, não sobre processo — daí
-    a sessão poder ser None sem que isso seja erro.
+    Agente com sessão de terminal própria (ALLOWED_SESSIONS) usa essa sessão,
+    mesmo que também conste no registro de runtimes Ollama/llama.cpp — é o
+    caso do local-code, que hoje tem sessão tmux real (CLI qwen apontado pro
+    llama.cpp local), mas continua listado ali para health-check/AI Hub.
+    Runtime puro (`gpu-*`) não tem sessão tmux: é um endpoint HTTP. Ligar/
+    desligar ali é sobre o MODELO, não sobre processo — daí a sessão poder
+    ser None sem que isso seja erro.
     """
     from app.services import agent_runtimes
+
+    if agent in ALLOWED_SESSIONS:
+        return _standby_session(agent)
 
     if agent_runtimes.is_ollama_agent(agent):
         return None
@@ -485,6 +690,8 @@ async def start_agent_lifecycle(agent: str):
     # Runtime Ollama não tem sessão: ligar é carregar o modelo no endpoint.
     # A primeira versão devolvia 409 aqui e o "Ligar" do plano não existia.
     launcher = STANDBY_COMMANDS.get(agent) if session else None
+    if launcher:
+        launcher = cli_agent_models.launcher(agent, launcher)
 
     try:
         resultado = await asyncio.to_thread(
@@ -498,6 +705,13 @@ async def start_agent_lifecycle(agent: str):
     except (RuntimeError, subprocess.TimeoutExpired) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
+    if agent in cli_agent_models.MODELS and resultado.get("started"):
+        try:
+            cli_agent_models.record_active(agent, cli_agent_models.selected(agent))
+        except OSError:
+            # A CLI já foi ligada; não afirmar que o start falhou nem inventar
+            # qual modelo está ativo se o registro de estado não foi gravado.
+            resultado["model_record_warning"] = "Modelo iniciado, mas não foi possível registrar o estado"
     return resultado
 
 
@@ -660,7 +874,43 @@ async def agent_terminal(websocket: WebSocket, agent: str):
     if not session:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Agente inválido")
         return
-    if not await _claim(session):
+    with SessionLocal() as db:
+        work = agent_lifecycle.active_work(db, agent)
+        try:
+            # O WebSocket só pode representar terminal operacional se a sessão
+            # física puder mesmo ser anexada. Sem isso, o `tmux attach-session`
+            # morreria em silêncio dentro do PTY e a aba mostraria um terminal
+            # vazio como se estivesse conectada.
+            session = _require_session(agent, db, "terminal")
+        except agent_operability.OperabilityDenied as error:
+            # Handshake completo antes de fechar: sem ele o browser recebe um
+            # 403 opaco em vez do motivo (mesmo cuidado do "terminal em uso").
+            denied = error.state
+            await websocket.accept()
+            await websocket.send_text(json.dumps({
+                "type": "status", "agent": agent, "running": False,
+                "send_ready": False, "terminal_ready": False,
+                "runtime_state": (
+                    "ERROR" if denied.daemon_alive or not denied.determinate else "OFFLINE"),
+                "health_reason": denied.health_reason,
+                "session_source": denied.session_source,
+                "state": denied.as_dict(),
+            }))
+            await websocket.close(
+                code=status.WS_1011_INTERNAL_ERROR,
+                reason=f"Sessão indisponível: {denied.health_reason or 'no_live_session'}",
+            )
+            return
+        bound_run_id = (work or {}).get('run_id') if work and session == agent_snapshot.auto_session_name(agent, work['run_id']) else None
+    takeover = websocket.query_params.get("takeover") == "1"
+    claimed, previous = await _claim(session, websocket, takeover)
+    if previous is not None:
+        with suppress(Exception):
+            await previous.close(code=TAKEN_OVER_CODE, reason="Terminal assumido por outra aba")
+    if not claimed:
+        # After authentication, complete the handshake so browsers receive
+        # the close code/reason instead of an opaque HTTP 403 / code 1006.
+        await websocket.accept()
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Terminal já está em uso")
         return
 
@@ -697,12 +947,25 @@ async def agent_terminal(websocket: WebSocket, agent: str):
         slave_fd = -1
         output_task = asyncio.create_task(_send_output(websocket, master_fd))
 
+        async def write_input(data: bytes):
+            if bound_run_id:
+                from app.services.run_pause import checked_work_unit, RunPaused
+                def checked_write():
+                    with checked_work_unit(bound_run_id):
+                        os.write(master_fd, data)
+                try:
+                    await asyncio.to_thread(checked_write)
+                except RunPaused:
+                    await websocket.send_text(json.dumps({'type':'pause', 'run_id':bound_run_id}))
+            else:
+                os.write(master_fd, data)
+
         while True:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
                 break
             if message.get("bytes") is not None:
-                os.write(master_fd, message["bytes"])
+                await write_input(message["bytes"])
                 continue
             text = message.get("text")
             if not text:
@@ -712,7 +975,7 @@ async def agent_terminal(websocket: WebSocket, agent: str):
             except json.JSONDecodeError:
                 continue
             if payload.get("type") == "input" and isinstance(payload.get("data"), str):
-                os.write(master_fd, payload["data"].encode())
+                await write_input(payload["data"].encode())
             elif payload.get("type") == "resize":
                 _resize(master_fd, int(payload.get("rows", 24)), int(payload.get("cols", 80)))
     except WebSocketDisconnect:
@@ -738,7 +1001,7 @@ async def agent_terminal(websocket: WebSocket, agent: str):
                 with suppress(OSError):
                     os.close(slave_fd)
         finally:
-            await _release(session)
+            await _release(session, websocket)
 
 
 # Runtimes Ollama locais/GPU ficam no mesmo router de agentes (`/api/agents*`,
@@ -747,3 +1010,4 @@ async def agent_terminal(websocket: WebSocket, agent: str):
 from app.routers.agent_runtimes import router as _agent_runtimes_router  # noqa: E402
 
 router.include_router(_agent_runtimes_router)
+

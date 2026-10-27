@@ -138,7 +138,7 @@ export function BacklogTab() {
         onUpdated={(updated) => {
           setItems(prev => prev.map(item => item.id === updated.id ? updated : item));
           setSelected(updated);
-          setMobileColumn(updated.status);
+          if (COLUMNS.some((col) => col.key === updated.status)) setMobileColumn(updated.status);
         }}
         item={selected}
         onClose={() => setSelected(null)}

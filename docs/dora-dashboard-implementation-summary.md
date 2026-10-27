@@ -2,7 +2,7 @@
 
 **Task:** `339e074d-faa3-4062-a2a2-e114fd627454`
 **Execução:** `c02d9561-50a0-4c71-93cf-3e79b617f067`
-**Agente:** qwen
+**Agente:** openrouter
 **Data:** 2026-09-07
 
 ---

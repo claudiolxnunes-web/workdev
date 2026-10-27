@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 import { useProject } from "../useProject";
 
 type RepositoryStatus = {
@@ -48,7 +48,9 @@ export function RepositoryTab() {
   }, [project.slug]);
 
   useEffect(() => {
-    refresh();
+    startTransition(() => {
+      refresh();
+    });
   }, [refresh]);
 
   if (loading && !data) {

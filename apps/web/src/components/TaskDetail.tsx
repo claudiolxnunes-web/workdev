@@ -1,7 +1,10 @@
 import { startTransition, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  ARCHIVE_REASONS,
+  createBancadaPlanningSession,
   createTaskPlanningSession,
+  createWorkspacePlanningSession,
   getSubtasks,
   getTaskPlanningEligibility,
   updateSubtask,
@@ -33,6 +36,34 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [saveError, setSaveError] = useState("");
+  const [archiving, setArchiving] = useState(false);
+  const [archiveReason, setArchiveReason] = useState("");
+  const [archiveNote, setArchiveNote] = useState("");
+  const archived = item.status === "archived";
+
+  async function changeArchive(changes: Parameters<typeof updateItem>[1]) {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setSaveError("");
+    try {
+      const updated = await updateItem(item.id, changes);
+      setArchiving(false);
+      onUpdated?.(updated);
+    } catch (error: unknown) {
+      setSaveError(error instanceof Error ? error.message : "Não foi possível alterar o arquivamento.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
+  function archive(event: React.FormEvent) {
+    event.preventDefault();
+    if (!archiveReason) { setSaveError("Escolha o motivo do arquivamento."); return; }
+    const note = archiveNote.trim();
+    changeArchive({ status: "archived", archived_reason: archiveReason, ...(note ? { archived_note: note } : {}) });
+  }
 
   function edit() {
     setDraft({ title: item.title, description: item.description || "", priority: item.priority, status: item.status });
@@ -105,16 +136,34 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
   }
 
   async function planInAIHub() {
+    await openPlanning(() => createTaskPlanningSession(item!.id), "1", "Não foi possível enviar a task ao AI Hub.");
+  }
+
+  async function planForBancada() {
+    await openPlanning(() => createBancadaPlanningSession(item!.id), "bancada",
+      "Não foi possível planejar a task para a Bancada Local.");
+  }
+
+  // Terceiro destino: o supervisor do Workspace Local. O Workspace tem sessão
+  // própria, então não mexe na chave de "última conversa" do AI Hub.
+  async function planForWorkspace() {
+    await openPlanning(() => createWorkspacePlanningSession(item!.id), "workspace",
+      "Não foi possível planejar a task para o Workspace Local.", "/workspace");
+  }
+
+  async function openPlanning(create: () => Promise<{ id: string }>, autostart: string, fallback: string, destino = "/ai-hub") {
     if (planningRef.current) return;
     planningRef.current = true;
     setPlanning(true);
     setPlanningError("");
     try {
-      const session = await createTaskPlanningSession(item!.id);
-      sessionStorage.setItem("workdev_chat_session", session.id);
-      navigate(`/ai-hub?session=${encodeURIComponent(session.id)}&autostart=1`);
+      const session = await create();
+      if (destino === "/ai-hub") sessionStorage.setItem("workdev_chat_session", session.id);
+      // O Workspace leva a task junto: a sessão isolada fica ligada a ela.
+      const task = destino === "/workspace" ? `&task=${encodeURIComponent(item!.id)}` : "";
+      navigate(`${destino}?session=${encodeURIComponent(session.id)}&autostart=${autostart}${task}`);
     } catch (error: unknown) {
-      setPlanningError(error instanceof Error && error.message ? error.message : "Não foi possível enviar a task ao AI Hub.");
+      setPlanningError(error instanceof Error && error.message ? error.message : fallback);
       planningRef.current = false;
       setPlanning(false);
     }
@@ -164,7 +213,36 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
           </div>
         </form> : <>
           {item.description && <p className="mb-4 whitespace-pre-wrap text-sm text-slate-300">{item.description}</p>}
-          <button onClick={edit} disabled={planning} className="mb-4 rounded-lg bg-blue-600 px-3 py-2">Editar task</button>
+          {archived && <p className="mb-4 rounded-lg border border-slate-700 bg-slate-800 p-3 text-sm text-slate-300">
+            Arquivada{item.archived_at ? ` em ${new Date(item.archived_at).toLocaleString("pt-BR")}` : ""}
+            {item.archived_reason ? ` — motivo: ${item.archived_reason}` : ""}
+          </p>}
+          <div className="mb-4 flex flex-wrap gap-3">
+            <button onClick={edit} disabled={planning || saving} className="rounded-lg bg-blue-600 px-3 py-2">Editar task</button>
+            {archived
+              ? <button onClick={() => changeArchive({ status: "todo" })} disabled={saving} className="rounded-lg bg-slate-700 px-3 py-2 disabled:opacity-50">
+                  {saving ? "Desarquivando…" : "Desarquivar (volta para todo)"}
+                </button>
+              : !archiving && <button onClick={() => { setArchiving(true); setSaveError(""); }} disabled={planning || saving} className="rounded-lg bg-slate-700 px-3 py-2">Arquivar</button>}
+          </div>
+          {archiving && !archived && <form onSubmit={archive} className="mb-4 space-y-3 rounded-lg border border-slate-700 p-3">
+            <fieldset disabled={saving} className="space-y-3 disabled:opacity-60">
+              <label className="block text-sm">Motivo do arquivamento
+                <select required value={archiveReason} onChange={e => setArchiveReason(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2">
+                  <option value="">Escolha…</option>
+                  {ARCHIVE_REASONS.map(reason => <option key={reason.value} value={reason.value}>{reason.label}</option>)}
+                </select>
+              </label>
+              <label className="block text-sm">Observação (opcional)
+                <input value={archiveNote} onChange={e => setArchiveNote(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2" />
+              </label>
+            </fieldset>
+            <div className="flex justify-end gap-3">
+              <button type="button" disabled={saving} onClick={() => setArchiving(false)} className="rounded-lg bg-slate-800 px-3 py-2">Cancelar</button>
+              <button type="submit" disabled={saving} className="rounded-lg bg-blue-600 px-3 py-2 disabled:opacity-50">{saving ? "Arquivando…" : "Confirmar arquivamento"}</button>
+            </div>
+          </form>}
+          {saveError && <p role="alert" className="mb-4 text-sm text-red-400">{saveError}</p>}
         </>}
 
         {!editing && ["todo", "doing", "blocked"].includes(item.status) && eligibility?.eligible && <button
@@ -175,6 +253,28 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
           {planning ? "Enviando ao AI Hub…" : "Enviar ao AI Hub"}
         </button>}
         {eligibility && !eligibility.eligible && <p className="mb-4 text-sm text-slate-400">{eligibility.message}</p>}
+        {/* Segundo destino: o AI Hub fatia a task em micro-tarefas para o modelo local. Não cria
+            plano oficial, então não depende da elegibilidade do envio acima. */}
+        {!editing && ["todo", "doing", "blocked"].includes(item.status) && (item.description?.trim()
+          ? <button
+              onClick={planForBancada}
+              disabled={planning}
+              className="mb-4 w-full rounded-lg border border-violet-600 px-4 py-2.5 font-medium text-violet-200 transition-colors hover:bg-violet-900/40 disabled:cursor-wait disabled:opacity-60"
+            >
+              Plano para a Bancada Local
+            </button>
+          : <p className="mb-4 text-sm text-slate-400">Escreva a descrição da task para planejá-la na Bancada Local.</p>)}
+        {/* Terceiro destino: o Workspace Local, onde o modelo local edita de verdade.
+            Não cria plano oficial, então não depende da elegibilidade do envio ao AI Hub. */}
+        {!editing && ["todo", "doing", "blocked"].includes(item.status) && (item.description?.trim()
+          ? <button
+              onClick={planForWorkspace}
+              disabled={planning}
+              className="mb-4 w-full rounded-lg border border-sky-700 px-4 py-2.5 font-medium text-sky-200 transition-colors hover:bg-sky-900/40 disabled:cursor-wait disabled:opacity-60"
+            >
+              Plano para o Workspace Local
+            </button>
+          : <p className="mb-4 text-sm text-slate-400">Escreva a descrição da task para planejá-la no Workspace Local.</p>)}
         {planningError && (
           <p role="alert" className="mb-4 text-sm text-red-400">{planningError}</p>
         )}
@@ -183,13 +283,13 @@ function TaskDetailContent({ item, onClose, onAdvance, onUpdated }: Props & { it
           <h3 className="font-semibold text-slate-300">
             Subtasks {subs.length > 0 && `(${done}/${subs.length})`}
           </h3>
-          <button
+          {!archived && <button
             disabled={editing || saving}
             onClick={() => onAdvance(item)}
             className="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded-lg transition-colors"
           >
             Avançar status →
-          </button>
+          </button>}
         </div>
 
         {loading && <p className="text-slate-500 text-sm">Carregando...</p>}

@@ -33,6 +33,7 @@ from app.services.agent_router import (
     _capability_data,
     _price_index,
 )
+from app.services.cli_agent_models import OPENROUTER_CLI_AGENTS
 from app.services.task_complexity import (
     ComplexityAssessment,
     WorkloadProfile,
@@ -46,6 +47,8 @@ SUPPORTED_AGENTS = (
     "claude",
     "kimi",
     "qwen",
+    "grok",
+    "deepseek",
     "gemini",
 )
 
@@ -55,6 +58,8 @@ AGENT_LABELS = {
     "claude": "Claude Code",
     "kimi": "Kimi Code",
     "qwen": "Qwen Code",
+    "grok": "Grok",
+    "deepseek": "DeepSeek",
     "gemini": "Gemini",
 }
 
@@ -112,6 +117,26 @@ AGENT_WORKLOAD_WEIGHTS: dict[str, dict[str, Decimal]] = {
         "architecture": Decimal("0.0"),
         "multimodal": Decimal("0.0"),
     },
+    "grok": {
+        "cost_sensitive": Decimal("0.5"),
+        "implementation": Decimal("1.5"),
+        "large_context": Decimal("1.0"),
+        "repository_analysis": Decimal("0.3"),
+        "documentation": Decimal("0.2"),
+        "review": Decimal("0.2"),
+        "architecture": Decimal("0.0"),
+        "multimodal": Decimal("0.0"),
+    },
+    "deepseek": {
+        "implementation": Decimal("2.0"),
+        "review": Decimal("1.5"),
+        "cost_sensitive": Decimal("1.5"),
+        "architecture": Decimal("1.0"),
+        "large_context": Decimal("1.0"),
+        "repository_analysis": Decimal("0.8"),
+        "documentation": Decimal("0.2"),
+        "multimodal": Decimal("0.0"),
+    },
 }
 
 
@@ -122,28 +147,36 @@ COMPLEXITY_BIAS: dict[str, dict[str, Decimal]] = {
         "qwen": Decimal("1.5"),
         "kimi": Decimal("0.8"),
         "gemini": Decimal("0.5"),
+        "grok": Decimal("0.4"),
         "codex": Decimal("0.3"),
+        "deepseek": Decimal("0.2"),
         "claude": Decimal("-0.5"),
     },
     "medium": {
         "codex": Decimal("0.5"),
         "kimi": Decimal("0.4"),
+        "deepseek": Decimal("0.4"),
         "qwen": Decimal("0.3"),
+        "grok": Decimal("0.25"),
         "gemini": Decimal("0.2"),
         "claude": Decimal("0.2"),
     },
     "high": {
         "claude": Decimal("1.5"),
+        "deepseek": Decimal("1.2"),
         "codex": Decimal("1.0"),
         "gemini": Decimal("0.5"),
         "kimi": Decimal("0.0"),
+        "grok": Decimal("-0.5"),
         "qwen": Decimal("-1.5"),
     },
     "critical": {
         "claude": Decimal("2.5"),
+        "deepseek": Decimal("2.0"),
         "codex": Decimal("1.5"),
         "gemini": Decimal("0.8"),
         "kimi": Decimal("-0.5"),
+        "grok": Decimal("-1.0"),
         "qwen": Decimal("-3.0"),
     },
 }
@@ -153,7 +186,9 @@ AGENT_STRENGTHS = {
     "codex": "implementação, debugging e testes direto no repositório",
     "claude": "análise arquitetural extensa, revisão técnica e documentação complexa",
     "gemini": "contexto muito grande, síntese e comparação de grandes volumes",
-    "qwen": "implementação simples ou média bem delimitada, com custo baixo",
+    "qwen": "implementação barata e bem delimitada, com bom custo-benefício",
+    "grok": "tarefas agentic longas e contexto muito grande, custo médio",
+    "deepseek": "raciocínio profundo, coding e revisão técnica complexa",
     "kimi": "implementação e análise intermediária com contexto extenso",
 }
 
@@ -925,6 +960,12 @@ def recommend_agents(
             has_inactive_only = (
                 not agent_rows and bool(inactive.get(agent))
             )
+
+        if model_row is None and agent in OPENROUTER_CLI_AGENTS:
+            # Cobram por token na OpenRouter: sem linha no catálogo não há
+            # custo nem capacidade a afirmar, então não viram "assinatura".
+            capable = False
+            has_inactive_only = True
 
         if model_row is None and not has_inactive_only:
             # Agente sem entrada no catálogo (ex.: CLI por assinatura).

@@ -40,15 +40,18 @@ unset gemini_key
 cd "${WORKDEV_AGENT_CWD:-${WORKDEV_DIR:-/opt/workdev}}"
 
 approval_mode="default"
+model_arguments=(--model "$GEMINI_MODEL")
 for argument in "$@"; do
   if [[ "$argument" == "--prompt" || "$argument" == "-p" ]]; then
     approval_mode="yolo"
-    break
+  fi
+  if [[ "$argument" == "--model" || "$argument" == "-m" ]]; then
+    model_arguments=()
   fi
 done
 
 exec "$GEMINI_EXECUTABLE" \
   --skip-trust \
-  --model "$GEMINI_MODEL" \
+  "${model_arguments[@]}" \
   --approval-mode "$approval_mode" \
   "$@"

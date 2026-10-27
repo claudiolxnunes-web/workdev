@@ -30,6 +30,23 @@ def _health(status, reason=None):
     )
 
 
+def _ollama_local_runtime():
+    """Runtime Ollama local isolado para testar somente o driver Ollama."""
+    return agent_runtimes.OllamaRuntime(
+        id="local-code",
+        label="Local Code Test Ollama",
+        kind=agent_runtimes.KIND_LOCAL,
+        persistence=agent_runtimes.PERSISTENCE_LOCAL,
+        base_url_env="WORKDEV_OLLAMA_LOCAL_URL",
+        default_base_url="http://127.0.0.1:11434",
+        model_env="WORKDEV_OLLAMA_LOCAL_MODEL",
+        default_model=None,
+        api_key_env=None,
+        notes="Runtime falso usado exclusivamente pelos testes do driver Ollama.",
+        engine=agent_runtimes.ENGINE_OLLAMA,
+    )
+
+
 class _FakeResponse:
     """Resposta de streaming: o payload vira uma linha NDJSON com done=true.
 
@@ -153,6 +170,14 @@ class DispatchGuardTest(unittest.TestCase):
 class DispatchTest(unittest.TestCase):
     def setUp(self):
         agent_runtimes.reset_health_cache()
+
+        self.runtime = patch(
+            "app.services.agent_runtimes.get_runtime",
+            return_value=_ollama_local_runtime(),
+        )
+        self.runtime.start()
+        self.addCleanup(self.runtime.stop)
+
         self.health = patch(
             "app.services.agent_runtimes.check_runtime_cached",
             new=AsyncMock(return_value=_health("online")),
@@ -276,7 +301,11 @@ class DispatchTest(unittest.TestCase):
         body = _FakeClient.last_request["json"]
         # O contrato do despacho é texto: nada de comando, caminho de repo,
         # ferramenta ou credencial atravessa a fronteira.
-        self.assertEqual(set(body), {"model", "prompt", "stream", "options"})
+        self.assertEqual(
+            set(body),
+            {"model", "prompt", "stream", "think", "options"},
+        )
+        self.assertIs(body["think"], False)
         # `options` existe só para a janela de contexto. Se um dia couber
         # `tools` ou caminho aqui dentro, é este teste que tem que barrar.
         self.assertEqual(set(body["options"]), {"num_ctx"})
@@ -434,6 +463,16 @@ class BuildGuardTest(unittest.TestCase):
             patch(
                 "app.routers.handoffs.ensure_dispatchable_blocking",
             ) as guard,
+            patch(
+                "app.routers.handoffs.allowed_models_for_agent",
+                return_value=[],
+            ),
+            # Modelo resolvido da aba Agentes não tem "active" registrado
+            # neste teste; sem sessão viva real, não há o que reconciliar.
+            patch(
+                "app.services.agent_operability.resolve",
+                return_value=Mock(session_exists=False),
+            ),
             patch(
                 "app.routers.handoffs.queue_build",
                 return_value=(run, Mock()),

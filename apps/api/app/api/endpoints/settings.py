@@ -2,7 +2,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from app.routers.ai import get_db
-from app.services.agent_router import resolve_execution_selection, AgentRoutingError
 from typing import Dict, Any
 from ...services.config_service import config_service
 
@@ -38,12 +37,9 @@ async def update_settings(settings: Dict[str, Any], db: Session = Depends(get_db
             agents = settings["agents"]
             if not isinstance(agents, dict):
                 raise HTTPException(422, "Configuração de agentes inválida")
-            if agents.get("executor") is not None:
-                try:
-                    selection = resolve_execution_selection(db, agents["executor"])
-                except AgentRoutingError as exc:
-                    raise HTTPException(409, {"code": exc.code, "message": exc.message}) from exc
-                agents["executor"] = {key: selection[key] for key in ("provider", "model", "runtime_id") if key in selection}
+            # Não existe mais executor padrão: o executor é escolhido em cada
+            # envio ao Build. Valor antigo (inclusive "ollama") não é regravado.
+            agents.pop("executor", None)
         
         # Atualiza as configurações do usuário
         success = config_service.update_user_config(settings)

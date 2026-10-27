@@ -9,7 +9,7 @@ from app.models.backlog import BacklogItem
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.project import Project
 from app.models.subtask import BacklogSubtask
-from app.schemas.chat import SessionFromTask, SessionUpdate
+from app.schemas.chat import SessionFromTask, SessionUpdate, BancadaPlanningRequest, WorkspacePlanningRequest
 from app.services import autoridade, chat_audit
 from app.services.handoff import active_plan_for_task, PLANNING_TASK_STATUSES
 
@@ -106,6 +106,186 @@ def _task_context(
     return "\n".join(lines)
 
 
+def _bancada_planning_context(task: BacklogItem | None, project: Project | None, prompt_livre: str | None = None) -> str | None:
+    """Prompt de planejamento da Bancada Local para LLM grande via OpenRouter."""
+    if prompt_livre:
+        entrada = f"Pedido livre:\n{prompt_livre}"
+    else:
+        if not (task.description or "").strip():
+            return None  # Sinal de que a descrição está vazia
+        entrada = (f"Task ID: `{task.id}` (use ler_task para reler a ficha)\n"
+                   f"Task: {task.title}\n{task.description or ''}")
+
+    lines = [
+        "Você é o planejador da Bancada Local do WorkDev. Vai quebrar o pedido abaixo em",
+        "micro-tarefas para um modelo local pequeno (Qwen ~30B MoE, contexto curto, sem",
+        "ferramentas). O modelo local NÃO lê arquivos: ele só vê os trechos que você",
+        "indicar, com número de linha. Ele inventa nomes com facilidade quando o",
+        "contexto não traz o que precisa.",
+        "",
+        "Regras de cada micro-tarefa:",
+        "- Uma ação só: um diff pequeno, uma docstring, um teste, um resumo, uma lista.",
+        "  Nada de 'refatore o módulo'.",
+        "- Trechos mínimos e suficientes: inclua a definição de TODO nome que a resposta",
+        "  vai precisar usar (função, constante, import). Se o diff mexe em X e chama Y,",
+        "  o trecho de Y também entra. Na dúvida, inclua o bloco de imports do arquivo.",
+        "- Linhas reais do arquivo atual, [caminho relativo à raiz do repo, início, fim],",
+        "  inclusivas. No máximo 8 trechos e 400 linhas por trecho; prefira bem menos.",
+        "- Nunca use .env, .git, chaves, certificados, node_modules ou caminhos fora do",
+        "  repo: a Bancada recusa.",
+        "- Instrução autocontida e explícita sobre o formato de saída. Para mudança de",
+        "  código: 'Saída: diff unificado (--- a/… +++ b/…) contra os trechos, e nada",
+        "  mais.' Para análise: diga o formato (lista, JSON com chaves X/Y).",
+        "- Sempre inclua na instrução: 'Use só nomes que aparecem nos trechos. Se faltar",
+        "  algo, responda FALTA: <o que falta> em vez de inventar.'",
+        "- espera_diff: true quando a saída esperada é um diff. As checagens rodam",
+        "  `git apply --check` contra a base e acusam erro se não vier diff.",
+        "- exige: até 5 pares {regex: explicação} com o essencial que a resposta precisa",
+        "  ACRESCENTAR (ex.: {'current\\\\(\\\\)': 'usar current() para ler a chave'}).",
+        "  É expressão regular Python, procurada só no código NOVO: linhas '+' do diff",
+        "  (ou blocos de código, se não houver diff). Escape parênteses e pontos.",
+        "- max_tokens: o suficiente para a saída, entre 64 e 4000 (diff pequeno ~400-800,",
+        "  teste ~800-1500, resumo ~300-600).",
+        "- id: deixe vazio para a numeração automática do lote (AAMMDD-NN-NN) ou use um",
+        "  id descritivo único (letras, números, _ e -, até 80 caracteres).",
+        "- Ordene as tarefas para que cada uma seja independente: o modelo local não vê",
+        "  a resposta das anteriores.",
+        "- Se o pedido não cabe em micro-tarefas (precisa de muitos arquivos, decisão de",
+        "  arquitetura, migração de banco), NÃO force: devolva {\"tarefas\": [],",
+        "  \"fora_do_alcance\": \"<motivo>\"}. O operador então usa o fluxo de nuvem.",
+        "- Prefira até 10 tarefas: cada proposta passa por revisão humana. De 11 a 20, a",
+        "  validação divide o plano em 2 lotes automaticamente. Acima de 20, a task é",
+        "  grande demais para a Bancada: devolva fora_do_alcance sugerindo dividi-la no backlog.",
+        "",
+        "Como trabalhar (você tem poucos passos de ferramenta; não os gaste à toa):",
+        "1. TRIAGEM PRIMEIRO, só com a ficha (ler_task), antes de ler qualquer código. Se a",
+        "   task pede discovery/investigação, mexe em várias camadas (frontend + backend +",
+        "   política/banco), envolve decisão de arquitetura, migração ou 'mostrar antes de",
+        "   implementar', ela NÃO cabe: responda já com {\"tarefas\": [], \"fora_do_alcance\":",
+        "   \"<motivo>\"}, sem ler código.",
+        "2. Se couber, peça VÁRIOS ler_trecho na mesma rodada (chamadas em paralelo), só dos",
+        "   arquivos que as micro-tarefas vão citar. Confira CADA trecho antes de citá-lo;",
+        "   não estime linhas.",
+        "- Antes de entregar, chame validar_lote_bancada com o plano e corrija até ok=true.",
+        "- A resposta final é só o(s) plano(s) devolvido(s) pela validação, cada lote num",
+        "  bloco ```json próprio, neste formato:",
+        "{\"tarefas\": [ {\"id\": \"...\", \"instrucao\": \"...\", \"trechos\": [[\"caminho\", ini, fim]],",
+        "               \"max_tokens\": 800, \"espera_diff\": true, \"exige\": {\"regex\": \"explicação\"}} ]}",
+        "",
+        f"Contexto do projeto: {project.name if project else 'N/A'} ({project.slug if project else 'N/A'})",
+        "",
+        entrada,
+    ]
+    return "\n".join(lines)
+
+
+def _workspace_planning_context(
+    task: BacklogItem | None, project: Project | None, prompt_livre: str | None = None,
+    referencias: str = "",
+) -> str | None:
+    """Prompt de planejamento do Workspace Local para LLM grande via OpenRouter.
+
+    `referencias` é o bloco canônico do projeto (ADR, knowledge, decisions),
+    já redigido por `canonical_context.planning_block`.
+
+    Diferente da Bancada, aqui o modelo local LÊ arquivos: a fatia não precisa
+    carregar o código, precisa saber o que fazer, onde olhar e como verificar.
+    Por isso o supervisor orienta em vez de micro-tarefar.
+    """
+    if prompt_livre:
+        entrada = f"Pedido livre:\n{prompt_livre}"
+    else:
+        if not (task.description or "").strip():
+            return None  # Sinal de que a descrição está vazia
+        entrada = (f"Task ID: `{task.id}` (use ler_task para reler a ficha)\n"
+                   f"Task: {task.title}\n{task.description or ''}")
+
+    linhas = [
+        "Você é o supervisor do Workspace Local do WorkDev. O Workspace é onde o",
+        "operador trabalha com um modelo local (padrão: Qwen3.8 35B A3B MoE, rodando",
+        "na CPU). Quando o operador aprova o seu plano, o Workspace executa uma fatia",
+        "por vez: o modelo local propõe o diff, o sistema aplica numa cópia isolada da",
+        "sessão, roda os testes do projeto e commita no branch da sessão. O modelo local",
+        "NÃO edita arquivos por conta própria, e levar o resultado para o branch do",
+        "operador (incorporar) é decisão dele. A fatia N+1 parte do código que a fatia N",
+        "deixou, mas o modelo não vê a resposta da fatia anterior.",
+        "",
+        "Seu papel é quebrar o pedido em fatias que o modelo local resolva com sucesso,",
+        "e não em micro-tarefas de resposta curta. O modelo local consegue buscar e ler",
+        "arquivos sozinho (buscar_texto, listar_pasta, ler_arquivo, somente leitura, até",
+        "6 voltas), mas cada leitura custa tempo de CPU, e ele erra em duas coisas:",
+        "orienta pouco e inventa nomes que não existem. Sua orientação é a defesa",
+        "contra as duas.",
+        "",
+        "Regras de cada fatia:",
+        "- Objetivo único: uma mudança coerente. Nada de 'refatore o módulo'.",
+        "- ORIENTAÇÃO, não código: em 'trechos' indique os arquivos e as linhas reais",
+        "  que a fatia vai mexer ou que precisa entender ([caminho, início, fim],",
+        "  inclusivas, no máximo 200 linhas por trecho). O modelo local abre o resto.",
+        "- 'instrucao': o que o modelo local deve fazer, em uma ou duas frases, com o",
+        "  formato de saída esperado ('Saída: diff unificado (--- a/… +++ b/…)' para",
+        "  mudança de código).",
+        "- 'gate': como se verifica que a fatia deu certo (comando, teste, o que conferir",
+        "  no arquivo). Uma fatia sem gate não é auditável e não entra no plano.",
+        "- 'exige': até 5 pares {regex: explicação} com o essencial que a resposta",
+        "  precisa ACRESCENTAR (ex.: {'current\\\\(\\\\)': 'usar current() para ler a chave'}).",
+        "  É expressão regular Python, procurada só no código NOVO: linhas '+' do diff.",
+        "- 'max_tokens': o suficiente para a saída, entre 64 e 4000 (diff ~800-1500,",
+        "  alteração de configuração ~300-800).",
+        "- 'id': vazio para numeração automática ou identificador descritivo único.",
+        "- Cada fatia é INDEPENDENTE das respostas das outras: o modelo local não vê o",
+        "  que a fatia anterior produziu.",
+        "- Nunca use .env, .git, chaves, certificados, node_modules ou caminhos fora do",
+        "  repo: o Workspace recusa.",
+        "- Fatia de BANCO (só quando a task pede mudar DADOS do WorkDev, não código):",
+        "  {\"tipo\": \"banco\", \"objetivo\", \"instrucao\", \"tabelas\": [...], \"verificacao\":",
+        "  [\"SELECT ... que dá true quando deu certo\"], \"gate\": [...]}. Só INSERT, UPDATE",
+        "  ou DELETE, no máximo 50 linhas, só nas tabelas projects, backlog, backlog_subtasks,",
+        "  knowledge, decisions, adrs e rfcs. O sistema simula (com rollback) e o operador",
+        "  aplica; nunca grava sozinho. Mudança de ESTRUTURA (CREATE/ALTER/DROP) não é fatia",
+        "  de banco: é fatia de código com migration do Alembic.",
+        "- Se o pedido precisa de decisão de arquitetura, migração de banco ou mudança",
+        "  em várias camadas de uma vez, NÃO force: devolva {\"fatias\": [],",
+        "  \"fora_do_alcance\": \"<motivo>\"}.",
+        "",
+        "Como trabalhar (você tem poucos passos de ferramenta; não os gaste à toa):",
+        "1. TRIAGEM PRIMEIRO, só com a ficha (ler_task), antes de ler qualquer código. Se a",
+        "   task pedir discovery/investigação, decisão de arquitetura, migração ou",
+        "   'mostrar antes de implementar', ela NÃO cabe: responda já com {\"fatias\": [],",
+        "   \"fora_do_alcance\": \"<motivo>\"}, sem ler código.",
+        "Se o operador pedir para olhar o andamento, para replanejar ou corrigir uma",
+        "fatia que falhou, chame ler_estado_sessao ANTES: ele mostra o que já foi",
+        "aplicado e commitado na sessão, e o erro de cada fatia. Não reproponha o que já",
+        "está feito.",
+        "Referências canônicas: o bloco 'Contexto recuperado' abaixo (quando existir) traz",
+        "os trechos de ADR, knowledge e decision que casam com a task. Para o texto",
+        "inteiro de uma ADR ou decision, use ler_referencias. O modelo local NÃO recebe",
+        "esse bloco: se uma ADR ou decision restringe a fatia, escreva a restrição na",
+        "própria 'instrucao' (ex.: 'não use o IP de bridge; use 127.0.0.1').",
+        "Antes de entregar o plano, chame validar_plano_workspace com ele e corrija o que",
+        "for recusado: é a mesma validação do botão Aprovar plano.",
+        "Se uma fatia falhou, ler_resultado_fatia mostra a etapa, o erro, os checks do",
+        "gate e o diff proposto — use para reescrever a instrução da correção.",
+        "2. Se não souber onde está, use buscar_texto (literal, como git grep) ou",
+        "   listar_pasta para achar arquivo e linha — não chute caminho.",
+        "3. Então peça VÁRIOS ler_trecho na mesma rodada (chamadas em paralelo), só dos",
+        "   arquivos que as fatias vão tocar. Confira CADA linha antes de citá-la; não",
+        "   estime linhas.",
+        "- A resposta final é só o plano, num bloco ```json, neste formato:",
+        '{"fatias": [ {"id": "...", "objetivo": "...", "instrucao": "...",',
+        '              "trechos": [["caminho", ini, fim]], "gate": ["..."],',
+        '              "exige": {"regex": "explicação"}, "max_tokens": 1200} ],',
+        ' "fora_do_alcance": "opcional"}',
+        "",
+        f"Contexto do projeto: {project.name if project else 'N/A'} ({project.slug if project else 'N/A'})",
+        "",
+        entrada,
+    ]
+    if referencias:
+        linhas += ["", referencias]
+    return "\n".join(linhas)
+
+
 def planning_eligibility(db: Session, task) -> dict:
     if task.status not in PLANNING_TASK_STATUSES:
         return {'eligible': False, 'code': 'task_not_eligible',
@@ -187,6 +367,146 @@ def criar_sessao_da_task(
         "task_id": str(task.id),
         "task_title": task.title,
         "backlog_id": str(task.id),
+    }
+
+
+@router.post("/chat/bancada/planejar", status_code=201)
+def criar_sessao_planejamento_bancada(
+    payload: BancadaPlanningRequest, db: Session = Depends(get_db)
+):
+    """Cria uma sessão de chat para planejar uma task da Bancada Local.
+
+    Recebe task_id ou prompt livre. Se task_id, valida que a task tem descrição.
+    Retorna uma sessão em modo OBSERVE com o prompt do planejador.
+    """
+    if not payload.task_id and not payload.prompt:
+        raise HTTPException(422, "Forneça task_id ou prompt")
+
+    task = None
+    project = None
+
+    if payload.task_id:
+        task = db.query(BacklogItem).filter(
+            BacklogItem.id == payload.task_id
+        ).first()
+        if not task:
+            raise HTTPException(404, "Task não encontrada")
+        project = db.query(Project).filter(Project.id == task.project_id).first()
+
+        # Validação: recusa task sem descrição
+        if not (task.description or "").strip():
+            raise HTTPException(409, {
+                "code": "descricao_vazia",
+                "message": "A task não tem descrição. Peça a descrição antes de planejar."
+            })
+    else:
+        # Prompt livre: sem projeto específico
+        project = None
+
+    # Monta o prompt de planejamento
+    prompt_content = _bancada_planning_context(task, project, payload.prompt)
+    if prompt_content is None:
+        raise HTTPException(409, "Task sem descrição")
+
+    # Cria a sessão em modo OBSERVE (somente leitura). Sem task_id de propósito:
+    # uq_chat_sessions_task_id reserva a vaga da task para a sessão de PLAN do
+    # "Enviar ao AI Hub". O id da task vai no prompt (ler_task relê a ficha).
+    session = ChatSession(
+        title=f"Planejar Bancada: {task.title if task else 'Prompt livre'}"[:255],
+        project_id=project.id if project else None,
+        authority=autoridade.OBSERVE,  # Somente leitura
+    )
+    try:
+        db.add(session)
+        db.flush()
+        db.add(ChatMessageDB(
+            session_id=session.id,
+            role="system",
+            content=prompt_content,
+        ))
+        db.commit()
+        db.refresh(session)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(500, "Erro ao criar sessão de planejamento")
+
+    return {
+        **sessao_out(session, project),
+        "task_id": str(task.id) if task else None,
+        "task_title": task.title if task else None,
+    }
+
+
+@router.post("/chat/workspace/planejar", status_code=201)
+def criar_sessao_planejamento_workspace(
+    payload: WorkspacePlanningRequest, db: Session = Depends(get_db)
+):
+    """Cria uma sessão de chat para o supervisor planejar uma task do Workspace Local.
+
+    Recebe task_id ou prompt livre. Se task_id, valida que a task tem descrição.
+    Retorna uma sessão em modo OBSERVE com o prompt do supervisor.
+
+    A Bancada Local não é tocada: é outro endpoint, outro prompt e outra sessão.
+    """
+    if not payload.task_id and not payload.prompt:
+        raise HTTPException(422, "Forneça task_id ou prompt")
+
+    task = None
+    project = None
+
+    if payload.task_id:
+        task = db.query(BacklogItem).filter(
+            BacklogItem.id == payload.task_id
+        ).first()
+        if not task:
+            raise HTTPException(404, "Task não encontrada")
+        project = db.query(Project).filter(Project.id == task.project_id).first()
+
+        if not (task.description or "").strip():
+            raise HTTPException(409, {
+                "code": "descricao_vazia",
+                "message": "A task não tem descrição. Peça a descrição antes de planejar."
+            })
+    else:
+        # Prompt livre: sem projeto específico
+        project = None
+
+    referencias = ""
+    if task is not None and project is not None:
+        from app.services import canonical_context, referencias_projeto
+        contexto = referencias_projeto.coletar(db, project.id, task.id)
+        contexto["task"] = {"title": task.title, "description": task.description}
+        referencias = canonical_context.planning_block(contexto)
+    prompt_content = _workspace_planning_context(task, project, payload.prompt, referencias)
+    if prompt_content is None:
+        raise HTTPException(409, "Task sem descrição")
+
+    # Sessão em modo OBSERVE (somente leitura). Sem task_id de propósito:
+    # uq_chat_sessions_task_id reserva a vaga da task para a sessão de PLAN do
+    # "Enviar ao AI Hub" — vale para o Workspace também.
+    session = ChatSession(
+        title=f"Supervisar Workspace: {task.title if task else 'Prompt livre'}"[:255],
+        project_id=project.id if project else None,
+        authority=autoridade.OBSERVE,
+    )
+    try:
+        db.add(session)
+        db.flush()
+        db.add(ChatMessageDB(
+            session_id=session.id,
+            role="system",
+            content=prompt_content,
+        ))
+        db.commit()
+        db.refresh(session)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(500, "Erro ao criar sessão de planejamento")
+
+    return {
+        **sessao_out(session, project),
+        "task_id": str(task.id) if task else None,
+        "task_title": task.title if task else None,
     }
 
 

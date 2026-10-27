@@ -33,6 +33,9 @@ class ModelPolicy:
 # Fundação central da política. Na Etapa 2 estes registros serão administrados
 # pelo catálogo persistido; por ora não há IDs ou preços espalhados no frontend.
 MODEL_POLICIES: dict[tuple[str, str], ModelPolicy] = {
+    ("openrouter", "typesafe/jev-1.13"): ModelPolicy(
+        "openrouter", "typesafe/jev-1.13", "economic", Decimal("0.042"), Decimal("0"),
+    ),
     ("openai", "gpt-5.6-luna"): ModelPolicy(
         "openai", "gpt-5.6-luna", "economic", None, None,
         allowed_efforts=("low", "medium"),
@@ -58,19 +61,67 @@ MODEL_POLICIES: dict[tuple[str, str], ModelPolicy] = {
     ),
     ("openrouter", "moonshotai/kimi-k2.7-code"): ModelPolicy(
         "openrouter", "moonshotai/kimi-k2.7-code", "economic",
-        Decimal("0.71"), Decimal("3.50"),
+        Decimal("0.6712"), Decimal("3.35"),
+    ),
+    ("openrouter", "moonshotai/kimi-k2.6"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k2.6", "economic",
+        Decimal("0.65"), Decimal("3.41"),
+    ),
+    ("openrouter", "moonshotai/kimi-k2.5"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k2.5", "economic",
+        Decimal("0.50"), Decimal("2.50"),
+    ),
+    ("openrouter", "moonshotai/kimi-k2-thinking"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k2-thinking", "economic",
+        Decimal("0.60"), Decimal("2.50"),
+    ),
+    ("openrouter", "moonshotai/kimi-k2-0905"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k2-0905", "economic",
+        Decimal("0.60"), Decimal("2.50"),
+    ),
+    ("openrouter", "moonshotai/kimi-k2"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k2", "economic",
+        Decimal("0.57"), Decimal("2.30"),
     ),
     ("openrouter", "moonshotai/kimi-k3"): ModelPolicy(
         "openrouter", "moonshotai/kimi-k3", "premium",
-        Decimal("3.00"), Decimal("15.00"), requires_confirmation=True,
+        Decimal("0.70"), Decimal("15.00"), requires_confirmation=True,
+    ),
+    ("openrouter", "moonshotai/kimi-k3:batch"): ModelPolicy(
+        "openrouter", "moonshotai/kimi-k3:batch", "premium",
+        Decimal("2.28"), Decimal("11.40"), requires_confirmation=True,
     ),
     ("anthropic", "claude-sonnet-5"): ModelPolicy(
         "anthropic", "claude-sonnet-5", "premium",
         Decimal("2.00"), Decimal("10.00"), requires_confirmation=True,
     ),
+    ("anthropic", "claude-opus-5.5"): ModelPolicy(
+        "anthropic", "claude-opus-5.5", "premium",
+        Decimal("4.00"), Decimal("20.00"), requires_confirmation=True,
+    ),
     ("anthropic", "claude-opus-5"): ModelPolicy(
-        "anthropic", "claude-opus-5", "premium", None, None,
-        requires_confirmation=True,
+        "anthropic", "claude-opus-5", "premium",
+        Decimal("5.00"), Decimal("25.00"), requires_confirmation=True,
+    ),
+    ("anthropic", "claude-opus-4.8"): ModelPolicy(
+        "anthropic", "claude-opus-4.8", "premium",
+        Decimal("5.00"), Decimal("25.00"), requires_confirmation=True,
+    ),
+    ("anthropic", "claude-haiku-4.5"): ModelPolicy(
+        "anthropic", "claude-haiku-4.5", "economic",
+        Decimal("1.00"), Decimal("5.00"),
+    ),
+    ("openai", "gpt-5.6-sol"): ModelPolicy(
+        "openai", "gpt-5.6-sol", "premium",
+        Decimal("2.00"), Decimal("10.00"), requires_confirmation=True,
+    ),
+    ("openai", "gpt-5.6-terra"): ModelPolicy(
+        "openai", "gpt-5.6-terra", "premium",
+        Decimal("2.00"), Decimal("12.00"), requires_confirmation=True,
+    ),
+    ("openai", "gpt-5.6-luna"): ModelPolicy(
+        "openai", "gpt-5.6-luna", "economic",
+        Decimal("0.20"), Decimal("1.20"),
     ),
 }
 

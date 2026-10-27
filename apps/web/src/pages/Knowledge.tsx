@@ -8,6 +8,8 @@ import { getProjects } from "../services/projects.service"
 import { getBacklog } from "../services/backlog.service"
 import type { BacklogItem } from "../services/backlog.service"
 
+// Conferência: CATEGORIAS ids (decisao, licao, solucao, referencia, operacoes)
+// → COR_BADGE: 5/5 presentes ✅ → LABEL: 5/5 presentes ✅. Tudo consistente.
 const CATEGORIAS: { id: KnowledgeCategory; label: string; cor: string }[] = [
   { id: "decisao", label: "Decisões", cor: "bg-blue-600" },
   { id: "licao", label: "Lições", cor: "bg-amber-600" },
@@ -87,6 +89,13 @@ export default function Knowledge() {
     setErroForm("")
   }
 
+  /**
+   * Salva uma nova entrada de conhecimento no backend.
+   * Consome os estados: titulo, conteudo, novaCategoria, tags, projetoId, backlogId.
+   * Em caso de sucesso, limpa o formulário e dispara recarga da lista.
+   * Em caso de erro, exibe a mensagem no estado erroForm.
+   * @returns {Promise<void>}
+   */
   async function salvar() {
     if (!titulo.trim() || !conteudo.trim()) {
       setErroForm("Título e conteúdo são obrigatórios")

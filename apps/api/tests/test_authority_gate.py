@@ -49,6 +49,8 @@ class MatrizTest(unittest.TestCase):
         self.assertEqual(nomes, {
             "listar_projetos", "listar_backlog", "listar_subtasks",
             "buscar_conhecimento", "buscar_rag", "listar_planos_execucao",
+            "ler_task", "ler_trecho", "buscar_texto", "listar_pasta", "ler_estado_sessao", "validar_lote_bancada",
+            "validar_plano_workspace", "ler_resultado_fatia", "ler_referencias",
         })
 
     def test_plan_acrescenta_registro_interno(self):
@@ -198,7 +200,7 @@ class CatalogoPorProviderTest(unittest.TestCase):
         observe = {t["function"]["name"] for t in ai.tools_openai(aut.OBSERVE)}
         plan = {t["function"]["name"] for t in ai.tools_openai(aut.PLAN)}
 
-        self.assertEqual(len(observe), 6)
+        self.assertEqual(len(observe), 15)
         self.assertEqual(len(plan), len(ai.TOOLS))
         self.assertNotIn("criar_task", observe)
 

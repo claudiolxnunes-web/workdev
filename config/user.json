@@ -8,5 +8,11 @@
     "enableGraphExplorer": true,
     "enableAIHub": true,
     "enableRealTimeSync": true
+  },
+  "agents": {
+    "adaptive_supervision": {
+      "enabled": true,
+      "confidence_threshold": 0.35
+    }
   }
 }

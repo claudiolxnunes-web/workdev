@@ -33,7 +33,7 @@ def test_strong_policy_must_route_away_from_economic_reviewer(lifecycle_api, mon
     client, run_id, factory, Run, Event, Cycle = lifecycle_api
     monkeypatch.setattr(review_cycle, 'collect_diff_stats', lambda *_: (['app/auth.py'], 'auth'))
     with factory() as db:
-        db.query(Run).filter_by(id=run_id).update({'reviewer_agent': 'qwen', 'complexity': 'high'})
+        db.query(Run).filter_by(id=run_id).update({'reviewer_agent': 'openrouter', 'complexity': 'high'})
         db.commit()
         add_evidence(db, Run, Event, run_id, passed=True)
     response = client.patch(f'/api/handoffs/runs/{run_id}', json={'status': 'review'})

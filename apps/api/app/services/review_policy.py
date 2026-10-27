@@ -24,9 +24,9 @@ DECISIONS = ('NO_REVIEW_COMPLETE', 'REVISAR', 'NO_REVIEW_GATE_FAIL', 'BLOCKED_OP
 
 _CONFIG_PATH = Path(__file__).resolve().parents[4] / 'config' / 'review-policy.json'
 _DEFAULT_CONFIG = {
-    'trusted_agents': ['codex', 'claude', 'kimi', 'qwen'],
+    'trusted_agents': ['codex', 'claude', 'kimi', 'qwen', 'grok', 'deepseek'],
     'tier_reviewers': {
-        'economic': ['qwen'],
+        'economic': ['qwen', 'grok', 'deepseek'],
         'strong': ['codex', 'claude', 'kimi'],
     },
     'volume_medium_lines': 200,
@@ -152,15 +152,16 @@ def reviewer_tier_for_escalation(current_tier: str, executor: str | None = None,
 
 def with_user_preference(decision: PolicyDecision, requested: bool | None, reviewer: str | None,
                          executor: str) -> PolicyDecision:
-    """Só revisão não sensível pode ser dispensada, sempre depois dos gates."""
+    """O operador decide a revisão em qualquer risco, sempre depois dos gates."""
     from dataclasses import replace
     if decision.gate_result != "pass" or decision.decision not in {"REVISAR", "NO_REVIEW_COMPLETE"}:
         return decision
-    if decision.sensitive or requested is None:
+    if requested is None:
         return decision
     if requested is False:
+        scope = f" apesar de escopo sensível ({', '.join(decision.sensitive)})" if decision.sensitive else ""
         return replace(decision, decision="NO_REVIEW_COMPLETE", tier="none", reviewer_candidates=[],
-                       justification=decision.justification + "; revisão independente dispensada por escolha auditada do usuário")
+                       justification=decision.justification + f"; revisão independente dispensada pelo operador{scope}")
     if reviewer and reviewer != executor:
         return replace(decision, decision="REVISAR", tier=decision.tier if decision.tier != "none" else "economic",
                        reviewer_candidates=[reviewer], justification=decision.justification + "; revisão solicitada pelo usuário")

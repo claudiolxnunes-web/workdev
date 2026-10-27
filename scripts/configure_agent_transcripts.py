@@ -18,6 +18,8 @@ SESSIONS = {
     "gemini": "gemini",
     "kimi": "kimi",
     "qwen": "qwen",
+    "grok": "grok",
+    "deepseek": "deepseek",
 }
 
 

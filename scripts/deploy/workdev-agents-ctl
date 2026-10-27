@@ -1,0 +1,15 @@
+#!/bin/sh
+# Instalado em /usr/local/libexec/workdev-agents-ctl (root:root 0755).
+# Chamado pela API e pelo healthcheck (usuário workdev). Único verbo permitido:
+# pedir ao systemd a unidade workdev-agents-ensure.service, liberada no polkit
+# só para "start". Nenhum outro controle do workdev-agents fica disponível.
+set -eu
+case "${1:-}" in
+  ensure-server)
+    exec /usr/bin/systemctl start workdev-agents-ensure.service
+    ;;
+  *)
+    echo "uso: workdev-agents-ctl ensure-server" >&2
+    exit 2
+    ;;
+esac

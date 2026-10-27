@@ -33,6 +33,12 @@ def api_terminal(tmp_path, monkeypatch):
     mapping.map_imperatively(Run, table)
     monkeypatch.setattr(service, 'AgentRun', Run)
     monkeypatch.setattr(run_terminal, 'AgentRun', Run)
+    # O checkpoint de PAUSE importa o AgentRun real (com plan_id) e consulta
+    # agent_run_events; este fixture só modela o stub de 2 colunas e não cobre
+    # pausa. Neutro aqui: o gate canônico é testado em test_run_pause.py.
+    import app.services.run_pause as run_pause
+    monkeypatch.setattr(run_pause, 'AgentRun', Run)
+    monkeypatch.setattr(run_pause, 'is_paused', lambda db, run_id: False)
     metadata = MetaData()
     table.to_metadata(metadata)
     TerminalSession.__table__.to_metadata(metadata)
@@ -428,7 +434,12 @@ def test_cancelled_attach_closes_orphan_socket_and_releases_writer(api_terminal,
         return connection, {}, b''
     monkeypatch.setattr(run_terminal, '_attach', attach)
 
+    class FakeHeaders:
+        def getlist(self, _name):
+            return []
+
     class FakeWS:
+        headers = FakeHeaders()
         query_params = {'role': 'writer'}
         cookies = {COOKIE_NAME: create_session_token()}
         async def close(self, code=1000, reason=''):
@@ -444,8 +455,15 @@ def test_cancelled_attach_closes_orphan_socket_and_releases_writer(api_terminal,
 
     async def drive():
         task = asyncio.create_task(run_terminal.run_terminal_ws(FakeWS(), str(run_id)))
-        while not entered.is_set():
+        for _ in range(200):
+            if entered.is_set():
+                break
+            if task.done():
+                await task
+                pytest.fail("handler terminou antes de iniciar _attach")
             await asyncio.sleep(.01)
+        else:
+            pytest.fail("_attach não iniciou dentro de 2 segundos")
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task

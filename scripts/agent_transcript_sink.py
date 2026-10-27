@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-ALLOWED_AGENTS = {"claude", "codex", "gemini", "kimi", "qwen"}
+ALLOWED_AGENTS = {"claude", "codex", "gemini", "kimi", "openrouter"}
 TRANSCRIPT_DIR = Path(
     os.getenv("AGENT_TRANSCRIPT_DIR", "/opt/workdev/agent-transcripts")
 )

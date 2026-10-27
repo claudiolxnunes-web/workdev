@@ -169,41 +169,47 @@ WorkDev que mudou.
   testes, vitest.config.ts, scripts/setup-config.sh, docs/settings-system.md)
   — o backend já foi revisado e commitado (42ce003), falta essa parte.
 - Dar tools de grafo (`graph_nodes`/`graph_edges`) para o Fable no AI Hub.
-- **Ownership root residual em `/opt/workdev` (causa raiz, adiado em 2026-08-20).**
-  Depois do `7d14fab feat(agents): run workdev services unprivileged` os serviços
-  passaram a rodar como `workdev`, mas vários diretórios continuaram `root:root`,
-  criados quando tudo era root. Sintomas já vistos: `pnpm install` morre com
-  `EACCES rmdir` nos `node_modules`, `pytest` não escreve `.pytest_cache`, e o
-  `apps/api/.env` residual é `root:root 600`. Contornado na marra rodando
-  `pnpm install` com `sudo`, o que **recria `node_modules` como root e realimenta
-  o problema**. Correção de verdade: varrer o repo inteiro
-  (`sudo find /opt/workdev -user root -not -path '*/venv/*'`) e decidir caso a
-  caso o que passa para `workdev:workdev` — não sair dando `chown -R` no
-  `/opt/workdev` todo às cegas, porque `venv/` e os `.env` têm dono e modo
-  propositais.
+- ✅ **Ownership root residual em `/opt/workdev` — resolvido em 2026-10-02.** Arquivos
+  rastreados pelo git (170) e suas pastas passaram a `workdev:workdev-runtime`; os três
+  `node_modules` foram reinstalados como `workdev` com o store do pnpm em
+  `/home/workdev/.local/share/pnpm/store` (antes em `/root`, ilegível); caches
+  `__pycache__`/`.pytest_cache` root apagados. Ficaram root DE PROPÓSITO: `.env*`,
+  `deploy.sh` (root o executa), `models/`, `.backups/`, `.local/`, `.claude/`, venvs e
+  saídas ignoradas de `training/`. **Para não voltar:** `pnpm add/install/build` e
+  `pytest` sempre como `workdev` (`runuser -u workdev -- …`); edição de código por
+  sessão root deve terminar com `chown workdev:workdev-runtime` nos arquivos tocados.
 
 
 ## workdev-api.service
 
-> ⚠️ Atualizado em 2026-08-20. A versão anterior desta seção dizia `User=root` e
-> apontava o env para `/opt/workdev/apps/api/.env` — as duas coisas ficaram falsas
-> depois do commit `7d14fab feat(agents): run workdev services unprivileged`.
-> Seguir a nota velha faz `pytest` e qualquer script quebrarem com
-> `PermissionError` no `.env`.
+> ⚠️ Corrigido em 2026-10-26 (conferido com `systemctl show workdev-api`). Até então
+> esta seção dizia que o unit não tinha `EnvironmentFile` e que
+> `/opt/workdev/apps/api/.env` era resíduo não lido. **As duas coisas eram falsas:**
+> é desse arquivo que a API recebe a `DATABASE_URL` de produção. Apagá-lo "como
+> lixo" impede a API de subir.
 
 - Roda **sem privilégio**: `User=workdev`, `Group=workdev`,
   `SupplementaryGroups=workdev-runtime`, `NoNewPrivileges=true`
-- Unit SEM `EnvironmentFile` — o dotenv é carregado pela app, mas o **caminho vem
-  da variável de ambiente** `WORKDEV_API_ENV_FILE`, setada via `Environment=` no unit:
-  ```python
-  # app/main.py e app/database.py
-  load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
-  ```
-- **Arquivo real do env: `/etc/workdev/workdev-api.env`** (`workdev:workdev 600`)
-- `/opt/workdev/apps/api/.env` é **resíduo** (`root:root 600`, ilegível pelo user
-  `workdev`). Não é lido pelo serviço. Se `WORKDEV_API_ENV_FILE` não estiver setada,
-  o `load_dotenv(None)` cai no auto-discovery, acha esse resíduo e estoura
-  `PermissionError` — foi exatamente o que aconteceu em 2026-08-20
+- **As variáveis chegam por DOIS caminhos**, e os dois são necessários:
+  1. **`EnvironmentFile=/opt/workdev/apps/api/.env`**, no drop-in
+     `/etc/systemd/system/workdev-api.service.d/20-environment.conf`. O systemd lê
+     esse arquivo **como root, antes de baixar para `workdev`**, por isso ele pode
+     ser `root:root 600` e mesmo assim chegar ao processo. **É daqui que vem a
+     `DATABASE_URL`.** `ignore_errors=no`: se o arquivo sumir, a API **não sobe**.
+  2. **dotenv da app**, com o caminho em `WORKDEV_API_ENV_FILE` (setada via
+     `Environment=` no unit): `/etc/workdev/workdev-api.env` (`root:root 640` + ACL
+     de leitura para o `workdev`). **Não tem `DATABASE_URL`.**
+     ```python
+     # app/main.py e app/database.py
+     load_dotenv(os.environ.get("WORKDEV_API_ENV_FILE"))
+     ```
+     O `load_dotenv` não sobrescreve o que o systemd já colocou no ambiente.
+- Se `WORKDEV_API_ENV_FILE` não estiver setada (script ou `pytest` rodado à mão), o
+  `load_dotenv(None)` cai no auto-discovery, acha `apps/api/.env` (ilegível para o
+  `workdev`) e estoura `PermissionError` — foi o que aconteceu em 2026-08-20. Por
+  isso os testes usam um `.env` falso (abaixo), nunca o real.
+- **Nunca apagar nem mover `/opt/workdev/apps/api/.env`.** Para trocar a credencial
+  do banco: editar esse arquivo como root e `systemctl restart workdev-api`.
 - `WORKDEV_WEB_DIST=/opt/workdev-runtime/current/apps/web/dist` e
   `WorkingDirectory=/opt/workdev-runtime/current/apps/api` — produção **não serve
   de `/opt/workdev`**, serve da release promovida (ver seção Deploy)
@@ -211,18 +217,22 @@ WorkDev que mudou.
 - ExecStart: `/opt/workdev/apps/api/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`
 - `PrivateTmp=false` de propósito: o Agent Hub precisa enxergar o socket tmux em
   `/tmp/tmux-<uid>`. Um /tmp privado esconderia o socket do processo da API
-- Rodar a suíte de testes como `workdev` (o `.env` residual não é legível):
+- Rodar a suíte de testes como `workdev`, com `.env` falso (o `apps/api/.env` real é
+  root e tem a credencial de produção — teste não usa):
   ```
   printf 'DATABASE_URL=postgresql+psycopg://u:p@127.0.0.1:5432/fake\n' > /tmp/test.env
   cd /opt/workdev/apps/api
-  WORKDEV_API_ENV_FILE=/tmp/test.env venv/bin/python -m pytest tests/ -q -p no:cacheprovider
+  WORKDEV_API_ENV_FILE=/tmp/test.env venv/bin/python -m pytest tests/ -q
   ```
-  (`-p no:cacheprovider` porque `.pytest_cache` também é root. DSN falso basta:
-  os testes não conectam, mas `app/database.py` cria o engine na importação.)
-- Teste de carga de uma variável (NÃO usar `/proc/PID/environ` — dá 0 mesmo funcionando):
+  (DSN falso basta: os testes não conectam, mas `app/database.py` cria o engine na
+  importação. O `-p no:cacheprovider` não é mais necessário desde 2026-10-02.)
+- Teste de carga de uma variável do **dotenv** (as de `/etc/workdev/workdev-api.env`
+  não aparecem em `/proc/PID/environ`, porque o dotenv carrega dentro do processo):
   ```
   /opt/workdev/apps/api/venv/bin/python -c "from dotenv import load_dotenv; import os; load_dotenv('/etc/workdev/workdev-api.env'); v=os.getenv('VAR'); print('OK', len(v)) if v else print('AUSENTE')"
   ```
+  As do `EnvironmentFile` (`apps/api/.env`, como a `DATABASE_URL`) só o root lê;
+  `systemctl show -p EnvironmentFiles workdev-api` mostra de onde vêm sem mostrar valores.
 - GITHUB_TOKEN: fine-grained, All repos, Contents+Metadata Read-only, sem expiracao
 
 ## Deploy — pipeline com prova assinada
@@ -241,8 +251,8 @@ Três etapas, nesta ordem:
 
 | Etapa | Comando | O que faz |
 |---|---|---|
-| 1 | `workdev-deployctl prepare` | roda o predeploy-gate, emite prova assinada com fingerprint de `apps/web/dist`, monta a release em `/opt/workdev-runtime`. Imprime o `proof_id`. TTL padrão 900s |
-| 2 | `workdev-deployctl approve <proof_id> --actor <nome>` | emite o approval assinado |
+| 1 | `/usr/local/sbin/workdev-deployctl prepare` | roda o predeploy-gate, emite prova assinada com fingerprint de `apps/web/dist`, monta a release em `/opt/workdev-runtime`. Imprime o `proof_id`. TTL padrão 900s |
+| 2 | `/usr/local/sbin/workdev-deployctl approve <proof_id> --actor <nome>` | emite o approval assinado |
 | 3 | `bash /opt/workdev/deploy.sh <proof_id>` | revalida o fingerprint, promove a release, reinicia a API, roda o postcheck; **rollback automático** se o postcheck falhar |
 
 - O **build tem que existir antes do `prepare`** — o fingerprint é tirado de
@@ -503,6 +513,19 @@ Regras:
 - se o agente não estiver executando como `root`, preparar o commit e pedir ao operador/root para realizar o push;
 - nunca imprimir chaves, tokens ou outros segredos nos logs ou na conversa.
 
+### Dono do `.git` depois de git como root (fetch, cherry-pick, commit, push)
+
+Todo git rodado como `root` cria objetos com dono `root`. Devolva sempre com o grupo
+`workdev-runtime`, **nunca** `workdev:workdev`:
+
+`chown -R workdev:workdev-runtime /opt/workdev/.git`
+
+O `.git` é `2750` (setgid): o `workdev-deploy` só entra nele pelo grupo
+`workdev-runtime`. Com o grupo `workdev`, o `workdev-deployctl prepare` passa no gate e
+falha em seguida com `git status ... returned non-zero exit status 128` ("not a git
+repository"), como em 2026-10-05. Arquivos de código tocados por root levam o mesmo dono:
+`git diff --name-only HEAD~N | xargs chown workdev:workdev-runtime`.
+
 ## Deploy — regra canônica obrigatória
 
 Antes de qualquer ação relacionada a deploy, ler obrigatoriamente:
@@ -516,4 +539,24 @@ O fluxo oficial é:
 Não improvisar, não redescobrir o procedimento e não executar `deploy.sh` sem `proof_id`.
 
 A fonte canônica e atualizável é `docs/DEPLOY_CANONICO.md`.
+
+### Forma preferida do operador: aliases `wd-*` (decisão de 2026-10-25)
+
+O Cláudio quer deployar **sempre** assim: o agente faz tudo que não exige root (validar,
+abrir PR, mergear com `gh`, buildar, conferir) e o Cláudio roda **um alias curto de cada vez**
+como root. Os aliases são comandos instalados em `/usr/local/sbin` (fonte em `scripts/deploy/atalhos/`):
+
+| Alias | Quem roda | O que faz |
+|---|---|---|
+| `wd-push [branch]` | root | publica a branch atual no GitHub (o `workdev` só lê); recusa o `main` |
+| `wd-sync` | root | atualiza o `main` local para o `origin/main` e acerta o dono do `.git` |
+| `wd-prepare` | root | passo 1: gate + prova assinada (guarda o `proof_id` em `/run`) |
+| `wd-deploy` | root | passos 2 e 3: aprova como Claudio e promove; o pós-check e o rollback já rodam dentro do deploy |
+| `wd-verificar` | qualquer um | confere por fora: serviço, PID da porta 8000, `/health`, site e bundle sem `localhost:8000` |
+
+Roteiro, regras e instalação completos em `docs/DEPLOY_CANONICO.md`. O terminal do Cláudio quebra
+comandos longos ao colar: nunca peça blocos grandes, grave num script e peça `bash <caminho>`.
+Nunca rode atalhos de dentro do repositório como root; só as cópias instaladas.
+Arquivos com dono root criados por outra sessão travam o `git checkout`: corrija o dono do
+diretório (`chown -R workdev:workdev-runtime <dir>`) e avance o `main` com `git checkout -f -B main origin/main`.
 

@@ -9,13 +9,47 @@ const headers: HeadersInit = {
 export type PlanStatus = "draft" | "approved" | "needs_revision" | "superseded" | "discarded"
 export type RunStatus = "queued" | "running" | "blocked" | "review" | "completed" | "failed" | "cancelled"
 /** Agentes com CLI e sessão tmux própria na VPS. */
-export type CliAgentName = "codex" | "claude" | "kimi" | "qwen" | "gemini"
+export type CliAgentName = "codex" | "claude" | "kimi" | "qwen" | "grok" | "deepseek" | "gemini"
 /** Identidades de runtime Ollama — estáveis, independentes do modelo carregado. */
-export type RuntimeAgentName = "local-code" | "gpu-hostinger" | "gpu-runpod"
+export type RuntimeAgentName = "gpu-hostinger" | "gpu-runpod"
 export type AgentName = CliAgentName | RuntimeAgentName
 
-export const CLI_AGENTS: CliAgentName[] = ["codex", "claude", "kimi", "qwen", "gemini"]
-export const RUNTIME_AGENTS: RuntimeAgentName[] = ["local-code", "gpu-hostinger", "gpu-runpod"]
+export const CLI_AGENTS: CliAgentName[] = ["codex", "claude", "kimi", "qwen", "grok", "deepseek", "gemini"]
+export const RUNTIME_AGENTS: RuntimeAgentName[] = ["gpu-hostinger", "gpu-runpod"]
+
+export type SelectableCliAgent = "codex" | "claude" | "kimi" | "qwen" | "grok" | "deepseek" | "gemini"
+export interface CliAgentModelInfo {
+  agent: SelectableCliAgent
+  selected: string
+  active: string | null
+  options: Array<{
+    model: string
+    label: string
+    input_cost_per_million: number | null
+    output_cost_per_million: number | null
+    expensive: boolean
+  }>
+  /** Níveis de esforço da CLI; vazio quando o agente não tem seletor. */
+  efforts: string[]
+  /** Esforço salvo; null = padrão da própria CLI. */
+  effort: string | null
+}
+
+export function getCliAgentModel(agent: SelectableCliAgent): Promise<CliAgentModelInfo> {
+  return runtimeRequest(`/api/cli-agent-models/${agent}`, { method: "GET", headers })
+}
+
+export function selectCliAgentModel(agent: SelectableCliAgent, model: string): Promise<CliAgentModelInfo> {
+  return runtimeRequest(`/api/cli-agent-models/${agent}`, {
+    method: "PUT", headers, body: JSON.stringify({ model }),
+  })
+}
+
+export function selectCliAgentEffort(agent: SelectableCliAgent, effort: string | null): Promise<CliAgentModelInfo> {
+  return runtimeRequest(`/api/cli-agent-models/${agent}/effort`, {
+    method: "PUT", headers, body: JSON.stringify({ effort }),
+  })
+}
 
 /**
  * Quem CONSEGUE emitir veredito. Espelha `AGENTS_WITH_REVIEW_CHANNEL` do
@@ -27,8 +61,9 @@ export const AGENTS_WITH_REVIEW_CHANNEL: CliAgentName[] = [...CLI_AGENTS]
 /**
  * Ordem de sugestão no seletor de revisor — dica visual, nunca filtro. A
  * escolha do executor e do revisor é sempre do operador, em todo envio.
- * `qwen` fica de fora por decisão dele (2026-09-09): é posicionado como
- * executor. Continua habilitado como revisor, só sem destaque.
+ * `qwen`, `grok` e `deepseek` ficam de fora por decisão de produto: são
+ * posicionados como executores. Continuam habilitados como revisores, só sem
+ * destaque.
  */
 export const RECOMMENDED_REVIEWERS: CliAgentName[] = ["claude", "codex", "gemini", "kimi"]
 
@@ -37,8 +72,9 @@ export const agentLabels: Record<AgentName, string> = {
   codex: "Codex",
   kimi: "Kimi Code",
   qwen: "Qwen Code",
+  grok: "Grok",
+  deepseek: "DeepSeek",
   gemini: "Gemini",
-  "local-code": "Ollama local (VPS)",
   "gpu-hostinger": "GPU Hostinger",
   "gpu-runpod": "GPU RunPod",
 }
@@ -49,7 +85,22 @@ export type RuntimeState = 'OFFLINE' | 'STARTING' | 'ONLINE' | 'STOPPING' | 'ERR
 export type ActivityState = 'IDLE' | 'BUSY' | 'WAITING_INPUT'
 
 export async function setAgentConnection(agent: AgentName, connected: boolean): Promise<unknown> {
-  return read(fetch(`/api/agents/${agent}/${connected ? 'start' : 'stop?confirm=true'}`, { method: 'POST', headers }))
+  return runtimeRequest(`/api/agents/${agent}/${connected ? 'start' : 'stop?confirm=true'}`, { method: 'POST', headers }, 30000)
+}
+
+async function runtimeRequest<T>(url: string, options: RequestInit, timeout = 10000): Promise<T> {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeout)
+  try {
+    return await read<T>(fetch(url, { ...options, signal: controller.signal }))
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(options.method === 'POST'
+        ? 'A resposta demorou. A operação pode continuar no servidor; confira o estado em Atualizar antes de tentar novamente.'
+        : 'Tempo esgotado ao consultar o estado do agente.', { cause: error })
+    }
+    throw error
+  } finally { window.clearTimeout(timer) }
 }
 
 export interface AgentRuntime {
@@ -185,6 +236,8 @@ export interface AgentRun {
   agent: AgentName
   reviewer_agent: AgentName | null
   review_attempts: number
+  /** Modelo efetivamente registrado na run (resolvido da aba Agentes no envio). */
+  model?: string | null
   status: RunStatus
   summary?: string
   result?: string
@@ -206,6 +259,10 @@ export interface AgentRun {
   dispatch_state: DispatchState
   dispatch_attempts: number
   last_dispatch_at?: string
+  observer?: { enabled: boolean; provider: string | null; model: string | null; runtime_id: string | null; configured_at: string } | null
+  /** Alertas do envio: nunca bloqueiam nem trocam a escolha do operador. */
+  warnings?: { code: string; severity: "warning"; message: string; details?: Record<string, unknown> }[]
+  pause?: { reason: string; evidence: Record<string, unknown>; event_id: string; created_at: string } | null
 }
 
 export type DispatchState =
@@ -256,7 +313,7 @@ export interface AgentContext {
   adrs: Array<{ id: string; title: string; decision: string; status: string }>
   knowledge: Array<{ id: string; title: string; category: string; content: string }>
   decisions: Array<{ id: string; title: string; description: string }>
-  events: Array<{ id: string; type: string; message?: string; created_at?: string }>
+  events: Array<{ id: string; type: string; message?: string; payload?: Record<string, unknown>; created_at?: string }>
   prompt: string
 }
 
@@ -342,9 +399,9 @@ export async function sendToBuild(
   agent?: AgentName,
   premiumConfirmed = false,
   model?: string,
-  useDefaultExecutor = false,
   reviewRequested?: boolean,
   reviewerSelection?: { provider: string; model: string },
+  observer?: { enabled: boolean; selection?: { provider: string; model: string; runtime_id?: string } },
 ): Promise<AgentRun> {
   if (agent && agent === reviewer) {
     throw new HandoffApiError(
@@ -353,19 +410,32 @@ export async function sendToBuild(
     )
   }
 
-  const body = agent || useDefaultExecutor
-    ? { routing_mode: "manual", agent, reviewer, ...(useDefaultExecutor ? { use_default_executor: true } : {}), ...(model ? { model } : {}), ...(reviewRequested !== undefined ? { review_requested: reviewRequested } : {}) }
+  const body = agent
+    ? { routing_mode: "manual", agent, reviewer, ...(model ? { model } : {}), ...(reviewRequested !== undefined ? { review_requested: reviewRequested } : {}) }
     : { routing_mode: "auto", reviewer, premium_confirmed: premiumConfirmed, ...(reviewRequested !== undefined ? { review_requested: reviewRequested } : {}) }
 
   return read(fetch(`/api/handoffs/plans/${id}/build`, {
-    method: "POST", headers, body: JSON.stringify({ ...body, ...(reviewerSelection ? { reviewer_selection: reviewerSelection } : {}) }),
+    method: "POST", headers, body: JSON.stringify({ ...body, ...(reviewerSelection ? { reviewer_selection: reviewerSelection } : {}),
+      observer_enabled: observer?.enabled ?? false,
+      ...(observer?.enabled && observer.selection ? { observer_selection: observer.selection } : {}) }),
+  }))
+}
+
+export function resumeObserverPause(runId: string, reason: string): Promise<AgentRun> {
+  return read(fetch(`/api/handoffs/runs/${runId}/resume`, {
+    method: "POST", headers, body: JSON.stringify({ reason }),
+  }))
+}
+
+export function configureRunObserver(runId: string, enabled: boolean,
+  selection?: { provider: string; model: string; runtime_id?: string }): Promise<AgentRun> {
+  return read(fetch(`/api/handoffs/runs/${runId}/observer`, {
+    method: "PUT", headers, body: JSON.stringify({ enabled, ...(selection ? { selection } : {}) }),
   }))
 }
 
 export async function getAgentRuntimes(): Promise<AgentRuntime[]> {
-  const body = await read<{ runtimes: AgentRuntime[] }>(
-    fetch('/api/agent-runtimes', { headers }),
-  )
+  const body = await runtimeRequest<{ runtimes: AgentRuntime[] }>('/api/agent-runtimes', { headers })
   return body.runtimes ?? []
 }
 
@@ -427,6 +497,10 @@ export async function swapRunReviewer(
   }))
 }
 
+export async function getRun(id: string): Promise<AgentRun> {
+  return read(fetch(`/api/handoffs/runs/${id}`, { headers }))
+}
+
 export async function getRuns(agent?: AgentName): Promise<AgentRun[]> {
   const query = agent ? `?agent=${agent}&limit=100` : "?limit=100"
   return read(fetch(`/api/handoffs/runs${query}`, { headers }))
@@ -476,4 +550,17 @@ export function subscribeToHandoffs(onChange: () => void): () => void {
     )
     .subscribe()
   return () => { void supabase.removeChannel(channel) }
+}
+
+export interface LocalModelInfo {
+  current: string | null
+  options: Array<{ key: string; label: string }>
+}
+
+export async function getLocalModel(): Promise<LocalModelInfo> {
+  return runtimeRequest<LocalModelInfo>("/api/agents/local-code/model", { headers })
+}
+
+export async function switchLocalModel(model: string): Promise<{ model: string; switched: boolean; restarted: boolean }> {
+  return runtimeRequest("/api/agents/local-code/model", { method: "POST", headers, body: JSON.stringify({ model }) }, 30000)
 }

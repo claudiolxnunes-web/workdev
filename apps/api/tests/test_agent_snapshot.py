@@ -102,3 +102,6 @@ def test_concurrent_writers_preserve_all_agents(snapshot_file):
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(writer, range(24)))
     assert len(json.loads(snapshot_file.read_text())['agents']) == 24
+
+
+from tests.test_runtime_state_audit import audit_store  # noqa: F401 -- isolated audit database fixture

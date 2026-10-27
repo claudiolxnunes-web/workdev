@@ -21,6 +21,7 @@ independente, como manda o ADR 004.
 from __future__ import annotations
 
 import os
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
@@ -33,6 +34,7 @@ from app.services.build_envelope import (
     parse_envelope,
 )
 from app.services.build_worktree import WorktreeError
+from app.services.run_pause import RunPaused
 from app.services.test_gate import (
     GateEvidence,
     GatePaths,
@@ -89,6 +91,7 @@ def execute_build(
     *,
     run_gate: bool = True,
     attempt: int | None = None,
+    checkpoint=None,
 ) -> BuildOutcome:
     """Texto do modelo → commit num branch isolado, ou recusa explicada.
 
@@ -113,20 +116,16 @@ def execute_build(
         )
 
     try:
-        return _executar(run, envelope, run_gate=run_gate, attempt=attempt)
+        return _executar(run, envelope, run_gate=run_gate, attempt=attempt,
+                        checkpoint=checkpoint)
+    except RunPaused:
+        raise
     except WorktreeError as error:
-        return BuildOutcome(
-            ok=False,
-            code=error.code,
-            message=error.message,
-            details=error.details,
-        )
+        return BuildOutcome(ok=False, code=error.code, message=error.message,
+                            details=error.details)
     except Exception as error:  # fail-closed: nada passa por acidente
-        return BuildOutcome(
-            ok=False,
-            code="build_failed",
-            message=f"Falha inesperada na execução: {type(error).__name__}",
-        )
+        return BuildOutcome(ok=False, code="build_failed",
+                            message=f"Falha inesperada na execução: {type(error).__name__}")
 
 
 def _executar(
@@ -135,15 +134,19 @@ def _executar(
     *,
     run_gate: bool,
     attempt: int | None = None,
+    checkpoint=None,
 ) -> BuildOutcome:
     # A tentativa entra no nome do branch: sem ela, redespachar a mesma run
     # apagava o branch anterior e tornava aquele commit inalcançável — e o
     # branch é o único lugar onde o commit do build existe, já que nada é
     # pushado.
-    with build_worktree.ephemeral_worktree(
-        str(run.id), attempt=attempt
-    ) as worktree:
-        tocados = build_worktree.write_files(worktree, envelope)
+    boundary = checkpoint or nullcontext
+    with ExitStack() as stack:
+        with boundary():
+            worktree = stack.enter_context(build_worktree.ephemeral_worktree(
+                str(run.id), attempt=attempt))
+        with boundary():
+            tocados = build_worktree.write_files(worktree, envelope)
 
         if not build_worktree.has_changes(worktree):
             return BuildOutcome(
@@ -162,16 +165,18 @@ def _executar(
         gate_passou: bool | None = None
 
         if run_gate:
-            evidencia = execute_gate(run, GatePaths(root=worktree.path))
+            with boundary():
+                evidencia = execute_gate(run, GatePaths(root=worktree.path))
             gate_passou = evidencia.passed
 
-        commit_sha = build_worktree.commit(
-            worktree,
-            _mensagem_de_commit(run, envelope, gate_passou),
-            # Só os caminhos do envelope: nada de node_modules, config ou
-            # qualquer coisa que o preparo do ambiente deixou na árvore.
-            paths=tocados,
-        )
+        with boundary():
+            commit_sha = build_worktree.commit(
+                worktree,
+                _mensagem_de_commit(run, envelope, gate_passou),
+                # Só os caminhos do envelope: nada de node_modules, config ou
+                # qualquer coisa que o preparo do ambiente deixou na árvore.
+                paths=tocados,
+            )
 
         # Depois do commit e contra a base: é o que enxerga arquivo novo sem
         # mexer no índice antes da hora.

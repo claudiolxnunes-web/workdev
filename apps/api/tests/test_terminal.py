@@ -14,6 +14,8 @@ from fastapi import HTTPException
 from app.routers.terminal import (
     ALLOWED_SESSIONS,
     STANDBY_COMMANDS,
+    _SEND_KEYS_CHUNK_BYTES,
+    _chunk_text,
     AgentSendRequest,
     _agent_status,
     _approval_state,
@@ -35,6 +37,7 @@ from app.routers.terminal import (
     agent_send,
     agent_transcript,
     agents_status,
+    start_agent_lifecycle,
     start_agent_session,
     start_agent_runtime,
     stop_agent_runtime,
@@ -47,7 +50,60 @@ class FailingWebSocket:
         raise RuntimeError("client disconnected")
 
 
+class TerminalBusyHandshakeTest(unittest.TestCase):
+    def test_busy_terminal_delivers_close_reason_after_handshake(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from unittest.mock import AsyncMock
+        from app.routers.terminal import router
+
+        app = FastAPI()
+        app.include_router(router)
+        with patch('app.routers.terminal.websocket_is_authenticated', return_value=True), \
+             patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=(False, None)), \
+             patch('app.routers.terminal.agent_lifecycle.active_work', return_value=None), \
+             patch('app.routers.terminal._require_session', return_value='codex'), \
+             patch('app.routers.terminal.subprocess.Popen') as process, \
+             TestClient(app) as client:
+            with client.websocket_connect('/ws/agents/codex') as socket:
+                self.assertEqual(socket.receive(), {
+                    'type': 'websocket.close', 'code': 1008,
+                    'reason': 'Terminal já está em uso',
+                })
+            process.assert_not_called()
+
+
+class TerminalTakeoverHandshakeTest(unittest.TestCase):
+    def test_takeover_closes_previous_tab_with_dedicated_code(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from unittest.mock import AsyncMock
+        from app.routers.terminal import router, TAKEN_OVER_CODE
+
+        previous = AsyncMock()
+        app = FastAPI()
+        app.include_router(router)
+        with patch('app.routers.terminal.websocket_is_authenticated', return_value=True), \
+             patch('app.routers.terminal._claim', new_callable=AsyncMock, return_value=(False, previous)) as claim, \
+             patch('app.routers.terminal.agent_lifecycle.active_work', return_value=None), \
+             patch('app.routers.terminal._require_session', return_value='codex'), \
+             patch('app.routers.terminal.subprocess.Popen'), \
+             TestClient(app) as client:
+            with client.websocket_connect('/ws/agents/codex?takeover=1') as socket:
+                socket.receive()
+        self.assertTrue(claim.call_args.args[2])
+        previous.close.assert_awaited_once_with(code=TAKEN_OVER_CODE, reason="Terminal assumido por outra aba")
+
+
 class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    @patch("app.services.agent_workspace.audit")
+    @patch("app.routers.terminal.agent_lifecycle.start")
+    async def test_local_code_removido_nao_religa_sessao(self, start, audit):
+        with self.assertRaises(HTTPException) as ctx:
+            await start_agent_lifecycle("local-code")
+        self.assertEqual(ctx.exception.status_code, 404)
+        start.assert_not_called()
+
     async def test_tmux_targets_require_exact_session_name(self):
         self.assertEqual(_session_target("code"), "=code")
         self.assertEqual(_pane_target("code"), "=code:")
@@ -55,7 +111,15 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
     async def test_all_agents_have_isolated_tmux_sessions(self):
         self.assertEqual(
             ALLOWED_SESSIONS,
-            {"claude": "code", "codex": "codex", "kimi": "kimi", "qwen": "qwen", "gemini": "gemini"},
+            {
+                "claude": "code",
+                "codex": "codex",
+                "kimi": "kimi",
+                "qwen": "qwen",
+                "grok": "grok",
+                "deepseek": "deepseek",
+                "gemini": "gemini",
+            },
         )
 
     async def test_output_sender_stops_when_websocket_disconnects(self):
@@ -86,14 +150,26 @@ class TerminalLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_connection_claim_can_be_released(self):
         session = "test-terminal-lifecycle"
-        await _release(session)
+        first, second = object(), object()
 
-        self.assertTrue(await _claim(session))
-        self.assertFalse(await _claim(session))
+        self.assertEqual(await _claim(session, first), (True, None))
+        self.assertEqual(await _claim(session, second), (False, None))
 
-        await _release(session)
-        self.assertTrue(await _claim(session))
-        await _release(session)
+        await _release(session, first)
+        self.assertEqual(await _claim(session, second), (True, None))
+        await _release(session, second)
+
+    async def test_takeover_hands_over_and_old_tab_cannot_release_new(self):
+        """Aba nova assume o terminal; a antiga, ao cair, não apaga o registro novo."""
+        session = "test-terminal-takeover"
+        old, new = object(), object()
+        self.assertEqual(await _claim(session, old), (True, None))
+        self.assertEqual(await _claim(session, new, takeover=True), (True, old))
+        await _release(session, old)
+        self.assertEqual(await _claim(session, object()), (False, None))
+        await _release(session, new)
+        self.assertEqual(await _claim(session, old), (True, None))
+        await _release(session, old)
 
     @patch("app.routers.terminal.subprocess.run")
     async def test_history_uses_tmux_capture_pane_without_shell(self, run):
@@ -161,6 +237,78 @@ class SendTextTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _send_text("codex", "oi")
 
+    @patch("app.routers.terminal.subprocess.run")
+    def test_small_text_passes_unchunked(self, run):
+        """Texto de 5KB deve enviar um único literal + Enter (sem chunking)."""
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+        text = "a" * (5 * 1024)
+
+        _send_text("codex", text)
+
+        self.assertEqual(run.call_args_list[0].args[0], [
+            "tmux", "send-keys", "-t", "=codex:", "-l", "--", text,
+        ])
+        self.assertEqual(run.call_args_list[1].args[0], [
+            "tmux", "send-keys", "-t", "=codex:", "Enter",
+        ])
+        self.assertEqual(run.call_count, 2)
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_chunks_large_payload(self, run):
+        """Texto de 20KB deve gerar múltiplos send-keys com Enter único no fim."""
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+        text = "x" * (20 * 1024)
+
+        _send_text("codex", text)
+
+        # Deve ter gerado ao menos 2 chamadas -l (cada chunk ≤12KB)
+        literal_calls = [c for c in run.call_args_list
+                         if c.args[0][:4] == ["tmux", "send-keys", "-t", "=codex:"]
+                         and c.args[0][4] == "-l"]
+        self.assertGreaterEqual(len(literal_calls), 2)
+        # Última chamada é Enter
+        last_args = run.call_args_list[-1].args[0]
+        self.assertEqual(last_args, ["tmux", "send-keys", "-t", "=codex:", "Enter"])
+        # Soma dos bytes dos chunks == tamanho original
+        total_bytes = sum(len(c.args[0][6]) for c in literal_calls)
+        self.assertEqual(total_bytes, len(text))
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_utf8_multibyte_not_split(self, run):
+        """Caractere multibyte no limite do chunk não deve ser quebrado."""
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+        # Emoji de 4 bytes posicionado exatamente no boundary do chunk
+        prefix = "a" * (_SEND_KEYS_CHUNK_BYTES - 2)  # 2 bytes livres
+        text = prefix + "🔥" + "b" * 50
+        _send_text("codex", text)
+
+        chunks = [
+            c.args[0][6]
+            for c in run.call_args_list
+            if c.args[0][:4] == ["tmux", "send-keys", "-t", "=codex:"]
+            and c.args[0][4] == "-l"
+        ]
+        self.assertGreater(len(chunks), 1)
+        # Reconstituir deve ser igual ao original
+        reconstructed = "".join(chunks)
+        self.assertEqual(reconstructed, text)
+
+    @patch("app.routers.terminal.subprocess.run")
+    def test_chunk_blank_skips_literal(self, run):
+        """Texto vazio não gera chamada -l (inalterado)."""
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+
+        _send_text("codex", "")
+
+        run.assert_called_once_with(
+            ["tmux", "send-keys", "-t", "=codex:", "Enter"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+
 class AgentRuntimeReadinessTest(unittest.TestCase):
     @patch("app.routers.terminal._start_gemini_headless_runtime")
     def test_gemini_uses_headless_runtime(
@@ -225,12 +373,27 @@ class AgentRuntimeReadinessTest(unittest.TestCase):
         with patch('app.routers.terminal.agent_lifecycle.run_lock', return_value=nullcontext()), \
              patch('app.routers.terminal.agent_lifecycle.agent_lock', return_value=nullcontext()), \
              patch('app.routers.terminal.agent_lifecycle.run_binding', return_value=None), \
+             patch('app.services.run_pause.checked_work_unit', return_value=nullcontext()), \
              patch('app.routers.terminal.agent_lifecycle.bind_run') as bind:
             result = start_agent_runtime("codex", "prompt", timeout_seconds=1, run_id="run-1")
             bind.assert_called_once_with('codex', 'run-1', 'auto-codex-run-1')
-        start_session.assert_called_once_with("codex", "auto-codex-run-1")
+        start_session.assert_called_once_with("codex", "auto-codex-run-1", None)
         send_text.assert_called_once_with("auto-codex-run-1", "prompt")
         self.assertEqual(result["session"], "auto-codex-run-1")
+
+    def test_paused_run_does_not_send_next_cli_prompt(self):
+        from contextlib import nullcontext
+        from app.services.run_pause import RunPaused
+        with patch('app.routers.terminal.agent_lifecycle.run_lock', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.agent_lock', return_value=nullcontext()), \
+             patch('app.routers.terminal.agent_lifecycle.run_binding', return_value=None), \
+             patch('app.services.run_pause.checked_work_unit', side_effect=RunPaused('paused')), \
+             patch('app.routers.terminal._start_standby_session') as start, \
+             patch('app.routers.terminal._send_text') as send:
+            with self.assertRaises(RunPaused):
+                start_agent_runtime('codex', 'next prompt', run_id='run-1')
+            start.assert_not_called()
+            send.assert_not_called()
     @patch("app.routers.terminal._stop_standby_session", return_value=True)
     def test_stop_auto_runtime_uses_run_scoped_session(self, stop_session):
         result = stop_agent_runtime("codex", "run-1")
@@ -257,23 +420,38 @@ class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
             await agent_send("desconhecido", AgentSendRequest(text="oi"))
         self.assertEqual(ctx.exception.status_code, 404)
 
+    @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
+    @patch("app.routers.terminal._require_session", return_value="codex")
     @patch("app.routers.terminal._send_text")
-    async def test_blank_text_is_forwarded_as_a_bare_enter(self, mock_send):
-        result = await agent_send("codex", AgentSendRequest(text=""))
+    async def test_blank_text_is_forwarded_as_a_bare_enter(self, mock_send, _require, _active_work):
+        result = await agent_send("codex", AgentSendRequest(text=""), db=None)
         mock_send.assert_called_once_with("codex", "")
         self.assertEqual(result, {"agent": "codex", "sent": True})
 
+    @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
+    @patch("app.routers.terminal._require_session", return_value="code")
     @patch("app.routers.terminal._send_text")
-    async def test_sends_text_to_the_mapped_tmux_session(self, mock_send):
-        result = await agent_send("claude", AgentSendRequest(text="continuar"))
+    async def test_sends_text_to_the_mapped_tmux_session(self, mock_send, require, _active_work):
+        result = await agent_send("claude", AgentSendRequest(text="continuar"), db=None)
+        require.assert_called_once_with("claude", None, "send")
         mock_send.assert_called_once_with("code", "continuar")
         self.assertEqual(result, {"agent": "claude", "sent": True})
 
+    @patch("app.routers.terminal.agent_operability.reconcile_snapshot")
+    @patch("app.routers.terminal._explain_denial", side_effect=lambda agent, state, db: state)
+    @patch("app.routers.terminal.agent_lifecycle.active_work", return_value=None)
+    @patch("app.routers.terminal._require_session", return_value="codex")
     @patch("app.routers.terminal._send_text", side_effect=RuntimeError("indisponível"))
-    async def test_reports_503_when_tmux_session_is_unavailable(self, _mock_send):
+    async def test_reports_503_when_tmux_session_is_unavailable(
+        self, _mock_send, _require, _active_work, _explain, reconcile
+    ):
         with self.assertRaises(HTTPException) as ctx:
-            await agent_send("codex", AgentSendRequest(text="oi"))
+            await agent_send("codex", AgentSendRequest(text="oi"), db=None)
         self.assertEqual(ctx.exception.status_code, 503)
+        # Sessão que morreu entre a resolução e o send-keys: erro estruturado
+        # e snapshot reconciliado no mesmo instante, nunca 503 opaco.
+        self.assertEqual(ctx.exception.detail["code"], "agent_send_failed")
+        reconcile.assert_called_once()
 
     @patch("app.routers.terminal.read_transcript", return_value=("linha limpa", 123.0))
     async def test_transcript_endpoint_returns_clean_persistent_text(self, read):
@@ -289,10 +467,10 @@ class AgentSendEndpointTest(unittest.IsolatedAsyncioTestCase):
 
 
 class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
-    @patch("app.routers.terminal._current_process", return_value="qwen")
+    @patch("app.routers.terminal._current_process", return_value="openrouter")
     @patch("app.routers.terminal.subprocess.run")
     def test_start_is_idempotent_when_agent_is_running(self, run, _current):
-        self.assertFalse(_start_standby_session("qwen", "qwen"))
+        self.assertFalse(_start_standby_session("openrouter", "openrouter"))
         run.assert_not_called()
 
     @patch("app.routers.terminal._current_process", return_value="")
@@ -300,9 +478,10 @@ class StandbySessionTest(unittest.IsolatedAsyncioTestCase):
     def test_start_uses_the_approved_launcher(self, run, _current):
         run.return_value.returncode = 0
         run.return_value.stderr = ""
-        self.assertTrue(_start_standby_session("kimi", "kimi"))
+        self.assertTrue(_start_standby_session("kimi", "kimi", "moonshotai/kimi-k3"))
         self.assertEqual(run.call_args.args[0], [
             "tmux", "new-session", "-d", "-s", "kimi", "-c", "/opt/workdev",
+            "env", "KIMI_PROVIDER=openrouter", "KIMI_MODEL=moonshotai/kimi-k3",
             "/opt/workdev/scripts/start_kimi_agent.sh",
         ])
 
@@ -406,7 +585,8 @@ class AgentStatusTest(unittest.IsolatedAsyncioTestCase):
     def test_status_endpoint_returns_snapshot_directly(self, read):
         read.return_value = {'agents': []}
         self.assertEqual(agents_status(), {'agents': []})
-        self.assertIn('local-code', read.call_args.args[0])
+        self.assertNotIn('local-code', read.call_args.args[0])
+        self.assertIn('gpu-runpod', read.call_args.args[0])
 
 
 class SupervisorHealthStateTest(unittest.TestCase):

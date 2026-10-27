@@ -6,7 +6,7 @@ from app.services.review_policy import (
 
 CFG = {
     'trusted_agents': ['codex', 'kimi'],
-    'tier_reviewers': {'economic': ['qwen'], 'strong': ['codex', 'kimi']},
+    'tier_reviewers': {'economic': ['openrouter'], 'strong': ['codex', 'kimi']},
     'volume_medium_lines': 10,
     'volume_high_lines': 50,
 }
@@ -55,12 +55,12 @@ def test_supervised_executor_never_completes_without_review():
 
 
 def test_executor_is_never_among_reviewer_candidates():
-    decision = decide('high', 'supervised', 'pass', executor='qwen', config=CFG)
-    assert 'qwen' not in decision.reviewer_candidates
+    decision = decide('high', 'supervised', 'pass', executor='openrouter', config=CFG)
+    assert 'openrouter' not in decision.reviewer_candidates
 
 
 def test_escalation_only_climbs_from_economic_to_strong():
-    escalation = reviewer_tier_for_escalation('economic', executor='qwen', config=CFG)
+    escalation = reviewer_tier_for_escalation('economic', executor='openrouter', config=CFG)
     assert escalation and escalation.tier == 'strong'
     assert reviewer_tier_for_escalation('strong', config=CFG) is None
     assert reviewer_tier_for_escalation('none', config=CFG) is None

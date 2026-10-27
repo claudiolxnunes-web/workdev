@@ -181,5 +181,101 @@ class BuildSystemTest(unittest.TestCase):
         self.assertNotIn("openclaw", ai.SYSTEM)
 
 
+class JevPlanningBlockTest(unittest.TestCase):
+    """Integração do Jev Pré-Plano em build_system — via app.services.jev_planning."""
+
+    def _db(self, *, tem_plano=False, task=Mock()):
+        db = Mock()
+        db.query.return_value.filter.return_value.first.return_value = (
+            Mock() if tem_plano else None
+        )
+        db.get.return_value = task
+        return db
+
+    def test_fora_do_nivel_plan_nao_injeta_bloco(self):
+        from app.services import adaptive_config, jev_planning
+        db = self._db()
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=True)), \
+             patch.object(jev_planning, "assess") as assess:
+            system = ai.build_system(db, nivel="execute", backlog_id="task-1")
+
+        assess.assert_not_called()
+        self.assertNotIn("Jev Pré-Plano", system)
+
+    def test_sem_backlog_id_nao_injeta_bloco(self):
+        from app.services import jev_planning
+        db = self._db()
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(jev_planning, "assess") as assess:
+            system = ai.build_system(db, nivel="plan")
+
+        assess.assert_not_called()
+        self.assertNotIn("Jev Pré-Plano", system)
+
+    def test_supervisao_adaptativa_desligada_nao_injeta_bloco(self):
+        from app.services import adaptive_config, jev_planning
+        db = self._db()
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=False)), \
+             patch.object(jev_planning, "assess") as assess:
+            system = ai.build_system(db, nivel="plan", backlog_id="task-1")
+
+        assess.assert_not_called()
+        self.assertNotIn("Jev Pré-Plano", system)
+
+    def test_task_ja_com_plano_nao_reavalia(self):
+        """'Antes de existir ExecutionPlan': uma vez que existe, a janela pré-plano passou."""
+        from app.services import adaptive_config, jev_planning
+        db = self._db(tem_plano=True)
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=True)), \
+             patch.object(jev_planning, "assess") as assess:
+            system = ai.build_system(db, nivel="plan", backlog_id="task-1")
+
+        assess.assert_not_called()
+        self.assertNotIn("Jev Pré-Plano", system)
+
+    def test_task_sem_plano_ainda_injeta_bloco_server_owned(self):
+        from app.services import adaptive_config, jev_planning
+        tarefa = Mock(id="task-1", project_id="proj-1", title="X", description="Y", type="feature")
+        db = self._db(tem_plano=False, task=tarefa)
+        assessment = jev_planning.PlanningAssessment(
+            planning_depth=jev_planning.PlanningDepth.STANDARD, decompose_score=.4,
+            recommended_slices=3, has_architectural_risk=False, has_state_risk=True,
+            has_concurrency_risk=False, has_security_risk=False,
+            has_irreversible_action_risk=False, conservative_fallback=False,
+        )
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=True)), \
+             patch.object(jev_planning, "assess", return_value=assessment) as assess:
+            system = ai.build_system(db, nivel="plan", backlog_id="task-1")
+
+        assess.assert_called_once_with(db, tarefa)
+        self.assertIn(jev_planning.render_system_block(assessment), system)
+        self.assertIn("NÃO é instrução executável", system)
+
+    def test_task_inexistente_nao_quebra_e_nao_injeta(self):
+        from app.services import adaptive_config
+        db = self._db(tem_plano=False, task=None)
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=True)):
+            system = ai.build_system(db, nivel="plan", backlog_id="task-inexistente")
+
+        self.assertNotIn("Jev Pré-Plano", system)
+        self.assertIn("assistente do WorkDev", system)
+
+    def test_falha_no_assess_nao_derruba_a_conversa(self):
+        from app.services import adaptive_config, jev_planning
+        db = self._db(tem_plano=False, task=Mock())
+        with patch.object(ce, "build_chat_context", return_value=CONTEXTO_GLOBAL), \
+             patch.object(adaptive_config, "load", return_value=adaptive_config.AdaptiveConfig(enabled=True)), \
+             patch.object(jev_planning, "assess", side_effect=RuntimeError("provider fora")):
+            system = ai.build_system(db, nivel="plan", backlog_id="task-1")
+
+        self.assertNotIn("Jev Pré-Plano", system)
+        self.assertIn("assistente do WorkDev", system)
+
+
 if __name__ == "__main__":
     unittest.main()

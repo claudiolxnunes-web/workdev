@@ -5,7 +5,7 @@ Dois subchecks, com fingerprints distintos porque são problemas diferentes:
   never_dispatched — plano `approved`, task ainda aberta, nenhum agent_run.
   run_stalled      — existe run em estado ativo, mas sem evento novo há dias.
 
-O filtro `b.status <> 'done'` não é detalhe: dos 2 planos aprovados sem run
+O filtro que exclui `done` (e `archived`, ADR 009) não é detalhe: dos 2 planos aprovados sem run
 em 2026-08-16, um pertence a uma task já concluída. Sem ele o check nasce com
 50% de falso positivo.
 """
@@ -46,7 +46,7 @@ SELECT pr.name              AS projeto,
         LIMIT 1
   ) ar ON true
  WHERE ep.status = 'approved'
-   AND b.status <> 'done'
+   AND b.status NOT IN ('done', 'archived')
    AND pr.status <> ALL(%(projetos_ignorados)s)
    AND (ar.id IS NULL OR ar.status = ANY(%(ativos)s))
  ORDER BY ep.approved_at ASC NULLS FIRST

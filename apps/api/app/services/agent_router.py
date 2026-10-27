@@ -5,12 +5,12 @@ from typing import Any, Iterable
 from sqlalchemy.orm import Session
 
 from app.models.ai_routing import AIModelCatalog
-from app.services.agent_runtimes import OLLAMA_AGENT_IDS
+from app.services.agent_runtimes import LOCAL_AGENT_REMOVED, OLLAMA_AGENT_IDS, RETIRED_AGENT_IDS
 from app.services.task_complexity import ComplexityAssessment
 
 
 # Agentes que o AUTO nunca escolhe sozinho nesta fase.
-AUTO_EXCLUDED_AGENTS = frozenset(OLLAMA_AGENT_IDS)
+AUTO_EXCLUDED_AGENTS = frozenset(OLLAMA_AGENT_IDS | RETIRED_AGENT_IDS)
 
 
 PROVIDER_TO_AGENT = {
@@ -136,6 +136,10 @@ def _agent_for_model(
     )
 
 
+def _as_float(value) -> float | None:
+    return float(value) if value is not None else None
+
+
 def configured_execution_models(db: Session) -> list[dict]:
     """Somente vínculos administrados e executáveis; catálogo de chat não é CLI."""
     from app.services.handoff import CLI_AGENTS, AGENTS_WITH_REVIEW_CHANNEL
@@ -147,7 +151,11 @@ def configured_execution_models(db: Session) -> list[dict]:
             continue
         result.append({"provider": row.provider, "model": row.provider_model_id,
                        "label": row.display_name, "agent": agent,
-                       "review_capable": agent in AGENTS_WITH_REVIEW_CHANNEL})
+                       "review_capable": agent in AGENTS_WITH_REVIEW_CHANNEL,
+                       # Preço do catálogo (OpenRouter) e ordem do agente para o seletor.
+                       "input_cost_per_million": _as_float(row.input_cost_per_million),
+                       "output_cost_per_million": _as_float(row.output_cost_per_million),
+                       "rank": getattr(row, "agent_preference_rank", None)})
     return sorted(result, key=lambda row: (row["provider"], row["label"]))
 
 
@@ -157,10 +165,12 @@ def resolve_execution_selection(db: Session, selection: dict) -> dict:
     if not isinstance(selection, dict):
         raise AgentRoutingError("invalid_executor_selection", "Selecione fonte e modelo do executor")
     provider, model = selection.get("provider"), selection.get("model")
+    if selection.get("runtime_id") in RETIRED_AGENT_IDS:
+        raise AgentRoutingError("local_agent_removed", LOCAL_AGENT_REMOVED)
     if provider == "ollama":
         try:
             options = [{**row, "agent": row["runtime_id"], "review_capable": False}
-                       for row in local_chat_models()]
+                       for row in local_chat_models() if row["runtime_id"] not in RETIRED_AGENT_IDS]
         except Exception as exc:
             raise AgentRoutingError("local_runtime_unavailable", "Inventário local indisponível") from exc
     else:

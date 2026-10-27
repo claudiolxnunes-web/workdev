@@ -51,7 +51,8 @@ UNLOAD_VERIFY_TIMEOUT_SECONDS = 20.0
 UNLOAD_POLL_SECONDS = 1.0
 
 PROBE_TIMEOUT_SECONDS = 5.0
-LOAD_TIMEOUT_SECONDS = 300.0
+# Cold starts observados ultrapassam cinco minutos; aguardar até dez.
+LOAD_TIMEOUT_SECONDS = 600.0
 
 CMD_TIMEOUT_SECONDS = 10
 
@@ -402,16 +403,90 @@ def _run(args: list[str], timeout: int = CMD_TIMEOUT_SECONDS):
     )
 
 
+
+LLAMA_CTL = "/usr/local/libexec/workdev-llama-ctl"
+AGENTS_CTL = "/usr/local/libexec/workdev-agents-ctl"
+TMUX_SERVER_TIMEOUT_SECONDS = 10
+# Maior que TimeoutStartSec=180 do workdev-agents-ensure.service.
+TMUX_ENSURE_TIMEOUT_SECONDS = 185
+
+
+def ensure_tmux_server() -> None:
+    """O servidor tmux só nasce dentro do workdev-agents.service.
+
+    Um `tmux new-session` sem servidor criaria um servidor novo no cgroup de
+    quem chamou: a API (morre a cada deploy) ou o healthcheck (morre ao fim de
+    cada rodada oneshot). Sem servidor, o wrapper pede ao systemd a unidade
+    workdev-agents-ensure.service (polkit libera só esse "start"), que confere
+    de novo como root e recria o servidor no workdev-agents.service. Com
+    servidor vivo, nada é reiniciado.
+    """
+    if _run(["tmux", "list-sessions"], 5).returncode == 0:
+        return
+    try:
+        resultado = _run([AGENTS_CTL, "ensure-server"], TMUX_ENSURE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        raise LifecycleError(
+            "tmux_server_unavailable",
+            f"workdev-agents-ensure excedeu {TMUX_ENSURE_TIMEOUT_SECONDS}s; "
+            "confira o estado da unidade antes de tentar novamente",
+        ) from error
+    if resultado.returncode != 0:
+        raise LifecycleError(
+            "tmux_server_unavailable",
+            "Servidor tmux dos agentes ausente e o workdev-agents-ensure não o recriou: "
+            + (resultado.stderr.strip() or f"código {resultado.returncode}"),
+        )
+    prazo = time.monotonic() + TMUX_SERVER_TIMEOUT_SECONDS
+    while time.monotonic() < prazo:
+        if _run(["tmux", "list-sessions"], 5).returncode == 0:
+            return
+        time.sleep(0.5)
+    raise LifecycleError(
+        "tmux_server_unavailable",
+        f"workdev-agents-ensure terminou, mas o servidor tmux não respondeu em "
+        f"{TMUX_SERVER_TIMEOUT_SECONDS}s; confira 'systemctl status workdev-agents'",
+    )
+
+
+def _llama_service(action: str) -> bool:
+    """Controla somente o serviço local llama.cpp via wrapper privilegiado."""
+    if action not in {"start", "stop", "is-active"}:
+        return False
+
+    try:
+        result = subprocess.run(
+            [LLAMA_CTL, action],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception:
+        return False
+
+    return result.returncode == 0
+
+
 def session_exists(session: str) -> bool:
-    return _run(["tmux", "has-session", "-t", f"={session}"], 5).returncode == 0
+    try:
+        return _run(["tmux", "has-session", "-t", f"={session}"], 5).returncode == 0
+    except subprocess.TimeoutExpired:
+        # Servidor tmux lento não é ausência de sessão; tratar como offline
+        # aqui apagaria da interface um agente vivo (achado 29/set/2026).
+        return True
 
 
 def pane_pid(session: str) -> int | None:
     """PID do processo do painel. É a raiz do que pertence a este agente."""
-    resultado = _run(
-        ["tmux", "display-message", "-p", "-t", f"={session}:", "#{pane_pid}"],
-        5,
-    )
+    try:
+        resultado = _run(
+            ["tmux", "display-message", "-p", "-t", f"={session}:", "#{pane_pid}"],
+            5,
+        )
+    except subprocess.TimeoutExpired:
+        return None
 
     if resultado.returncode != 0:
         return None
@@ -422,13 +497,16 @@ def pane_pid(session: str) -> int | None:
 
 
 def current_process(session: str) -> str:
-    resultado = _run(
-        [
-            "tmux", "display-message", "-p", "-t", f"={session}:",
-            "#{pane_current_command}",
-        ],
-        5,
-    )
+    try:
+        resultado = _run(
+            [
+                "tmux", "display-message", "-p", "-t", f"={session}:",
+                "#{pane_current_command}",
+            ],
+            5,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
     return resultado.stdout.strip() if resultado.returncode == 0 else ""
 
 
@@ -570,7 +648,7 @@ def model_is_loaded(model: str | None, endpoint: str | None, headers=None):
 def model_for_agent(agent: str) -> str | None:
     """Modelo Ollama do agente, quando ele for um runtime Ollama.
 
-    Agente CLI (codex, claude, kimi, qwen, gemini) fala com API remota e não
+    Agente CLI (codex, claude, kimi, openrouter, gemini) fala com API remota e não
     tem modelo residente aqui — devolve None, e nada é descarregado por ele.
     """
     from app.services import agent_runtimes
@@ -730,7 +808,23 @@ def read_state(
     endpoint, headers = endpoint_for(agent)
     estado.endpoint_configured = bool(endpoint)
 
-    if estado.model:
+    from app.services import agent_runtimes
+
+    runtime = agent_runtimes.get_runtime(agent)
+
+    if (
+        runtime is not None
+        and runtime.engine == agent_runtimes.ENGINE_LLAMACPP
+    ):
+        health = agent_runtimes.check_runtime_blocking(runtime)
+        estado.model_loaded = (
+            health.status == agent_runtimes.STATUS_ONLINE
+            and (
+                not estado.model
+                or estado.model in health.models
+            )
+        )
+    elif estado.model:
         estado.model_loaded = model_is_loaded(estado.model, endpoint, headers)
     else:
         # Agente sem modelo residente: estado conhecido e vazio, não incerto.
@@ -870,6 +964,21 @@ def active_work(db, agent: str) -> dict | None:
     if run is not None:
         return {"run_id": str(run.id), "status": run.status, "reason": "run_running"}
 
+    # PAUSE cooperativo não mata o turno já iniciado. Enquanto o processo
+    # vinculado continua vivo, impedir que o lifecycle o desligue só porque
+    # a Run saiu de `running` para `blocked`.
+    from sqlalchemy.orm import Session
+    if isinstance(db, Session):
+        from app.services.run_pause import is_paused
+        paused_runs = (db.query(AgentRun).filter(AgentRun.agent == agent,
+            AgentRun.status == 'blocked').order_by(AgentRun.created_at.desc()).limit(20).all())
+        for paused in paused_runs:
+            if not is_paused(db, paused.id):
+                continue
+            binding = run_binding(agent, paused.id)
+            if binding and not binding.get('stopped') and process_starttime(binding['pid']) == binding['starttime']:
+                return {'run_id': str(paused.id), 'status': 'blocked', 'reason': 'observer_pause_current_turn'}
+
     job = (
         db.query(AgentBuildJob)
         .join(AgentRun, AgentRun.id == AgentBuildJob.run_id)
@@ -922,8 +1031,58 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
 
     antes = read_state(agent, session)
 
-    # Runtime Ollama não tem sessão: ligar é CARREGAR O MODELO. Antes isto
-    # devolvia 409 e o 'Ligar' do plano simplesmente não existia.
+    from app.services import agent_runtimes
+
+    runtime = agent_runtimes.get_runtime(agent)
+    if runtime is not None and runtime.engine == agent_runtimes.ENGINE_LLAMACPP:
+        service_started = False
+        model_started = antes.model_loaded is not True
+        try:
+            if model_started:
+                # Serviço já carregando não pertence a esta chamada para rollback.
+                if not _llama_service("is-active"):
+                    if not _llama_service("start"):
+                        raise LifecycleError(
+                            "runtime_start_failed",
+                            f"Não foi possível iniciar o serviço llama.cpp de {agent}",
+                        )
+                    service_started = True
+
+                limite = time.monotonic() + LOAD_TIMEOUT_SECONDS
+                while time.monotonic() < limite:
+                    antes = read_state(agent, session)
+                    if antes.model_loaded is True:
+                        break
+                    time.sleep(1)
+                else:
+                    raise LifecycleError(
+                        "runtime_start_timeout",
+                        f"{agent} não ficou online dentro do prazo",
+                    )
+
+            if session is None:
+                return {
+                    "agent": agent,
+                    "started": model_started,
+                    "already_running": not model_started,
+                    "state": antes.as_dict(),
+                }
+
+            result = _start_cli(agent, session, launcher, antes)
+        except Exception as error:
+            # Inclui timeout/exceção do tmux, sem parar serviço preexistente.
+            if service_started and not _llama_service("stop"):
+                raise LifecycleError(
+                    "runtime_rollback_failed",
+                    f"Falha ao desligar llama.cpp de {agent} após erro no start",
+                ) from error
+            raise
+
+        if model_started:
+            result.update(started=True, already_running=False)
+        return result
+
+    # Ollama sem sessão continua carregando pelo endpoint configurado.
     if session is None:
         if not antes.model:
             raise LifecycleError(
@@ -962,6 +1121,13 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
             "state": read_state(agent, session).as_dict(),
         }
 
+    return _start_cli(agent, session, launcher, antes)
+
+
+def _start_cli(
+    agent: str, session: str, launcher: list[str] | None, antes: AgentState,
+) -> dict:
+    """Cria/repara a CLI sob o lock do start, após o modelo estar pronto."""
     if antes.agent_process_running:
         return {
             "agent": agent,
@@ -990,6 +1156,7 @@ def start(agent: str, session: str | None, launcher: list[str] | None) -> dict:
     if antes.session_exists:
         _run(["tmux", "kill-session", "-t", f"={session}"], 5)
 
+    ensure_tmux_server()
     resultado = _run(
         [
             "tmux", "new-session", "-d", "-s", session,
@@ -1094,27 +1261,66 @@ def stop(agent: str, session: str | None, *, unload: bool = True, db=None) -> di
     motivo_modelo = "sem modelo associado"
 
     if unload and antes.model:
-        endpoint, headers = endpoint_for(agent)
-        usuarios = model_users(antes.model, excluding=agent, db=db)
+        from app.services import agent_runtimes
 
-        if usuarios:
-            motivo_modelo = f"mantido: em uso por {', '.join(usuarios)}"
-        elif antes.model_loaded is False:
-            motivo_modelo = "já não estava carregado"
-        elif antes.model_loaded is None:
-            motivo_modelo = (
-                "estado desconhecido: a sondagem do endpoint não respondeu"
+        runtime = agent_runtimes.get_runtime(agent)
+
+        if (
+            runtime is not None
+            and runtime.engine == agent_runtimes.ENGINE_LLAMACPP
+        ):
+            usuarios = model_users(
+                antes.model,
+                excluding=agent,
+                db=db,
             )
-        else:
-            modelo_descarregado = unload_model(antes.model, endpoint, headers)
-            motivo_modelo = (
-                "descarregado" if modelo_descarregado
-                else (
-                    "ainda residente após "
-                    f"{UNLOAD_VERIFY_TIMEOUT_SECONDS:g}s; o descarregamento "
-                    "é assíncrono — consulte o lifecycle para confirmar"
+
+            if usuarios:
+                modelo_descarregado = False
+                motivo_modelo = (
+                    f"mantido: em uso por {', '.join(usuarios)}"
                 )
-            )
+            elif antes.model_loaded is False:
+                modelo_descarregado = True
+                motivo_modelo = "já estava desligado"
+            elif antes.model_loaded is None:
+                modelo_descarregado = False
+                motivo_modelo = (
+                    "estado desconhecido: "
+                    "a sondagem do endpoint não respondeu"
+                )
+            elif _llama_service("stop"):
+                modelo_descarregado = True
+                motivo_modelo = "serviço llama.cpp desligado"
+            else:
+                modelo_descarregado = False
+                motivo_modelo = "falha ao desligar serviço llama.cpp"
+        else:
+            endpoint, headers = endpoint_for(agent)
+            usuarios = model_users(antes.model, excluding=agent, db=db)
+
+            if usuarios:
+                motivo_modelo = f"mantido: em uso por {', '.join(usuarios)}"
+            elif antes.model_loaded is False:
+                motivo_modelo = "já não estava carregado"
+            elif antes.model_loaded is None:
+                motivo_modelo = (
+                    "estado desconhecido: a sondagem do endpoint não respondeu"
+                )
+            else:
+                modelo_descarregado = unload_model(
+                    antes.model,
+                    endpoint,
+                    headers,
+                )
+                motivo_modelo = (
+                    "descarregado" if modelo_descarregado
+                    else (
+                        "ainda residente após "
+                        f"{UNLOAD_VERIFY_TIMEOUT_SECONDS:g}s; o descarregamento "
+                        "é assíncrono — consulte o lifecycle para confirmar"
+                    )
+                )
 
     # Releitura carregando o PGID original: sem isso, sobrevivente do grupo
     # ficaria invisível e o estado alegaria offline (achado P1).
@@ -1169,7 +1375,7 @@ def lifecycle_operation(agent: str, session: str | None, phase: str, db=None):
         agent_snapshot.atomic_json(operation_file(agent), operation)
         agent_snapshot.publish([agent_snapshot.AgentSnapshot(agent=agent,
             runtime_state=phase, activity_state='IDLE', checked_at=agent_snapshot.now(),
-            persistent=agent_snapshot.is_persistent(agent, session))])
+            persistent=agent_snapshot.is_persistent(agent, session))], source='lifecycle')
     except OSError as error:
         raise LifecycleError('state_not_durable', 'Operação abortada: estado não persistido') from error
     outcome = {}
@@ -1177,7 +1383,14 @@ def lifecycle_operation(agent: str, session: str | None, phase: str, db=None):
         yield outcome
         values = outcome['state']
         state = AgentState(**{field.name: values[field.name] for field in fields(AgentState) if field.name in values})
-        row = agent_snapshot.from_physical(agent, state)
+        # O desfecho de start/stop também passa pelo contrato de operabilidade,
+        # derivado do `state` que acabou de ser lido sob este mesmo lock: sem
+        # isto, um start que deixou a sessão morta publicaria ONLINE a partir
+        # do processo sobrevivente, e o snapshot sairia sem send_ready.
+        from app.services import agent_operability
+
+        row = agent_snapshot.from_physical(agent, state, operability=(
+            agent_operability.from_agent_state(agent, state, session) if session else None))
         complete = row.runtime_state.value == operation['desired']
         operation['running'] = False
         if not complete:
@@ -1194,13 +1407,13 @@ def lifecycle_operation(agent: str, session: str | None, phase: str, db=None):
         agent_snapshot.atomic_json(operation_file(agent), operation)
         agent_snapshot.publish([agent_snapshot.AgentSnapshot(agent=agent,
             runtime_state='ERROR', activity_state='IDLE', checked_at=agent_snapshot.now(),
-            reason=operation['reason'], persistent=agent_snapshot.is_persistent(agent, session))])
+            reason=operation['reason'], persistent=agent_snapshot.is_persistent(agent, session))], source='lifecycle')
         raise
     else:
         operation['updated_at'] = agent_snapshot.now()
         agent_snapshot.atomic_json(operation_file(agent), operation)
         row.checked_at = agent_snapshot.now()
-        agent_snapshot.publish([row])
+        agent_snapshot.publish([row], source='lifecycle')
 
 
 def try_recover(agent: str, session: str, launcher: list[str]) -> dict | None:
@@ -1312,6 +1525,11 @@ def stop_run_process(agent, run_id):
     Caller serializes on run_lock. Agent lock also excludes agent lifecycle and
     launch. Tombstone survives an API/DB failure, making retries idempotent.
     """
+    if agent == 'local-code':
+        row = run_binding(agent, run_id)
+        if row and row.get('mode') == 'persistent_cli':
+            from app.services.local_code_channel import stop as stop_cli_run
+            return stop_cli_run(run_id)
     with agent_lock(agent):
         row = run_binding(agent, run_id)
         if not row:

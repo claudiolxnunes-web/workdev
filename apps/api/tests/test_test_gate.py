@@ -10,6 +10,7 @@ Cobertura obrigatória das 4 falhas corrigidas:
 """
 
 import sys
+from unittest.mock import patch
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
@@ -82,7 +83,7 @@ def create_test_run(db: Session) -> AgentRun:
         id=uuid4(),
         plan_id=uuid4(),
         backlog_id=uuid4(),
-        agent="qwen",
+        agent="openrouter",
         status="running",
     )
     db.add(run)
@@ -100,7 +101,19 @@ def test_gate_executa_fail_closed():
 
     from unittest.mock import patch
     # Executar gate (patch venv para não existir)
-    with patch("app.services.test_gate.API_VENV", Path("/tmp/invalid_venv/bin/python")):
+    with (
+        patch("app.services.test_gate.API_VENV", Path("/tmp/invalid_venv/bin/python")),
+        patch("app.services.test_gate._run_command", return_value=(0, "", "", 0)),
+        patch(
+            "app.services.test_gate._check_guardrails",
+            return_value=CheckResult(
+                name="guardrails",
+                passed=True,
+                mandatory=True,
+                reason="Guardrails operacionais OK",
+            ),
+        ),
+    ):
         evidence = execute_gate(run)
 
     # FAIL-CLOSED: sem venv → FAIL
@@ -111,7 +124,6 @@ def test_gate_executa_fail_closed():
     print(f"  ✅ PASS: Gate falhou como esperado: {evidence.error}")
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_gate_evidence_persistida():
@@ -148,7 +160,6 @@ def test_gate_evidence_persistida():
     print(f"  ✅ PASS: Evento {event.event_type} criado com payload")
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_evidence_vinculada_ao_run():
@@ -186,7 +197,6 @@ def test_evidence_vinculada_ao_run():
     print(f"  ✅ PASS: Evidência corretamente vinculada ao run")
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_validate_run_review_sem_evidencia():
@@ -204,7 +214,6 @@ def test_validate_run_review_sem_evidencia():
     print(f"  ✅ PASS: review bloqueado: {reason}")
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_validate_run_completed_sem_evidencia():
@@ -221,7 +230,6 @@ def test_validate_run_completed_sem_evidencia():
     print(f"  ✅ PASS: completed bloqueado: {reason}")
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_validate_run_running_permitido():
@@ -238,7 +246,6 @@ def test_validate_run_running_permitido():
     print(f"  ✅ PASS: running permitido: {reason}")
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_validate_run_failed_permitido():
@@ -255,7 +262,6 @@ def test_validate_run_failed_permitido():
     print(f"  ✅ PASS: failed permitido: {reason}")
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_evidence_payload_valido():
@@ -291,7 +297,6 @@ def test_evidence_payload_valido():
     print(f"  ✅ PASS: Payload tem todos campos obrigatórios")
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_evidence_expira_24h():
@@ -323,7 +328,6 @@ def test_evidence_expira_24h():
     print(f"  ✅ PASS: Evidência expirada corretamente rejeitada")
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_mandatory_failed_bloqueia():
@@ -354,7 +358,6 @@ def test_mandatory_failed_bloqueia():
     print(f"  ✅ PASS: Check obrigatório falhando bloqueia gate")
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_frontend_pnpm_ausente_fail():
@@ -362,7 +365,8 @@ def test_frontend_pnpm_ausente_fail():
     print("\n[TESTE 11] Frontend pnpm ausente → FAIL")
 
     # Executar check vitest (assume pnpm não disponível no PATH do teste)
-    result = _check_vitest()
+    with patch("shutil.which", return_value=None):
+        result = _check_vitest()
 
     # Se pnpm não está no PATH, deve FAIL
     if result.reason == "pnpm não encontrado no PATH":
@@ -375,14 +379,14 @@ def test_frontend_pnpm_ausente_fail():
 
     db_path = Path("/tmp/test_gate.db")
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_frontend_build_fail():
     """Teste 12: Frontend build ausente → FAIL (fail-closed)."""
     print("\n[TESTE 12] Frontend build sem pnpm → FAIL")
 
-    result = _check_build()
+    with patch("shutil.which", return_value=None):
+        result = _check_build()
 
     # Se pnpm não está no PATH, deve FAIL
     if result.reason == "pnpm não encontrado no PATH":
@@ -395,7 +399,6 @@ def test_frontend_build_fail():
 
     db_path = Path("/tmp/test_gate.db")
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_fingerprint_sha_divergente_bloqueia():
@@ -430,7 +433,6 @@ def test_fingerprint_sha_divergente_bloqueia():
 
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def test_backlog_id_divergente_rejeita():
@@ -461,7 +463,6 @@ def test_backlog_id_divergente_rejeita():
 
     db.close()
     db_path.unlink(missing_ok=True)
-    return True
 
 
 def main():

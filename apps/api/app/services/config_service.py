@@ -115,6 +115,9 @@ class ConfigService:
                         json.dump(updated_config, f, indent=2, ensure_ascii=False)
                         f.flush()
                         os.fsync(f.fileno())
+                    # NamedTemporaryFile cria 600; o arquivo é versionado, sem segredos
+                    # (chaves sensíveis são recusadas), e o deploy precisa lê-lo.
+                    temp_path.chmod(0o644)
                     os.replace(temp_path, self.user_config_path)
                 finally:
                     if temp_path and temp_path.exists():

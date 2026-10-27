@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# wd-verificar — confere o deploy por fora. Somente leitura; não precisa de root.
+# Sai com 1 se algo não bater. Ver docs/DEPLOY_CANONICO.md.
+set -uo pipefail
+
+DOMINIO="${WD_DOMINIO:-https://workdev.bpfconsult.com.br}"
+falhas=0
+falha() { echo "FALHA: $*" >&2; falhas=$((falhas + 1)); }
+
+estado=$(systemctl is-active workdev-api 2>/dev/null || true)
+echo "workdev-api: $estado"
+[[ "$estado" == "active" ]] || falha "workdev-api não está active"
+
+systemctl show -p ActiveEnterTimestamp -p NRestarts workdev-api
+
+# O PID na porta 8000 tem que ser o Main PID do systemd; senão há processo órfão.
+main_pid=$(systemctl show -p MainPID --value workdev-api)
+porta_pid=$(ss -tlnp 2>/dev/null | grep ':8000 ' | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2 || true)
+echo "MainPID=$main_pid porta8000=${porta_pid:-?}"
+if [[ -n "$porta_pid" && "$porta_pid" != "$main_pid" ]]; then
+  falha "porta 8000 pertence ao PID $porta_pid, não ao MainPID $main_pid (processo órfão?)"
+fi
+
+saude=$(curl -s -m 10 "$DOMINIO/health" || true)
+echo "health: $saude"
+[[ "$saude" == *'"status":"online"'* ]] || falha "/health não respondeu online"
+
+codigo=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$DOMINIO/" || true)
+echo "site: $codigo"
+[[ "$codigo" == "200" ]] || falha "o site não respondeu 200"
+
+bundle=$(curl -s -m 10 "$DOMINIO/" | grep -o 'assets/index-[A-Za-z0-9_-]*\.js' | head -1 || true)
+if [[ -n "$bundle" ]]; then
+  n=$(curl -s -m 20 "$DOMINIO/$bundle" | grep -c 'localhost:8000' || true)
+  echo "bundle: $bundle (localhost:8000: $n)"
+  [[ "$n" == "0" ]] || falha "o bundle publicado contém localhost:8000"
+else
+  falha "não achei o bundle principal no HTML"
+fi
+
+if (( falhas > 0 )); then echo "VERIFICACAO_FALHOU ($falhas)" >&2; exit 1; fi
+echo VERIFICACAO_OK

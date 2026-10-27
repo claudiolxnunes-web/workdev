@@ -54,6 +54,10 @@ class RepoFalso:
     def mtime(self, _caminho):
         return self.build
 
+    def alteracoes_desde(self, *_args, **_kwargs):
+        # None = conteúdo indeterminado: o check mantém o veredito por mtime.
+        return None
+
     def mtime_mais_recente(self, subdiretorio, sufixos=None):
         if subdiretorio == config.FONTES_BACKEND:
             return self.fonte_backend
@@ -370,7 +374,7 @@ def estado_agentes(atualizado=None, **agentes):
         "claude": {"status": "idle", "reason": None, "session": "code"},
         "codex": {"status": "idle", "reason": None, "session": "codex"},
         "kimi": {"status": "offline", "reason": "agent_process_missing", "session": "kimi"},
-        "qwen": {"status": "offline", "reason": "agent_process_missing", "session": "qwen"},
+        "openrouter": {"status": "offline", "reason": "agent_process_missing", "session": "openrouter"},
     }
     padrao.update(agentes)
     return {

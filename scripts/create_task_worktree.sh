@@ -2,7 +2,7 @@
 # Criar worktree isolado para execução de task por agente.
 #
 # Uso: ./scripts/create_task_worktree.sh <task-id> [agent]
-# Exemplo: ./scripts/create_task_worktree.sh 339e074d-faa3-4062-a2a2-e114fd627454 qwen
+# Exemplo: ./scripts/create_task_worktree.sh 339e074d-faa3-4062-a2a2-e114fd627454 openrouter
 
 set -euo pipefail
 

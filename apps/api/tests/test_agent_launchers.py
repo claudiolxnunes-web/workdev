@@ -15,7 +15,7 @@ def test_bootstrap_starts_only_always_on_agents_and_uses_exact_tmux_targets():
     content = (SCRIPTS / "bootstrap_agents.sh").read_text(encoding="utf-8")
 
     assert "for session in code codex" in content
-    assert "for session in code codex kimi qwen gemini" not in content
+    assert "for session in code codex kimi openrouter gemini" not in content
     assert 'tmux has-session -t "=$session"' in content
     assert "tmux set-option -g extended-keys on" in content
     assert "tmux set-option -g history-limit 100000" in content
@@ -33,6 +33,7 @@ def test_launchers_disable_update_checks():
     assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in launcher("gemini")
 
 
+# grok e deepseek delegam ao start_qwen_agent.sh e herdam cor e cwd dele.
 def test_all_launchers_advertise_truecolor_without_overriding_term():
     for agent in ("claude", "codex", "kimi", "qwen", "gemini"):
         content = launcher(agent)
@@ -79,6 +80,17 @@ def test_qwen_has_noninteractive_provider_default_and_no_read_prompt():
 
     assert 'QWEN_PROVIDER="${QWEN_PROVIDER:-openrouter}"' in content
     assert "read -r -p" not in content
+
+
+def test_grok_and_deepseek_delegate_to_qwen_cli_over_openrouter():
+    for agent, model_env in (("grok", "GROK_MODEL"), ("deepseek", "DEEPSEEK_MODEL")):
+        content = launcher(agent)
+        assert "export QWEN_PROVIDER=openrouter" in content
+        assert f'export QWEN_MODEL="${{{model_env}:-' in content
+        assert ('exec "$(dirname "$(realpath "$0")")/start_qwen_agent.sh" '
+                '--append-system-prompt "$IDENTITY" "$@"') in content
+        assert "read -r -p" not in content
+    assert not (SCRIPTS / "start_groq_agent.sh").exists()
 
 
 def test_kimi_disables_update_and_telemetry_before_exec():

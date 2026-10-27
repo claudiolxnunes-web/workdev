@@ -94,6 +94,70 @@ Não coloque numa fase algo que só poderá ser validado depois de várias fases
 
 ---
 
+## REGRA OBRIGATÓRIA — GRANULARIDADE E SUBTASKS
+
+Antes de persistir ou solicitar aprovação de qualquer plano, identifique as frentes independentes de trabalho.
+
+Exemplos de frentes independentes:
+
+* discovery;
+* ADR/decisão arquitetural;
+* backend;
+* frontend;
+* banco/schema;
+* infraestrutura;
+* integração externa;
+* observabilidade;
+* segurança;
+* testes/robustez;
+* deploy.
+
+Se houver mais de uma frente independente, o plano deve possuir subtasks reais e auditáveis correspondentes.
+
+Fases descritas apenas no corpo do plano pai NÃO substituem subtasks persistidas.
+
+A regra de cobertura é:
+
+frentes detectadas == frentes cobertas por subtasks
+
+Toda frente relevante deve estar coberta por pelo menos uma subtask.
+
+Cada subtask deve representar uma unidade de execução pequena o suficiente para:
+
+* ser executada por um único agente;
+* possuir objetivo específico;
+* possuir critérios de aceite próprios;
+* possuir validação objetiva própria;
+* produzir evidência auditável;
+* permitir revisão independente;
+* ser corrigida isoladamente.
+
+Não agrupe frentes independentes apenas para reduzir artificialmente a quantidade de subtasks.
+
+Quando houver dependência entre subtasks, registre-a explicitamente.
+
+Exemplo:
+
+Discovery → ADR → Backend → Frontend → Robustez
+
+Antes de persistir o plano, faça obrigatoriamente este auto-check:
+
+1. Quantas frentes independentes existem?
+2. Quantas subtasks reais existem?
+3. Todas as frentes estão cobertas?
+4. Alguma subtask ainda contém múltiplas frentes independentes?
+5. As dependências estão explícitas?
+6. Cada subtask possui critérios de aceite?
+7. Cada subtask possui validação objetiva?
+8. Foi verificado se a implementação proposta já existe no WorkDev?
+
+Se a decomposição estiver insuficiente, corrija o plano e crie/ajuste as subtasks ANTES de solicitar aprovação.
+
+Se o backend informar required_subtasks, detected_workstreams, uncovered_workstreams ou solicitar decomposição, trate isso como requisito obrigatório do plano.
+
+Não use aprovação forçada para contornar granularidade insuficiente, salvo quando uma exceção humana explícita tiver sido solicitada.
+
+---
 ## 5. CRITÉRIO DE ACEITE
 
 Toda fase deve possuir pelo menos um critério de aceite objetivo.

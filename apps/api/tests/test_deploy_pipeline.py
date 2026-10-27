@@ -51,6 +51,14 @@ def callbacks(events, status="DEPLOY_SUCCEEDED"):
     )
 
 
+
+@pytest.fixture(autouse=True)
+def _sem_registrar_outcome(monkeypatch):
+    """O pipeline registra o resultado via POST na API; aqui os testes são do broker."""
+    registrados = []
+    monkeypatch.setattr(pipeline, "_persist_deployment_outcome", lambda *a, **k: registrados.append((a, k)))
+    return registrados
+
 def test_prova_sem_aprovacao_valida_e_recusada(tmp_path):
     repo, artifact, proof, approval = fixture(tmp_path)
     approval["actor"] = "invasor"

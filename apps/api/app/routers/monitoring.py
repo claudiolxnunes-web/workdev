@@ -54,6 +54,33 @@ def _check_vps1() -> dict:
     )
 
 
+def _check_ollama() -> dict:
+    """Ollama roda LOCAL na VPS1, nunca existiu na VPS2 -- a checagem
+    antiga vivia dentro do SSH remoto pra VPS2 e por isso reportava
+    offline pra sempre, mesmo com o serviço no ar (achado 26/set/2026,
+    aba Monitoring parada em "3/8 online" com Ollama sempre vermelho)."""
+    started = time.monotonic()
+    try:
+        api = _run(["systemctl", "is-active", "ollama"], timeout=3)
+        reachable = _run(
+            ["curl", "-fsS", "--max-time", "2", "http://127.0.0.1:11434/api/tags"],
+            timeout=3,
+        )
+        active = api.stdout.strip() == "active" and reachable.returncode == 0
+        api_ok = "ok" if reachable.returncode == 0 else "sem resposta"
+        detail = f"systemd: {api.stdout.strip()}; API: {api_ok}"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        active = False
+        detail = f"Falha na checagem: {type(exc).__name__}"
+    return _service(
+        "Ollama",
+        "VPS1 · :11434",
+        active,
+        detail,
+        round((time.monotonic() - started) * 1000),
+    )
+
+
 def _check_postgres() -> dict:
     started = time.monotonic()
     try:
@@ -83,8 +110,6 @@ def _check_vps2() -> list[dict]:
         "then echo openclaw=active; else echo openclaw=inactive; fi; "
         "printf 'agent='; systemctl is-active agente.service 2>/dev/null || true; "
         "printf 'agent_api='; systemctl is-active agente-api.service 2>/dev/null || true; "
-        "if curl -fsS --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null; "
-        "then echo ollama=active; else echo ollama=inactive; fi"
     )
     command = [
         "ssh",
@@ -105,7 +130,6 @@ def _check_vps2() -> list[dict]:
             _service("VPS 2 Intelligence", "VPS2", False, detail, latency),
             _service("OpenClaw", "VPS2", False, "VPS2 indisponível", latency),
             _service("Agente Pessoal", "VPS2", False, "VPS2 indisponível", latency),
-            _service("Ollama", "VPS2", False, "VPS2 indisponível", latency),
         ]
 
     if result.returncode != 0:
@@ -114,7 +138,6 @@ def _check_vps2() -> list[dict]:
             _service("VPS 2 Intelligence", "VPS2", False, detail, latency),
             _service("OpenClaw", "VPS2", False, "VPS2 indisponível", latency),
             _service("Agente Pessoal", "VPS2", False, "VPS2 indisponível", latency),
-            _service("Ollama", "VPS2", False, "VPS2 indisponível", latency),
         ]
 
     states = dict(
@@ -130,10 +153,6 @@ def _check_vps2() -> list[dict]:
         _service(
             "Agente Pessoal", "VPS2 · systemd", agent_active,
             f"bot: {states.get('agent', 'desconhecido')}; API: {states.get('agent_api', 'desconhecido')}", latency,
-        ),
-        _service(
-            "Ollama", "VPS2 · :11434", states.get("ollama") == "active",
-            f"API: {states.get('ollama', 'desconhecido')}", latency,
         ),
     ]
 
@@ -241,6 +260,74 @@ def _vps2_process_metrics(pattern: str) -> dict:
         return {"active_state": "active", "logs": []}
 
 
+JEV_MCP_HOST = os.getenv("WORKDEV_JEV_MCP_HOST", "100.103.18.93")
+JEV_MCP_PORT = os.getenv("WORKDEV_JEV_MCP_PORT", "8891")
+JEV_MCP_TAILSCALE_HOSTNAME = os.getenv("WORKDEV_JEV_MCP_TAILSCALE_HOSTNAME", "srv1750921")
+
+
+def _check_jev_mcp() -> list[dict]:
+    """Conectividade VPS1 -> VPS2 (Tailscale) para o MCP do Jev (montado em
+    /home/pal-mcp/jev_mcp.py, porta 8891, validado ponta-a-ponta manualmente
+    em 26/set/2026; aqui vira um monitor continuo, nao mais so um teste
+    manual)."""
+    started = time.monotonic()
+    try:
+        result = _run(["tailscale", "status", "--json"], timeout=5)
+        peer_online = None
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            peer = next(
+                (p for p in data.get("Peer", {}).values()
+                 if p.get("HostName") == JEV_MCP_TAILSCALE_HOSTNAME),
+                None,
+            )
+            if peer is not None:
+                peer_online = bool(peer.get("Online"))
+        if peer_online is None:
+            tailscale_up = False
+            detail = "Peer da VPS2 nao encontrado no tailscale status"
+        else:
+            tailscale_up = peer_online
+            detail = f"peer {JEV_MCP_TAILSCALE_HOSTNAME}: {'online' if peer_online else 'offline'}"
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        tailscale_up = False
+        detail = f"Falha na checagem: {type(exc).__name__}"
+    tailscale_service = _service(
+        "Tailscale (VPS1 -> VPS2)",
+        "VPS1",
+        tailscale_up,
+        detail,
+        round((time.monotonic() - started) * 1000),
+    )
+
+    started = time.monotonic()
+    try:
+        result = _run(
+            [
+                "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
+                "-m", "4", f"http://{JEV_MCP_HOST}:{JEV_MCP_PORT}/",
+            ],
+            timeout=6,
+        )
+        # FastMCP nao expoe rota raiz/health; qualquer resposta HTTP (mesmo
+        # 404) ja prova que a camada TCP+HTTP esta de pe -- so falha de
+        # conexao (exit != 0) indica o MCP fora do ar.
+        reachable = result.returncode == 0
+        http_code = result.stdout.strip() or "?"
+        detail = f"http {http_code}" if reachable else (result.stderr.strip() or "sem resposta")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        reachable = False
+        detail = f"Falha na checagem: {type(exc).__name__}"
+    jev_service = _service(
+        "Jev MCP",
+        f"VPS2 . {JEV_MCP_HOST}:{JEV_MCP_PORT}",
+        reachable,
+        detail,
+        round((time.monotonic() - started) * 1000),
+    )
+    return [tailscale_service, jev_service]
+
+
 PROJECT_INFRA = {
     "workdev-core": {"kind": "local_systemd", "unit": "workdev-api"},
     "agente-pessoal": {"kind": "vps2_systemd", "unit": "agente-api.service"},
@@ -280,11 +367,19 @@ def status_by_slug(slug: str):
 
 @router.get("/status")
 def status():
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         vps1_future = executor.submit(_check_vps1)
         postgres_future = executor.submit(_check_postgres)
         vps2_future = executor.submit(_check_vps2)
-        services = [vps1_future.result(), *vps2_future.result(), postgres_future.result()]
+        jev_future = executor.submit(_check_jev_mcp)
+        ollama_future = executor.submit(_check_ollama)
+        services = [
+            vps1_future.result(),
+            *vps2_future.result(),
+            postgres_future.result(),
+            *jev_future.result(),
+            ollama_future.result(),
+        ]
 
     online = sum(service["status"] == "online" for service in services)
     return {

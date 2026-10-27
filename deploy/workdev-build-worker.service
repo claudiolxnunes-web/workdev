@@ -1,10 +1,8 @@
 # Worker de Build isolado — ADR 005.
 #
-# NÃO INSTALADO. Este arquivo é a proposta; instalar exige root e é decisão do
-# operador:
-#   sudo cp deploy/workdev-build-worker.service /etc/systemd/system/
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now workdev-build-worker
+# Unit canônica do worker de Build isolado.
+# Em produção, deve permanecer instalada e habilitada quando
+# WORKDEV_OLLAMA_BUILD_ENABLED=true.
 #
 # ⚠️ `deploy.sh` só reinicia `workdev-api.service`. Depois de todo deploy que
 # mexa no worker, reiniciar explicitamente:

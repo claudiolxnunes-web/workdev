@@ -1,6 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from "react"
 import { Badge } from "@/components/ui/badge"
-import { Routes, Route, NavLink } from "react-router-dom"
+import { Routes, Route, NavLink, useLocation } from "react-router-dom"
 
 import NewProject from "./pages/NewProject"
 import Dashboard from "./pages/Dashboard"
@@ -11,18 +11,24 @@ import Deployments from "./pages/Deployments"
 import Monitoring from "./pages/Monitoring"
 import Settings from "./pages/Settings"
 import Backlog from "./pages/Backlog"
+import { AgentReset } from "./modules/agents/AgentReset"
 
 const EngineeringPage = lazy(() =>
   import('./modules/engineering').then((m) => ({ default: m.EngineeringPage }))
 )
-const RunTerminalPage = lazy(() => import("./modules/agents/RunTerminalPage"))
+const AgentTerminalPage = lazy(() => import("./modules/agents/AgentTerminalPage"))
+const RunTerminalPage = lazy(() => import("./modules/agents/RunObserverStatus"))
 const AIHub = lazy(() => import("./pages/AIHub"))
+const ChatLivre = lazy(() => import("./pages/ChatLivre"))
+const BancadaLocal = lazy(() => import("./pages/BancadaLocal"))
+const Workspace = lazy(() => import("./pages/Workspace"))
 const AgentsPage = lazy(() =>
   import("./modules/agents").then((module) => ({ default: module.AgentsPage }))
 )
 const ProjectWorkspace = lazy(() => import("./pages/ProjectWorkspace"))
 
 function App() {
+  const location = useLocation()
   const [versao, setVersao] = useState("")
   const [appName, setAppName] = useState("WorkDev Core")
   useEffect(() => {
@@ -35,21 +41,37 @@ function App() {
       .then((d) => d?.app?.name && setAppName(d.app.name))
       .catch(() => {})
   }, [])
+  const agentsWorkspace = location.pathname === "/agents" || location.pathname === "/workspace"
   const menuClass =
     "block px-3 py-2 rounded-lg transition-colors hover:bg-slate-800"
 
   const activeMenuClass =
     "block px-3 py-2 rounded-lg bg-slate-800"
 
+  if (/^\/agents\/[^/]+\/terminal$/.test(location.pathname) || (/^\/runs\/[^/]+\/terminal$/.test(location.pathname) && new URLSearchParams(location.search).get("compact") === "1")) {
+    return <Suspense fallback={<div className="h-dvh bg-slate-950 p-6 text-slate-300">Carregando terminal…</div>}>
+      <Routes>
+        <Route path="/agents/:agentId/terminal" element={<AgentTerminalPage />} />
+        <Route path="/runs/:runId/terminal" element={<RunTerminalPage />} />
+      </Routes>
+    </Suspense>
+  }
   return (
     <div className="min-h-screen max-w-full overflow-x-hidden bg-slate-950 text-white">
       {/* Header */}
-      <header className="border-b border-slate-800 px-4 py-3 sm:px-8 sm:py-4 flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold">{appName}</h1>
-          <p className="text-slate-400 text-sm">
-            Software Engineering Platform
-          </p>
+      <header className={`border-b border-slate-800 px-4 flex justify-between items-center ${agentsWorkspace ? "py-2 sm:px-6" : "py-3 sm:px-8 sm:py-4"}`}>
+        <div className="flex min-w-0 items-center gap-3">
+          <img
+            src="/workdev-logo.png"
+            alt="WorkDev — Software Engineering Platform"
+            className={`shrink-0 object-contain ${agentsWorkspace ? "h-12 w-12" : "h-16 w-16"}`}
+          />
+          <div className="min-w-0">
+            <h1 className={agentsWorkspace ? "text-lg font-bold" : "text-2xl font-bold"}>{appName}</h1>
+            <p className={agentsWorkspace ? "hidden" : "text-slate-400 text-sm"}>
+              Software Engineering Platform
+            </p>
+          </div>
         </div>
 
         <Badge variant="secondary">
@@ -109,6 +131,24 @@ function App() {
             </NavLink>
 
             <NavLink
+              to="/bancada"
+              className={({ isActive }) =>
+                isActive ? activeMenuClass : menuClass
+              }
+            >
+              🧪 Bancada Local
+            </NavLink>
+
+            <NavLink
+              to="/workspace"
+              className={({ isActive }) =>
+                isActive ? activeMenuClass : menuClass
+              }
+            >
+              🧩 Workspace Local
+            </NavLink>
+
+            <NavLink
               to="/knowledge"
               className={({ isActive }) =>
                 isActive ? activeMenuClass : menuClass
@@ -157,7 +197,7 @@ function App() {
         </aside>
 
         {/* Main Content */}
-        <main className="min-w-0 max-w-full flex-1 overflow-x-hidden p-3 sm:p-5 md:p-8">
+        <main className={`min-w-0 max-w-full flex-1 overflow-x-hidden p-3 ${agentsWorkspace ? "md:p-4" : "sm:p-5 md:p-8"}`}>
           <Routes>
               <Route path="/runs/:runId/terminal" element={<RunTerminalPage />} />
             <Route path="/" element={<Dashboard />} />
@@ -171,11 +211,36 @@ function App() {
                 </Suspense>
               }
             />
+            <Route
+              path="/chat-livre/:conversationId?"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <ChatLivre />
+                </Suspense>
+              }
+            />
             <Route path="/knowledge" element={<Knowledge />} />
+            <Route
+              path="/bancada"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <BancadaLocal />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/workspace"
+              element={
+                <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <Workspace />
+                </Suspense>
+              }
+            />
             <Route
               path="/agents"
               element={
                 <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
+                  <AgentReset />
                   <AgentsPage />
                 </Suspense>
               }

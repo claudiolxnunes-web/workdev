@@ -13,9 +13,14 @@ Três regras, em ordem de dureza:
    consentimento é por execução e fica na trilha de auditoria.
 3. **Runtime remoto sempre passa por redaction.** Mesmo com tudo autorizado.
 
-`local-code` é isento das regras 2 e 3 por ser loopback: o texto não deixa a
-máquina. Se um dia existir runtime local em outra máquina, ele entra como
-remoto — o critério é `kind == KIND_GPU`, não o nome.
+`local-code` é isento da regra 2 por ser loopback: o texto não deixa a
+máquina, então não há o que consentir. Se um dia existir runtime local em outra
+máquina, ele entra como remoto — o critério é `kind == KIND_GPU`, não o nome.
+
+A redaction (regra 3) vale para os dois lados. O texto não sair da máquina não
+significa que ele não chegue a um modelo: o contexto canônico é o que o
+operador escreveu ao longo de meses, e pode ter uma chave colada num
+troubleshooting (ADR 012).
 """
 
 from __future__ import annotations
@@ -165,11 +170,20 @@ def prepare(
     classificacao = classification_for_run(db, run)
 
     if not remoto:
-        # Loopback: nada deixa a máquina, nada a redigir nem a consentir.
+        # Loopback: o texto não deixa a máquina, então não há o que consentir.
+        #
+        # Redigir, porém, sim: o texto não sai da VPS, mas chega a um modelo,
+        # e o contexto canônico é exatamente o texto que o operador escreveu ao
+        # longo de meses — que pode ter uma chave colada num troubleshooting
+        # (ADR 012). O custo é um trecho de contexto a menos; segredo não é
+        # insumo de implementação.
+        resultado = context_redaction.redact(prompt)
+
         return EgressDecision(
-            prompt=prompt,
+            prompt=resultado.text,
             remote=False,
             classification=classificacao,
+            redaction=resultado,
         )
 
     if classificacao == CLASSIFICATION_RESTRICTED:

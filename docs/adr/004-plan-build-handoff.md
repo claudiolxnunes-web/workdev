@@ -110,3 +110,96 @@ classifica, roteia e enfileira — o agente a recolhe pela CLI, na sua sessão d
 sempre. Todo o backend do AUTO v2 (classificação semântica, subtasks reais,
 erros estruturados, lifecycle e isolamento de sessão) permanece intacto e não
 foi expandido.
+
+## Modelo é decisão prévia por agente, nunca por envio — 2026-10-24
+
+A tela de planos (PLAN → BUILD) deixa de oferecer qualquer seletor de modelo —
+inclusive no bloco de recomendação, que continua mostrando o modelo sugerido
+só como texto. O operador escolhe ali apenas **quem** (executor, revisor
+opcional, observer opcional), nunca **qual modelo**. O modelo de cada agente
+de CLI (Claude, Codex, Kimi, Qwen, Grok, DeepSeek, Gemini) é decidido antes,
+na aba Agentes (`GET/PUT /api/cli-agent-models/{agent}`), e vale para toda run
+nova até ser trocado ali — nunca por envio.
+
+Isso formaliza o que já estava implícito em "Recomendação consultiva": o
+WorkDev pode sugerir agente e modelo, nunca decidir quem executa ou qual
+modelo roda. A decisão de agente, revisor e modelo é sempre e exclusivamente
+do operador — soberana, sem hierarquia de qualidade entre agentes.
+
+No envio, o backend resolve o modelo do executor e, quando houver, do revisor
+pela configuração salva na aba Agentes (mesmo contrato, sem catálogo
+paralelo); registra agente, provider e modelo efetivamente usados no evento
+`build.queued` da run. Observer é exceção deliberada: não tem configuração na
+aba Agentes, então mantém seletor próprio na tela de planos, sem mudança.
+
+As escolhas do operador (agentes e modelos) prevalecem: o envio **nunca é
+bloqueado nem tem o modelo trocado** por causa delas. Sessão viva rodando outro
+modelo, modelo fora da lista permitida em Settings e modelo fora do catálogo da
+CLI geram **alerta** (`build.warning` na run e `warnings` na resposta; a tela de
+planos mostra "Alerta: …") e o envio segue com a escolha. Continua bloqueando só
+o que não dá para executar: seleção salva que saiu do catálogo (erro claro, sem
+substituir o modelo em silêncio), revisor sem canal de veredito e runtime
+indisponível. Regra do operador (2026-10-24): "o sistema só pode sugerir e
+alertar".
+
+Chamadas diretas e legadas da API que informam `model` explícito no payload
+seguem aceitas como antes; a tela de planos nunca envia modelo para agentes de
+CLI.
+
+### Verificação
+
+```bash
+# nenhum seletor de modelo na tela de planos
+grep -c "Modelo do executor\|Modelo do revisor" apps/web/src/components/ai-hub/PlanningPanel.tsx  # 0
+
+# executor e revisor resolvem pela aba Agentes; sessão divergente só alerta
+cd apps/api && WORKDEV_API_ENV_FILE=/tmp/test.env venv/bin/python -m pytest \
+  tests/test_executor_model_resolution.py -q
+```
+
+## Esforço por agente e vigia do healthcheck — 2026-10-24
+
+Complementa a decisão acima ("modelo é decisão prévia por agente"); mesma regra,
+agora também para esforço de raciocínio e saúde dos agentes.
+
+- **Esforço é escolha prévia por agente**, salvo na aba Agentes junto do modelo
+  (`PUT /api/cli-agent-models/{agent}/effort`) e vale no próximo "Ligar". Só é
+  injetado onde a CLI tem mecanismo comprovado: `claude --effort`,
+  `codex -c model_reasoning_effort`, `kimi KIMI_MODEL_THINKING_EFFORT`. Gemini,
+  Qwen, Grok e DeepSeek não oferecem o seletor; sem escolha, a CLI usa o padrão
+  dela. Nunca é decidido por envio nem pelo sistema (9891146).
+- **Healthcheck mantém os sete agentes de CLI ligados** (antes só Claude e
+  Codex). A recuperação automática respeita a intenção OFFLINE (desligar pela
+  aba Agentes), com 3 tentativas e backoff de 5 min (c7b620b).
+- **Healthcheck vigia memória disponível**: alerta no Telegram (baixa < 6 GB,
+  crítica < 3 GB, swap > 8 GB, após 120 s) e sai com exit 1 se crítica ou se não
+  conseguir medir (4e6be40). Motivo: 31 GB sem GPU dividem RAM com modelos
+  locais e as sessões dos agentes.
+- **Decisão do operador reafirmada:** planos e agentes são sempre escolha do
+  operador; o sistema só sugere e alerta, nunca bloqueia nem troca em silêncio.
+
+Estado em 2026-10-24: branch `feat/backlog-archived` verde (build, eslint,
+1656 testes), aguardando push por root e abertura de PR.
+
+## Task a4059dd7 (execução 0139fd5b): itens do plano v1 superados — 2026-10-24
+
+O plano v1 da task "Centralizar modelos em Agentes e simplificar os planos" previa
+comportamentos que contradizem a decisão do operador já registrada acima. Por decisão
+do operador, a decisão registrada prevalece e os itens abaixo ficam **superados**
+(o texto do plano v1 permanece como histórico; não vale como contrato):
+
+| Item do plano v1 | Situação | Vale agora |
+|---|---|---|
+| F5: sessão ativa com modelo incompatível ou não identificável **bloqueia** o envio | Superado | Gera **alerta** (`model_requires_new_session`); o envio segue com a escolha do operador. Sem reinício de tmux |
+| F5/API: modelo explícito de outro cliente só aceito se igual à aba Agentes; divergência rejeitada | Superado | Chamadas diretas e legadas com `model` explícito seguem aceitas como antes; divergência do catálogo só alerta |
+| Remover recomendação do painel | Superado | A recomendação do WorkDev é **consultiva**: pode sugerir e ordenar, nunca preenche nem substitui executor, revisor ou modelo |
+| Revisão obrigatória pelo revisor independente nesta execução | Dispensada | Revisão é opcional; o operador decidiu não usar revisor nesta task, pois a maior parte já estava pronta |
+
+Continua valendo e foi entregue: o modelo vem só da aba Agentes (sem seletor no painel),
+seleção salva inválida bloqueia sem fallback, `DEFAULT` só sem seleção salva, e o modelo
+efetivamente usado fica registrado na run.
+
+Lacunas fechadas nesta execução (2B): a escolha Sim/Não de revisão por plano agora
+sobrevive ao reload (`localStorage`, chave `workdev.planos.revisao`) e, depois do envio,
+o painel mostra o **modelo registrado** na run. O modelo configurado já era exibido
+antes do envio.

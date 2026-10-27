@@ -1,4 +1,5 @@
 import os
+import copy
 import json
 import time
 import uuid
@@ -9,6 +10,7 @@ from decimal import Decimal
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, SecretStr
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from anthropic import Anthropic
 from openai import OpenAI
@@ -22,7 +24,9 @@ from app.models.handoff import ExecutionPlan
 from app.models.chat import ChatSession, ChatMessage as ChatMessageDB
 from app.models.ai_routing import AICallLog, AIModelCatalog
 from app.services import autoridade, context_engine, rag_search
-from app.services import ai_cost_guard, agent_runtimes
+from app.services import (ai_cost_guard, agent_runtimes, bancada_runner, leitura_repo, local_model,
+                          tool_loop, workspace_execucao)
+from app.services.backlog_status import BacklogStatusError, apply_status
 from app.services.engineering_graph import graph_sync
 from app.services.handoff import HandoffError, create_plan
 
@@ -55,9 +59,6 @@ _compat_clients: dict = {}
 COMPAT_PROVIDERS = {
     "openai": {"base_url": None, "env_key": "OPENAI_API_KEY",
                "default_model": OPENAI_MODEL},
-    "kimi": {"base_url": "https://api.moonshot.cn/v1",
-             "env_key": "MOONSHOT_API_KEY",
-             "default_model": os.getenv("KIMI_MODEL", "kimi-k2.6")},
     "gemini": {"base_url": "https://generativelanguage.googleapis.com"
                            "/v1beta/openai/",
                "env_key": "GEMINI_API_KEY",
@@ -152,28 +153,61 @@ def get_db():
         db.close()
 
 
+def _jev_planning_block(db: Session, backlog_id, nivel: str | None) -> str | None:
+    """Bloco consultivo do Jev Pré-Plano — só quando faz sentido, nunca quebra o chat.
+
+    `None` (sem efeito no prompt) fora do nível PLAN, sem task em escopo,
+    supervisão adaptativa desligada, ou quando a task já tem algum
+    ExecutionPlan — a janela "antes de existir ExecutionPlan" já passou, e o
+    Jev pós-plano (jev_decision.py) assume a partir da criação do Build.
+    """
+    if autoridade.normalizar(nivel) != autoridade.PLAN or backlog_id is None:
+        return None
+    try:
+        from app.services import adaptive_config, jev_planning
+        if not adaptive_config.load().enabled:
+            return None
+        tem_plano = db.query(ExecutionPlan.id).filter(
+            ExecutionPlan.backlog_id == backlog_id).first()
+        if tem_plano:
+            return None
+        task = db.get(BacklogItem, backlog_id)
+        if task is None:
+            return None
+        assessment = jev_planning.assess(db, task)
+        return jev_planning.render_system_block(assessment)
+    except Exception:  # noqa: BLE001 — consultivo; nunca deve derrubar o chat
+        return None
+
+
 def build_system(db: Session, project_slug: str | None = None,
-                 nivel: str | None = None) -> str:
+                 nivel: str | None = None, backlog_id=None) -> str:
     """System prompt com o contexto do WorkDev apurado no banco.
 
     Sem `project_slug`, monta o contexto global. Com um slug desconhecido,
     degrada para o global e diz isso ao modelo — em vez de responder no vazio.
 
     Uma falha ao ler o contexto nunca derruba a conversa: o chat volta ao
-    system base e segue com as ferramentas, que continuam funcionando.
+    system base e segue com as ferramentas, que continuam funcionando. O
+    mesmo vale para o bloco do Jev Pré-Plano (`backlog_id`, ver
+    `_jev_planning_block`): é aditivo e nunca impede a resposta.
     """
     modo = autoridade.instrucao_de_nivel(nivel)
+    jev_block = _jev_planning_block(db, backlog_id, nivel)
     try:
         contexto = context_engine.build_chat_context(db, project_slug)
     except Exception as erro:  # noqa: BLE001 — contexto é melhoria, não requisito
-        return "\n\n".join(_with_plan_policy([
+        partes = _with_plan_policy([
             SYSTEM,
             modo,
             (
                 f"[contexto indisponível: {type(erro).__name__}. "
                 f"Use as ferramentas para consultar o estado atual.]"
             ),
-        ], nivel))
+        ], nivel)
+        if jev_block:
+            partes.append(jev_block)
+        return "\n\n".join(partes)
 
     if contexto is None:
         contexto = context_engine.montar_contexto_global(db)
@@ -181,11 +215,14 @@ def build_system(db: Session, project_slug: str | None = None,
             f"\n\n[o projeto '{project_slug}' não existe no WorkDev; "
             f"contexto global abaixo]"
         )
-        return "\n\n".join(_with_plan_policy([
+        partes = _with_plan_policy([
             SYSTEM,
             f"{modo}{aviso}",
             context_engine.renderizar_contexto(contexto),
-        ], nivel))
+        ], nivel)
+        if jev_block:
+            partes.append(jev_block)
+        return "\n\n".join(partes)
 
     partes = _with_plan_policy(
         [SYSTEM, modo, context_engine.renderizar_contexto(contexto)],
@@ -194,6 +231,8 @@ def build_system(db: Session, project_slug: str | None = None,
 
     if contexto.get("escopo") == context_engine.ESCOPO_PROJETO:
         partes.append(FOCO_PROJETO)
+    if jev_block:
+        partes.append(jev_block)
     return "\n\n".join(partes)
 
 
@@ -243,11 +282,11 @@ TOOLS = [
     },
     {
         "name": "listar_backlog",
-        "description": "Lista itens do backlog, filtro opcional por status e/ou projeto",
+        "description": "Lista itens do backlog, filtro opcional por status e/ou projeto. Tasks arquivadas só aparecem com status=archived",
         "input_schema": {
             "type": "object",
             "properties": {
-                "status": {"type": "string", "enum": ["todo", "doing", "blocked", "done"]},
+                "status": {"type": "string", "enum": ["todo", "doing", "blocked", "done", "archived"]},
                 "projeto_slug": {"type": "string"},
             },
         },
@@ -351,14 +390,117 @@ TOOLS = [
         },
     },
     {
+        "name": "ler_task",
+        "description": "Le uma task do backlog pelo id (uuid): titulo, descricao, projeto, status e subtasks. Somente leitura. Se a descricao estiver vazia, a resposta diz isso explicitamente (descricao_vazia=true); nesse caso nao invente contexto.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "id (uuid) da task"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "ler_trecho",
+        "description": "Le linhas reais de um arquivo do repositorio WorkDev (caminho relativo a raiz do repo, linhas inicio..fim inclusivas, a partir de 1). Somente leitura. No maximo 200 linhas por chamada; recusa caminho fora do repo, .env, .git, chaves, credenciais, node_modules, binarios e arquivos acima de 1 MB. Use para citar arquivo e linhas que existem de fato.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "caminho": {"type": "string", "description": "ex.: apps/api/app/routers/ai.py"},
+                "inicio": {"type": "integer", "description": "primeira linha, a partir de 1"},
+                "fim": {"type": "integer", "description": "ultima linha, inclusiva"},
+            },
+            "required": ["caminho", "inicio", "fim"],
+        },
+    },
+    {
+        "name": "buscar_texto",
+        "description": "Procura texto literal (nao regex) nos arquivos do repositorio WorkDev, como git grep: respeita o .gitignore e pula binarios, .env, .git e credenciais. Devolve caminho, linha e o conteudo da linha (ate 80 ocorrencias). Somente leitura. Use ANTES de ler_trecho para descobrir onde algo esta, em vez de chutar caminho ou linha.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "texto": {"type": "string", "description": "texto literal, ex.: def ler_trecho"},
+                "caminho": {"type": "string", "description": "pasta ou arquivo onde procurar, relativo a raiz; padrao '.'"},
+            },
+            "required": ["texto"],
+        },
+    },
+    {
+        "name": "listar_pasta",
+        "description": "Lista arquivos e subpastas de uma pasta do repositorio WorkDev (subpasta termina com '/'). Esconde .env, .git, node_modules, venv, dist e credenciais. Somente leitura.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "caminho": {"type": "string", "description": "pasta relativa a raiz; '.' e a raiz"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ler_estado_sessao",
+        "description": "Le o estado da sessao ativa do Workspace Local: fatias do plano aprovado (status, etapa, erro, commit, arquivos tocados), commits do branch da sessao, alteracoes sem commit e o diff --stat desde a base. Somente leitura. Use antes de replanejar ou de sugerir correcao, para nao repropor o que ja foi aplicado.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "validar_plano_workspace",
+        "description": "Valida um plano de fatias do Workspace Local contra a copia da sessao ativa (ou o checkout, sem sessao): objetivo e instrucao presentes, gate presente, trechos com arquivo e linhas reais, exige com regex valida, fatia de banco bem formada. E a mesma validacao do botao Aprovar plano. Somente leitura: nao grava nem aprova nada. Chame antes de entregar o bloco json e corrija o que for recusado.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plano": {"type": "object", "description": "{\"fatias\": [{\"id\", \"objetivo\", \"instrucao\", \"trechos\", \"gate\", \"exige\", \"max_tokens\"}]}"},
+            },
+            "required": ["plano"],
+        },
+    },
+    {
+        "name": "ler_resultado_fatia",
+        "description": "Le o detalhe de uma fatia da sessao ativa do Workspace Local: instrucao, status, etapa e erro, checks do gate e o diff (do commit, se passou; da proposta do modelo local, se falhou). Segredos sao redigidos. Somente leitura. Use para escrever a correcao de uma fatia que falhou.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"n": {"type": "integer", "description": "numero da fatia (1, 2, ...)"}},
+            "required": ["n"],
+        },
+    },
+    {
+        "name": "ler_referencias",
+        "description": "Le o texto inteiro das referencias canonicas de um projeto: ADRs (contexto, decisao, consequencias, status), decisions e knowledge. Filtra por termo no titulo/conteudo. Segredos sao redigidos. Somente leitura. Use quando o bloco 'Contexto recuperado' citar uma referencia que restringe o plano, ou para conferir se ja existe decisao sobre o assunto.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "projeto_slug": {"type": "string", "description": "slug do projeto; opcional se task_id for informado"},
+                "task_id": {"type": "string", "description": "uuid da task; inclui as ADRs ligadas a ela"},
+                "tipo": {"type": "string", "enum": ["adr", "decision", "knowledge", "todos"], "description": "padrao: todos"},
+                "termo": {"type": "string", "description": "filtro opcional, sem diferenciar maiusculas"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "validar_lote_bancada",
+        "description": "Valida um lote de micro-tarefas da Bancada Local contra os arquivos reais do repositorio: arquivo existe, linha final existe, caminho permitido, ate 10 tarefas por lote (11 a 20 sao divididas automaticamente em 2 lotes), ate 8 trechos de ate 400 linhas, max_tokens 64-4000, exige com regex valida. Ids vazios ou genericos recebem o id do lote (AAMMDD-NN-NN). Somente leitura: nao grava nem executa nada. Use antes de entregar o JSON final e entregue o plano devolvido.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plano": {
+                    "type": "object",
+                    "description": "{\"tarefas\": [{\"id\", \"instrucao\", \"trechos\": [[caminho, inicio, fim]], \"max_tokens\", \"espera_diff\", \"exige\"}], \"fora_do_alcance\": opcional}",
+                },
+            },
+            "required": ["plano"],
+        },
+    },
+    {
         "name": "atualizar_task",
-        "description": "Atualiza uma task do backlog: status (todo/doing/blocked/done), prioridade, titulo ou sprint. Use quando pedirem para marcar como concluida/done, mover para doing, mudar prioridade, renomear. Se houver mais de uma task com titulo parecido, a tool devolve a lista para voce pedir especificacao.",
+        "description": "Atualiza uma task do backlog: status (todo/doing/blocked/done/archived), prioridade, titulo ou sprint. Use quando pedirem para marcar como concluida/done, mover para doing, arquivar, desarquivar, mudar prioridade, renomear. Arquivar (archived) exige motivo_arquivamento; desarquivar e sempre voltar para todo. Se houver mais de uma task com titulo parecido, a tool devolve a lista para voce pedir especificacao.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string", "description": "id (uuid) da task — prefira sempre que souber"},
                 "titulo_task": {"type": "string", "description": "titulo (ou parte unica) da task"},
-                "novo_status": {"type": "string", "enum": ["todo", "doing", "blocked", "done"]},
+                "novo_status": {"type": "string", "enum": ["todo", "doing", "blocked", "done", "archived"]},
+                "motivo_arquivamento": {"type": "string", "enum": ["concluida_fora", "obsoleta", "sem_destravamento"],
+                                        "description": "obrigatorio com novo_status=archived"},
+                "nota_arquivamento": {"type": "string", "description": "texto livre opcional junto do motivo"},
                 "nova_prioridade": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
                 "novo_titulo": {"type": "string"},
                 "novo_sprint": {"type": "string"},
@@ -470,6 +612,178 @@ TOOLS = [
 ]
 
 
+# ler_trecho do AI Hub: wrapper fino sobre bancada_runner.ler_trecho, que já
+# valida realpath, raiz do repo e a lista de caminhos sensíveis. As travas
+# abaixo só existem porque aqui quem chama é o modelo: o runner lê o arquivo
+# inteiro antes de cortar (um GGUF em models/ tem 9 GB) e aceita 400 linhas.
+LER_TRECHO_MAX_LINHAS = 200
+LER_TRECHO_MAX_BYTES = 1_000_000
+LER_TRECHO_MAX_CHARS = 20_000
+
+
+def _ler_task(args: dict, db: Session) -> str:
+    try:
+        task_uuid = uuid.UUID(str(args.get("task_id", "")))
+    except ValueError:
+        return json.dumps({"erro": "task_id inválido (esperado uuid)"},
+                          ensure_ascii=False)
+    t = db.query(BacklogItem).filter(BacklogItem.id == task_uuid).first()
+    if not t:
+        return json.dumps({"erro": "task não encontrada"}, ensure_ascii=False)
+    p = db.query(Project).filter(Project.id == t.project_id).first()
+    subs = (db.query(BacklogSubtask)
+            .filter(BacklogSubtask.backlog_id == t.id)
+            .order_by(BacklogSubtask.execution_order).all())
+    descricao = (t.description or "").strip()
+    saida = {
+        "task_id": str(t.id),
+        "titulo": t.title,
+        "descricao": descricao or None,
+        "descricao_vazia": not descricao,
+        "projeto": {"nome": p.name, "slug": p.slug} if p else None,
+        "status": t.status,
+        "prioridade": t.priority,
+        "tipo": t.type,
+        "archived_reason": t.archived_reason,
+        "archived_at": str(t.archived_at) if t.archived_at else None,
+        "subtasks": [{"ordem": s.execution_order, "titulo": s.title,
+                      "status": s.status,
+                      "descricao": (s.description or "").strip() or None}
+                     for s in subs],
+    }
+    if not descricao:
+        saida["aviso"] = ("A task não tem descrição. Não planeje nem complete "
+                          "o contexto por conta própria: peça a descrição.")
+    return json.dumps(saida, ensure_ascii=False)
+
+
+def _validar_lote_bancada(args: dict) -> str:
+    plano = args.get("plano")
+    if isinstance(plano, str):
+        try:
+            plano = json.loads(plano)
+        except ValueError:
+            plano = None
+    if not isinstance(plano, dict):
+        return json.dumps({"ok": False, "erro": "plano precisa ser objeto {\"tarefas\": [...]}"},
+                          ensure_ascii=False)
+    local = bancada_runner._modulo("bancada_local")
+    # Só prévia do id: o lote é gravado quando a Bancada recebe o plano.
+    lote = local.proximo_lote(bancada_runner.pasta() / "planos")
+    try:
+        lotes = local.dividir_em_lotes(copy.deepcopy(plano), lote, local.LIMITES_AI_HUB,
+                                       bancada_runner.REPO_TRABALHO.resolve())
+    except ValueError as e:
+        return json.dumps({"ok": False, "erro": str(e),
+                           "proximo_passo": "Corrija a tarefa citada (confira as linhas com ler_trecho) e valide de novo."},
+                          ensure_ascii=False)
+    if not lotes[0][1]["tarefas"]:
+        return json.dumps({"ok": True, "lotes": [],
+                           "fora_do_alcance": plano.get("fora_do_alcance"),
+                           "proximo_passo": "Nada vai para a Bancada: explique o motivo e sugira o fluxo de nuvem (Enviar ao AI Hub)."},
+                          ensure_ascii=False)
+    passo = ("Entregue exatamente este plano em um bloco ```json para o operador levar à Bancada."
+             if len(lotes) == 1 else
+             f"O plano foi dividido em {len(lotes)} lotes. Entregue cada um em um bloco ```json "
+             "separado, rotulado com o id do lote, na ordem: o operador roda um lote de cada vez.")
+    return json.dumps({"ok": True, "lotes": [{"lote": n, "plano": p} for n, p in lotes],
+                       "proximo_passo": passo}, ensure_ascii=False)
+
+
+def _ler_trecho(args: dict) -> str:
+    def erro(codigo: str, mensagem: str) -> str:
+        return json.dumps({"erro": mensagem, "code": codigo},
+                          ensure_ascii=False)
+
+    caminho = args.get("caminho")
+    try:
+        inicio, fim = int(args.get("inicio")), int(args.get("fim"))
+    except (TypeError, ValueError):
+        return erro("trecho_invalido", "inicio e fim precisam ser inteiros")
+    if inicio < 1 or fim < inicio:
+        return erro("trecho_invalido", f"intervalo inválido: {inicio}-{fim}")
+    if not isinstance(caminho, str) or not caminho.strip():
+        return erro("trecho_invalido", "caminho vazio")
+    raiz = bancada_runner.REPO_TRABALHO.resolve()
+    alvo = Path(os.path.realpath(raiz / caminho.strip()))
+    if raiz not in alvo.parents:
+        return erro("trecho_invalido", f"fora do repositório: {caminho}")
+    # Tamanho checado só por stat, antes de o runner ler o arquivo.
+    if alvo.is_file() and alvo.stat().st_size > LER_TRECHO_MAX_BYTES:
+        return erro("trecho_grande",
+                    f"arquivo acima de {LER_TRECHO_MAX_BYTES} bytes: {caminho}")
+    pedido_fim = fim
+    fim = min(fim, inicio + LER_TRECHO_MAX_LINHAS - 1)
+    try:
+        texto, inicio, fim = bancada_runner.ler_trecho(caminho, inicio, fim)
+    except bancada_runner.BancadaErro as e:
+        return erro(e.codigo, e.mensagem)
+    if "\x00" in texto:
+        return erro("trecho_binario", f"arquivo binário: {caminho}")
+    saida = {"caminho": caminho.strip(), "inicio": inicio, "fim": fim,
+             "texto": texto[:LER_TRECHO_MAX_CHARS]}
+    if fim < pedido_fim or len(texto) > LER_TRECHO_MAX_CHARS:
+        saida["truncado"] = True
+    return json.dumps(saida, ensure_ascii=False)
+
+
+def _leitura_repo(funcao, *args) -> str:
+    """buscar_texto e listar_pasta: a trava de caminhos é do leitura_repo."""
+    try:
+        return json.dumps(funcao(*args), ensure_ascii=False)
+    except leitura_repo.Recusado as e:
+        return json.dumps({"erro": str(e), "code": "leitura_recusada"}, ensure_ascii=False)
+
+
+MAX_REFERENCIAS = 10
+MAX_TEXTO_REFERENCIA = 3000
+
+
+def _ler_referencias(args: dict, db: Session) -> str:
+    from app.services import referencias_projeto
+    from app.services.context_redaction import redact
+
+    task = None
+    if args.get("task_id"):
+        try:
+            task = db.get(BacklogItem, uuid.UUID(str(args["task_id"])))
+        except ValueError:
+            return json.dumps({"erro": "task_id invalido", "code": "task_id_invalido"}, ensure_ascii=False)
+    if task is not None:
+        projeto = db.get(Project, task.project_id)
+    elif args.get("projeto_slug"):
+        projeto = db.query(Project).filter(Project.slug == args["projeto_slug"]).first()
+    else:
+        return json.dumps({"erro": "informe projeto_slug ou task_id", "code": "sem_projeto"}, ensure_ascii=False)
+    if projeto is None:
+        return json.dumps({"erro": "projeto ou task nao encontrado", "code": "nao_encontrado"}, ensure_ascii=False)
+
+    dados = referencias_projeto.coletar(db, projeto.id, task.id if task else None)
+    tipo = args.get("tipo") or "todos"
+    termo = str(args.get("termo") or "").strip().lower()
+    textos = {
+        "adr": lambda r: f"Contexto: {r['context']}\nDecisao: {r['decision']}\nConsequencias: {r['consequences'] or ''}",
+        "decision": lambda r: r["description"],
+        "knowledge": lambda r: r["content"],
+    }
+    chaves = {"adr": "adrs", "decision": "decisions", "knowledge": "knowledge"}
+    saida = []
+    for nome_tipo, chave in chaves.items():
+        if tipo not in ("todos", nome_tipo):
+            continue
+        for linha in dados[chave]:
+            # Redige antes de cortar: o corte não pode partir um segredo ao meio.
+            texto = redact(textos[nome_tipo](linha) or "").text
+            if termo and termo not in f"{linha['title']} {texto}".lower():
+                continue
+            saida.append({"tipo": nome_tipo, "id": linha["id"], "titulo": linha["title"],
+                          **({"status": linha["status"]} if nome_tipo == "adr" else {}),
+                          "texto": texto[:MAX_TEXTO_REFERENCIA],
+                          "truncado": len(texto) > MAX_TEXTO_REFERENCIA})
+    return json.dumps({"projeto": projeto.slug, "referencias": saida[:MAX_REFERENCIAS],
+                       "total": len(saida)}, ensure_ascii=False)
+
+
 def executar_tool(nome: str, args: dict, db: Session,
                   nivel: str = autoridade.NIVEL_PADRAO, *, backlog_id=None) -> str:
     """Executa uma tool, respeitando a autoridade da conversa.
@@ -528,6 +842,8 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
         q = db.query(BacklogItem)
         if args.get("status"):
             q = q.filter(BacklogItem.status == args["status"])
+        else:
+            q = q.filter(BacklogItem.status != "archived")
         if args.get("projeto_slug"):
             p = db.query(Project).filter(Project.slug == args["projeto_slug"]).first()
             if not p:
@@ -536,7 +852,10 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
         return json.dumps(
             [{"id": str(i.id), "titulo": i.title, "status": i.status,
               "prioridade": i.priority, "tipo": i.type,
-              "sprint": i.sprint} for i in q.all()],
+              "sprint": i.sprint,
+              "archived_reason": i.archived_reason,
+              "archived_at": str(i.archived_at) if i.archived_at else None}
+             for i in q.all()],
             ensure_ascii=False,
         )
 
@@ -632,6 +951,45 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
                            "status": s.status} for s in subs]},
             ensure_ascii=False,
         )
+
+    if nome == "ler_task":
+        return _ler_task(args, db)
+
+    if nome == "ler_trecho":
+        return _ler_trecho(args)
+
+    if nome == "buscar_texto":
+        return _leitura_repo(leitura_repo.buscar_texto, args.get("texto"), args.get("caminho") or ".")
+
+    if nome == "listar_pasta":
+        return _leitura_repo(leitura_repo.listar_pasta, args.get("caminho") or ".")
+
+    if nome == "ler_estado_sessao":
+        try:
+            return json.dumps(workspace_execucao.estado_para_supervisor(), ensure_ascii=False)
+        except Exception as e:  # noqa: BLE001 — leitura: erro vira resposta, não exceção no chat
+            return json.dumps({"erro": f"{type(e).__name__}: {e}"[:500], "code": "estado_indisponivel"},
+                              ensure_ascii=False)
+
+    if nome == "validar_lote_bancada":
+        return _validar_lote_bancada(args)
+
+    if nome == "validar_plano_workspace":
+        plano = args.get("plano")
+        if not isinstance(plano, dict):
+            return json.dumps({"valido": False, "code": "plano_invalido", "mensagem": "plano precisa ser objeto"},
+                              ensure_ascii=False)
+        return json.dumps(workspace_execucao.validar_plano_supervisor(plano), ensure_ascii=False)
+
+    if nome == "ler_resultado_fatia":
+        try:
+            n = int(args.get("n"))
+        except (TypeError, ValueError):
+            return json.dumps({"erro": "n precisa ser inteiro", "code": "n_invalido"}, ensure_ascii=False)
+        return json.dumps(workspace_execucao.resultado_fatia(n), ensure_ascii=False)
+
+    if nome == "ler_referencias":
+        return _ler_referencias(args, db)
 
     if nome == "registrar_conhecimento":
         pid = None
@@ -753,8 +1111,22 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
         t = matches[0]
         alteracoes = {}
         if args.get("novo_status"):
-            t.status = args["novo_status"]
+            try:
+                apply_status(t, args["novo_status"],
+                             db.execute(text("SELECT now()")).scalar(),
+                             args.get("motivo_arquivamento"),
+                             args.get("nota_arquivamento"))
+            except BacklogStatusError as erro:
+                db.rollback()
+                return json.dumps({"erro": erro.message, "code": erro.code,
+                                   "details": erro.details}, ensure_ascii=False)
             alteracoes["status"] = t.status
+            if t.status == "archived":
+                alteracoes["motivo_arquivamento"] = t.archived_reason
+        elif args.get("motivo_arquivamento") or args.get("nota_arquivamento"):
+            return json.dumps({"erro": "motivo de arquivamento exige novo_status=archived",
+                               "code": "archived_reason_without_archive"},
+                              ensure_ascii=False)
         if args.get("nova_prioridade"):
             t.priority = args["nova_prioridade"]
             alteracoes["prioridade"] = t.priority
@@ -1062,6 +1434,20 @@ def _provider_result(value) -> ProviderResult:
     return value if isinstance(value, ProviderResult) else ProviderResult(str(value))
 
 
+# Planejar para a Bancada é o único fluxo que lê código com ler_trecho; estourar o
+# limite ali quase sempre quer dizer task grande demais, não falha técnica.
+TOOLS_DE_LEITURA_DE_CODIGO = {"ler_trecho", "validar_lote_bancada"}
+
+
+def mensagem_limite_de_passos(usadas: set[str]) -> str:
+    passos = int(os.getenv("AI_MAX_TOOL_STEPS", "12"))
+    if usadas & TOOLS_DE_LEITURA_DE_CODIGO:
+        return (f"Não consegui concluir: o limite de {passos} passos acabou enquanto eu lia o código. "
+                "No planejamento para a Bancada Local, isso costuma indicar que a task é grande demais "
+                "para micro-tarefas. Use \"Enviar ao AI Hub\" (fluxo de nuvem) ou divida a task no backlog.")
+    return "Não consegui concluir a operação (limite de passos)."
+
+
 def chat_anthropic(messages: list, db: Session, model: str | None = None,
                    system: str | None = None,
                    nivel: str = autoridade.NIVEL_PADRAO,
@@ -1071,10 +1457,24 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
     # Camada 1 do gate: o modelo só recebe o catálogo do seu nível.
     tools = autoridade.tools_para(nivel, TOOLS)
     input_tokens = output_tokens = 0
-    for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
+    usadas: set[str] = set()
+    guarda = tool_loop.Guarda(tools, local=False)
+    try:
+        return _loop_anthropic(client, messages, db, model, system, nivel, max_output_tokens, reasoning_effort,
+                               backlog_id, tools, guarda, usadas)
+    except tool_loop.Interromper as e:
+        return ProviderResult(e.mensagem, guarda.input_tokens, guarda.output_tokens)
+
+
+def _loop_anthropic(client, messages, db, model, system, nivel, max_output_tokens, reasoning_effort,
+                    backlog_id, tools, guarda, usadas) -> ProviderResult:
+    input_tokens = output_tokens = 0
+    guarda.input_tokens = guarda.output_tokens = 0
+    for passo in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
         # max_tokens limita thinking + texto da resposta juntos: 4096 truncava
         # no meio quando o modelo pensa antes de responder. Hoje o valor vem do
         # cost guard (AI_MAX_OUTPUT_TOKENS, default 16000) em vez de fixo aqui.
+        inicio = time.monotonic()
         resp = client.messages.create(
             model=model or ANTHROPIC_MODEL,
             max_tokens=max_output_tokens,
@@ -1082,9 +1482,15 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
             system=system or SYSTEM,
             tools=tools,
             messages=messages,
+            timeout=guarda.prazo(float(os.getenv("ANTHROPIC_TIMEOUT", "120"))),
         )
         input_tokens += int(getattr(resp.usage, "input_tokens", 0) or 0)
         output_tokens += int(getattr(resp.usage, "output_tokens", 0) or 0)
+        guarda.input_tokens, guarda.output_tokens = input_tokens, output_tokens
+        _telemetria("anthropic", model or ANTHROPIC_MODEL, None, passo, inicio, getattr(resp, "usage", None),
+                    "input_tokens", "output_tokens",
+                    [b.name for b in resp.content if getattr(b, "type", None) == "tool_use"],
+                    resp.stop_reason, backlog_id)
         if resp.stop_reason == "max_tokens":
             txt = "".join(b.text for b in resp.content if b.type == "text")
             final = (txt + "\n\n[resposta truncada — limite de tokens]") \
@@ -1100,21 +1506,43 @@ def chat_anthropic(messages: list, db: Session, model: str | None = None,
         results = []
         for block in resp.content:
             if block.type == "tool_use":
-                try:
-                    out = executar_tool(block.name, block.input, db, nivel, backlog_id=backlog_id)
-                except Exception as e:
-                    db.rollback()
-                    out = json.dumps({"erro": f"argumentos invalidos: "
-                                      f"{type(e).__name__} {e}"},
-                                     ensure_ascii=False)
+                usadas.add(block.name)
+                out = _rodar_tool(guarda, block.name, block.input, db, nivel, backlog_id)
                 results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
                     "content": out,
                 })
         messages.append({"role": "user", "content": results})
-    return ProviderResult("Não consegui concluir a operação (limite de passos).",
-                          input_tokens, output_tokens)
+    return ProviderResult(mensagem_limite_de_passos(usadas), input_tokens, output_tokens)
+
+
+def _rodar_tool(guarda: "tool_loop.Guarda", nome: str, bruto, db: Session, nivel: str, backlog_id) -> str:
+    """Parse, validação e repetição antes de executar; qualquer erro volta ao modelo como resultado."""
+    args, erro = guarda.argumentos(nome, bruto)
+    if erro is None:
+        erro = guarda.repetida(nome, args)
+    if erro is not None:
+        return erro
+    try:
+        out = executar_tool(nome, args, db, nivel, backlog_id=backlog_id)
+    except Exception as e:
+        db.rollback()
+        out = json.dumps({"erro": f"argumentos invalidos: {type(e).__name__} {e}"}, ensure_ascii=False)
+    return guarda.truncar(out)
+
+
+def _telemetria(provider: str, model: str, runtime_id: str | None, passo: int, inicio: float, usage,
+                campo_entrada: str, campo_saida: str, tools: list[str], fim, backlog_id, local_llama=False) -> None:
+    segundos = round(time.monotonic() - inicio, 2)
+    saida = int(getattr(usage, campo_saida, 0) or 0)
+    tool_loop.registrar(provider=provider, model=model, runtime_id=runtime_id,
+                        modelo_local=local_model.current() if local_llama else None, passo=passo,
+                        segundos=segundos, prompt_tokens=int(getattr(usage, campo_entrada, 0) or 0),
+                        # Tokens gerados / tempo total da chamada (prefill incluso): não é a taxa de geração.
+                        completion_tokens=saida, tok_s_total=round(saida / segundos, 2) if segundos else None,
+                        tools=tools, fim=str(fim) if fim is not None else None,
+                        backlog_id=str(backlog_id) if backlog_id else None)
 
 def tools_openai(nivel: str = autoridade.NIVEL_PADRAO) -> list:
     """Mesmo catálogo filtrado da camada 1, no formato dos providers compat."""
@@ -1137,13 +1565,28 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
                 max_output_tokens: int = 4096,
                 reasoning_effort: str | None = None, backlog_id=None,
                 runtime_id: str | None = None) -> ProviderResult:
-    context_limit = agent_runtimes.local_chat_context(runtime_id, model) if runtime_id else None
+    local_runtime = (
+        agent_runtimes.local_chat_runtime(runtime_id)
+        if runtime_id
+        else None
+    )
+    context_limit = (
+        agent_runtimes.local_chat_context(runtime_id, model)
+        if runtime_id
+        else None
+    )
     client = get_openai(provider, runtime_id) if runtime_id else get_openai(provider)
+    # llama-server tem um slot só: a chamada entra na fila da Bancada/Workspace.
+    llama = local_runtime is not None and local_runtime.engine == agent_runtimes.ENGINE_LLAMACPP
+    guarda = tool_loop.Guarda(autoridade.tools_para(nivel, TOOLS), local=runtime_id is not None)
+    por_chamada = float(os.getenv("WORKDEV_LOCAL_CHAT_TIMEOUT", "900")) if runtime_id \
+        else float(os.getenv("AI_PROVIDER_TIMEOUT", "30"))
+    input_tokens = output_tokens = 0
     try:
         msgs = [{"role": "system", "content": system or SYSTEM}] + messages
         tools = tools_openai(nivel)
-        input_tokens = output_tokens = 0
-        for _ in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
+        usadas: set[str] = set()
+        for passo in range(int(os.getenv("AI_MAX_TOOL_STEPS", "12"))):
             kwargs = dict(
                 model=model or COMPAT_PROVIDERS[provider]["default_model"],
                 tools=tools,
@@ -1168,34 +1611,45 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
                         {"context_limit": context_limit, "estimated_input_tokens": estimated_input_tokens, "required_tokens": required_tokens},
                     )
             if runtime_id:
-                kwargs["reasoning_effort"] = reasoning_effort or "none"
+                # llama.cpp expõe o Qwen via API OpenAI-compatible, mas este
+                # runtime não anuncia suporte a reasoning_effort. Não envie
+                # parâmetros que o engine não suporta.
+                if (
+                    local_runtime is not None
+                    and local_runtime.engine != agent_runtimes.ENGINE_LLAMACPP
+                ):
+                    kwargs["reasoning_effort"] = reasoning_effort or "none"
                 kwargs["temperature"] = 0
             if reasoning_effort and provider == "openai":
                 kwargs["reasoning_effort"] = reasoning_effort
-            resp = client.chat.completions.create(**kwargs)
+            kwargs["timeout"] = guarda.prazo(por_chamada)
+            inicio = time.monotonic()
+            with tool_loop.slot_local(llama, espera_s=min(tool_loop.ESPERA_SLOT_PADRAO, guarda.restante())):
+                kwargs["timeout"] = guarda.prazo(por_chamada)
+                resp = client.chat.completions.create(**kwargs)
             usage = getattr(resp, "usage", None)
             input_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
             output_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
             msg = resp.choices[0].message
+            _telemetria(provider, kwargs["model"], runtime_id, passo, inicio, usage, "prompt_tokens",
+                        "completion_tokens", [tc.function.name for tc in (msg.tool_calls or [])],
+                        resp.choices[0].finish_reason if hasattr(resp.choices[0], "finish_reason") else None,
+                        backlog_id, local_llama=llama)
             if not msg.tool_calls:
                 return ProviderResult(msg.content or "", input_tokens, output_tokens)
             msgs.append(msg)
             for tc in msg.tool_calls:
-                args = json.loads(tc.function.arguments or "{}")
-                try:
-                    out = executar_tool(tc.function.name, args, db, nivel, backlog_id=backlog_id)
-                except Exception as e:
-                    db.rollback()
-                    out = json.dumps({"erro": f"argumentos invalidos: "
-                                      f"{type(e).__name__} {e}"},
-                                     ensure_ascii=False)
+                usadas.add(tc.function.name)
+                # Antes o json.loads ficava fora do try: JSON quebrado derrubava a requisição.
+                out = _rodar_tool(guarda, tc.function.name, tc.function.arguments or "{}", db, nivel, backlog_id)
                 msgs.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": out,
                 })
-        return ProviderResult("Não consegui concluir a operação (limite de passos).",
-                              input_tokens, output_tokens)
+        return ProviderResult(mensagem_limite_de_passos(usadas), input_tokens, output_tokens)
+    except tool_loop.Interromper as e:
+        return ProviderResult(e.mensagem, input_tokens, output_tokens)
     finally:
         if runtime_id:
             client.close()
@@ -1204,7 +1658,6 @@ def chat_openai(messages: list, db: Session, model: str | None = None,
 AI_PROVIDER_KEYS = {
     "anthropic": ("Claude (Anthropic)", "ANTHROPIC_API_KEY"),
     "openai": ("OpenAI", "OPENAI_API_KEY"),
-    "kimi": ("Kimi (Moonshot)", "MOONSHOT_API_KEY"),
     "gemini": ("Gemini", "GEMINI_API_KEY"),
     "openrouter": ("OpenRouter", "OPENROUTER_API_KEY"),
     "ollama": ("Ollama Cloud", "OLLAMA_API_KEY"),
@@ -1483,7 +1936,7 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
 
     # E1.2: o contexto passa a ser montado sempre — global quando não há projeto
     # ativo. Antes, o chat global ia ao modelo sem nenhum dado do WorkDev.
-    system = build_system(db, slug_efetivo, nivel)
+    system = build_system(db, slug_efetivo, nivel, backlog_id)
     if session is not None:
         persisted_system = (
             db.query(ChatMessageDB)

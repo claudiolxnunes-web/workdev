@@ -179,6 +179,7 @@ async def dispatch(
         "model": chosen_model,
         "prompt": prompt,
         "stream": True,
+        "think": False,
         # Sem isto o Ollama trunca o prompt em ~4096 tokens sem avisar.
         "options": {"num_ctx": num_ctx()},
     }

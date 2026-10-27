@@ -65,6 +65,17 @@ class _DiffView:
         self.text = text
 
 
+def _descends_from(ancestor: str, descendant: str, root: Path = REPO_ROOT) -> bool:
+    if not re.fullmatch(r'[0-9a-fA-F]{40}', ancestor or ''):
+        return False
+    try:
+        result = subprocess.run(['git', 'merge-base', '--is-ancestor', ancestor, descendant],
+                                cwd=root, capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
 def evaluate_for_run(run: AgentRun, gate_result: str,
                      config: dict | None = None, *, gate_sha: str | None = None) -> tuple[PolicyDecision, _DiffView]:
     """Decisão determinística da run: risco (diff) + trust (config) + gate."""
@@ -73,9 +84,14 @@ def evaluate_for_run(run: AgentRun, gate_result: str,
         return decide('high', trust_of(run, config), gate_result, config=config), _DiffView([], '')
     if gate_sha is not None:
         revision = getattr(run, 'commit_sha', None)
+        # Retrabalho após rejeição: o gate novo pode estar num commit que
+        # descende do registrado na run. Só uma revisão sem relação com ela
+        # (ou fora do repositório) é divergência.
         if (not re.fullmatch(r'[0-9a-fA-F]{40}', gate_sha)
-                or (revision and revision != gate_sha)):
-            return decide('high', trust_of(run, config), 'revision_mismatch', config=config), _DiffView([], '')
+                or (revision and revision != gate_sha and not _descends_from(revision, gate_sha))):
+            # gate_result é varchar(16): 'revision_mismatch' (17) estourava no
+            # Postgres e derrubava o PATCH com 500.
+            return decide('high', trust_of(run, config), 'rev_mismatch', config=config), _DiffView([], '')
         run.commit_sha = gate_sha
     stats = collect_diff_stats(run)
     if stats is None:

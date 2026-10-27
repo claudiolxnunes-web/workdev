@@ -164,7 +164,7 @@ if [[ "${1:-}" == "--testes" ]]; then
   titulo "8. Testes"
   if [[ -x "$API/venv/bin/python" ]]; then
     # -k exclui o caso que pendura (backlog: teste de websocket)
-    if saida=$(cd "$RAIZ" && timeout 180 "$API/venv/bin/python" -m pytest -q \
+    if saida=$(cd "$RAIZ" && env -u WORKDEV_API_ENV_FILE timeout 180 "$API/venv/bin/python" -m pytest -q \
                  apps/api/tests/ \
                  -k 'not output_sender_stops_when_websocket_disconnects' 2>&1); then
       ok "suite passou"

@@ -7,6 +7,7 @@ import pytest
 
 from app.services import build_worker
 from app.services.build_executor import BuildOutcome
+from app.services.run_pause import RunPaused
 
 
 class TestInstrucoesDeEnvelope:
@@ -37,7 +38,9 @@ class TestInstrucoesDeEnvelope:
             build_worker, "build_context", lambda db, run: {"task": {}}
         )
         monkeypatch.setattr(
-            build_worker, "augment_prompt", lambda ctx: "CONTEXTO DO BUILD"
+            build_worker.canonical_context,
+            "build_prompt",
+            lambda ctx, *, suffix="": "CONTEXTO DO BUILD" + suffix,
         )
 
         prompt = build_worker.build_prompt(None, SimpleNamespace(id=uuid4()))
@@ -68,15 +71,84 @@ class TestClaim:
         assert "SKIP LOCKED" in capturado["sql"]
         assert "FOR UPDATE" in capturado["sql"]
         assert "state = 'queued'" in capturado["sql"]
+        assert "run.status IN ('queued', 'running')" in capturado["sql"]
+
+
+def test_response_is_held_without_applying_when_paused(monkeypatch):
+    run = SimpleNamespace(id=uuid4())
+    job = SimpleNamespace(state='running', payload={'held_response':'response'})
+    class Db:
+        committed=False
+        def commit(self): self.committed=True
+    db=Db()
+    monkeypatch.setattr(build_worker,'assert_run_can_continue',
+                        lambda *_: (_ for _ in ()).throw(RunPaused('paused')))
+    monkeypatch.setattr(build_worker,'execute_build',
+                        lambda *_a,**_kw: pytest.fail('envelope applied while paused'))
+    assert build_worker._apply_response(db,run,job,'response') is None
+    assert job.state=='queued'
+    assert job.payload['held_response']=='response'
+    assert db.committed
+
+
+def test_pause_during_build_defers_final_transition(monkeypatch):
+    run = SimpleNamespace(id=uuid4(), dispatch_attempts=1, status='blocked')
+    job = SimpleNamespace(id=uuid4(), attempt=1,
+                          payload={'held_response': 'response'}, state='running')
+    events = []
+    class Db:
+        committed = False
+        def refresh(self, *_args, **_kwargs): pass
+        def commit(self): self.committed = True
+    db = Db()
+    monkeypatch.setattr(build_worker, 'assert_run_can_continue', lambda *_: run)
+    monkeypatch.setattr(build_worker, 'is_paused', lambda *_: True)
+    monkeypatch.setattr(build_worker, 'execute_build', lambda *_a, **_kw: BuildOutcome(
+        ok=True, code='build_committed', message='done', branch='build/x', gate_passed=True))
+    monkeypatch.setattr(build_worker, 'persist_outcome', lambda *_: None)
+    monkeypatch.setattr(build_worker, 'add_run_event',
+                        lambda _db, _run, kind, *_args: events.append(kind))
+    monkeypatch.setattr(build_worker.build_jobs, 'finish_job',
+                        lambda _db, item, payload: setattr(item, 'state', 'done'))
+    monkeypatch.setattr(build_worker, '_transicionar',
+                        lambda *_: pytest.fail('PAUSE was cleared by worker'))
+    outcome = build_worker._apply_response(db, run, job, 'response')
+    assert outcome.ok
+    assert job.payload['deferred_transition'] == 'review'
+    assert 'held_response' not in job.payload
+    assert 'build.transition_deferred' in events
+    assert db.committed
+
+
+def test_deferred_transition_requires_explicit_resume(monkeypatch):
+    run = SimpleNamespace(id=uuid4(), status='running')
+    job = SimpleNamespace(id=uuid4(), payload={'deferred_transition': 'review'})
+    class Query:
+        def filter(self, *_): return self
+        def order_by(self, *_): return self
+        def first(self): return job
+    class Db:
+        committed = False
+        def query(self, *_): return Query()
+        def commit(self): self.committed = True
+    db = Db()
+    monkeypatch.setattr(build_worker, 'assert_run_can_continue', lambda *_: run)
+    monkeypatch.setattr(build_worker, 'update_run',
+                        lambda _db, item, data: setattr(item, 'status', data['status']))
+    monkeypatch.setattr(build_worker, 'add_run_event', lambda *_: None)
+    assert build_worker.continue_paused_outcome(db, run)
+    assert run.status == 'review'
+    assert 'deferred_transition' not in job.payload
+    assert db.committed
 
 
 class TestHabilitacao:
-    def test_desligado_por_padrao(self, monkeypatch):
+    def test_fila_cli_independe_da_flag_http(self, monkeypatch):
         monkeypatch.delenv("WORKDEV_OLLAMA_BUILD_ENABLED", raising=False)
 
         pode, motivo = build_worker.worker_should_run()
 
-        assert pode is False
+        assert pode is True
         assert "WORKDEV_OLLAMA_BUILD_ENABLED" in motivo
 
     def test_ligado_quando_a_flag_esta_on(self, monkeypatch):

@@ -23,7 +23,7 @@ from app.models.knowledge import KnowledgeEntry
 from app.models.project import Project
 from app.models.review_cycle import ReviewCycle
 from app.models.subtask import BacklogSubtask
-from app.services.agent_runtimes import OLLAMA_AGENT_IDS
+from app.services.agent_runtimes import LOCAL_AGENT_REMOVED, OLLAMA_AGENT_IDS, RETIRED_AGENT_IDS
 
 
 PLAN_EDITABLE = {"draft", "needs_revision"}
@@ -36,6 +36,8 @@ CLI_AGENTS = {
     "claude",
     "kimi",
     "qwen",
+    "grok",
+    "deepseek",
     "gemini",
 }
 
@@ -481,6 +483,7 @@ def queue_build(
     *,
     reviewer: str | None = None,
     model: str | None = None,
+    provider: str | None = None,
     reasoning_effort: str | None = None,
     routing_mode: str = "manual",
     complexity: str | None = None,
@@ -488,7 +491,12 @@ def queue_build(
     routing_reason: str | None = None,
     review_requested: bool | None = None,
     reviewer_selection: dict | None = None,
+    observer_enabled: bool = False,
+    observer_selection: dict | None = None,
 ) -> tuple[AgentRun, AgentRunEvent]:
+    if agent in RETIRED_AGENT_IDS:
+        raise HandoffError(LOCAL_AGENT_REMOVED)
+
     if plan.status != "approved":
         raise HandoffError(
             "O plano precisa estar aprovado antes do Build"
@@ -504,6 +512,21 @@ def queue_build(
     if reviewer is not None or review_requested is not False:
         reviewer = validate_review_pair(agent, reviewer)
 
+    # Resolução do executor: quem chama sem ter resolvido ainda (ex.: callers
+    # diretos de queue_build) cai no mesmo contrato da aba Agentes. O revisor é
+    # resolvido por quem monta reviewer_selection antes de chegar aqui — nunca
+    # neste ponto. Modelo explícito (envio legado) nunca é substituído, e o
+    # modo AUTO já traz o modelo decidido pelo roteador.
+    if model is None and routing_mode == "manual" and agent in CLI_AGENTS:
+        from app.services import cli_agent_models
+        if agent in cli_agent_models.MODELS:
+            try:
+                model, _ = cli_agent_models.validate_selected(agent)
+            except ValueError as error:
+                raise HandoffError(str(error)) from error
+            if provider is None:
+                provider = cli_agent_models.PROVIDERS.get(agent)
+
     active = db.query(AgentRun).filter(
         AgentRun.backlog_id == plan.backlog_id,
         AgentRun.status.in_(ACTIVE_RUN_STATUSES),
@@ -513,6 +536,30 @@ def queue_build(
         raise HandoffError(
             f"A task já possui uma execução ativa ({active.status})"
         )
+
+    adaptive_event = None
+    from app.services import adaptive_config
+    if adaptive_config.load().enabled and isinstance(db, Session):
+        from app.services.task_complexity import classify_task
+        from app.services.jev_decision import classify
+        task = db.get(BacklogItem, plan.backlog_id)
+        assessment = classify_task(task, plan, load_subtasks(db, plan.backlog_id))
+        floor = max((assessment.level, complexity or assessment.level),
+                    key=('low', 'medium', 'high', 'critical').index)
+        # Nada foi escrito nesta transação até aqui (só leituras acima). O
+        # commit é um checkpoint sem efeito colateral que devolve a conexão
+        # ao pool ANTES da chamada de rede do Jev (até timeout_seconds, hoje
+        # 15s) — sem isto, a conexão HTTP deste request fica presa ao Jev
+        # inteiro. classify() precisa rodar antes de criar a AgentRun porque
+        # a complexidade decidida por ele alimenta a criação da run logo
+        # abaixo; não dá para adiar para BackgroundTasks (padrão do graph_sync)
+        # sem mudar quando a exigência de revisão é decidida.
+        db.commit()
+        policy, adaptive_event = classify(db, task, plan, deterministic_complexity=floor,
+            mandatory_review=review_requested is True, mandatory_human=floor == 'critical')
+        complexity = policy.complexity.value.lower()
+        complexity_score = max(complexity_score or 0, {'low': 10, 'medium': 40, 'high': 70, 'critical': 100}[complexity])
+        routing_reason = (routing_reason or '') + '; ' + policy.reason
 
     run = AgentRun(
         plan_id=plan.id,
@@ -532,8 +579,13 @@ def queue_build(
     db.add(run)
     db.flush()
 
+    if adaptive_event is not None:
+        adaptive_event.run_id = run.id
+        adaptive_event.payload = {**adaptive_event.payload, 'run_id': str(run.id)}
+
     routing_payload = {
         "agent": agent,
+        "provider": provider,
         "reviewer_agent": reviewer,
         "model": model,
         "reasoning_effort": reasoning_effort,
@@ -560,10 +612,19 @@ def queue_build(
     if review_requested is not None:
         add_run_event(db, run, "build.review_preference", "Revisão solicitada pelo usuário" if review_requested else "Revisão recomendada recusada pelo usuário",
                       {"requested": review_requested, "actor": "user", "reviewer": reviewer,
-                       "mandatory_policy_preserved": True})
+                       "operator_decides": True})
     if reviewer_selection:
         add_run_event(db, run, "build.reviewer_configuration", "Fonte e modelo escolhidos para a revisão",
                       {key: reviewer_selection[key] for key in ("provider", "model", "agent")})
+    add_run_event(db, run, 'observer.configured',
+                  'Observer ligado' if observer_enabled else 'Observer desligado',
+                  {'enabled': observer_enabled,
+                   'provider': observer_selection.get('provider') if observer_selection else None,
+                   'model': observer_selection.get('model') if observer_selection else None,
+                   'runtime_id': observer_selection.get('runtime_id') if observer_selection else None})
+    if observer_enabled:
+        from app.services.observer_workspace import baseline
+        baseline(db, run)
 
     task = db.query(BacklogItem).filter(
         BacklogItem.id == plan.backlog_id
@@ -594,6 +655,10 @@ def update_run(
     event = None
 
     if next_status and next_status != run.status:
+        if run.status == 'blocked' and next_status == 'running':
+            from app.services.run_pause import is_paused
+            if is_paused(db, run.id):
+                raise HandoffError('PAUSE do Observer exige retomada explícita', 'run_paused')
         allowed = RUN_TRANSITIONS.get(run.status, set())
 
         if next_status not in allowed:
@@ -627,10 +692,18 @@ def update_run(
                                    and current_sha and (review.payload or {}).get("commit_sha") == current_sha)
                 decision_event = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run.id,
                     AgentRunEvent.event_type == "build.review_decision").order_by(AgentRunEvent.created_at.desc()).first()
-                waived = bool(cycle and cycle.decision == "NO_REVIEW_COMPLETE" and cycle.gate_result == "pass" and not cycle.sensitive
+                from app.services.adaptive_review import operator_declined_review
+                waived = bool(cycle and cycle.decision == "NO_REVIEW_COMPLETE" and cycle.gate_result == "pass"
+                              and (not cycle.sensitive or operator_declined_review(db, run))
                               and decision_event and current_sha
                               and (decision_event.payload or {}).get("commit_sha") == current_sha
                               and (decision_event.payload or {}).get("decision") == "NO_REVIEW_COMPLETE")
+                if waived:
+                    from app.services.adaptive_review import exemption_current
+                    waived = exemption_current(db, run)
+                if waived:
+                    from app.services.adaptive_review import can_waive
+                    waived = can_waive(db, run)
                 if not independent and not waived:
                     raise HandoffError("Conclusão exige revisão independente aprovada ou dispensa pela política após os gates", "review_required")
 
@@ -663,7 +736,9 @@ def update_run(
             BacklogItem.id == run.backlog_id
         ).first()
 
-        if task:
+        # Task arquivada (ADR 009) só sai do arquivo por desarquivamento
+        # explícito; transição de run não a reabre.
+        if task and task.status != "archived":
             if next_status in {"running", "review"}:
                 task.status = "doing"
             elif next_status in {"blocked", "failed"}:
@@ -733,6 +808,9 @@ def transfer_run(
     reason: str,
     new_reviewer: str | None = None,
 ) -> tuple[AgentRun, AgentRun]:
+    from app.services.run_pause import is_paused
+    if is_paused(db, run.id):
+        raise HandoffError('PAUSE do Observer exige retomada explícita antes do handoff', 'run_paused')
     if new_agent not in SUPPORTED_AGENTS:
         raise HandoffError(
             "Agente inválido; escolha um dos agentes suportados: "
@@ -1420,7 +1498,16 @@ Subtasks:
 {subtask_text}
 
 ## Registro da execução
-Use a CLI local, que não exibe secrets:
+Use a CLI local como usuário operacional workdev, sem expor secrets.
+A autenticação vem da configuração local; nunca procure chaves em backups.
+Antes de entregar, revise e registre as alterações da execução, preservando
+alterações preexistentes. O comando review valida o gate, registra evidência
+real e só então solicita revisão. Gate reprovado impede a entrega; corrija os
+checks indicados. Uma evidência válida do mesmo commit é reutilizada.
+Diagnóstico de autenticação: `python3 /opt/workdev/scripts/workdev_agent.py doctor {run['id']}`
+Gate sem transição: `python3 /opt/workdev/scripts/workdev_agent.py gate {run['id']}`
+Para builds em worktree isolado, use o gate do worker; não teste outra árvore.
+Comandos da execução:
 `python3 /opt/workdev/scripts/workdev_agent.py start {run['id']}`
 `python3 /opt/workdev/scripts/workdev_agent.py block {run['id']} "motivo"`
 `python3 /opt/workdev/scripts/workdev_agent.py review {run['id']} "resumo"`

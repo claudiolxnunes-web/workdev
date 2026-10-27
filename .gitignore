@@ -35,3 +35,4 @@ supabase/.temp/
 /training/**/.cache/
 /training/**/output/
 /training/feedback/*.jsonl
+skills/synced/

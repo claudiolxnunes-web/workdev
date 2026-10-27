@@ -32,13 +32,13 @@ const REPROVISION_LABEL: Record<string, string> = {
  * em texto, já que o despacho pela tela de Agents é a fatia 2 do plano de
  * correção e ainda não existe.
  */
-export function RuntimePanel({ runtime }: { runtime: AgentRuntime }) {
+export function RuntimePanel({ runtime, showControls = true }: { runtime: AgentRuntime; showControls?: boolean }) {
   return (
     <section
       aria-label={`Runtime ${runtime.label}`}
       className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-lg border border-slate-800 bg-slate-900/60 p-4 text-sm"
     >
-      <RuntimeControls key={runtime.id} agent={runtime.id} runtimeState={runtime.runtime_state} activityState={runtime.activity_state} persistent={runtime.persistent ?? false} checkedAt={runtime.checked_at} />
+      {showControls && <RuntimeControls key={runtime.id} agent={runtime.id} runtimeState={runtime.runtime_state} activityState={runtime.activity_state} persistent={runtime.persistent ?? false} checkedAt={runtime.checked_at} />}
       <header className="flex flex-wrap items-center gap-2">
         <h3 className="text-base font-semibold text-slate-100">{runtime.label}</h3>
         <span className={`rounded px-2 py-1 text-xs font-bold ${STATUS_STYLE[runtime.status] ?? "bg-slate-800 text-slate-300"}`}>

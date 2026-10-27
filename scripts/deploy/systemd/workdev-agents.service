@@ -1,10 +1,12 @@
 [Unit]
 Description=WorkDev agents bootstrap
-After=network-online.target
-Wants=network-online.target
+After=network-online.target workdev-api.service
+Wants=network-online.target workdev-api.service
 
 [Service]
 Type=oneshot
+Restart=on-failure
+RestartSec=10
 User=workdev
 Group=workdev
 Environment=HOME=/home/workdev

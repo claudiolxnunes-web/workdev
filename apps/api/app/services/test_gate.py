@@ -175,9 +175,12 @@ class GateEvidence:
         }
 
 
-def _run_command(cmd: list[str], cwd: Path, timeout: int = 300) -> tuple[int, str, str, int]:
+def _run_command(cmd: list[str], cwd: Path, timeout: int = 300,
+                 env: dict[str, str] | None = None) -> tuple[int, str, str, int]:
     """
     Executar comando e retornar (exit_code, stdout, stderr, duration_ms).
+
+    `env` substitui o ambiente inteiro; sem ele, herda o do processo.
     """
     import time
     start = time.monotonic()
@@ -189,6 +192,7 @@ def _run_command(cmd: list[str], cwd: Path, timeout: int = 300) -> tuple[int, st
             text=True,
             timeout=timeout,
             check=False,
+            env=env,
         )
         duration = int((time.monotonic() - start) * 1000)
         return result.returncode, result.stdout, result.stderr, duration
@@ -200,8 +204,15 @@ def _run_command(cmd: list[str], cwd: Path, timeout: int = 300) -> tuple[int, st
         return -1, "", str(e), duration
 
 
-def _check_pytest(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
-    """Executar pytest no ambiente correto da API."""
+def _check_pytest(paths: GatePaths = DEFAULT_PATHS, env: dict[str, str] | None = None,
+                  alvos: list[str] | None = None) -> CheckResult:
+    """Executar pytest no ambiente correto da API.
+
+    `env`: a sessão do Workspace passa um ambiente com `.env` e arquivos de
+    estado falsos, para a suíte não ler credencial nem gravar estado real.
+    `alvos`: arquivos de teste (relativos a apps/api) para rodar só a área
+    tocada; sem alvos, roda a suíte inteira.
+    """
     venv = paths.api_venv
 
     if not venv.exists():
@@ -213,9 +224,10 @@ def _check_pytest(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
         )
 
     exit_code, stdout, stderr, duration = _run_command(
-        [str(venv), "-m", "pytest", "-v", "--tb=short"],
+        [str(venv), "-m", "pytest", "-v", "--tb=short", *(alvos or [])],
         paths.api_dir,
         timeout=300,
+        env=env,
     )
 
     if exit_code == 0:
@@ -223,7 +235,8 @@ def _check_pytest(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
             name="pytest",
             passed=True,
             mandatory=True,
-            reason="Todos testes Python passaram",
+            reason=(f"Testes da área passaram ({len(alvos)} arquivo(s))" if alvos
+                    else "Todos testes Python passaram"),
             duration_ms=duration,
         )
 
@@ -301,7 +314,7 @@ def _check_vitest(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
 
 
 def _check_lint(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
-    """Executar lint no frontend. OBRIGATÓRIO, mas com tratamento de dívida histórica."""
+    """Lint é gate físico obrigatório, incluindo falhas preexistentes."""
     import shutil
 
     pnpm_path = shutil.which("pnpm")
@@ -335,16 +348,9 @@ def _check_lint(paths: GatePaths = DEFAULT_PATHS) -> CheckResult:
             duration_ms=duration,
         )
 
-    # Verificar se é dívida histórica conhecida (não relacionada à task atual)
-    # Para Fase 1, registramos mas não bloqueamos se for apenas lint
-    # Isso deve ser removido quando dívida de lint for resolvida
-    issues = len([l for l in stderr.split("\n") if l.strip()])
-
     return CheckResult(
-        name="lint",
-        passed=True,  # ⚠️ PASS com aviso - dívida histórica conhecida
-        mandatory=False,  # ⚠️ Opcional até dívida ser resolvida
-        reason=f"{issues} issues de lint (dívida histórica conhecida, não bloqueia Fase 1)",
+        name="lint", passed=False, mandatory=True,
+        reason="Lint reprovado; nenhuma política de IA pode dispensar este gate",
         duration_ms=duration,
     )
 
