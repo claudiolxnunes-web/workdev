@@ -36,3 +36,6 @@ supabase/.temp/
 /training/**/output/
 /training/feedback/*.jsonl
 skills/synced/
+
+# credenciais da skill postgres-readonly-queries (só connections.example.json é versionado)
+skills/postgres-readonly-queries/connections.json

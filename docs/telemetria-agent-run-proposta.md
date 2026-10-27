@@ -4,15 +4,17 @@
 > incorporada. Trazido para a `main` em 2026-10-27, quando o Cláudio decidiu
 > ("do 1 ao 4") — ver ADR 017.
 >
-> Task `d6fb67a5-e311-4924-8d2f-8e48c17cb5c0`. **Aplicado em 2026-10-27**, com
-> uma diferença em relação ao texto original: a coluna `provider` ficou
+> Task `d6fb67a5-e311-4924-8d2f-8e48c17cb5c0`. **Código incorporado em 2026-10-27**
+> (PR #22); **a migration ainda não foi aplicada em produção** — em 2026-10-27
+> `/api/system/migrations` devolvia `current = 20261012t120000`. Há uma
+> diferença em relação ao texto original: a coluna `provider` ficou
 > **nullable** (o plano falava em `NOT NULL`), porque as runs anteriores à
 > decisão não têm provider — e uma migration que recusa linhas existentes
 > não é reversível na prática. O resto do schema é o que está lá em
 > `apps/api/alembic/versions/20261027t090000_agent_run_telemetry.py`.
 
-Por isso o SQL abaixo está **fora de `apps/api/alembic/versions/`** — um arquivo
-lá seria aplicado no próximo `alembic upgrade head` sem ninguém decidir.
+O SQL abaixo é o rascunho de 2026-09-08, mantido como registro. O que vale é o
+arquivo da migration em `apps/api/alembic/versions/`.
 
 ## O que já existe
 
@@ -144,7 +146,7 @@ linha.
 
 ## Ordem sugerida
 
-1. Aplicar a migration (decisão do Cláudio; migrations não são automáticas). Feito em 2026-10-27 — a migration entra **antes** do deploy do código, porque `agent_runs.provider` é lida pelo ORM.
+1. Aplicar a migration (decisão do Cláudio; migrations não são automáticas). **Pendente** (em 2026-10-27 o banco estava em `20261012t120000`) — a migration entra **antes** do deploy do código, porque `agent_runs.provider` é lida pelo ORM.
 2. Passar `provider` de `queue_build` para a coluna, além do evento.
 3. Instrumentar os coletores por agente — cada CLI expõe consumo de um jeito
    diferente, e Claude/Codex por assinatura talvez não exponham nada. Onde não

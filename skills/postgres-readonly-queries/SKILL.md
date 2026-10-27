@@ -70,6 +70,10 @@ chmod 600 connections.json
 
 ## Usage
 
+> Na VPS1 do WorkDev o `python3` do sistema não tem `psycopg2`. Use o do venv da
+> API no lugar de `python3` nos comandos abaixo:
+> `/opt/workdev/apps/api/venv/bin/python scripts/query.py --list`
+
 ### List configured databases
 ```bash
 python3 scripts/query.py --list
