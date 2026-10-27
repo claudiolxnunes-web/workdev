@@ -67,3 +67,26 @@ indexador que **não está neste repositório** — o que foi indexado sob a fon
 - Quando a unificação for feita, ela tem que respeitar o teto de trechos e o
   contrato de somente-leitura — não vale substituir o corte por "traz o que
   o vetor trouxer".
+
+## Atualização — unificação implementada (2026-10-27)
+
+A decisão 3 foi implementada em `feat/referencias-e-telemetria`, na forma
+descrita: **lexical como piso, semântico como complemento**.
+
+- `build_rag` continua puro: não ganhou embedding, rede nem dependência.
+- O complemento vive em `app/services/semantic_complement.py` e só é consultado
+  quando sobra algo que o lexical não pegou — se o piso já esgota os
+  candidatos, o RAG nem é chamado (custo zero quando não há o que recuperar).
+- **O mesmo teto vale para os dois**: 6 trechos, 1200 caracteres por trecho.
+- **O texto entregue vem do banco canônico**, não da cópia do indexador: o hit
+  semântico escolhe *qual* entrada entra; o texto é lido da tabela do WorkDev.
+- **Semântica não é critério de completude**: hit de outro projeto, de backlog
+  ou de `decision` (que o indexador não publica) é ignorado.
+- **Degradação silenciosa**: RAG fora do ar, sem chave de embedding ou em
+  timeout (30 s) não derruba o Build — o piso lexical está sempre lá.
+- Cada trecho agora carrega `origem` (`lexical` / `semantico`), e o bloco
+  canônico registra a contagem — para que o operador veja, no endpoint de
+  referências (ADR 014), o que o agente recebeu e de onde veio.
+- O complemento é **opt-in por ambiente** (`WORKDEV_SEMANTIC_COMPLEMENT=1`) e
+  fica desligado na suíte de testes: a dependência de indexação externa não
+  pode decidir o resultado de um teste.

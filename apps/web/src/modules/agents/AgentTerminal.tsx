@@ -22,6 +22,43 @@ const OPERATION_STYLE: Record<OperationalStatus, string> = {
 // Fechamento enviado pelo backend à aba cujo terminal foi assumido por outra.
 const TAKEN_OVER_CODE = 4000
 
+// Mesmo padrão de autenticação usado em apps/web/src/services/handoff.service.ts.
+const API_KEY = import.meta.env.VITE_API_KEY || ""
+const apiHeaders: HeadersInit = {
+  "Content-Type": "application/json",
+  "X-API-Key": API_KEY,
+}
+
+/** Trecho canônico devolvido por GET /api/handoffs/runs/{run_id}/references. */
+type ReferenceSnippet = {
+  source: string | null
+  id: string | null
+  title: string | null
+  text: string
+  score: number | null
+}
+
+/** Resumo de run devolvido por GET /api/handoffs/runs?agent=...&limit=N. */
+type AgentRunSummary = {
+  id: string
+  status: string | null
+  model: string | null
+  created_at: string | null
+}
+
+const SOURCE_LABEL: Record<string, string> = {
+  adr: "ADR",
+  knowledge: "Knowledge",
+  decision: "Decision",
+}
+
+function formatRunDate(value: string | null) {
+  if (!value) return "—"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit" })
+}
+
 export function AgentTerminal({
   agent, awaitingApproval = false, operationalStatus = "standby", takeOver = false,
 }: {
@@ -48,6 +85,17 @@ export function AgentTerminal({
   const [prompt, setPrompt] = useState("")
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState("")
+  const [referencesOpen, setReferencesOpen] = useState(false)
+  const [referencesRuns, setReferencesRuns] = useState<AgentRunSummary[]>([])
+  const [referencesLoading, setReferencesLoading] = useState(false)
+  const [referencesError, setReferencesError] = useState("")
+  const [selectedRunId, setSelectedRunId] = useState("")
+  const [referencesSnippets, setReferencesSnippets] = useState<ReferenceSnippet[]>([])
+  const [referencesBlock, setReferencesBlock] = useState("")
+  const [referencesRunLoading, setReferencesRunLoading] = useState(false)
+  const [referencesRunError, setReferencesRunError] = useState("")
+  const [referencesNotice, setReferencesNotice] = useState("")
+  const [referencesSending, setReferencesSending] = useState(false)
 
   useEffect(() => {
     const container = containerRef.current
@@ -239,6 +287,77 @@ export function AgentTerminal({
     await copyText(history, "Histórico copiado")
   }
 
+  /** Abre o painel com as referências canônicas que o Build receberia para uma run. */
+  async function openReferences() {
+    setReferencesOpen(true)
+    setReferencesRuns([])
+    setReferencesLoading(true)
+    setReferencesError("")
+    setReferencesNotice("")
+    setSelectedRunId("")
+    setReferencesSnippets([])
+    setReferencesBlock("")
+    setReferencesRunError("")
+    try {
+      const response = await fetch(`/api/handoffs/runs?agent=${agent}&limit=20`, { headers: apiHeaders })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || "Falha ao carregar as runs")
+      setReferencesRuns(Array.isArray(data) ? data : [])
+    } catch (cause) {
+      setReferencesError(cause instanceof Error ? cause.message : "Falha ao carregar as runs")
+    } finally {
+      setReferencesLoading(false)
+    }
+  }
+
+  async function selectRun(runId: string) {
+    setSelectedRunId(runId)
+    setReferencesSnippets([])
+    setReferencesBlock("")
+    setReferencesRunLoading(true)
+    setReferencesRunError("")
+    setReferencesNotice("")
+    try {
+      const response = await fetch(`/api/handoffs/runs/${runId}/references`, { headers: apiHeaders })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || "Falha ao carregar as referências")
+      setReferencesSnippets(Array.isArray(data.snippets) ? data.snippets : [])
+      setReferencesBlock(typeof data.block === "string" ? data.block : "")
+    } catch (cause) {
+      setReferencesRunError(cause instanceof Error ? cause.message : "Falha ao carregar as referências")
+    } finally {
+      setReferencesRunLoading(false)
+    }
+  }
+
+  async function copyReferencesBlock() {
+    if (!referencesBlock) return
+    await copyText(referencesBlock, "Bloco de referências copiado")
+  }
+
+  /** Entrega o bloco canônico ao agente pelo mesmo endpoint do prompt manual. */
+  async function sendReferencesToAgent() {
+    const text = referencesBlock.trim()
+    if (!text || referencesSending) return
+    setReferencesSending(true)
+    setReferencesNotice("")
+    setReferencesRunError("")
+    try {
+      const response = await fetch(`/api/agents/${agent}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || "Falha ao enviar ao agente")
+      setReferencesNotice("Bloco de referências enviado ao agente")
+    } catch (cause) {
+      setReferencesRunError(cause instanceof Error ? cause.message : "Falha ao enviar ao agente")
+    } finally {
+      setReferencesSending(false)
+    }
+  }
+
   async function sendPrompt() {
     const text = prompt.trim()
     if (!text || sending) return
@@ -316,6 +435,14 @@ export function AgentTerminal({
           </button>
           <button
             type="button"
+            onClick={() => void openReferences()}
+            className="min-h-8 shrink-0 rounded bg-sky-950 px-2 py-1 text-xs font-medium text-sky-300 hover:bg-sky-900"
+            title="Ver as referências canônicas (ADR, knowledge, decisions) que o Build receberia para a run"
+          >
+            Referências da run
+          </button>
+          <button
+            type="button"
             className="min-h-8 shrink-0 rounded px-2 py-1 text-xs text-sky-400 hover:bg-slate-800 hover:text-sky-300 disabled:cursor-wait disabled:text-slate-600"
             onClick={() => void reconnect()}
             title={active ? "Refazer a conexão com o terminal" : "Reconectar ao terminal"}
@@ -388,6 +515,99 @@ export function AgentTerminal({
               aria-label={`Histórico textual do ${agent}`}
             />
           )}
+        </div>
+      )}
+      {referencesOpen && (
+        <div className="absolute inset-0 z-20 flex flex-col bg-slate-950">
+          <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">Referências da run</p>
+              <p className="text-[11px] text-slate-500">Mesmo bloco canônico que o Build receberia, já redigido</p>
+            </div>
+            <div className="flex max-w-full flex-wrap items-center gap-1 sm:gap-2">
+              <button
+                type="button"
+                disabled={!referencesBlock}
+                onClick={() => void copyReferencesBlock()}
+                className="rounded bg-slate-800 px-3 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-40"
+              >
+                Copiar bloco
+              </button>
+              <button
+                type="button"
+                disabled={!referencesBlock || referencesSending}
+                onClick={() => void sendReferencesToAgent()}
+                className="rounded bg-sky-700 px-3 py-1.5 text-xs hover:bg-sky-600 disabled:opacity-40"
+              >
+                {referencesSending ? "Enviando…" : "Enviar ao agente"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setReferencesOpen(false)}
+                className="rounded px-2 py-1 text-xl text-slate-400 hover:bg-slate-800 hover:text-white"
+                aria-label="Fechar referências"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+            <div className="flex min-h-0 w-full shrink-0 flex-col border-b border-slate-800 lg:w-72 lg:border-b-0 lg:border-r">
+              <p className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Runs recentes</p>
+              <div className="min-h-0 flex-1 overflow-auto px-2 pb-2">
+                {referencesLoading && <p className="p-2 text-xs text-slate-400">Carregando runs…</p>}
+                {referencesError && <p className="m-2 rounded bg-red-950/60 p-2 text-xs text-red-300">{referencesError}</p>}
+                {!referencesLoading && !referencesError && referencesRuns.length === 0 && (
+                  <p className="p-2 text-xs text-slate-500">Nenhuma run encontrada para este agente</p>
+                )}
+                {referencesRuns.map((run) => (
+                  <button
+                    key={run.id}
+                    type="button"
+                    onClick={() => void selectRun(run.id)}
+                    className={`mb-1 w-full rounded px-2 py-1.5 text-left text-xs ${
+                      selectedRunId === run.id ? "bg-sky-900 text-sky-100" : "text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <span className="block font-mono">{run.id.slice(0, 8)}</span>
+                    <span className="block text-[10px] text-slate-500">
+                      {run.status || "—"} · {run.model || "—"} · {formatRunDate(run.created_at)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-auto p-3">
+              {!selectedRunId && !referencesRunLoading && (
+                <p className="text-xs text-slate-500">Selecione uma run para ver as referências canônicas.</p>
+              )}
+              {referencesRunLoading && <p className="text-sm text-slate-400">Carregando referências…</p>}
+              {referencesRunError && <p className="rounded bg-red-950/60 p-3 text-sm text-red-300">{referencesRunError}</p>}
+              {referencesNotice && <p className="mb-2 text-xs text-emerald-400">{referencesNotice}</p>}
+              {selectedRunId && !referencesRunLoading && !referencesRunError && referencesSnippets.length === 0 && (
+                <p className="text-xs text-slate-500">Nenhuma referência encontrada para esta run.</p>
+              )}
+              {referencesSnippets.map((snippet, index) => (
+                <article
+                  key={`${snippet.source || "ref"}-${snippet.id || index}-${index}`}
+                  className="mb-2 rounded border border-slate-800 bg-slate-900 p-3"
+                >
+                  <header className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="shrink-0 rounded bg-sky-950 px-1.5 py-0.5 text-[10px] font-bold text-sky-300">
+                      {SOURCE_LABEL[snippet.source || ""] || snippet.source || "Referência"}
+                    </span>
+                    <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-slate-200">
+                      {snippet.title || "sem título"}
+                    </h3>
+                    {snippet.score !== null && snippet.score !== undefined && (
+                      <span className="shrink-0 text-[10px] text-slate-500">score {snippet.score}</span>
+                    )}
+                  </header>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-400">{snippet.text}</p>
+                </article>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </section>

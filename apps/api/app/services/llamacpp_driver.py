@@ -108,12 +108,15 @@ async def dispatch(
         ],
         "temperature": 0,
         "stream": True,
+        # Sem isto o llama.cpp não devolve a contagem de tokens no streaming.
+        "stream_options": {"include_usage": True},
         "chat_template_kwargs": {
             "enable_thinking": False,
         },
     }
 
     partes: list[str] = []
+    usage: dict = {}
 
     async def emitir() -> None:
         if on_chunk is not None:
@@ -189,6 +192,11 @@ async def dispatch(
                             {"runtime_id": runtime.id},
                         )
 
+                    # A contagem de tokens chega no último evento, com
+                    # `choices` vazio e `usage` preenchido.
+                    if evento.get("usage"):
+                        usage = evento["usage"] or {}
+
                     choices = evento.get("choices") or []
 
                     if not choices:
@@ -257,4 +265,8 @@ async def dispatch(
         "thinking": "",
         "truncated": truncated,
         "duration_ms": int((time.monotonic() - started) * 1000),
+        # Contagem que o próprio runtime devolveu. É o que permite registrar
+        # telemetria de consumo sem estimar nada.
+        "input_tokens": usage.get("prompt_tokens"),
+        "output_tokens": usage.get("completion_tokens"),
     }

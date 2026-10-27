@@ -64,6 +64,8 @@ NIVEL_POR_TOOL: dict[str, str] = {
     "validar_plano_workspace": OBSERVE,
     "ler_resultado_fatia": OBSERVE,
     "ler_referencias": OBSERVE,
+    "listar_adrs": OBSERVE,
+    "listar_decisoes": OBSERVE,
     "previsualizar_plano_execucao": PLAN,
     # registro interno do WorkDev
     "criar_task": PLAN,

@@ -127,4 +127,90 @@ describe("AgentTerminal", () => {
     await waitFor(() => expect(mocks.sockets).toHaveLength(1))
     expect(mocks.sockets[0].url).toContain("takeover=1")
   })
+
+  it("abre as referências da run e mostra os trechos canônicos", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/references")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            run_id: "abcdef12-3456-7890-abcd-ef1234567890",
+            snippets: [
+              { source: "adr", id: "ADR-014", title: "Contexto canônico", text: "Bloco canônico entregue ao agente.", score: 7 },
+              { source: "knowledge", id: "KN-3", title: "Setup local", text: "Rodar pnpm dev na raiz do web.", score: 2 },
+            ],
+            block: "## Contexto canônico\n\nBloco canônico entregue ao agente.",
+          }),
+        })
+      }
+      if (url.includes("/api/handoffs/runs?")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            { id: "abcdef12-3456-7890-abcd-ef1234567890", status: "completed", model: "claude-opus", created_at: "2026-02-03T10:00:00Z" },
+          ]),
+        })
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    })
+
+    render(<AgentTerminal agent="claude" />)
+    fireEvent.click(screen.getByText(/Ferramentas do terminal/))
+    fireEvent.click(screen.getByRole("button", { name: "Referências da run" }))
+
+    fireEvent.click(await screen.findByRole("button", { name: /abcdef12/ }))
+    expect(await screen.findByText("Contexto canônico")).toBeInTheDocument()
+    expect(screen.getByText("ADR")).toBeInTheDocument()
+    expect(screen.getByText("Setup local")).toBeInTheDocument()
+    expect(screen.getByText("Knowledge")).toBeInTheDocument()
+    expect(screen.getByText(/score 7/)).toBeInTheDocument()
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/handoffs/runs?agent=claude&limit=20",
+      expect.objectContaining({ headers: expect.objectContaining({ "X-API-Key": expect.any(String) }) }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/handoffs/runs/abcdef12-3456-7890-abcd-ef1234567890/references",
+      expect.objectContaining({ headers: expect.objectContaining({ "X-API-Key": expect.any(String) }) }),
+    )
+  })
+
+  it("mostra o detalhe do erro da API ao pedir as referências", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/references")) {
+        return Promise.resolve({ ok: false, json: () => Promise.resolve({ detail: "Run não encontrada" }) })
+      }
+      if (url.includes("/api/handoffs/runs?")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            { id: "abcdef12-3456-7890-abcd-ef1234567890", status: "queued", model: "claude-opus", created_at: "2026-02-03T10:00:00Z" },
+          ]),
+        })
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    })
+
+    render(<AgentTerminal agent="claude" />)
+    fireEvent.click(screen.getByText(/Ferramentas do terminal/))
+    fireEvent.click(screen.getByRole("button", { name: "Referências da run" }))
+    fireEvent.click(await screen.findByRole("button", { name: /abcdef12/ }))
+
+    expect(await screen.findByText("Run não encontrada")).toBeInTheDocument()
+    // O terminal continua vivo: a área de envio do prompt segue disponível.
+    expect(screen.getByPlaceholderText(/Enviar prompt para claude/)).toBeInTheDocument()
+  })
+
+  it("informa quando o agente não tem runs", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/api/handoffs/runs?")) return Promise.resolve({ ok: true, json: () => Promise.resolve([]) })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    })
+
+    render(<AgentTerminal agent="kimi" />)
+    fireEvent.click(screen.getByText(/Ferramentas do terminal/))
+    fireEvent.click(screen.getByRole("button", { name: "Referências da run" }))
+
+    expect(await screen.findByText("Nenhuma run encontrada para este agente")).toBeInTheDocument()
+  })
 })

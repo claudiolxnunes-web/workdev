@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.models.adr import ADR
 from app.models.backlog import BacklogItem
+from app.models.decision import Decision
 from app.models.handoff import AgentRun, ExecutionPlan
 from app.models.knowledge import KnowledgeEntry
 from app.models.project import Project
@@ -48,12 +49,21 @@ LIMITE_BACKLOG_ABERTO = 12
 LIMITE_ATENCAO_GLOBAL = 8
 LIMITE_KNOWLEDGE = 5
 LIMITE_ADRS = 5
+LIMITE_DECISOES = 5
 LIMITE_PLANOS = 5
 LIMITE_EXECUCOES = 5
 LIMITE_SUBTASKS = 10
 # Corte de texto livre (objetivo de plano, erro de execução). Campos assim não
 # têm teto no banco e sozinhos dominam o prompt se entrarem inteiros.
 LIMITE_TEXTO_LIVRE = 160
+# Recorte da descrição de uma decisão dentro do contexto automático. O texto
+# integral fica na tool `ler_referencias`, chamada sob demanda.
+LIMITE_TEXTO_DECISAO = 200
+# Teto do bloco de referências (ADRs + decisões) que entra no system prompt.
+# O bloco é indexado, mas não é curto por natureza: um projeto com ADR longa e
+# várias decisões empurraria o resto do contexto para fora da janela. O corte
+# é explícito e marcado — nunca silencioso.
+LIMITE_BLOCO_REFERENCIAS = 4000
 
 STATUS_ABERTOS = ("todo", "doing", "blocked")
 PRIORIDADES_ATENCAO = ("critical", "high")
@@ -67,6 +77,16 @@ ORDEM_PRIORIDADE = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 def agora_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _data(valor: datetime | None) -> str | None:
+    """Data de criação como `YYYY-MM-DD`. None quando o registro não tem data."""
+    if valor is None:
+        return None
+    try:
+        return valor.date().isoformat()
+    except AttributeError:
+        return str(valor)[:10]
 
 
 # --------------------------------------------------------------------------
@@ -201,6 +221,11 @@ def coletar_knowledge(
 def coletar_adrs(
     db: Session, project_id: Any, limite: int = LIMITE_ADRS
 ) -> list[dict[str, Any]]:
+    """ADRs do projeto como índice: título, status e data. Sem o corpo.
+
+    O texto integral (contexto, decisão, consequências) fica na tool
+    `ler_referencias`, que o modelo chama quando a referência importa.
+    """
     linhas = (
         db.query(ADR)
         .filter(ADR.project_id == project_id)
@@ -209,7 +234,35 @@ def coletar_adrs(
         .all()
     )
     return [
-        {"titulo": linha.title, "status": linha.status} for linha in linhas
+        {"titulo": linha.title, "status": linha.status, "data": _data(linha.created_at)}
+        for linha in linhas
+    ]
+
+
+def coletar_decisoes(
+    db: Session, project_id: Any, limite: int = LIMITE_DECISOES
+) -> list[dict[str, Any]]:
+    """Decisões registradas do projeto: título, data e descrição recortada.
+
+    A tabela `decisions` é lida pelo Build e pela tool `ler_referencias`, mas
+    não entrava no contexto do AI Hub — o planejador via os ADRs como índice e
+    nenhuma decisão. Aqui entra o recorte: a descrição é um resumo, e o texto
+    integral continua sendo coisa de `ler_referencias`.
+    """
+    linhas = (
+        db.query(Decision)
+        .filter(Decision.project_id == project_id)
+        .order_by(Decision.created_at.desc())
+        .limit(limite)
+        .all()
+    )
+    return [
+        {
+            "titulo": linha.title,
+            "data": _data(linha.created_at),
+            "descricao": _cortar(linha.description, LIMITE_TEXTO_DECISAO),
+        }
+        for linha in linhas
     ]
 
 
@@ -321,6 +374,7 @@ def montar_contexto_projeto(db: Session, projeto: Project) -> dict[str, Any]:
         "planos": coletar_planos(db, projeto.id),
         "execucoes": coletar_execucoes(db, projeto.id),
         "adrs": coletar_adrs(db, projeto.id),
+        "decisoes": coletar_decisoes(db, projeto.id),
         "knowledge": coletar_knowledge(db, projeto.id),
     }
 
@@ -496,10 +550,7 @@ def _renderizar_projeto(dados: dict[str, Any]) -> str:
         [_linha_execucao(execucao) for execucao in dados.get("execucoes") or []],
     )
 
-    linhas += _secao(
-        "ADRs",
-        [f"- {adr['titulo']} [{adr['status']}]" for adr in dados.get("adrs") or []],
-    )
+    linhas += _bloco_referencias(dados)
 
     linhas += _secao(
         "Knowledge do projeto",
@@ -507,6 +558,77 @@ def _renderizar_projeto(dados: dict[str, Any]) -> str:
     )
 
     return "\n".join(linhas).strip()
+
+
+def _bloco_referencias(dados: dict[str, Any]) -> list[str]:
+    """Bloco de referências do projeto: ADRs e decisões, com teto de caracteres.
+
+    O bloco entra inteiro no system prompt, então precisa de teto próprio: o
+    contexto compete com a conversa pelo mesmo orçamento de tokens e um bloco
+    de referências sem teto empurra o resto para fora da janela. O corte é
+    explícito — a última linha diz que o bloco foi truncado.
+    """
+    marcador = f"- (referências truncadas no teto de {LIMITE_BLOCO_REFERENCIAS} caracteres)"
+    # A reserva cobre o marcador e as linhas em branco entre seções: o bloco
+    # final precisa caber no teto, não só as linhas contadas.
+    orcamento = LIMITE_BLOCO_REFERENCIAS - len(marcador) - 16
+    usados = 0
+    truncado = False
+    saida: list[str] = []
+
+    def cabe(linha: str) -> bool:
+        nonlocal usados
+        custo = len(linha) + 1
+        if usados + custo > orcamento:
+            return False
+        usados += custo
+        return True
+
+    for titulo, itens in (
+        ("ADRs", _linhas_adr(dados)),
+        ("Decisões do projeto", _linhas_decisao(dados)),
+    ):
+        if not itens:
+            continue
+        if not cabe(f"### {titulo}"):
+            truncado = True
+            break
+        aceitas: list[str] = []
+        for linha in itens:
+            if not cabe(linha):
+                truncado = True
+                break
+            aceitas.append(linha)
+        if aceitas:
+            saida.append(f"### {titulo}")
+            saida.extend(aceitas)
+            saida.append("")
+        if truncado:
+            break
+
+    if truncado:
+        saida.append(marcador)
+    return saida
+
+
+def _linhas_adr(dados: dict[str, Any]) -> list[str]:
+    linhas = []
+    for adr in dados.get("adrs") or []:
+        data = f" · {adr['data']}" if adr.get("data") else ""
+        linhas.append(f"- {adr['titulo']} [{adr.get('status') or 'sem status'}]{data}")
+    return linhas
+
+
+def _linhas_decisao(dados: dict[str, Any]) -> list[str]:
+    linhas = []
+    for decisao in dados.get("decisoes") or []:
+        partes = [f"- {decisao['titulo']}"]
+        if decisao.get("descricao"):
+            partes.append(f" — {decisao['descricao']}")
+        if decisao.get("data"):
+            partes.append(f" · {decisao['data']}")
+        linhas.append("".join(partes))
+    return linhas
 
 
 def _linha_execucao(execucao: dict[str, Any]) -> str:

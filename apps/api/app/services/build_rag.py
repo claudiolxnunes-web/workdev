@@ -72,7 +72,7 @@ def _snippet_text(*parts: str | None) -> str:
     return joined[:MAX_SNIPPET_CHARS]
 
 
-def _candidates(context: dict) -> list[dict]:
+def candidates(context: dict) -> list[dict]:
     candidates: list[dict] = []
 
     for row in context.get("adrs") or []:
@@ -113,17 +113,28 @@ def _candidates(context: dict) -> list[dict]:
 
 
 def select_snippets(context: dict) -> list[dict]:
-    """Escolhe os trechos mais próximos da task/plano, em texto plano."""
+    """Escolhe os trechos mais próximos da task/plano, em texto plano.
+
+    Este é o **piso** da seleção: lexical, sem rede, sem custo, sempre
+    presente. O complemento semântico entra depois, em
+    `services.semantic_complement`, e obedece aos mesmos tetos.
+    """
     query = _query_tokens(context)
     scored = []
 
-    for candidate in _candidates(context):
+    for candidate in candidates(context):
         overlap = query & _tokens(
             f"{candidate['title'] or ''} {candidate['text']}"
         )
         if not overlap:
             continue
-        scored.append({**candidate, "score": len(overlap)})
+        scored.append(
+            {
+                **candidate,
+                "score": len(overlap),
+                "origem": "lexical",
+            }
+        )
 
     scored.sort(key=lambda item: (-item["score"], str(item["title"] or "")))
 

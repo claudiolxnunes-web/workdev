@@ -32,8 +32,8 @@ from app.schemas.handoff import (
 )
 from app.services import (
     agent_runtimes,
+    agent_telemetry,
     build_jobs,
-    build_rag,
     canonical_context,
     context_egress,
     context_redaction,
@@ -1279,7 +1279,10 @@ def get_run_references(
             str(error),
         ) from error
 
-    snippets = build_rag.select_snippets(context)
+    # Mesma seleção do Build: piso lexical e, se o RAG responder, o
+    # complemento semântico (ADR 011, decisão 3). O operador vê o recorte
+    # que o agente recebeu, não um recorte paralelo.
+    snippets = canonical_context.select_snippets(context)
     bloco = canonical_context.canonical_block(context)
 
     return {
@@ -1291,10 +1294,86 @@ def get_run_references(
                 "title": item.get("title"),
                 "text": context_redaction.redact(item.get("text") or "").text,
                 "score": item.get("score"),
+                "origem": item.get("origem"),
             }
             for item in snippets
         ],
         "block": context_redaction.redact(bloco).text,
+    }
+
+
+@router.get("/runs/{run_id}/telemetry")
+def get_run_telemetry(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Consumo registrado para uma run.
+
+    Vazio não quer dizer zero: quer dizer que o executor não reportou
+    consumo. Quem consome esta rota precisa distinguir as duas coisas — por
+    isso cada linha traz `source` e `cost_class`.
+    """
+    run = _get_run(db, run_id)
+
+    from app.models.handoff import AgentRunTelemetry
+
+    linhas = (
+        db.query(AgentRunTelemetry)
+        .filter(AgentRunTelemetry.run_id == run.id)
+        .order_by(AgentRunTelemetry.recorded_at)
+        .all()
+    )
+
+    return {
+        "run_id": str(run.id),
+        "provider": run.provider,
+        "model": run.model,
+        "reported": bool(linhas),
+        "telemetry": [
+            {
+                "id": str(linha.id),
+                "agent": linha.agent,
+                "provider": linha.provider,
+                "model": linha.model,
+                "input_tokens": linha.input_tokens,
+                "cached_input_tokens": linha.cached_input_tokens,
+                "output_tokens": linha.output_tokens,
+                "total_tokens": linha.total_tokens,
+                "estimated_cost": float(linha.estimated_cost or 0),
+                "actual_cost": (
+                    float(linha.actual_cost) if linha.actual_cost is not None else None
+                ),
+                "currency": linha.currency,
+                "source": linha.source,
+                "cost_class": linha.cost_class,
+                "recorded_at": linha.recorded_at.isoformat() if linha.recorded_at else None,
+            }
+            for linha in linhas
+        ],
+    }
+
+
+@router.get("/telemetry")
+def get_telemetry_summary(
+    project_id: UUID | None = Query(default=None),
+    agent: str | None = Query(default=None),
+    cost_class: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Consumo agregado, agrupado por agente, provedor, modelo, origem e classe.
+
+    Oficial e estimado nunca somam na mesma linha: é por isso que `source` e
+    `cost_class` são parte da chave do agrupamento, e não filtros opcionais.
+    """
+    return {
+        "rows": agent_telemetry.resumo(
+            db,
+            project_id=str(project_id) if project_id else None,
+            agent=agent,
+            cost_class=cost_class,
+            source=source,
+        )
     }
 
 
@@ -1673,6 +1752,17 @@ async def _consume_dispatch_job(
                 "truncated": result["truncated"],
                 "event_id": str(event.id),
             },
+        )
+        # Telemetria de consumo: o runtime devolveu a contagem de tokens, e
+        # ela vira linha com origem declarada. Sem número oficial, nenhuma
+        # linha é gravada.
+        agent_telemetry.registrar_despacho(
+            db,
+            run,
+            result,
+            runtime_id=result.get("runtime_id"),
+            agent=run.agent,
+            model=result.get("model"),
         )
         db.commit()
         _sync_auto_transition(db, run, event)

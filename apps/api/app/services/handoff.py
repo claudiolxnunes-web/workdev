@@ -568,6 +568,10 @@ def queue_build(
         reviewer_agent=reviewer,
         review_attempts=0,
         model=model,
+        # O provider deixa de viver só no evento `build.queued` e passa a
+        # ser coluna: é o que permite dizer, depois, quanto uma run custou
+        # e a quem.
+        provider=provider,
         reasoning_effort=reasoning_effort,
         complexity=complexity,
         complexity_score=complexity_score,
