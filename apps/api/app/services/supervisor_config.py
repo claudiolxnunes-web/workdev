@@ -49,6 +49,9 @@ class WorkspaceConfig(BaseModel):
     max_tokens_fatia: int = Field(default=1500, ge=64, le=4000)
     pausar_em_risco: bool = True
     teto_falhas: int = Field(default=2, ge=1, le=5)
+    # Modelo que escreve a correção quando a fatia falha (o supervisor da
+    # conversa do Workspace).
+    modelo_supervisor: str = "deepseek/deepseek-v4-flash"
 
 
 #: Prefixos que o supervisor pode gravar. Só a seção dele: o supervisor ajusta

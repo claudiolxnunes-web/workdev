@@ -156,6 +156,10 @@ export interface EventoFatia {
   tipo: string; n?: number; etapa?: string; status?: StatusFatia; erro?: string; commit?: string
   texto?: string; nome?: string; argumentos?: Record<string, unknown>; caracteres?: number; recusada?: boolean
   checks?: CheckGate[]; codigo?: string; mensagem?: string; segundos?: number; leituras?: number
+  /** Parecer do observer sobre a proposta (auditoria antes do commit). */
+  parecer?: { ok?: boolean; parecer?: { veredito?: string; erros?: Array<{ descricao?: string }>; prompt_correcao?: string } }
+  /** Correção que o supervisor escreveu para a próxima tentativa. */
+  correcao?: string
 }
 
 /** Executa a fatia n; cada evento SSE chega em onEvento, na ordem. */

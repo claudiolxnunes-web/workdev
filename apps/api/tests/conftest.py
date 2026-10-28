@@ -93,3 +93,22 @@ def _nunca_chamar_a_api_real(monkeypatch):
             raise RuntimeError(f"teste tentou chamar a API real: {url}")
         return original(alvo, *args, **kwargs)
     monkeypatch.setattr(urllib.request, "urlopen", urlopen_vigiado)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_supervisor_config(tmp_path, monkeypatch):
+    """O supervisor dos testes não mexe na configuração real nem chama o observer.
+
+    A auditoria (observer) e a autocorreção do supervisor speak de rede e de
+    arquivo: desligadas por padrão na suíte, como o resto das travas daqui."""
+    from app.services import supervisor_config
+    from app.services.config_service import config_service
+
+    monkeypatch.setattr(config_service, 'runtime_config_path', tmp_path / 'runtime.json')
+    monkeypatch.setattr(config_service, 'user_config_path', tmp_path / 'user.json')
+    monkeypatch.setattr(supervisor_config, '_caminho_auditoria', lambda: tmp_path / 'auditoria.jsonl')
+    monkeypatch.setattr(supervisor_config, 'limites', lambda: {
+        "em_vigor": supervisor_config.WorkspaceConfig(
+            observador_auditoria=False, tentativas_autocorrecao=0).model_dump(),
+        "config": {}, "gravaveis": list(supervisor_config.GRAVAVEIS),
+        "protegidas": list(supervisor_config.PROTEGIDAS)})
