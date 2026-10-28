@@ -142,7 +142,10 @@ export default function Workspace() {
         ))}
       </div>
       <div className="min-h-0 flex-1">
-        {abaInferior === "local" ? chat : abaInferior === "execucao" ? execucao : <Terminal agente={agente} onAgente={setAgente} />}
+        {/* O chat Local fica sempre montado: desmontar apagava a conversa ao trocar de aba. */}
+        <div className={abaInferior === "local" ? "h-full" : "hidden"}>{chat}</div>
+        {abaInferior === "execucao" && execucao}
+        {abaInferior === "terminal" && <Terminal agente={agente} onAgente={setAgente} />}
       </div>
     </div>
   )
@@ -186,7 +189,7 @@ export default function Workspace() {
         <div className="min-h-0 flex-1 overflow-hidden rounded border border-slate-800">
           {abaMovel === "explorer" && explorer}
           {abaMovel === "editor" && editor}
-          {abaMovel === "local" && chat}
+          <div className={abaMovel === "local" ? "h-full" : "hidden"}>{chat}</div>
           {abaMovel === "execucao" && execucao}
           {abaMovel === "supervisor" && supervisor}
         </div>
@@ -211,7 +214,7 @@ export default function Workspace() {
             </Panel>
             {painelAberto && <>
               <Separator aria-label="Altura do painel inferior" className="h-1 bg-slate-800 transition-colors hover:bg-sky-700 focus:bg-sky-700 focus:outline-none data-[separator=active]:bg-sky-600" />
-              <Panel id="painel" defaultSize="35%" minSize="120px">
+              <Panel id="painel" defaultSize="40%" minSize="280px">
                 <section aria-label="Painel inferior" className="h-full min-h-0">{painelInferior}</section>
               </Panel>
             </>}
