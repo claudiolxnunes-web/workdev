@@ -29,6 +29,29 @@ function novoId(): string {
   return `ws-${agora.getFullYear()}${p(agora.getMonth() + 1)}${p(agora.getDate())}-${p(agora.getHours())}${p(agora.getMinutes())}${p(agora.getSeconds())}-${sufixo}`
 }
 
+// A conversa vive no navegador (sessionStorage): fechar o painel ou dar F5 não a
+// apaga. Uma resposta que ainda gerava quando o chat saiu de cena não é mais
+// acompanhada; ela volta marcada como interrompida.
+const CHAVE_CONVERSA = "workdev-workspace-chat-local"
+
+function lerConversa(): Mensagem[] {
+  try {
+    const salvas = JSON.parse(sessionStorage.getItem(CHAVE_CONVERSA) ?? "[]") as Mensagem[]
+    if (!Array.isArray(salvas)) return []
+    return salvas.map((m) => m.tipo === "modelo" && (m.estado === "rodando" || m.observando)
+      ? { ...m, estado: m.estado === "rodando" ? "erro" : m.estado, observando: false,
+          erro: m.estado === "rodando" ? "acompanhamento interrompido (o chat foi fechado ou a página recarregou); a proposta pode estar na Bancada" : m.erro }
+      : m)
+  } catch { return [] }
+}
+
+function guardarConversa(mensagens: Mensagem[]) {
+  try {
+    if (mensagens.length) sessionStorage.setItem(CHAVE_CONVERSA, JSON.stringify(mensagens))
+    else sessionStorage.removeItem(CHAVE_CONVERSA)
+  } catch { /* sem armazenamento: a conversa só não sobrevive ao F5 */ }
+}
+
 function rotuloAnexo(anexo: Anexo) {
   return `${anexo.caminho.split("/").pop()} ${anexo.inicio}–${anexo.fim}`
 }
@@ -112,7 +135,7 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
   sessao?: string | null
 }) {
   const [estado, setEstado] = useState<EstadoBancada | null>(null)
-  const [mensagens, setMensagens] = useState<Mensagem[]>([])
+  const [mensagens, setMensagens] = useState<Mensagem[]>(lerConversa)
   const [instrucao, setInstrucao] = useState("")
   const [esperaDiff, setEsperaDiff] = useState(true)
   const [observarSozinho, setObservarSozinho] = useState(true)
@@ -133,7 +156,10 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void carregarEstado()
   }, [carregarEstado])
-  useEffect(() => { fim.current?.scrollIntoView?.({ block: "end" }) }, [mensagens])
+  useEffect(() => {
+    fim.current?.scrollIntoView?.({ block: "end" })
+    guardarConversa(mensagens)
+  }, [mensagens])
 
   const atualizar = (chave: string, mudanca: Partial<MensagemModelo> | ((m: MensagemModelo) => Partial<MensagemModelo>)) =>
     setMensagens((atual) => atual.map((m) => (m.tipo === "modelo" && m.chave === chave
@@ -256,7 +282,7 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
         <div ref={fim} />
       </div>
 
-      <form className="border-t border-slate-800 bg-slate-900 p-2" onSubmit={(e) => { e.preventDefault(); void enviar() }}>
+      <form className="shrink-0 border-t border-slate-800 bg-slate-900 p-2" onSubmit={(e) => { e.preventDefault(); void enviar() }}>
         {anexos.length > 0 && (
           <ul aria-label="Trechos anexados" className="mb-1 flex flex-wrap gap-1">
             {anexos.map((anexo, i) => (
@@ -268,11 +294,11 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
           </ul>
         )}
         {anexos.length > MAX_TRECHOS && <p className="text-xs text-amber-300">No máximo {MAX_TRECHOS} trechos por pedido.</p>}
-        <textarea aria-label="Pedido ao modelo local" value={instrucao} rows={3}
+        <textarea aria-label="Pedido ao modelo local" value={instrucao} rows={5}
           onChange={(e) => setInstrucao(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void enviar() } }}
           placeholder="Ex.: Adicione uma docstring a load_subtasks. Saída: diff unificado e nada mais."
-          className="w-full rounded bg-slate-950 p-2 text-sm text-slate-100" />
+          className="min-h-[7.5rem] w-full resize-y rounded bg-slate-950 p-2 text-sm text-slate-100" />
         <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-300">
           <label className="flex items-center gap-1" title="O modelo local busca e lê arquivos do repositório antes de responder (somente leitura, até 6 voltas)"><input type="checkbox" checked={lerRepo} onChange={(e) => setLerRepo(e.target.checked)} /> ler o repo</label>
           <label className="flex items-center gap-1"><input type="checkbox" checked={esperaDiff} onChange={(e) => setEsperaDiff(e.target.checked)} /> espera diff</label>

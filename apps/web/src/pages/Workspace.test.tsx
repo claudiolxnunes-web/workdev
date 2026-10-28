@@ -86,6 +86,7 @@ beforeEach(() => {
   chamadas.length = 0
   fetchMock.mockClear()
   vi.stubGlobal("fetch", fetchMock)
+  sessionStorage.clear()
 })
 afterEach(() => vi.unstubAllGlobals())
 
@@ -140,6 +141,31 @@ describe("Workspace Local", () => {
     fireEvent.click(painel.getByRole("button", { name: "Enviar" }))
     await waitFor(() => expect(chamadas.filter((c) => c.url.endsWith("/rodar")).length).toBe(2))
     expect(chamadas.filter((c) => c.url.endsWith("/rodar"))[1].corpo).toMatchObject({ ferramentas: false })
+  })
+
+  it("a conversa com o modelo local sobrevive à troca de aba e ao recarregar", async () => {
+    const { unmount } = render(<Workspace />)
+    fireEvent.change(await screen.findByLabelText("Pedido ao modelo local"), { target: { value: "Troque o retorno para 2." } })
+    const painel = within(screen.getByRole("region", { name: "Painel inferior" }))
+    await waitFor(() => expect(painel.getByRole("button", { name: "Enviar" })).not.toBeDisabled())
+    fireEvent.click(painel.getByRole("button", { name: "Enviar" }))
+    await waitFor(() => expect(chamadas.some((c) => c.url.endsWith("/parecer"))).toBe(true))
+    expect(await screen.findByLabelText(/^Resposta ws-/)).toHaveTextContent("+ return 2")
+    fireEvent.click(screen.getByRole("tab", { name: "Terminal" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Local" }))
+    expect(screen.getByLabelText(/^Resposta ws-/)).toHaveTextContent("+ return 2")
+    unmount()
+    render(<Workspace />)
+    expect(await screen.findByLabelText(/^Resposta ws-/)).toHaveTextContent("+ return 2")
+    expect(screen.getByText("Troque o retorno para 2.")).toBeInTheDocument()
+  })
+
+  it("resposta que ainda gerava ao recarregar volta como interrompida", async () => {
+    sessionStorage.setItem("workdev-workspace-chat-local", JSON.stringify([
+      { tipo: "modelo", chave: "m-1", id: "ws-20261028-000000-abcd", modelo: "moe", texto: "--- a/x", estado: "rodando", avisos: [], leituras: [] }]))
+    render(<Workspace />)
+    expect(await screen.findByRole("alert", { name: "" })).toHaveTextContent(/acompanhamento interrompido/)
+    expect(screen.queryByText("gerando…")).not.toBeInTheDocument()
   })
 
   it("começa a sessão ligada à task, mostra o branch e abre o diff da sessão", async () => {
