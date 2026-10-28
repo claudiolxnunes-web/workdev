@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getLocalModels, getOpenRouterModels, sendAiChatWithConfirmation, type CatalogModel } from "@/services/ai.service";
+import { criarSessaoSupervisor } from "@/services/workspace.service";
 import { planoDoTexto, type PlanoSupervisor } from "./plano";
 
 // Chat do supervisor do Workspace Local: o modelo grande (OpenRouter) que
@@ -115,10 +116,19 @@ export function ChatSupervisor({ sessionId, onSessionId, onAprovarPlano }: {
     setCarregando(true);
     setErro("");
     const alvo = modelos.find((m) => chaveModelo(m) === modelo);
+    let sessao = sessionId;
     try {
+      // Pedido livre, sem sessão: ela precisa nascer como sessão de SUPERVISOR
+      // (modo Observar, com o contrato do plano no system prompt). Numa sessão
+      // genérica do AI Hub o supervisor responde como planejador do WorkDev —
+      // em prosa, sem bloco ```json — e o cartão "Aprovar plano" não aparece.
+      if (!sessao) {
+        const criada = await criarSessaoSupervisor(texto);
+        sessao = criada.id;
+      }
       const data = await sendAiChatWithConfirmation({
         messages: proximas,
-        session_id: sessionId,
+        session_id: sessao,
         provider: alvo?.provider ?? "openrouter",
         model: alvo?.model ?? modelo,
         ...(alvo?.runtime_id ? { runtime_id: alvo.runtime_id } : {}),
@@ -128,7 +138,8 @@ export function ChatSupervisor({ sessionId, onSessionId, onAprovarPlano }: {
         ...proximas,
         { role: "assistant", content: data.reply || "Erro na resposta", error: !!data.error },
       ]);
-      if (data.session_id && data.session_id !== sessionId) onSessionId?.(data.session_id);
+      if (data.session_id && data.session_id !== sessao) onSessionId?.(data.session_id);
+      else if (sessao && sessao !== sessionId) onSessionId?.(sessao);
     } catch {
       setMensagens([...proximas, { role: "assistant", content: "Erro ao falar com o supervisor", error: true }]);
     } finally {
@@ -180,6 +191,14 @@ export function ChatSupervisor({ sessionId, onSessionId, onAprovarPlano }: {
             {autoridade}
           </span>
         )}
+        <button
+          type="button"
+          onClick={() => { setMensagens([]); setErro(""); onSessionId?.(null); }}
+          title="Começar uma conversa nova com o supervisor"
+          className="ml-auto rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700"
+        >
+          Nova
+        </button>
       </div>
 
       <div ref={painel} aria-label="Conversa com o supervisor" className="min-h-0 flex-1 space-y-3 overflow-auto p-3">

@@ -97,6 +97,30 @@ export const encerrarSessao = (id: string, descartarAlteracoes = false) =>
 export const salvarArquivoSessao = (id: string, caminho: string, texto: string, sha256: string) =>
   post<{ caminho: string; commit: string; sha256: string }>(`/sessao/${encodeURIComponent(id)}/arquivo`, { caminho, texto, sha256 })
 export const aprovarPlano = (id: string, plano: unknown) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/plano`, { plano })
+
+/** Sessão de supervisor para um pedido livre do chat do Workspace.
+ *
+ *  Sem isto, o primeiro texto digitado no painel Supervisor caía numa sessão
+ *  genérica do AI Hub (modo "Planejar"), cujo system prompt manda o modelo
+ *  responder como planejador do WorkDev — em prosa, sem o bloco ```json do
+ *  contrato do Workspace. O cartão "Aprovar plano" nunca aparecia.
+ *
+ *  Aqui a sessão nasce no modo "Observar" com o protocolo do Workspace já
+ *  persistido: o supervisor lê os arquivos, fatia e devolve o plano em JSON. */
+export const criarSessaoSupervisor = (prompt: string) =>
+  fetch("/api/chat/workspace/planejar", {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt }),
+  }).then(async (response) => {
+    if (!response.ok) {
+      const detalhe = await response.json().catch(() => ({}))
+      const mensagem = typeof detalhe?.detail === "string" ? detalhe.detail
+        : "Não foi possível abrir a sessão do supervisor."
+      throw new Error(mensagem)
+    }
+    return response.json() as Promise<{ id: string; authority: string }>
+  })
 export const simularBanco = (id: string, n: number, sql: string) =>
   post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/banco/simular`, { sql })
 export const aplicarBanco = (id: string, n: number) => post<Sessao>(`/sessao/${encodeURIComponent(id)}/fatias/${n}/banco/aplicar`, {})
