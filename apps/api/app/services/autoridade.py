@@ -66,6 +66,11 @@ NIVEL_POR_TOOL: dict[str, str] = {
     "ler_referencias": OBSERVE,
     "listar_adrs": OBSERVE,
     "listar_decisoes": OBSERVE,
+    # autonomia do supervisor sobre a configuração e a execução
+    "ler_configuracoes": OBSERVE,
+    "mudar_configuracao": OBSERVE,
+    "parar_execucao": OBSERVE,
+    "retomar_execucao": OBSERVE,
     "previsualizar_plano_execucao": PLAN,
     # registro interno do WorkDev
     "criar_task": PLAN,

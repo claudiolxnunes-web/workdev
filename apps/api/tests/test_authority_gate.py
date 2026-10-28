@@ -43,15 +43,20 @@ class MatrizTest(unittest.TestCase):
             )
             anterior = atual
 
-    def test_observe_so_tem_leitura(self):
+    def test_observe_tem_leitura_e_a_autonomia_do_supervisor(self):
         nomes = {t["name"] for t in aut.tools_para(aut.OBSERVE, ai.TOOLS)}
 
+        # OBSERVE = leitura do WorkDev + a autonomia do supervisor sobre a
+        # PRÓPRIA configuração e sobre o freio da execução. Não escreve
+        # registro do WorkDev (task, ADR, plano) nem muda a configuração do
+        # aplicativo: quem muda isso é o operador.
         self.assertEqual(nomes, {
             "listar_projetos", "listar_backlog", "listar_subtasks",
             "buscar_conhecimento", "buscar_rag", "listar_planos_execucao",
             "ler_task", "ler_trecho", "buscar_texto", "listar_pasta", "ler_estado_sessao", "validar_lote_bancada",
             "validar_plano_workspace", "ler_resultado_fatia", "ler_referencias",
             "listar_adrs", "listar_decisoes",
+            "ler_configuracoes", "mudar_configuracao", "parar_execucao", "retomar_execucao",
         })
 
     def test_plan_acrescenta_registro_interno(self):
@@ -201,7 +206,7 @@ class CatalogoPorProviderTest(unittest.TestCase):
         observe = {t["function"]["name"] for t in ai.tools_openai(aut.OBSERVE)}
         plan = {t["function"]["name"] for t in ai.tools_openai(aut.PLAN)}
 
-        self.assertEqual(len(observe), 17)
+        self.assertEqual(len(observe), 21)
         self.assertEqual(len(plan), len(ai.TOOLS))
         self.assertNotIn("criar_task", observe)
 

@@ -307,11 +307,22 @@ def _fatia_aberta(meta: dict, n: int) -> dict:
     return fatia
 
 
+def _pausada(ident: str) -> dict | None:
+    """A sessão está pausada? Rele do disco: a pausa pode vir de outro processo."""
+    meta = sessao._ler_meta(ident)
+    return (meta or {}).get("pausada")
+
+
 def _executar_fatia(ident: str, n: int, correcao: str | None) -> Iterator[str]:
     with sessao.lock_execucao(ident):
         meta = sessao._exigir(ident)
         if meta["status"] != "ativa":
             raise WorkspaceErro(409, "sessao_encerrada", f"a sessão {ident} não está ativa")
+        pausada = meta.get("pausada")
+        if pausada:
+            yield _sse({"tipo": "erro", "n": n, "codigo": "sessao_pausada",
+                        "mensagem": f"a sessão está pausada: {pausada.get('motivo', 'sem motivo')}"})
+            return
         fatia = _fatia_aberta(meta, n)
         cwd = Path(meta["caminho"])
         if sessao._alteracoes(meta):
@@ -375,6 +386,12 @@ def _executar_fatia(ident: str, n: int, correcao: str | None) -> Iterator[str]:
                              "leituras": final.get("leituras", 0), "medicao": final.get("medicao")}
 
         # 2. aplicar na cópia
+        pausada = _pausada(ident)
+        if pausada:
+            # O freio do supervisor: a proposta fica na sessão, mas nada é
+            # aplicado nem commitado sem a mão do operador.
+            yield falhar("aplicar", f"execução pausada pelo supervisor: {pausada.get('motivo', 'sem motivo')}")
+            return
         yield etapa("aplicar")
         diff = bancada_runner._modulo("bancada_checks").extrair_diff(texto)
         if diff is None:
