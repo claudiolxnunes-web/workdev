@@ -145,7 +145,7 @@ def test_diff_que_nao_aplica_falha_e_repetir_com_correcao_limpa_e_passa(amb):
     assert amb.backlog[-1][:3] == ("marcar_subtask", "sub-1", "blocked")
     amb.respostas.append(DIFF_OK)
     assert eventos(ex.executar_fatia(meta["id"], 1, "use as linhas reais"))[-1]["status"] == "ok"
-    assert "Correção pedida pelo operador: use as linhas reais" in amb.pedidos[-1]["instrucao"]
+    assert "Correção pedida (pelo operador ou pelo supervisor): use as linhas reais" in amb.pedidos[-1]["instrucao"]
 
 
 def test_gate_reprovado_para_deixa_a_mudanca_e_repetir_limpa(amb):
@@ -474,3 +474,73 @@ def test_gate_final_aprovado_no_mesmo_head_nao_roda_de_novo(amb):
     ex._gate_final(gravada)
     ex._gate_final(sessao._ler_meta(meta["id"]))
     assert amb.gate["completos"] == [False, True]
+
+
+# ---------------------------------------------------------------- auditoria e orientação
+
+def test_observer_que_descarta_a_proposta_reprova_e_nao_deixa_mudanca(amb, monkeypatch):
+    """A auditoria vem antes do commit: proposta descartada não vira commit."""
+    monkeypatch.setattr(ex, "_limites_supervisor",
+                        lambda: {"observador_auditoria": True, "tentativas_autocorrecao": 0})
+    monkeypatch.setattr(ex, "_auditar", lambda *a, **k: {
+        "ok": True, "parecer": {"veredito": "descartada", "erros": [{"descricao": "não cumpre o pedido"}]}})
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK)
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+    assert [e.get("etapa") for e in lista if e["tipo"] == "etapa"] == ["aplicar", "gate", "auditoria"]
+    assert lista[-1]["status"] == "falhou" and lista[-1]["etapa"] == "auditoria"
+    assert "não cumpre o pedido" in lista[-1]["erro"]
+    # A cópia volta ao estado anterior: nada do modelo local fica na sessão.
+    assert (Path(meta["caminho"]) / "app" / "mod.py").read_text() == "def f():\n    return 1\n"
+
+
+def test_observer_que_pede_ajuste_localizado_orienta_sem_reprovar(amb, monkeypatch):
+    monkeypatch.setattr(ex, "_limites_supervisor",
+                        lambda: {"observador_auditoria": True, "tentativas_autocorrecao": 0})
+    monkeypatch.setattr(ex, "_auditar", lambda *a, **k: {
+        "ok": True, "parecer": {"veredito": "correcao_pequena", "erros": [], "prompt_correcao": "use a constante"}})
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK)
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+    assert lista[-1]["status"] == "ok"
+    assert any(e["tipo"] == "correcao_sugerida" for e in lista)
+
+
+def test_supervisor_escreve_a_correcao_e_a_fatia_repete(amb, monkeypatch):
+    """A orientação automática: falhou, o supervisor escreve, a fatia roda de novo."""
+    monkeypatch.setattr(ex, "_limites_supervisor",
+                        lambda: {"observador_auditoria": False, "tentativas_autocorrecao": 1})
+    monkeypatch.setattr(ex, "_correcao_do_supervisor", lambda ident, n: "ajuste o diff")
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK.replace("-    return 1", "-    return 9"))  # não aplica
+    amb.respostas.append(DIFF_OK)
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+    assert any(e["tipo"] == "correcao" and e["correcao"] == "ajuste o diff" for e in lista)
+    assert lista[-1]["status"] == "ok"
+    assert "Correção pedida (pelo operador ou pelo supervisor): ajuste o diff" in amb.pedidos[-1]["instrucao"]
+
+
+def test_sem_correcao_do_supervisor_a_fatia_para(amb, monkeypatch):
+    monkeypatch.setattr(ex, "_limites_supervisor",
+                        lambda: {"observador_auditoria": False, "tentativas_autocorrecao": 1})
+    monkeypatch.setattr(ex, "_correcao_do_supervisor", lambda ident, n: "")
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK.replace("-    return 1", "-    return 9"))
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+    assert lista[-1]["status"] == "falhou"
+    assert len([e for e in lista if e["tipo"] == "correcao"]) == 0
+
+
+def test_sessao_pausada_barra_a_execucao(amb, monkeypatch):
+    """O freio do supervisor: com a sessão pausada, nenhuma fatia roda."""
+    original = sessao._ler_meta
+
+    def meta_com_pausa(ident):
+        meta = original(ident)
+        return {**meta, "pausada": {"motivo": "risco de quebrar o aplicativo"}}
+
+    monkeypatch.setattr(sessao, "_ler_meta", meta_com_pausa)
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK)
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+    assert lista[0]["tipo"] == "erro" and lista[0]["codigo"] == "sessao_pausada"

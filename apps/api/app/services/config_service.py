@@ -12,25 +12,34 @@ class ConfigService:
         self.config_dir = self.project_root / "config"
         # Arquivo canônico compartilhado entre releases e workers.
         self.user_config_path = Path(os.getenv("WORKDEV_USER_CONFIG_FILE", "/opt/workdev/config/user.json"))
-        
+        # Camada de runtime: fora do git, para o supervisor poder ajustar a
+        # configuração sem sujar o checkout (a sessão do Workspace exige
+        # checkout limpo). Tem precedência sobre o user.json.
+        self.runtime_config_path = Path(os.getenv(
+            "WORKDEV_RUNTIME_CONFIG_FILE", "/opt/workdev-builds/config/runtime.json"))
+
         # Garante que o diretório de configurações existe
         self.config_dir.mkdir(exist_ok=True)
-        
+
         # Carrega as configurações padrão
         self.default_config = self._load_config_file("default.json")
-        
+
         # Carrega as configurações específicas do ambiente
         env = os.getenv("ENVIRONMENT", "development")
         self.env_config = self._load_config_file(f"{env}.json")
-        
+
         # Carrega as configurações do usuário (se existirem)
         self.user_config = self._load_user_config()
-        
+
+        # Carrega a camada de runtime (se existir)
+        self.runtime_config = self._load_runtime_config()
+
         # Combina as configurações
         self.config = self._merge_configs([
             self.default_config,
             self.env_config,
-            self.user_config
+            self.user_config,
+            self.runtime_config
         ])
     
     def _load_config_file(self, filename: str) -> Dict[str, Any]:
@@ -51,12 +60,24 @@ class ConfigService:
         """Carrega as configurações específicas do usuário"""
         if not self.user_config_path.exists():
             return {}
-        
+
         try:
             with open(self.user_config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             print(f"Erro ao carregar as configurações do usuário: {str(e)}")
+            return {}
+
+    def _load_runtime_config(self) -> Dict[str, Any]:
+        """Camada de runtime (fora do git): ajustes que o supervisor pode fazer."""
+        if not self.runtime_config_path.exists():
+            return {}
+
+        try:
+            with open(self.runtime_config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Erro ao carregar a configuração de runtime: {str(e)}")
             return {}
     
     def _merge_configs(self, configs: list) -> Dict[str, Any]:
@@ -83,7 +104,10 @@ class ConfigService:
     def get_config(self) -> Dict[str, Any]:
         """Retorna a configuração combinada"""
         self.user_config = self._load_user_config()
-        self.config = self._merge_configs([self.default_config, self.env_config, self.user_config])
+        self.runtime_config = self._load_runtime_config()
+        self.config = self._merge_configs([
+            self.default_config, self.env_config, self.user_config, self.runtime_config
+        ])
         return self.config
     
     def get_setting(self, key_path: str) -> Any:
@@ -128,12 +152,54 @@ class ConfigService:
             self.config = self._merge_configs([
                 self.default_config,
                 self.env_config,
-                self.user_config
+                self.user_config,
+                self.runtime_config
             ])
-            
+
             return True
         except Exception as e:
             print(f"Erro ao atualizar as configurações do usuário: {str(e)}")
+            return False
+
+    def update_runtime_config(self, new_config: Dict[str, Any]) -> bool:
+        """Atualiza a camada de runtime (fora do git).
+
+        É por aqui que o supervisor ajusta a configuração sem sujar o
+        checkout — a sessão do Workspace exige checkout limpo para começar.
+        """
+        try:
+            self.runtime_config_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = self.runtime_config_path.with_suffix(".lock")
+            with open(lock_path, "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                current = self._load_runtime_config()
+                updated = self._deep_merge(current, new_config)
+                temp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.runtime_config_path.parent,
+                                                     prefix=".runtime-", delete=False) as f:
+                        temp_path = Path(f.name)
+                        json.dump(updated, f, indent=2, ensure_ascii=False)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    # Fora do git, sem segredos (o supervisor nunca grava chave).
+                    temp_path.chmod(0o644)
+                    os.replace(temp_path, self.runtime_config_path)
+                finally:
+                    if temp_path and temp_path.exists():
+                        temp_path.unlink()
+
+            self.runtime_config = updated
+            self.config = self._merge_configs([
+                self.default_config,
+                self.env_config,
+                self.user_config,
+                self.runtime_config
+            ])
+
+            return True
+        except Exception as e:
+            print(f"Erro ao atualizar a configuração de runtime: {str(e)}")
             return False
 
 # Instância singleton do serviço de configuração

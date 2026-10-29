@@ -285,11 +285,100 @@ def _commit(cwd: Path, caminhos: list[str], mensagem: str) -> str:
 
 # ---------------------------------------------------------------- executar
 
-def executar_fatia(ident: str, n: int, correcao: str | None = None) -> Iterator[str]:
+PEDIDO_CORRECAO = (
+    "A fatia {n} do Workspace Local falhou. Use a tool ler_resultado_fatia para ver "
+    "a etapa, o erro, os checks do gate e o diff proposto pelo modelo local.\n\n"
+    "Responda SÓ com a nova INSTRUÇÃO da fatia: o texto que o modelo local deve "
+    "executar para corrigir, em uma ou duas frases, no mesmo formato de saída "
+    "(diff unificado contra o arquivo). Sem JSON, sem explicação, sem repetir o "
+    "erro. Se o problema não é do modelo local (por exemplo, o gate está errado), "
+    "diga isso em uma frase."
+)
+
+
+def _limites_supervisor() -> dict:
+    from app.services import supervisor_config
+    return supervisor_config.limites()["em_vigor"]
+
+
+def _auditar(cwd: Path, fatia: dict, instrucao: str, proposta: str, resultados: list) -> dict:
+    """O observer julga a proposta: o mesmo árbitro da Bancada Local.
+
+    Falha do observer NÃO reprova a fatia — o gate objetivo continua valendo.
+    Um observer fora do ar não pode travar o trabalho do agente local.
+    """
     try:
-        yield from _executar_fatia(ident, n, (correcao or "").strip()[:2000] or None)
-    except WorkspaceErro as erro:
-        yield _sse({"tipo": "erro", "n": n, "codigo": erro.codigo, "mensagem": erro.mensagem})
+        obs = bancada_runner._modulo("bancada_observer")
+        trechos = "\n\n".join(
+            f"### {c} (linhas {i}-{f})\n```\n{bancada_runner.ler_trecho(c, i, f, cwd)[0]}\n```"
+            for c, i, f in (fatia.get("trechos") or []))
+        checagens = {"achados": [
+            {"nome": r.name, "severidade": "erro" if not r.passed else "info",
+             "mensagem": r.reason[:300]} for r in resultados]}
+        return obs.observar(obs.PADRAO, obs.montar_mensagens(instrucao, trechos, proposta, checagens))
+    except Exception as erro:  # noqa: BLE001 — a auditoria é advice, não gate
+        return {"ok": False, "parecer": None,
+                "falhas": [f"{type(erro).__name__}: {str(erro)[:200]}"]}
+
+
+def _correcao_do_supervisor(ident: str, n: int) -> str:
+    """O supervisor da conversa escreve a correção da fatia que falhou.
+
+    É a orientação do modo automático: o supervisor tem as tools
+    (ler_resultado_fatia, ler_estado_sessao) e responde com a nova instrução.
+    """
+    meta = sessao._exigir(ident)
+    chat_id = meta.get("chat_session_id")
+    if not chat_id:
+        return ""
+    limites = _limites_supervisor()
+    modelo = limites.get("modelo_supervisor") or "deepseek/deepseek-v4-flash"
+    try:
+        from app.database import SessionLocal
+        from app.routers.ai import ChatRequest, ai_chat
+        db = SessionLocal()
+        try:
+            resposta = ai_chat(ChatRequest(
+                messages=[{"role": "user", "content": PEDIDO_CORRECAO.format(n=n)}],
+                session_id=chat_id, provider="openrouter", model=modelo), db)
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001 — sem supervisor, sem correção automática
+        return ""
+    texto = str((resposta or {}).get("reply") or "").strip()
+    return texto[:2000]
+
+
+def executar_fatia(ident: str, n: int, correcao: str | None = None) -> Iterator[str]:
+    """Executa a fatia e, se ela falhar, pede a correção ao supervisor e repete.
+
+    O número de repetições é `workspace.tentativas_autocorrecao` — o supervisor
+    ajusta esse limite pela própria configuração.
+    """
+    limites = _limites_supervisor()
+    max_tentativas = int(limites.get("tentativas_autocorrecao") or 0)
+    for rodada in range(1, max_tentativas + 2):
+        try:
+            yield from _executar_fatia(ident, n, (correcao or "").strip()[:2000] or None)
+        except WorkspaceErro as erro:
+            yield _sse({"tipo": "erro", "n": n, "codigo": erro.codigo, "mensagem": erro.mensagem})
+            return
+        try:
+            meta = sessao._exigir(ident)
+        except WorkspaceErro:
+            return
+        fatias = (meta.get("plano") or {}).get("fatias") or []
+        if not fatias or not (1 <= n <= len(fatias)):
+            return
+        if fatias[n - 1].get("status") != "falhou":
+            return
+        if rodada > max_tentativas:
+            return
+        nova = _correcao_do_supervisor(ident, n)
+        if not nova:
+            return
+        correcao = nova
+        yield _sse({"tipo": "correcao", "n": n, "correcao": nova})
 
 
 def _fatia_aberta(meta: dict, n: int) -> dict:
@@ -307,11 +396,22 @@ def _fatia_aberta(meta: dict, n: int) -> dict:
     return fatia
 
 
+def _pausada(ident: str) -> dict | None:
+    """A sessão está pausada? Rele do disco: a pausa pode vir de outro processo."""
+    meta = sessao._ler_meta(ident)
+    return (meta or {}).get("pausada")
+
+
 def _executar_fatia(ident: str, n: int, correcao: str | None) -> Iterator[str]:
     with sessao.lock_execucao(ident):
         meta = sessao._exigir(ident)
         if meta["status"] != "ativa":
             raise WorkspaceErro(409, "sessao_encerrada", f"a sessão {ident} não está ativa")
+        pausada = meta.get("pausada")
+        if pausada:
+            yield _sse({"tipo": "erro", "n": n, "codigo": "sessao_pausada",
+                        "mensagem": f"a sessão está pausada: {pausada.get('motivo', 'sem motivo')}"})
+            return
         fatia = _fatia_aberta(meta, n)
         cwd = Path(meta["caminho"])
         if sessao._alteracoes(meta):
@@ -351,7 +451,11 @@ def _executar_fatia(ident: str, n: int, correcao: str | None) -> Iterator[str]:
         if "diff" not in instrucao.lower():
             instrucao += "\n" + SAIDA_DIFF
         if correcao:
-            instrucao += f"\n\nA tentativa anterior falhou. Correção pedida pelo operador: {correcao}"
+            instrucao += (f"\n\nA tentativa anterior falhou. Correção pedida "
+                          f"(pelo operador ou pelo supervisor): {correcao}")
+        elif fatia.get("correcao_sugerida"):
+            instrucao += (f"\n\nA tentativa anterior falhou e o observer pediu um ajuste "
+                          f"localizado: {fatia['correcao_sugerida']}")
         elif fatia.get("erro_anterior"):
             instrucao += f"\n\nA tentativa anterior falhou: {fatia['erro_anterior']}"
         pid = f"ws-{ident}-{fatia['id']}-t{fatia['tentativas']}"[:80]
@@ -375,6 +479,12 @@ def _executar_fatia(ident: str, n: int, correcao: str | None) -> Iterator[str]:
                              "leituras": final.get("leituras", 0), "medicao": final.get("medicao")}
 
         # 2. aplicar na cópia
+        pausada = _pausada(ident)
+        if pausada:
+            # O freio do supervisor: a proposta fica na sessão, mas nada é
+            # aplicado nem commitado sem a mão do operador.
+            yield falhar("aplicar", f"execução pausada pelo supervisor: {pausada.get('motivo', 'sem motivo')}")
+            return
         yield etapa("aplicar")
         diff = bancada_runner._modulo("bancada_checks").extrair_diff(texto)
         if diff is None:
@@ -401,6 +511,29 @@ def _executar_fatia(ident: str, n: int, correcao: str | None) -> Iterator[str]:
         if reprovados:
             yield falhar("gate", "; ".join(f"{r.name}: {r.reason}" for r in reprovados))
             return
+
+        # 3.5 auditoria: o observer julga a proposta antes do commit
+        if _limites_supervisor().get("observador_auditoria"):
+            yield etapa("auditoria")
+            parecer = _auditar(cwd, fatia, instrucao, texto, resultados)
+            fatia["parecer"] = parecer
+            yield _sse({"tipo": "parecer", "n": n, "parecer": parecer})
+            veredito = ((parecer or {}).get("parecer") or {}).get("veredito")
+            if veredito == "descartada":
+                # Volta a cópia ao último commit: nada do que o modelo local
+                # propôs fica na sessão.
+                _limpar(cwd)
+                erros = "; ".join(str(e.get("descricao", e)) for e in
+                                  ((parecer.get("parecer") or {}).get("erros") or []))
+                yield falhar("auditoria", f"o observer descartou a proposta: {erros}"[:500])
+                return
+            if veredito == "correcao_pequena":
+                # A ideia está certa, o ajuste é localizado: orienta a próxima
+                # tentativa em vez de reprovar o trabalho.
+                sugestao = str((parecer.get("parecer") or {}).get("prompt_correcao") or "")[:2000]
+                if sugestao:
+                    fatia["correcao_sugerida"] = sugestao
+                    yield _sse({"tipo": "correcao_sugerida", "n": n, "correcao": sugestao})
 
         # 4. commit no branch da sessão
         yield etapa("commit")

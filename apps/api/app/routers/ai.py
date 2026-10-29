@@ -501,6 +501,52 @@ TOOLS = [
         },
     },
     {
+        "name": "ler_configuracoes",
+        "description": "Le a configuracao efetiva do WorkDev (sem segredos) e os limites de operacao do supervisor. Sem 'caminho', devolve o bloco 'workspace' e a secao 'agents.adaptive_supervision'; com 'caminho' (ex.: 'workspace.tentativas_autocorrecao'), devolve so aquele valor. Use para saber o que esta em vigor antes de mudar alguma coisa, e para conferir o que voce ja mudou.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "caminho": {"type": "string", "description": "caminho pontilhado; opcional"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "mudar_configuracao",
+        "description": "Muda UM valor de configuracao do WorkDev, dentro do que o supervisor pode mudar: 'agents.adaptive_supervision.<campo>' e 'workspace.<campo>'. O valor novo e validado contra o schema antes de gravar; valor invalido e recusado e nada e gravado. Chaves protegidas (gasto, confirmacao de modelo premium, credenciais) e caminhos fora da allowlist sao recusados com o motivo. A gravacao vai para a camada de runtime, fora do git, e fica em auditoria. Use para ajustar os proprios limites de operacao (ex.: 'workspace.tentativas_autocorrecao'), nao para mexer no aplicativo.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "caminho": {"type": "string", "description": "ex.: 'workspace.tentativas_autocorrecao'"},
+                "valor": {"description": "novo valor"},
+                "motivo": {"type": "string", "description": "por que esta mudando; vai para a auditoria"},
+            },
+            "required": ["caminho", "valor"],
+        },
+    },
+    {
+        "name": "parar_execucao",
+        "description": "PAUSA a execucao da sessao ativa do Workspace Local: nenhuma fatia nova comeca e a que esta rodando para antes de aplicar o diff. Use quando o trabalho estiver saindo do controle (diff grande demais, arquivo errado, risco de quebrar o aplicativo). Nao apaga nada e nao destrava: quem retoma e o operador ou voce, com retomar_execucao.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "motivo": {"type": "string", "description": "por que esta parando; vai para a auditoria e para a tela"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "retomar_execucao",
+        "description": "Retoma uma sessao do Workspace Local que estava pausada por parar_execucao. Use depois de explicar ao operador o que foi corrigido. Nao pula gate nem revive fatia que falhou: a fatia falha precisa ser executada de novo.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "motivo": {"type": "string", "description": "por que esta retomando; vai para a auditoria"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "validar_lote_bancada",
         "description": "Valida um lote de micro-tarefas da Bancada Local contra os arquivos reais do repositorio: arquivo existe, linha final existe, caminho permitido, ate 10 tarefas por lote (11 a 20 sao divididas automaticamente em 2 lotes), ate 8 trechos de ate 400 linhas, max_tokens 64-4000, exige com regex valida. Ids vazios ou genericos recebem o id do lote (AAMMDD-NN-NN). Somente leitura: nao grava nem executa nada. Use antes de entregar o JSON final e entregue o plano devolvido.",
         "input_schema": {
@@ -941,6 +987,44 @@ def executar_tool(nome: str, args: dict, db: Session,
     return _executar_tool_sem_gate(nome, args, db)
 
 
+def _tool_supervisor_config(nome: str, args: dict) -> str:
+    """Autonomia do supervisor: ler, mudar e parar.
+
+    Toda recusa volta como resposta (nunca exceção no chat): o modelo precisa
+    saber por que o pedido não foi atendido.
+    """
+    from app.services import supervisor_config
+    try:
+        if nome == "ler_configuracoes":
+            caminho = (args.get("caminho") or "").strip() or None
+            if caminho == "auditoria":
+                return json.dumps({"auditoria": supervisor_config.auditoria()},
+                                  ensure_ascii=False)
+            if caminho is None:
+                return json.dumps({"limites": supervisor_config.limites(),
+                                   "config": supervisor_config.ler()["config"]},
+                                  ensure_ascii=False)
+            return json.dumps(supervisor_config.ler(caminho), ensure_ascii=False)
+        if nome == "mudar_configuracao":
+            return json.dumps(
+                supervisor_config.mudar(args.get("caminho") or "", args.get("valor"),
+                                        motivo=args.get("motivo") or ""),
+                ensure_ascii=False)
+        if nome == "parar_execucao":
+            return json.dumps(supervisor_config.pausar_sessao(args.get("motivo") or ""),
+                              ensure_ascii=False)
+        if nome == "retomar_execucao":
+            return json.dumps(supervisor_config.retomar_sessao(motivo=args.get("motivo") or ""),
+                              ensure_ascii=False)
+    except supervisor_config.SupervisorConfigErro as erro:
+        return json.dumps({"erro": erro.mensagem, "code": erro.codigo, "executado": False},
+                          ensure_ascii=False)
+    except Exception as erro:  # noqa: BLE001 — tool: erro vira resposta, não chat quebrado
+        return json.dumps({"erro": f"{type(erro).__name__}: {erro}"[:300], "executado": False},
+                          ensure_ascii=False)
+    return json.dumps({"erro": "tool desconhecida", "executado": False}, ensure_ascii=False)
+
+
 def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
     if nome == "listar_projetos":
         ps = db.query(Project).all()
@@ -1098,6 +1182,9 @@ def _executar_tool_sem_gate(nome: str, args: dict, db: Session) -> str:
         except (TypeError, ValueError):
             return json.dumps({"erro": "n precisa ser inteiro", "code": "n_invalido"}, ensure_ascii=False)
         return json.dumps(workspace_execucao.resultado_fatia(n), ensure_ascii=False)
+
+    if nome in ("ler_configuracoes", "mudar_configuracao", "parar_execucao", "retomar_execucao"):
+        return _tool_supervisor_config(nome, args)
 
     if nome == "ler_referencias":
         return _ler_referencias(args, db)

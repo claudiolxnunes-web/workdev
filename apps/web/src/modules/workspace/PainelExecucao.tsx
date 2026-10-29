@@ -23,7 +23,7 @@ const COR: Record<string, string> = {
 function linhaDoEvento(e: EventoFatia): string | null {
   const n = e.n ? `[${e.n}] ` : ""
   if (e.tipo === "fatia" && e.status === "rodando") return `${n}começou${e.etapa ? "" : ""}`
-  if (e.tipo === "etapa") return `${n}${e.etapa === "aplicar" ? "aplicando o diff na cópia" : e.etapa === "gate" ? "rodando o gate (testes do projeto)" : e.etapa === "simular" ? "validando e simulando o SQL (rollback)" : "commitando no branch da sessão"}`
+  if (e.tipo === "etapa") return `${n}${e.etapa === "aplicar" ? "aplicando o diff na cópia" : e.etapa === "gate" ? "rodando o gate (testes do projeto)" : e.etapa === "auditoria" ? "auditando a proposta (observer)" : e.etapa === "simular" ? "validando e simulando o SQL (rollback)" : "commitando no branch da sessão"}`
   if (e.tipo === "ferramenta") {
     const a = e.argumentos ?? {}
     const alvo = e.nome === "ler_arquivo" ? `${a.caminho} ${a.inicio}–${a.fim}` : e.nome === "buscar_texto" ? `“${a.texto}”` : String(a.caminho ?? ".")
@@ -33,6 +33,13 @@ function linhaDoEvento(e: EventoFatia): string | null {
   if (e.tipo === "limite") return `${n}limite de leituras atingido`
   if (e.tipo === "fim") return `${n}modelo respondeu em ${e.segundos ?? "?"}s · ${e.leituras ?? 0} leitura(s)`
   if (e.tipo === "gate") return (e.checks ?? []).map((c) => `${n}${c.passou ? "✓" : "✗"} ${c.nome} — ${c.motivo.split("\n")[0]}`).join("\n")
+  if (e.tipo === "parecer") {
+    const p = (e as { parecer?: { parecer?: { veredito?: string; erros?: Array<{ descricao?: string }> } } }).parecer?.parecer
+    const erros = (p?.erros ?? []).map((x) => x.descricao).filter(Boolean).join("; ")
+    return `${n}observer: ${p?.veredito ?? "sem veredito"}${erros ? ` — ${erros}` : ""}`
+  }
+  if (e.tipo === "correcao") return `${n}supervisor escreveu a correção: ${(e as { correcao?: string }).correcao ?? ""}`
+  if (e.tipo === "correcao_sugerida") return `${n}observer pediu ajuste: ${(e as { correcao?: string }).correcao ?? ""}`
   if (e.tipo === "fatia" && e.status === "simulada") return `${n}⏸ simulado (nada gravado): ${(e as { linhas?: number }).linhas ?? "?"} linha(s) — confira e clique em Aplicar no banco`
   if (e.tipo === "fatia" && e.status === "ok") return `${n}✓ ok · commit ${(e.commit ?? "").slice(0, 7)}`
   if (e.tipo === "fatia" && e.status === "falhou") return `${n}✗ falhou em ${e.etapa}: ${e.erro}`
