@@ -613,6 +613,14 @@ def cmd_extrair(args) -> int:
     arquivos = re.findall(r"^\+\+\+ b/(\S+)", diff, re.M)
     print(f"proposta: {rel(proposta)}")
     print(f"patch:    {rel(patch)}  ({', '.join(arquivos) or 'sem cabeçalho +++ b/'})")
+    # Hunk sem contexto não tem âncora: o git aplicaria no fim do arquivo.
+    import hunk_validator
+    problemas = hunk_validator.validar_hunks(diff)
+    if problemas:
+        print("patch inseguro — não aplique:")
+        for problema in problemas:
+            print(f"  - {problema.codigo}: {problema.mensagem}")
+        return 3
     teste = subprocess.run(["git", "-C", str(REPO), "apply", "--recount", "--check", str(patch)],
                            capture_output=True, text=True, timeout=30)
     if teste.returncode != 0:

@@ -21,6 +21,8 @@ import uuid
 from functools import lru_cache
 from pathlib import Path
 
+import hunk_validator
+
 # A CLI roda do checkout (/opt/workdev); a API roda da release, sem .git: ela
 # aponta WORKDEV_BANCADA_REPO para o checkout e WORKDEV_BANCADA_DIR para a pasta.
 REPO = Path(os.environ.get("WORKDEV_BANCADA_REPO") or Path(__file__).resolve().parent.parent)
@@ -314,6 +316,11 @@ def verificar(texto: str, tarefa: dict) -> dict:
     achados: list[dict] = []
     diff = extrair_diff(texto)
     if diff is not None:
+        # Antes de testar a aplicação: hunk sem contexto não tem âncora, e o git
+        # aplicaria o trecho no fim do arquivo (medido em 2026-11-04). O
+        # --check passaria e a proposta nasceria errada.
+        for problema in hunk_validator.validar_hunks(diff):
+            achados.append(achado(problema.codigo, "erro", problema.mensagem))
         resultado, _ = _checar_diff(raiz, diff, escopo)
         achados.extend(resultado)
     elif tarefa.get("espera_diff"):

@@ -544,3 +544,59 @@ def test_sessao_pausada_barra_a_execucao(amb, monkeypatch):
     amb.respostas.append(DIFF_OK)
     lista = eventos(ex.executar_fatia(meta["id"], 1))
     assert lista[0]["tipo"] == "erro" and lista[0]["codigo"] == "sessao_pausada"
+
+
+# ---------------------------------------------------------------- hunk sem contexto
+
+# Regressão de 2026-11-04: hunk sem contexto passa pelo `git apply --check` e
+# pelo `exige`, mas o git aplica a linha no FIM do arquivo. A docstring de uma
+# função virou código morto depois do `return`, e todas as camadas deram verde.
+HUNK_SEM_CONTEXTO = """```diff
+--- a/app/mod.py
++++ b/app/mod.py
+@@ -1,0 +2 @@
++    \"\"\"docstring que nao devia estar aqui\"\"\"
+```"""
+
+
+def test_hunk_sem_contexto_falha_antes_de_aplicar(amb):
+    """Hunk sem âncora é recusado na etapa de aplicar, sem tocar no arquivo."""
+    meta = nova(amb)
+    amb.respostas.append(HUNK_SEM_CONTEXTO)
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+
+    falhou = [e for e in lista if e["tipo"] == "fatia" and e["status"] == "falhou"]
+    assert falhou, "o hunk sem contexto tem de ser recusado"
+    assert falhou[0]["etapa"] == "aplicar"
+    assert "contexto" in falhou[0]["erro"]
+    assert "ancora" in falhou[0]["erro"] or "âncora" in falhou[0]["erro"]
+
+
+def test_hunk_sem_contexto_nao_altera_o_arquivo(amb):
+    """A recusa acontece ANTES do git apply: nada muda no arquivo."""
+    meta = nova(amb)
+    destino = Path(amb.repo) / "app" / "mod.py"
+    antes = destino.read_text(encoding="utf-8")
+    amb.respostas.append(HUNK_SEM_CONTEXTO)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    assert destino.read_text(encoding="utf-8") == antes
+    # E nada foi commitado.
+    log = git(Path(meta["caminho"]), "log", "--oneline")
+    assert log.count("\n") == 0, "não deve haver commit da fatia"
+
+
+def test_patch_sem_contexto_nao_chega_ao_git_apply(amb, monkeypatch):
+    """O guard roda antes de qualquer `git apply`."""
+    chamadas = []
+    original = ex._git
+
+    def git_espiao(args, cwd):
+        if args and args[0] == "apply":
+            chamadas.append(args)
+        return original(args, cwd)
+
+    monkeypatch.setattr(ex, "_git", git_espiao)
+    meta = nova(amb)
+    amb.respostas.append(HUNK_SEM_CONTEXTO)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    assert not chamadas, f"nenhum git apply deveria rodar: {chamadas}"

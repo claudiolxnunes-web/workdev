@@ -36,7 +36,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from app.services import bancada_runner, build_worktree, test_gate, workspace, workspace_banco, workspace_sessao as sessao
+from app.services import (bancada_runner, build_worktree, test_gate, workspace, workspace_banco,
+                         workspace_sessao as sessao)
 from app.services.workspace import WorkspaceErro
 
 MAX_FATIAS = 20
@@ -44,7 +45,9 @@ FECHADAS = ("ok", "pulada")
 AUTOR_NOME = "WorkDev Workspace Local"
 AUTOR_EMAIL = "workspace-local@workdev.local"
 SAIDA_DIFF = ("Saída: diff unificado (--- a/caminho, +++ b/caminho, blocos @@) contra os arquivos reais "
-              "e nada mais.")
+              "e nada mais. Cada bloco @@ precisa vir com as linhas originais de contexto em volta da "
+              "mudança (3 antes e 3 depois, como o git gera): sem contexto o patch não tem âncora e "
+              "seria aplicado no fim do arquivo.")
 MAX_ERRO = 1500
 
 
@@ -199,6 +202,12 @@ def _aplicar(cwd: Path, diff: str, ident: str) -> tuple[str | None, list[str]]:
     patch = sessao.raiz() / "_sessoes" / f"{ident}.patch"
     patch.parent.mkdir(parents=True, exist_ok=True)
     patch.write_text(diff, encoding="utf-8")
+    # Antes de qualquer `git apply`: hunk sem contexto não tem âncora, e o git
+    # aplicaria o trecho no fim do arquivo em vez de onde o modelo disse
+    # (medido em 2026-11-04). O --check passaria e a mudança nasceria errada.
+    problemas = bancada_runner._modulo("hunk_validator").validar_hunks(diff)
+    if problemas:
+        return bancada_runner._modulo("hunk_validator").resumo(problemas), []
     numstat = _git(["apply", "--numstat", "--recount", str(patch)], cwd)
     if numstat.returncode != 0:
         return f"o diff não é um patch válido: {(numstat.stderr or '').strip()[:500]}", []
