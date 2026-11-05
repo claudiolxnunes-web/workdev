@@ -259,6 +259,7 @@ web) antes de commitar. Se o git rodou como root, devolva o dono:
 ```
 Tarefa: <uma frase, um verbo, um alvo>.
 Formato de saída: diff unificado contra <caminho> e nada mais.
+Cada bloco @@ vem com as linhas originais de contexto (3 antes e 3 depois).
 Regras: não invente nomes; use só o que está nos trechos.
 Se faltar informação, responda exatamente: FALTA: <o quê e onde>.
 Mude o mínimo necessário.
@@ -269,6 +270,11 @@ Mude o mínimo necessário.
   rápido e lê menos.
 - Resposta `FALTA: ...` é um bom sinal: anexe o que ele pediu (ou ligue **ler o
   repo**) e reenvie.
+- **O diff precisa ter contexto.** Um bloco `@@` sem as linhas originais em volta
+  da mudança não tem âncora: o `git apply` aplicaria o trecho no fim do arquivo,
+  em vez de onde você pediu. O sistema recusa esse patch (`hunk_sem_contexto`) —
+  é mais seguro recusar do que aplicar no lugar errado. Peça de novo com
+  "diff com 3 linhas de contexto" e o modelo local costuma acertar.
 
 ## Problemas comuns
 
@@ -281,6 +287,7 @@ Mude o mínimo necessário.
 | Leitura com "· recusada" | Caminho bloqueado (.env, .git, credenciais) ou fora do repo — é proposital |
 | "Começar sessão" recusa (`arvore_suja`) | Há arquivo rastreado alterado sem commit: commite ou guarde antes |
 | Fatia falhou em **aplicar** | O diff não encaixou no arquivo real: Repetir (o erro vai junto) ou corrija a instrução |
+| Fatia falhou com `hunk_sem_contexto` | O modelo devolveu diff sem linhas de contexto: peça de novo com "diff com 3 linhas de contexto" — sem âncora o patch cairia no fim do arquivo |
 | Fatia falhou em **gate** | Teste/lint/build reprovou: a mudança fica na cópia para olhar; Repetir limpa e refaz |
 | Incorporar recusa `gate_final_reprovado` | A suíte completa reprovou: veja o motivo, corrija com uma fatia nova ou edite na sessão, e incorpore de novo |
 | Incorporar recusa `branch_trocado` | O checkout mudou de branch desde que a sessão começou: volte ao branch de origem |
