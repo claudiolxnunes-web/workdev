@@ -68,13 +68,22 @@ SISTEMA = (
 )
 
 
-def montar_mensagens(instrucao: str, trechos: str, proposta: str, checagens: dict) -> list[dict]:
+def montar_mensagens(instrucao: str, trechos: str, proposta: str, checagens: dict,
+                     aplicado: str = "") -> list[dict]:
     categorias = "\n".join(f"- {nome}: {descricao}" for nome, descricao in CATEGORIAS.items())
     achados = [a for a in checagens["achados"] if a["severidade"] != "info"]
+    # O resultado aplicado é o que o disco mostra. A proposta diz o que o
+    # modelo PEDIU; o aplicado diz o que ficou no arquivo — e eles podem
+    # divergir (hunk sem contexto aplicado no fim do arquivo).
+    bloco_aplicado = (
+        f"## Resultado aplicado no arquivo (a verdade sobre o disco)\n{aplicado}\n\n"
+        if aplicado else ""
+    )
     pedido = (
         f"## Enunciado dado ao modelo local\n{instrucao}\n\n"
         f"## Trechos reais do código\n{trechos}\n\n"
         f"## Proposta do modelo local\n{proposta}\n\n"
+        f"{bloco_aplicado}"
         f"## Checagens mecânicas\n{json.dumps(achados, ensure_ascii=False, indent=1) or '[]'}\n\n"
         "## Responda com este JSON\n"
         '{"veredito": "aproveitada|correcao_pequena|descartada",\n'
@@ -83,6 +92,10 @@ def montar_mensagens(instrucao: str, trechos: str, proposta: str, checagens: dic
         f"Categorias permitidas:\n{categorias}\n\n"
         "aproveitada = aplica e cumpre o enunciado; correcao_pequena = ideia certa, ajuste "
         "localizado; descartada = não cumpre o enunciado ou exige refazer."
+        + ("\n\nO bloco 'Resultado aplicado' mostra o que ficou no arquivo: se ele "
+           "divergir da intenção do enunciado (código em função errada, depois de um "
+           "return, fora do escopo), isso é erro, mesmo que a proposta pareça correta."
+           if aplicado else "")
     )
     return [{"role": "system", "content": SISTEMA}, {"role": "user", "content": pedido}]
 
