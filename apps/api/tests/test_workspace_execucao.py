@@ -680,6 +680,8 @@ def test_patch_valido_passa_pela_segunda_camada(amb):
 # Patch que deixa a docstring DEPOIS do return: código morto.
 # As aspas triplas do patch não podem ser as aspas da string do Python:
 # o texto é montado por concatenação.
+# Substituicao que deixa a docstring DEPOIS do return: o patch tem contexto
+# antes e depois (passa da primeira camada) e a segunda camada e quem pega.
 PATCH_CODIGO_MORTO = ("```diff\n"
                       "--- a/app/duas.py\n"
                       "+++ b/app/duas.py\n"
@@ -689,7 +691,8 @@ PATCH_CODIGO_MORTO = ("```diff\n"
                       " \n"
                       " \n"
                       " def outra():\n"
-                      "     return 2\n"
+                      "-    return 2\n"
+                      "+    return 2\n"
                       '+    ' + chr(34) * 3 + 'docstring morta' + chr(34) * 3 + "\n"
                       "```")
 

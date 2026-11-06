@@ -142,7 +142,37 @@ def validar_hunks(diff: str) -> list[ProblemaHunk]:
                 cabecalho, arquivo))
             continue
 
+        # Contexto só ANTES da mudança não ancora. Medido em 2026-11-06:
+        #   - hunk com linhas REMOVIDAS se ancora pela remoção: o git procura
+        #     a linha que vai sumir e aplica ali (o DIFF_OK clássico passa);
+        #   - hunk só de ADIÇÕES precisa de contexto depois: sem ele o git
+        #     recusa ("patch does not apply") quando a mudança é no meio do
+        #     arquivo, e aplica no FIM do arquivo quando é no fim — que é
+        #     exatamente o bug do patch sem contexto.
+        tem_contexto_depois = False
+        ultimo_add = -1
+        for indice, linha in enumerate(corpo):
+            if linha.startswith(ADICIONADO):
+                ultimo_add = indice
+        if ultimo_add >= 0:
+            tem_contexto_depois = any(
+                linha.startswith(CONTEXTO) for linha in corpo[ultimo_add + 1:]
+            )
+        if linhas_adicionadas and not linhas_removidas and not tem_contexto_depois:
+            problemas.append(ProblemaHunk(
+                "hunk_sem_ancora",
+                f"hunk só de adições sem contexto depois em {arquivo or '?'} ({cabecalho}): "
+                f"sem a linha original que fica para trás, o git não tem onde ancorar — "
+                f"ou recusa o patch, ou (se a mudança for no fim do arquivo) aplica no "
+                f"lugar errado. Inclua as linhas originais que vêm DEPOIS da mudança "
+                f"(3 linhas bastam).",
+                cabecalho, arquivo))
+            continue
+
         # Com contexto, as contagens precisam fechar — senão o git recusa.
+        # O `--recount` corrige a contagem, então isto é aviso, não erro: o
+        # git aceita. Mas vale avisar, porque contagem errada costuma
+        # acompanhar hunk malformado.
         if contagem_antiga is not None:
             esperado_antigo = int(contagem_antiga)
             real_antigo = len(linhas_contexto) + len(linhas_removidas)
@@ -150,7 +180,8 @@ def validar_hunks(diff: str) -> list[ProblemaHunk]:
                 problemas.append(ProblemaHunk(
                     "hunk_contagem_incoerente",
                     f"contagem inconsistente em {arquivo or '?'} ({cabecalho}): "
-                    f"o hunk declara {esperado_antigo} linha(s) antiga(s) e tem {real_antigo}.",
+                    f"o hunk declara {esperado_antigo} linha(s) antiga(s) e tem {real_antigo}. "
+                    f"O --recount corrige na aplicação, mas o diff está malformado.",
                     cabecalho, arquivo))
         if contagem_nova is not None:
             esperado_novo = int(contagem_nova)
@@ -159,7 +190,8 @@ def validar_hunks(diff: str) -> list[ProblemaHunk]:
                 problemas.append(ProblemaHunk(
                     "hunk_contagem_incoerente",
                     f"contagem inconsistente em {arquivo or '?'} ({cabecalho}): "
-                    f"o hunk declara {esperado_novo} linha(s) nova(s) e tem {real_novo}.",
+                    f"o hunk declara {esperado_novo} linha(s) nova(s) e tem {real_novo}. "
+                    f"O --recount corrige na aplicação, mas o diff está malformado.",
                     cabecalho, arquivo))
 
     return problemas
