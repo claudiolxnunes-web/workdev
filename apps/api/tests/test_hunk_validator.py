@@ -176,3 +176,127 @@ class TestComportamentoDoGit:
                                    capture_output=True, text=True)
         assert resultado.returncode != 0, "contexto inexistente tem de ser recusado"
 
+
+
+class TestAncora:
+    """A regra real do git, medida em 2026-11-06 com o modelo local.
+
+    Contexto só ANTES da mudança não ancora: o git reprova o patch. O que
+    ancora é ter contexto DEPOIS da última linha adicionada.
+    """
+
+    # Patch real produzido pelo modelo local (exercício de 2026-11-06):
+    # 7 linhas de contexto antes, 4 adições, e NADA depois.
+    PATCH_SEM_ANCHORA = """--- a/apps/api/app/services/workspace_sessao.py
++++ b/apps/api/app/services/workspace_sessao.py
+@@ -360,7 +360,8 @@ def apagar_branch(meta: dict, repo, perder_commits: bool = False) -> None:
+         if contagem not in ("", "0") and not perder_commits:
+             raise WorkspaceErro(409, "commits_nao_incorporados",
+                                 f"{meta['branch']} tem {contagem} commit(s) fora de {meta['branch_origem']}; "
+                                 "apagar perde esse trabalho")
+         sha = _git_ok(["rev-parse", meta["branch"]], repo(), "branch_inexistente")
+         _git_ok(["branch", "-D", meta["branch"]], repo(), "branch_nao_apagado")
+         meta = {**meta, "branch_apagado_em": _agora(), "branch_apagado_sha": sha}
++
++
++def funcao_que_nao_existe_xyz() -> int:
++    return 1
+"""
+
+    # Patch real da fatia que PASSOU: contexto antes E depois.
+    PATCH_COM_ANCHORA = """--- a/apps/api/app/services/workspace_sessao.py
++++ b/apps/api/app/services/workspace_sessao.py
+@@ -172,3 +172,4 @@
+ def criar(task_id: str | None = None, chat_session_id: str | None = None, titulo: str | None = None) -> dict:
++    \"\"\"Cria a copia isolada da sessao e o branch de trabalho.\"\"\"
+     with _lock():
+         atual = ativa()
+"""
+
+    def test_patch_sem_ancora_e_reprovado(self):
+        problemas = hunk_validator.validar_hunks(self.PATCH_SEM_ANCHORA)
+        assert problemas, "patch so de adicoes sem contexto depois tem de ser recusado"
+        assert problemas[0].codigo == "hunk_sem_ancora"
+
+    def test_substituicao_sem_contexto_depois_passa(self):
+        """Hunk com linha REMOVIDA se ancora pela remocao: o git aplica."""
+        diff = ("--- a/app/mod.py\n"
+                "+++ b/app/mod.py\n"
+                "@@ -1,2 +1,2 @@\n"
+                " def f():\n"
+                "-    return 1\n"
+                "+    return 2\n")
+        assert hunk_validator.validar_hunks(diff) == []
+
+    def test_a_mensagem_diz_para_incluir_contexto_depois(self):
+        problema = hunk_validator.validar_hunks(self.PATCH_SEM_ANCHORA)[0]
+        assert "DEPOIS" in problema.mensagem
+
+    def test_patch_com_ancora_passa(self):
+        assert hunk_validator.validar_hunks(self.PATCH_COM_ANCHORA) == []
+
+    def test_contagem_errada_so_por_si_nao_reprova(self):
+        """O --recount corrige a contagem; o git aceita. O aviso pode vir,
+        mas a recusa tem de ser pela falta de ancora."""
+        diff = self.PATCH_COM_ANCHORA.replace("@@ -172,3 +172,4 @@", "@@ -172,3 +172,9 @@")
+        problemas = hunk_validator.validar_hunks(diff)
+        assert not problemas or all(p.codigo != "hunk_sem_ancora" for p in problemas)
+
+
+class TestRegraDoGit:
+    """Reproduz o comportamento real do git: o que ancora e o que nao."""
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        raiz = tmp_path / "repo"
+        raiz.mkdir()
+        (raiz / "f.py").write_text("\n".join(f"linha{i}" for i in range(1, 21)) + "\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(raiz)], check=True)
+        for chave, valor in (("user.name", "t"), ("user.email", "t@t")):
+            subprocess.run(["git", "-C", str(raiz), "config", chave, valor], check=True)
+        subprocess.run(["git", "-C", str(raiz), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(raiz), "commit", "-q", "-m", "base"], check=True)
+        return raiz
+
+    def _aplica(self, repo, antes, depois):
+        ini = 5
+        ctx_antes = [f"linha{i}" for i in range(ini - antes, ini)]
+        ctx_depois = [f"linha{i}" for i in range(ini + 1, ini + 1 + depois)]
+        # antigo = contexto_antes + 1 removida + contexto_depois
+        # novo   = contexto_antes + 1 adicionada + contexto_depois
+        total = antes + 1 + depois
+        patch = (f"--- a/f.py\n+++ b/f.py\n@@ -{ini - antes},{total} +{ini - antes},{total} @@\n"
+                 + "".join(f" {l}\n" for l in ctx_antes)
+                 + "-linha5\n+X\n"
+                 + "".join(f" {l}\n" for l in ctx_depois))
+        (repo / "p.patch").write_text(patch, encoding="utf-8")
+        return subprocess.run(["git", "-C", str(repo), "apply", "--check", str(repo / "p.patch")],
+                              capture_output=True, text=True)
+
+    def test_contexto_antes_e_depois_aplica(self, repo):
+        assert self._aplica(repo, 3, 3).returncode == 0
+
+    def test_so_contexto_antes_nao_aplica(self, repo):
+        """Regra medida: adicao sem contexto depois, no meio do arquivo, o git recusa."""
+        resultado = self._aplica(repo, 3, 0)
+        assert resultado.returncode != 0
+
+    def test_hunk_precisa_de_ancora_no_meio_do_arquivo(self, repo):
+        """Sem contexto depois, o git so aplica no FIM do arquivo.
+
+        Medido em 2026-11-06: substituicao no meio (linha 5 de 20) e
+        adicao no meio falham; no fim do arquivo, passam.
+        """
+        patch_meio = ("--- a/f.py\n+++ b/f.py\n@@ -5,2 +5,2 @@\n"
+                      " linha4\n-linha5\n+NEW5\n")
+        (repo / "p.patch").write_text(patch_meio, encoding="utf-8")
+        meio = subprocess.run(["git", "-C", str(repo), "apply", "--check", str(repo / "p.patch")],
+                              capture_output=True, text=True)
+        assert meio.returncode != 0, "no meio do arquivo, sem contexto depois, o git recusa"
+
+        patch_fim = ("--- a/f.py\n+++ b/f.py\n@@ -20,1 +20,2 @@\n"
+                     " linha20\n+NEW\n")
+        (repo / "p.patch").write_text(patch_fim, encoding="utf-8")
+        fim = subprocess.run(["git", "-C", str(repo), "apply", "--check", str(repo / "p.patch")],
+                             capture_output=True, text=True)
+        assert fim.returncode == 0, "no fim do arquivo, o git aplica (e e o bug)"
