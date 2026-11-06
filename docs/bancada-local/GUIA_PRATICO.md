@@ -171,6 +171,9 @@ roda o plano inteiro numa **cópia isolada do projeto**.
      fatias anteriores já mudaram);
    - aplica com `git apply --check`;
    - confere o `exige`;
+   - confere a **segunda camada**: o código novo caiu no lugar certo? (o
+     `exige` responde "o código pedido existe?"; esta responde "está na função
+     certa e é alcançável?");
    - roda o **gate**: pytest **só dos testes da área** se mexeu em `apps/api`
      (`tests/test_*<módulo>*.py`; módulo sem teste correspondente roda a suíte
      inteira); vitest, lint e build se mexeu em `apps/web`;
@@ -287,6 +290,7 @@ Mude o mínimo necessário.
 | Leitura com "· recusada" | Caminho bloqueado (.env, .git, credenciais) ou fora do repo — é proposital |
 | "Começar sessão" recusa (`arvore_suja`) | Há arquivo rastreado alterado sem commit: commite ou guarde antes |
 | Fatia falhou em **aplicar** | O diff não encaixou no arquivo real: Repetir (o erro vai junto) ou corrija a instrução |
+| Fatia falhou em **semantica** | O código novo caiu no lugar errado (função errada ou depois de um `return`): a instrução precisa ser mais precisa sobre ONDE mudar |
 | Fatia falhou com `hunk_sem_contexto` | O modelo devolveu diff sem linhas de contexto: peça de novo com "diff com 3 linhas de contexto" — sem âncora o patch cairia no fim do arquivo |
 | Fatia falhou em **gate** | Teste/lint/build reprovou: a mudança fica na cópia para olhar; Repetir limpa e refaz |
 | Incorporar recusa `gate_final_reprovado` | A suíte completa reprovou: veja o motivo, corrija com uma fatia nova ou edite na sessão, e incorpore de novo |

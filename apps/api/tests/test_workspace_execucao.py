@@ -28,6 +28,10 @@ def amb(tmp_path, monkeypatch):
     raiz = tmp_path / "repo"
     (raiz / "app").mkdir(parents=True)
     (raiz / "app" / "mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    # Arquivo com duas funcoes: serve para testar o escopo (o codigo novo cai
+    # na funcao errada, mas continua sendo codigo valido).
+    (raiz / "app" / "duas.py").write_text(
+        "def criar():\n    return 1\n\n\ndef outra():\n    return 2\n", encoding="utf-8")
     (raiz / "app" / "outro.py").write_text("X = 1\n", encoding="utf-8")
     git(raiz.parent, "init", "-q", "-b", "main", str(raiz))
     git(raiz, "config", "user.name", "Operador")
@@ -75,6 +79,12 @@ def amb(tmp_path, monkeypatch):
 def fatia(**extra):
     return {"objetivo": "f retorna 2", "instrucao": "Troque o retorno de f para 2.",
             "trechos": [["app/mod.py", 1, 2]], "gate": ["pytest"], **extra}
+
+
+def fatia_escopo(**extra):
+    """Fatia cujo enunciado nomeia a funcao `criar` de app/duas.py."""
+    return {"objetivo": "docstring em criar", "instrucao": "Adicione uma docstring a funcao criar.",
+            "trechos": [["app/duas.py", 1, 2]], "gate": ["pytest"], **extra}
 
 
 def eventos(gerador) -> list[dict]:
@@ -600,3 +610,128 @@ def test_patch_sem_contexto_nao_chega_ao_git_apply(amb, monkeypatch):
     amb.respostas.append(HUNK_SEM_CONTEXTO)
     eventos(ex.executar_fatia(meta["id"], 1))
     assert not chamadas, f"nenhum git apply deveria rodar: {chamadas}"
+
+
+# ---------------------------------------------------------------- segunda camada (semântica)
+
+# Regressão de 2026-11-04: a docstring de `criar` foi parar depois do `return`
+# de `apagar_branch`. O `exige` passava (a string existia), o gate passava
+# (nada quebrou) e o observer passava (leu a proposta, não o resultado).
+# Patch COM contexto (passa pela primeira camada) que insere a linha nova
+# depois do `return` de outra função: a segunda camada é quem pega.
+PATCH_QUE_CAI_NO_FIM = """```diff
+--- a/app/duas.py
++++ b/app/duas.py
+@@ -1,6 +1,7 @@
+ def criar():
+     return 1
+ 
+ 
+ def outra():
++    \"\"\"docstring que nao devia estar aqui\"\"\"
+     return 2
+```"""
+
+
+def test_codigo_novo_no_escopo_errado_falha_na_etapa_semantica(amb):
+    """O código que cai na função errada é reprovado antes do gate."""
+    meta = nova(amb, fatias=[fatia_escopo()])
+    amb.respostas.append(PATCH_QUE_CAI_NO_FIM)
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+
+    falhou = [e for e in lista if e["tipo"] == "fatia" and e["status"] == "falhou"]
+    assert falhou, "o código no escopo errado tem de ser reprovado"
+    assert falhou[0]["etapa"] == "semantica"
+
+
+def test_a_falha_semantica_traz_o_achado(amb):
+    meta = nova(amb, fatias=[fatia_escopo()])
+    amb.respostas.append(PATCH_QUE_CAI_NO_FIM)
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+    achados = [e for e in lista if e["tipo"] == "achados_semanticos"]
+    assert achados, "os achados semânticos têm de aparecer no fluxo"
+    categorias = {a["categoria"] for a in achados[0]["achados"]}
+    # O código caiu em outra(): nem é código morto (é alcançável), mas está
+    # no escopo errado — e a função pedida ficou sem mudança.
+    assert "simbolo_em_outro_escopo" in categorias
+    assert "funcao_nao_alterada" in categorias
+
+
+def test_codigo_morto_nao_e_commitado(amb):
+    """Nada é commitado: a cópia fica como estava, para o operador olhar."""
+    destino = Path(amb.repo) / "app" / "duas.py"
+    antes = destino.read_text(encoding="utf-8")
+    meta = nova(amb, fatias=[fatia_escopo()])
+    amb.respostas.append(PATCH_QUE_CAI_NO_FIM)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    log = git(Path(meta["caminho"]), "log", "--oneline")
+    assert log.count("\n") == 0, "não deve haver commit da fatia"
+
+
+def test_patch_valido_passa_pela_segunda_camada(amb):
+    """Um patch bem ancorado não gera achado semântico."""
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK)
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+    assert not [e for e in lista if e["tipo"] == "achados_semanticos"]
+    assert lista[-1]["status"] == "ok"
+
+
+# Patch que deixa a docstring DEPOIS do return: código morto.
+# As aspas triplas do patch não podem ser as aspas da string do Python:
+# o texto é montado por concatenação.
+PATCH_CODIGO_MORTO = ("```diff\n"
+                      "--- a/app/duas.py\n"
+                      "+++ b/app/duas.py\n"
+                      "@@ -1,6 +1,7 @@\n"
+                      " def criar():\n"
+                      "     return 1\n"
+                      " \n"
+                      " \n"
+                      " def outra():\n"
+                      "     return 2\n"
+                      '+    ' + chr(34) * 3 + 'docstring morta' + chr(34) * 3 + "\n"
+                      "```")
+
+
+def test_codigo_morto_e_reprovado(amb):
+    """String depois do return: inalcançável, e o patch caiu no lugar errado."""
+    meta = nova(amb, fatias=[fatia_escopo()])
+    amb.respostas.append(PATCH_CODIGO_MORTO)
+    lista = eventos(ex.executar_fatia(meta["id"], 1))
+    achados = [e for e in lista if e["tipo"] == "achados_semanticos"]
+    assert achados
+    categorias = {a["categoria"] for a in achados[0]["achados"]}
+    assert "codigo_morto" in categorias
+
+
+def test_o_observer_recebe_o_resultado_aplicado(amb, monkeypatch):
+    """A auditoria precisa ver o que ficou no disco, não só a proposta."""
+    recebido = {}
+
+    def montar_falso(instrucao, trechos, proposta, checagens, aplicado=""):
+        recebido["aplicado"] = aplicado
+        return [{"role": "user", "content": "x"}]
+
+    def observar_falso(modelo, mensagens):
+        return {"ok": True, "parecer": {"veredito": "aproveitada", "erros": [],
+                                        "prompt_correcao": ""},
+                "custo_usd": 0.0, "segundos": 1.0, "falhas": []}
+
+    class Obs:
+        PADRAO = "fake"
+        montar_mensagens = staticmethod(montar_falso)
+        observar = staticmethod(observar_falso)
+
+    original = bancada_runner._modulo
+    monkeypatch.setattr(bancada_runner, "_modulo",
+                        lambda nome: Obs if nome == "bancada_observer" else original(nome))
+    # A suíte desliga a auditoria por padrão (ela fala com a rede): aqui ela
+    # é o objeto do teste.
+    monkeypatch.setattr(ex, "_limites_supervisor", lambda: {"observador_auditoria": True,
+                                                            "tentativas_autocorrecao": 0})
+    meta = nova(amb)
+    amb.respostas.append(DIFF_OK)
+    eventos(ex.executar_fatia(meta["id"], 1))
+    assert "aplicado" in recebido, "o observer tem de receber o resultado aplicado"
+    assert "diff aplicado pelo sistema" in recebido["aplicado"]

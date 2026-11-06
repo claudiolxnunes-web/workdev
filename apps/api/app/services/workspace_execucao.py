@@ -305,13 +305,35 @@ PEDIDO_CORRECAO = (
 )
 
 
+def _verificar_semantica(cwd: Path, diff: str, instrucao: str, caminhos: list[str]) -> list:
+    """Segunda camada: o código novo caiu onde a instrução pediu?
+
+    Usa o AST do arquivo já aplicado — sem LLM. Falha do verificador não
+    reprova a fatia: quem decide continua sendo o objetivo (gate + exige).
+    """
+    try:
+        modulo = bancada_runner._modulo("verificador_aplicado")
+        return modulo.verificar_diff_aplicado(diff, cwd, instrucao, caminhos)
+    except Exception:  # noqa: BLE001 — verificador é advice, não gate
+        return []
+
+
+def _semantica_resumo(achados: list) -> str:
+    return "; ".join(a.mensagem for a in achados[:3])
+
+
 def _limites_supervisor() -> dict:
     from app.services import supervisor_config
     return supervisor_config.limites()["em_vigor"]
 
 
 def _auditar(cwd: Path, fatia: dict, instrucao: str, proposta: str, resultados: list) -> dict:
-    """O observer julga a proposta: o mesmo árbitro da Bancada Local.
+    """O observer julga o RESULTADO APPLICADO: o mesmo árbitro da Bancada Local.
+
+    O observer recebe o diff que o sistema de fato aplicou e o trecho do
+    arquivo já alterado — não só a proposta. Em 2026-11-04 ele aprovou uma
+    proposta em que a docstring fora parar depois do `return`: leu a proposta
+    (correta na intenção) e não o resultado (errado no lugar).
 
     Falha do observer NÃO reprova a fatia — o gate objetivo continua valendo.
     Um observer fora do ar não pode travar o trabalho do agente local.
@@ -324,10 +346,31 @@ def _auditar(cwd: Path, fatia: dict, instrucao: str, proposta: str, resultados: 
         checagens = {"achados": [
             {"nome": r.name, "severidade": "erro" if not r.passed else "info",
              "mensagem": r.reason[:300]} for r in resultados]}
-        return obs.observar(obs.PADRAO, obs.montar_mensagens(instrucao, trechos, proposta, checagens))
+        aplicado = _resultado_aplicado(cwd, fatia)
+        return obs.observar(obs.PADRAO, obs.montar_mensagens(
+            instrucao, trechos, proposta, checagens, aplicado=aplicado))
     except Exception as erro:  # noqa: BLE001 — a auditoria é advice, não gate
         return {"ok": False, "parecer": None,
                 "falhas": [f"{type(erro).__name__}: {str(erro)[:200]}"]}
+
+
+def _resultado_aplicado(cwd: Path, fatia: dict) -> str:
+    """O diff que o sistema aplicou + o trecho do arquivo já alterado.
+
+    É o que o observer precisa ver: o que o disco mostra depois do patch.
+    """
+    partes: list[str] = []
+    diff = fatia.get("diff_aplicado") or ""
+    if diff:
+        partes.append("diff aplicado pelo sistema:\n```diff\n" + diff[:6000] + "\n```")
+    arquivos = fatia.get("arquivos") or []
+    for caminho in arquivos[:3]:
+        try:
+            texto = (cwd / caminho).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        partes.append(f"arquivo já alterado — {caminho}:\n```\n{texto[:5000]}\n```")
+    return "\n\n".join(partes)
 
 
 def _correcao_do_supervisor(ident: str, n: int) -> str:
@@ -505,9 +548,22 @@ def _executar_fatia(ident: str, n: int, correcao: str | None) -> Iterator[str]:
             yield falhar("aplicar", erro)
             return
         fatia["arquivos"] = caminhos
+        fatia["diff_aplicado"] = diff
         faltando = _exige_faltando(diff, fatia["exige"])
         if faltando:
             yield falhar("exige", "o código novo não tem: " + "; ".join(faltando))
+            return
+
+        # 2.5 segunda camada: o código novo caiu onde a instrução pediu?
+        # O `exige` acima responde "o código pedido existe?"; este responde
+        # "está no lugar certo?". O bug de 2026-11-04 (docstring depois do
+        # return, em outra função) passava pelo `exige` e pelo gate.
+        semantica = _verificar_semantica(cwd, diff, instrucao, caminhos)
+        if semantica:
+            fatia["achados_semanticos"] = [a.como_dict() for a in semantica]
+            yield _sse({"tipo": "achados_semanticos", "n": n,
+                        "achados": [a.como_dict() for a in semantica]})
+            yield falhar("semantica", _semantica_resumo(semantica))
             return
 
         # 3. gate fixo do projeto
