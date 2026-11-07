@@ -1,6 +1,6 @@
 # Guia prático — Bancada Local e Workspace Local
 
-Estado conferido em 2026-10-26: produção até o PR #14 (sessão, laço de fatias, leituras, fatias de banco), mais a branch `feat/workspace-supervisor-acoes` (ferramentas novas do supervisor, medição, repetição automática, gate em duas camadas, sessões anteriores), que só vale depois do deploy. Contrato: ADR 015.
+Estado conferido em 2026-11-07: base `main` em `5d8f90d`, com o guia de hunk sem âncora, a segunda camada semântica e o relatório do modelo local. Contrato: ADR 015. Para o roteiro de uso, do zero à entrega, leia [Como trabalhar no Workspace e na Bancada Local](PASSO_A_PASSO.md).
 
 ## Qual usar
 
@@ -99,7 +99,17 @@ ver `README.md` desta pasta.
 ```
 - Divisórias arrastáveis; o layout fica lembrado. "Fechar painel" esconde o
   painel inferior.
-- **Celular**: vira quatro abas — Explorer · Editor · Local · Supervisor.
+- **Celular**: vira cinco abas — Explorer · Editor · Local · Execução · Supervisor.
+
+### Antes de começar a sessão: branch de origem
+
+Prepare uma branch de tarefa no checkout que o Workspace usa (por padrão,
+`/opt/workdev`), com a árvore limpa. A sessão nasce no HEAD desse checkout,
+e **Incorporar** devolve os commits ao mesmo branch de origem. Como o `main`
+recebe mudanças por PR, confira a origem na barra da sessão antes de executar.
+Abrir um worktree separado no terminal não troca a origem da página Workspace.
+Mantenha o checkout no branch de origem até incorporar. Veja o
+[passo a passo](PASSO_A_PASSO.md#2-prepare-a-tarefa-e-o-branch-antes-da-sessão).
 
 ### 1. Entrar
 **A. Pelo backlog (recomendado)**: task com descrição → **Plano para o Workspace
