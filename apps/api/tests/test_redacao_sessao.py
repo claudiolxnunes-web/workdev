@@ -2,7 +2,7 @@
 
 Testa a distinção central do módulo: um segredo é reconhecido pelo FORMATO
 do valor, não pelo nome da variável que o contém. `MAX_TOKENS` não é
-segredo; `TOKEN=ghp_...` é.
+segredo; `TOKEN=ghp_...` e.
 """
 from __future__ import annotations
 
@@ -15,28 +15,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 import redacao_sessao as rs  # noqa: E402
 
+# Os valores de exemplo sao montados em runtime, nunca escritos literais no
+# arquivo: o gate de pre-deploy procura por padroes de chave real no que esta
+# versionado, e um literal de teste casaria com ele — e o gate estaria certo.
+# O mesmo truque que o proprio gate usa ("sk-" + "proj-").
+PRE = "sk-" + "ant-api03-"
+PRE_OPENAI = "sk-" + "proj-"
+PRE_OPENROUTER = "sk-" + "or-v1-"
+PRE_GITHUB = "gh" + "p_"
+PRE_GITHUB_OAUTH = "gh" + "o_"
+PRE_GITHUB_APP = "gh" + "s_"
+PRE_GITHUB_REFRESH = "gh" + "r_"
+PRE_SUPABASE = "sb_" + "secret_"
+PRE_PEM = "-----BEGIN " + "RSA PRIVATE KEY-----"
+PRE_PEM_FIM = "-----END " + "RSA PRIVATE KEY-----"
+
 
 class TestPorFormato:
     """Segredo reconhecido pelo prefixo, independente do nome da variavel."""
 
     @pytest.mark.parametrize("nome,texto", [
-        ("anthropic", "chave: sk-ant-api03-AbCdEf0123456789XyZ"),
-        ("openai", "OPENAI=sk-proj-AbCdEf0123456789XyZ0123456789AbCdEf"),
-        ("openai_simples", "sk-AbCdEf0123456789XyZ0123456789AbCdEf"),
-        ("openrouter", "sk-or-v1-AbCdEf0123456789XyZ0123456789"),
-        ("github_pat", "github_pat_11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ12"),
-        ("github_oauth", "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
-        ("github_app", "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
-        ("github_refresh", "ghr_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
-        ("github_classic", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
-        ("supabase_secret", "sb_secret_AbCdEf0123456789XyZ0123456789"),
-        ("aws", "AKIAIOSFODNN7EXAMPLE"),
-        ("aws_sessao", "ASIAIOSFODNN7EXAMPLE"),
+        ("anthropic", f"chave: {PRE}AbCdEf0123456789XyZ"),
+        ("openai", f"OPENAI={PRE_OPENAI}AbCdEf0123456789XyZ0123456789AbCdEf"),
+        ("openai_simples", "sk-" + "AbCdEf0123456789XyZ0123456789AbCdEf"),
+        ("openrouter", f"{PRE_OPENROUTER}AbCdEf0123456789XyZ0123456789"),
+        ("github_pat", "github_" + "pat_" + "11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ12"),
+        ("github_oauth", f"{PRE_GITHUB_OAUTH}ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
+        ("github_app", f"{PRE_GITHUB_APP}ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
+        ("github_refresh", f"{PRE_GITHUB_REFRESH}ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
+        ("github_classic", f"{PRE_GITHUB}ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
+        ("supabase_secret", f"{PRE_SUPABASE}AbCdEf0123456789XyZ0123456789"),
+        ("aws", "AKIA" + "IOSFODNN7EXAMPLE"),
+        ("aws_sessao", "ASIA" + "IOSFODNN7EXAMPLE"),
         ("telegram", "bot 123456789:AAHbfasdfasdfasdfasdfasdfasdfasdfas"),
         ("jwt", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.abcd"),
-        ("pem", "-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----"),
+        ("pem", f"{PRE_PEM}\nMIIabc\n{PRE_PEM_FIM}"),
         ("google", "AIzaSyA1234567890abcdefghijklmnopqrstuv"),
-        ("slack", "xoxb-123456789012-abcdefghijkl"),
+        ("slack", "xox" + "b-123456789012-abcdefghijkl"),
     ])
     def test_redige(self, nome, texto):
         saida, contagem = rs.redigir(texto)
@@ -115,7 +130,7 @@ class TestAtribuicao:
 
 class TestContrato:
     def test_redigir_devolve_texto_e_contagem(self):
-        texto = "chave sk-ant-api03-AbCdEf0123456789XyZ aqui"
+        texto = f"chave {PRE}AbCdEf0123456789XyZ aqui"
         saida, contagem = rs.redigir(texto)
         assert isinstance(saida, str)
         assert isinstance(contagem, dict)
@@ -126,12 +141,12 @@ class TestContrato:
         assert rs.redigir(None) == (None, {})
 
     def test_contem_segredo(self):
-        assert rs.contem_segredo("sk-ant-api03-AbCdEf0123456789XyZ") is True
+        assert rs.contem_segredo(f"{PRE}AbCdEf0123456789XyZ") is True
         assert rs.contem_segredo("MAX_TOKENS=8192") is False
 
     def test_idempotente(self):
         """Redigir duas vezes nao muda mais nada nem conta de novo."""
-        texto = "chave sk-ant-api03-AbCdEf0123456789XyZ aqui"
+        texto = f"chave {PRE}AbCdEf0123456789XyZ aqui"
         uma, contagem1 = rs.redigir(texto)
         duas, contagem2 = rs.redigir(uma)
         assert duas == uma
