@@ -269,18 +269,60 @@ def _alvos_pytest(cwd: Path, caminhos: list[str]) -> list[str] | None:
     return sorted(alvos) or None
 
 
-def _gate(cwd: Path, caminhos: list[str], completo: bool = False) -> list[test_gate.CheckResult]:
-    """Gate de uma fatia: só os testes da área tocada. `completo`: suíte inteira (antes de incorporar)."""
+def _gate(cwd: Path, caminhos: list[str], completo: bool = False,
+          head: str | None = None) -> tuple[list[test_gate.CheckResult], bool]:
+    """Gate de uma fatia: só os testes da área tocada. `completo`: suíte inteira (antes de incorporar).
+
+    Devolve (resultados, cache_hit). O cache é por (HEAD, arquivos tocados,
+    comandos): repetir a mesma fatia sem mudar nada não repete os minutos de
+    teste. Ver `app/services/gate_cache.py`.
+    """
+    from app.services import gate_cache
+
     paths = test_gate.GatePaths(root=cwd)
+    comandos = _comandos_do_gate(cwd, caminhos, completo)
+    if head is None:
+        head = _git(["rev-parse", "HEAD"], cwd).stdout.strip()
+
+    entrada = gate_cache.buscar(head, caminhos, comandos)
+    if entrada is not None:
+        resultados = [
+            test_gate.CheckResult(
+                name=check.get("name", ""),
+                passed=bool(check.get("passed")),
+                mandatory=bool(check.get("mandatory", True)),
+                reason=str(check.get("reason", "")),
+                duration_ms=int(check.get("duration_ms", 0)),
+            )
+            for check in entrada.checks
+        ]
+        return resultados, True
+
     resultados = [test_gate._check_guardrails(paths)]
     if not resultados[0].passed:
-        return resultados
+        return resultados, False
     if any(c.startswith("apps/api/") for c in caminhos):
         alvos = None if completo else _alvos_pytest(cwd, caminhos)
         resultados.append(test_gate._check_pytest(paths, env=_env_gate(), alvos=alvos))
     if any(c.startswith("apps/web/") for c in caminhos):
         resultados += [test_gate._check_vitest(paths), test_gate._check_lint(paths), test_gate._check_build(paths)]
-    return resultados
+
+    reprovados = [r for r in resultados if r.mandatory and not r.passed]
+    gate_cache.gravar(head, caminhos, comandos, not reprovados, resultados)
+    return resultados, False
+
+
+def _comandos_do_gate(cwd: Path, caminhos: list[str], completo: bool) -> list[str]:
+    """Os comandos que o gate vai rodar — a chave do cache precisa saber deles."""
+    comandos: list[str] = []
+    if any(c.startswith("apps/api/") for c in caminhos):
+        alvos = None if completo else _alvos_pytest(cwd, caminhos)
+        # O texto do alvo faz parte da chave: a suite completa ("None") e a
+        # suite da area ("arquivo1,arquivo2") sao entradas diferentes.
+        comandos.append("pytest:" + (",".join(alvos) if alvos else "None"))
+    if any(c.startswith("apps/web/") for c in caminhos):
+        comandos += ["vitest", "lint", "build"]
+    return comandos
 
 
 def _commit(cwd: Path, caminhos: list[str], mensagem: str) -> str:
@@ -373,6 +415,71 @@ def _resultado_aplicado(cwd: Path, fatia: dict) -> str:
     return "\n\n".join(partes)
 
 
+def _correcao_local(ident: str, n: int) -> str:
+    """Tenta corrigir a fatia localmente, sem chamar o supervisor de nuvem.
+
+    A ideia: a falha da fatia é, na maioria das vezes, um erro de forma do
+    diff — contexto faltando, contagem errada, hunk sem ancora. Isso o modelo
+    local corrige sozinho, e o supervisor de nuvem nem precisa ser acionado
+    (que custa uma chamada e latencia).
+
+    Devolve a nova instrucao (o texto que o modelo local deve executar) ou
+    string vazia se a correcao local nao resolveu.
+    """
+    meta = sessao._exigir(ident)
+    fatias = (meta.get("plano") or {}).get("fatias") or []
+    if not (1 <= n <= len(fatias)):
+        return ""
+    fatia = fatias[n - 1]
+    # O erro da falha fica em `erro` enquanto a fatia esta aberta e vira
+    # `erro_anterior` na tentativa seguinte. Os dois valem.
+    erro = str(fatia.get("erro") or fatia.get("erro_anterior") or "")
+    if not erro:
+        return ""
+
+    instrucao = str(fatia.get("instrucao") or "")
+    diff = str(fatia.get("diff_aplicado") or "")
+    pedido = (
+        f"A tentativa anterior falhou.\n"
+        f"Erro: {erro}\n"
+        f"Trechos que voce tinha: {instrucao}\n"
+        f"Diff que voce propôs:\n{diff}\n"
+        f"Corrija e responda de novo no mesmo formato. Se o diff nao tinha linhas "
+        f"de contexto, inclua 3 antes e 3 depois da mudanca — sem isso o patch "
+        f"nao tem ancora e cai no fim do arquivo."
+    )
+
+    limites = _limites_supervisor()
+    # O id segue o padrao da execucao da fatia, com o sufixo que diz que e
+    # a tentativa local: `ws-<sessao>-<fatia>-local`.
+    ident_execucao = f"ws-{ident}-{fatia['id']}-local"[:80]
+    try:
+        plano = bancada_runner.preparar_execucao(
+            ident_execucao, pedido, fatia.get("trechos") or [],
+            int(limites.get("max_tokens_fatia") or 1500),
+            fatia.get("exige") or {}, True, True, _raiz_sessao(ident),
+        )
+        for _evento in bancada_runner.executar(plano):
+            pass
+        # A resposta do modelo local fica no arquivo da proposta.
+        arquivo = bancada_runner.pasta() / "moe" / f"{ident_execucao}.txt"
+        if not arquivo.exists():
+            return ""
+        return arquivo.read_text(encoding="utf-8", errors="replace").strip()[:2000]
+    except Exception:  # noqa: BLE001 — correcao local e um extra, nao um caminho
+        return ""
+
+
+def _raiz_sessao(ident: str) -> Path | None:
+    """A raiz da copia da sessao, onde o modelo local le para corrigir."""
+    try:
+        meta = sessao._exigir(ident)
+    except WorkspaceErro:
+        return None
+    caminho = meta.get("caminho")
+    return Path(caminho) if caminho else None
+
+
 def _correcao_do_supervisor(ident: str, n: int) -> str:
     """O supervisor da conversa escreve a correção da fatia que falhou.
 
@@ -402,14 +509,22 @@ def _correcao_do_supervisor(ident: str, n: int) -> str:
 
 
 def executar_fatia(ident: str, n: int, correcao: str | None = None) -> Iterator[str]:
-    """Executa a fatia e, se ela falhar, pede a correção ao supervisor e repete.
+    """Executa a fatia e, se ela falhar, tenta corrigir antes de pedir ajuda.
 
-    O número de repetições é `workspace.tentativas_autocorrecao` — o supervisor
-    ajusta esse limite pela própria configuração.
+    A ordem e deliberada: primeiro a **correcao local** (o modelo local
+    mesmo, sem custo de nuvem), depois o **supervisor** (modelo grande, na
+    nuvem). O supervisor so e acionado se a correcao local nao resolver.
+
+    O número de repetições é `workspace.tentativas_autocorrecao` (nuvem) e
+    `workspace.tentativas_autocorrecao_local` (local) — o supervisor ajusta
+    esses limites pela própria configuração.
     """
     limites = _limites_supervisor()
     max_tentativas = int(limites.get("tentativas_autocorrecao") or 0)
-    for rodada in range(1, max_tentativas + 2):
+    max_locais = int(limites.get("tentativas_autocorrecao_local") or 0)
+    rodada = 0
+    locais = 0
+    while True:
         try:
             yield from _executar_fatia(ident, n, (correcao or "").strip()[:2000] or None)
         except WorkspaceErro as erro:
@@ -424,13 +539,77 @@ def executar_fatia(ident: str, n: int, correcao: str | None = None) -> Iterator[
             return
         if fatias[n - 1].get("status") != "falhou":
             return
-        if rodada > max_tentativas:
+
+        # Primeiro a correcao local: mais barata e mais rapida.
+        if locais < max_locais:
+            locais += 1
+            nova = _correcao_local(ident, n)
+            if nova:
+                correcao = nova
+                yield _sse({"tipo": "correcao_local", "n": n, "correcao": nova})
+                continue
+
+        if rodada >= max_tentativas:
             return
+        rodada += 1
         nova = _correcao_do_supervisor(ident, n)
         if not nova:
             return
         correcao = nova
         yield _sse({"tipo": "correcao", "n": n, "correcao": nova})
+
+
+def _proxima_fatia_continua(ident: str, depois_de: int) -> tuple[int | None, str | None]:
+    """Próxima fatia que ainda não foi fechada, em ordem."""
+    meta = sessao._exigir(ident)
+    fatias = (meta.get("plano") or {}).get("fatias") or []
+    for f in fatias[depois_de:]:
+        if f["status"] in FECHADAS:
+            continue
+        return f["n"], f.get("tipo", "codigo")
+    return None, None
+
+
+def executar_fatia_continua(ident: str, n: int, correcao: str | None, continuo: bool) -> Iterator[str]:
+    """Executa a fatia n e, no modo contínuo, avança sozinho enquanto passar.
+
+    Regras do modo contínuo (ADR 021):
+    - avança para a próxima fatia pendente se a atual terminar com status `ok`;
+    - para em qualquer falha, em fatia de banco (sempre exige confirmação humana)
+      ou se o frontend fechar a conexão (que desliga o modo na próxima chamada).
+    """
+    atual = n
+    primeira_correcao = correcao
+    while True:
+        yield from executar_fatia(ident, atual, primeira_correcao if atual == n else None)
+
+        if not continuo:
+            return
+
+        try:
+            meta = sessao._exigir(ident)
+        except WorkspaceErro:
+            return
+        fatias = (meta.get("plano") or {}).get("fatias") or []
+        fatia_atual = next((f for f in fatias if f["n"] == atual), None)
+        if fatia_atual is None or fatia_atual.get("status") != "ok":
+            yield _sse({"tipo": "continuo", "n": atual, "motivo": "falha",
+                        "status": fatia_atual.get("status") if fatia_atual else None,
+                        "mensagem": "Execução contínua parada: a fatia não passou."})
+            return
+
+        proxima, tipo = _proxima_fatia_continua(ident, atual)
+        if proxima is None:
+            yield _sse({"tipo": "continuo", "n": atual, "motivo": "concluido",
+                        "mensagem": "Execução contínua concluída: não há mais fatias pendentes."})
+            return
+        if tipo == "banco":
+            yield _sse({"tipo": "continuo", "n": atual, "proxima": proxima, "motivo": "banco",
+                        "mensagem": f"Execução contínua parada na fatia {proxima}: "
+                                    f"aguardando decisão do operador para aplicar no banco."})
+            return
+
+        atual = proxima
 
 
 def _fatia_aberta(meta: dict, n: int) -> dict:
@@ -568,10 +747,12 @@ def _executar_fatia(ident: str, n: int, correcao: str | None) -> Iterator[str]:
 
         # 3. gate fixo do projeto
         yield etapa("gate")
-        resultados = _gate(cwd, caminhos)
+        resultados, cache_hit = _gate(cwd, caminhos)
         fatia["gate_checks"] = [{"nome": r.name, "passou": r.passed, "motivo": r.reason[:500],
                                  "ms": r.duration_ms} for r in resultados]
-        yield _sse({"tipo": "gate", "n": n, "checks": fatia["gate_checks"]})
+        fatia["gate_cache_hit"] = cache_hit
+        yield _sse({"tipo": "gate", "n": n, "checks": fatia["gate_checks"],
+                    "cache_hit": cache_hit})
         reprovados = [r for r in resultados if r.mandatory and not r.passed]
         if reprovados:
             yield falhar("gate", "; ".join(f"{r.name}: {r.reason}" for r in reprovados))
@@ -770,18 +951,22 @@ def _gate_final(meta: dict) -> None:
     """Segunda camada: a suíte inteira sobre tudo que a sessão mudou, antes de incorporar.
 
     Cada fatia rodou só os testes da área; aqui roda tudo, uma vez. O resultado
-    fica gravado com o HEAD da sessão: incorporar de novo sem commit novo não
-    repete os minutos de teste.
+    fica no cache de gate, keyed pelo HEAD da sessão: incorporar de novo sem
+    commit novo não repete os minutos de teste.
     """
     cwd = Path(meta["caminho"])
     head = _git(["rev-parse", "HEAD"], cwd).stdout.strip()
+    # Duas guardas, na ordem: primeiro o registro desta sessao (o mesmo HEAD
+    # ja passou -> nao repete a suite), depois o cache compartilhado (outra
+    # sessao ja rodou a mesma suite -> tambem nao repete).
     anterior = meta.get("gate_final") or {}
     if anterior.get("head") == head and anterior.get("passou"):
         return
     caminhos = [c for c in _git(["diff", "--name-only", meta["base"], "HEAD"], cwd).stdout.splitlines() if c]
-    resultados = _gate(cwd, caminhos, completo=True)
+    resultados, cache_hit = _gate(cwd, caminhos, completo=True, head=head)
     reprovados = [r for r in resultados if r.mandatory and not r.passed]
     meta["gate_final"] = {"head": head, "passou": not reprovados, "em": _agora(),
+                          "cache_hit": cache_hit,
                           "checks": [{"nome": r.name, "passou": r.passed, "motivo": r.reason[:500],
                                       "ms": r.duration_ms} for r in resultados]}
     sessao._gravar_meta(meta)

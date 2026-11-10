@@ -57,12 +57,13 @@ def amb(tmp_path, monkeypatch):
 
     gate = {"passa": True, "chamadas": []}
 
-    def gate_falso(cwd, caminhos, completo=False):
+    def gate_falso(cwd, caminhos, completo=False, head=None):
         gate["chamadas"].append(caminhos)
         gate.setdefault("completos", []).append(completo)
         passa = gate.get("final", gate["passa"]) if completo else gate["passa"]
-        return [test_gate.CheckResult(name="pytest", passed=passa, mandatory=True,
-                                      reason="ok" if passa else "1 teste falhou")]
+        # A assinatura real devolve (resultados, cache_hit).
+        return ([test_gate.CheckResult(name="pytest", passed=passa, mandatory=True,
+                                       reason="ok" if passa else "1 teste falhou")], False)
     monkeypatch.setattr(ex, "_gate", gate_falso)
 
     backlog = []
@@ -263,12 +264,13 @@ def test_gate_escolhe_checks_pela_area_e_isola_o_ambiente(tmp_path, monkeypatch)
     monkeypatch.setattr(test_gate, "_check_pytest", lambda paths, env=None, alvos=None: chamados.setdefault("pytest", env) and ok("pytest"))
     for nome in ("vitest", "lint", "build"):
         monkeypatch.setattr(test_gate, f"_check_{nome}", lambda paths, n=nome: chamados.setdefault(n, True) and ok(n))
-    assert [r.name for r in ex._gate(tmp_path, ["docs/x.md"])] == ["guardrails"]
-    assert [r.name for r in ex._gate(tmp_path, ["apps/api/app/x.py"])] == ["guardrails", "pytest"]
+    # _gate devolve (resultados, cache_hit).
+    assert [r.name for r in ex._gate(tmp_path, ["docs/x.md"])[0]] == ["guardrails"]
+    assert [r.name for r in ex._gate(tmp_path, ["apps/api/app/x.py"])[0]] == ["guardrails", "pytest"]
     env = chamados["pytest"]
     assert "SUPABASE_SECRET_KEY" not in env and Path(env["WORKDEV_API_ENV_FILE"]).read_text().endswith("/fake\n")
     assert env["WORKDEV_CLI_AGENT_MODELS_FILE"].startswith(str(tmp_path))
-    assert [r.name for r in ex._gate(tmp_path, ["apps/web/src/x.tsx"])] == ["guardrails", "vitest", "lint", "build"]
+    assert [r.name for r in ex._gate(tmp_path, ["apps/web/src/x.tsx"])[0]] == ["guardrails", "vitest", "lint", "build"]
 
 
 # ---------------------------------------------------------------- fatias de banco

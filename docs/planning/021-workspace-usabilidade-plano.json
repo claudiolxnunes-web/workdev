@@ -1,0 +1,195 @@
+{
+  "fatias": [
+    {
+      "id": "gate-cache-service",
+      "objetivo": "Criar o service determinístico de cache de gate para reusar resultados de testes/lint/build quando HEAD e arquivos não mudarem.",
+      "instrucao": "Crie apps/api/app/services/gate_cache.py com: classe GateCache; funcao chave(head: str, caminhos: list[str], comandos: list[str]) -> str usando sha256 de JSON ordenado; buscar(chave) -> dict|None; gravar(chave, passou: bool, checks: list[dict], stdout: str, ttl_dias: int=7); limpar(antes_de: datetime). O cache deve guardar em /opt/workdev-builds/workspace/.gate-cache/ um arquivo JSON por chave (nome = chave[:16].json) com os campos: passou, checks, stdout, gravado_em. Use data class ou dict tipado. A limpeza remove arquivos com mais de ttl_dias ao gravar uma nova entrada. Saída: diff unificado do novo arquivo e testes.",
+      "trechos": [
+        ["apps/api/app/services/test_gate.py", 35, 45],
+        ["apps/api/app/services/workspace_execucao.py", 569, 577]
+      ],
+      "gate": [
+        "test -f apps/api/app/services/gate_cache.py",
+        "apps/api/venv/bin/python -m pytest apps/api/tests/test_gate_cache.py -v"
+      ],
+      "exige": {
+        "class GateCache|def chave|def buscar|def gravar": "service expõe API mínima de cache",
+        "sha256": "chave é determinística por sha256",
+        "gravado_em|ttl": "cache tem timestamp e TTL",
+        "/opt/workdev-builds/workspace/.gate-cache": "cache fica fora do repo, no diretório de builds"
+      },
+      "max_tokens": 1500
+    },
+    {
+      "id": "gate-cache-integracao-fatia",
+      "objetivo": "Integrar o cache de gate no gate por fatia, emitindo evento SSE indicando hit ou miss.",
+      "instrucao": "Altere apps/api/app/services/workspace_execucao.py na funcao _gate (linha ~230) e no ponto de chamada (linha ~570). Antes de executar os checks, calcule head = git rev-parse HEAD na copia da sessao, chave = gate_cache.chave(head, sorted(caminhos), comandos). Se buscar retornar hit e passou=True, retorne os checks do cache e emita SSE {'tipo': 'gate', 'n': n, 'checks': ..., 'cache_hit': true}. Se miss, execute _gate normalmente, depois grave no cache e emita cache_hit=false. Mantenha comportamento quando o cache nao achar. Atualize a funcao _gate para retornar tambem a informacao de cache_hit. Saída: diff unificado.",
+      "trechos": [
+        ["apps/api/app/services/workspace_execucao.py", 230, 283],
+        ["apps/api/app/services/workspace_execucao.py", 569, 577]
+      ],
+      "gate": [
+        "apps/api/venv/bin/python -m pytest apps/api/tests/test_workspace_execucao.py -v -k gate_cache",
+        "grep -n 'cache_hit' apps/api/app/services/workspace_execucao.py"
+      ],
+      "exige": {
+        "gate_cache.chave|gate_cache.buscar|gate_cache.gravar": "service de cache é usado",
+        "cache_hit": "SSE indica hit/miss",
+        "rev-parse HEAD": "head da copia entra na chave"
+      },
+      "max_tokens": 1500
+    },
+    {
+      "id": "gate-cache-integracao-final",
+      "objetivo": "Fazer o gate final antes de incorporar reaproveitar o cache de gate entre sessões e quando HEAD não mudou.",
+      "instrucao": "Altere apps/api/app/services/workspace_execucao.py na funcao _gate_final (linha ~769). Hoje ela evita reexecutar quando meta['gate_final'].head == head e passou. Amplie para tambem consultar gate_cache.buscar com a chave do HEAD atual e caminhos alterados entre base e HEAD. Se houver hit passou, reaproveite; se nao, execute, grave no cache e atualize meta['gate_final'] como ja faz. Adicione log/SSE indicando cache hit. Saída: diff unificado.",
+      "trechos": [
+        ["apps/api/app/services/workspace_execucao.py", 769, 791]
+      ],
+      "gate": [
+        "apps/api/venv/bin/python -m pytest apps/api/tests/test_workspace_execucao.py -v -k gate_final_cache",
+        "grep -n 'gate_cache' apps/api/app/services/workspace_execucao.py"
+      ],
+      "exige": {
+        "_gate_final": "gate final usa cache",
+        "gate_cache.buscar": "consulta cache compartilhado",
+        "diff --name-only": "caminhos alterados entram na chave"
+      },
+      "max_tokens": 1200
+    },
+    {
+      "id": "correcao-local-service",
+      "objetivo": "Criar função que tenta corrigir uma fatia falha usando o próprio modelo local, antes de chamar o supervisor de nuvem.",
+      "instrucao": "Crie a funcao _correcao_local(ident: str, n: int) em apps/api/app/services/workspace_execucao.py (proximo a _correcao_do_supervisor, linha ~376). Ela deve: ler a meta e a fatia; montar um prompt contendo a instrucao original, o erro anterior (ex.: 'aplicar: hunk_sem_contexto', 'semantica: codigo_morto', 'gate: pytest ...'), o diff recusado (se houver), e a ordem 'corrija mantendo as linhas de contexto (3 antes e 3 depois)'; executar o modelo local via bancada_runner.executar com um pid novo; retornar o texto corrigido ou string vazia se nao conseguir. Limite a 1 tentativa local por chamada. Saída: diff unificado.",
+      "trechos": [
+        ["apps/api/app/services/workspace_execucao.py", 376, 401],
+        ["apps/api/app/services/workspace_execucao.py", 501, 529]
+      ],
+      "gate": [
+        "grep -n '_correcao_local' apps/api/app/services/workspace_execucao.py",
+        "apps/api/venv/bin/python -m pytest apps/api/tests/test_workspace_execucao.py -v -k correcao_local"
+      ],
+      "exige": {
+        "_correcao_local": "funcao existe",
+        "erro_anterior": "prompt inclui erro",
+        "diff_aplicado|diff recusado": "prompt inclui diff quando disponível",
+        "3 antes e 3 depois": "prompt pede contexto explicitamente"
+      },
+      "max_tokens": 1500
+    },
+    {
+      "id": "correcao-local-ordem",
+      "objetivo": "Mudar executar_fatia para tentar correção local até 2 vezes antes de chamar o supervisor de nuvem.",
+      "instrucao": "Altere apps/api/app/services/workspace_execucao.py na funcao executar_fatia (linha ~404). Hoje, apos _executar_fatia falhar, ela chama _correcao_do_supervisor. Mude para: apos falha, tente _correcao_local ate 2 vezes (nova config tentativas_autocorrecao_local, default 2, pode vir de supervisor_config.py); se ainda falhar, ai sim chame _correcao_do_supervisor. Adicione evento SSE {'tipo': 'correcao_local', 'n': n, 'correcao': texto} quando usar correção local. Mantenha o limite geral de tentativas (max_tentativas). Saída: diff unificado.",
+      "trechos": [
+        ["apps/api/app/services/workspace_execucao.py", 404, 433]
+      ],
+      "gate": [
+        "apps/api/venv/bin/python -m pytest apps/api/tests/test_workspace_execucao.py -v -k correcao_local_antes_supervisor",
+        "grep -n 'tentativas_autocorrecao_local' apps/api/app/services/workspace_execucao.py"
+      ],
+      "exige": {
+        "_correcao_local": "correção local é chamada",
+        "_correcao_do_supervisor": "supervisor ainda é fallback",
+        "correcao_local": "SSE novo é emitido",
+        "tentativas_autocorrecao_local": "config existe"
+      },
+      "max_tokens": 1500
+    },
+    {
+      "id": "execucao-continua-api",
+      "objetivo": "Adicionar parâmetro 'continuo' na API de execução de fatia e lógica para executar a próxima fatia automaticamente enquanto passar.",
+      "instrucao": "Altere apps/api/app/routers/workspace.py na rota POST /sessao/{ident}/fatias/{n}/executar para aceitar continuo: bool no body (default false). Crie apps/api/app/services/workspace_execucao.py:executar_fatia_continua(ident, n, correcao, continuo) que gere SSE: execute a fatia n; se ela passar e continuo=true, encontre a próxima fatia com status 'pendente' e execute-a; repita até falhar, encontrar fatia de banco, ou acabar o plano. Pare sempre em falha. Nunca pule banco automaticamente. Saída: diff unificado + testes.",
+      "trechos": [
+        ["apps/api/app/routers/workspace.py", 125, 149],
+        ["apps/api/app/services/workspace_execucao.py", 404, 449]
+      ],
+      "gate": [
+        "apps/api/venv/bin/python -m pytest apps/api/tests/test_workspace_execucao.py -v -k execucao_continua",
+        "grep -n 'executar_fatia_continua' apps/api/app/services/workspace_execucao.py"
+      ],
+      "exige": {
+        "continuo": "parametro existe na API",
+        "executar_fatia_continua": "funcao de execução contínua existe",
+        "proxima fatia": "avança para próxima pendente",
+        "banco": "para em fatia de banco"
+      },
+      "max_tokens": 1800
+    },
+    {
+      "id": "execucao-continua-ui",
+      "objetivo": "Adicionar no PainelExecução um toggle 'Executar próximas automaticamente' e conectá-lo à API.",
+      "instrucao": "Altere apps/web/src/modules/workspace/PainelExecucao.tsx para adicionar um switch 'Executar próximas automaticamente enquanto passarem' (default false). Quando o usuário clicar 'Executar fatia N' ou 'Executar todas' com o switch ligado, envie continuo=true no body da chamada POST /workspace/sessao/{ident}/fatias/{n}/executar. Mostre indicador visual quando estiver em modo contínuo e botão 'Pausar' para interromper. Saída: diff unificado + teste de componente se houver suite no frontend.",
+      "trechos": [
+        ["apps/web/src/modules/workspace/PainelExecucao.tsx", 1, 80]
+      ],
+      "gate": [
+        "grep -n 'continuo' apps/web/src/modules/workspace/PainelExecucao.tsx",
+        "cd /opt/workdev/apps/web && pnpm test -- --run PainelExecucao 2>/dev/null || echo 'sem teste específico'"
+      ],
+      "exige": {
+        "Executar proximas automaticamente|continuo": "toggle existe e envia flag",
+        "Pausar": "botão de pausa existe"
+      },
+      "max_tokens": 1800
+    },
+    {
+      "id": "wizard-inicio-rapido-api",
+      "objetivo": "Criar endpoint de início rápido no Workspace que cria sessão e chat do supervisor a partir de uma task do backlog.",
+      "instrucao": "Crie em apps/api/app/routers/workspace.py o endpoint POST /workspace/inicio-rapido com body {task_id, branch_origem?, modelo_supervisor?}. Valide que a task existe, tem descrição e está elegível. Descubra o branch da task via git branch --list 'feat/*<slug>*' ou use branch_origem informado; senão, use 'main'. Crie a sessão com workspace_sessao.criar(task_id), depois crie a sessão de supervisor com chat_sessions.criar_sessao_planejamento_workspace passando task_id. Retorne {sessao_id, chat_session_id, branch_origem, url_workspace}. Saída: diff unificado + testes.",
+      "trechos": [
+        ["apps/api/app/routers/workspace.py", 56, 81],
+        ["apps/api/app/routers/chat_sessions.py", 440, 510]
+      ],
+      "gate": [
+        "grep -n 'inicio-rapido' apps/api/app/routers/workspace.py",
+        "apps/api/venv/bin/python -m pytest apps/api/tests/test_workspace.py -v -k inicio_rapido"
+      ],
+      "exige": {
+        "inicio-rapido": "endpoint existe",
+        "chat_sessions.criar_sessao_planejamento_workspace": "cria chat do supervisor",
+        "workspace_sessao.criar": "cria sessão de trabalho",
+        "branch_origem": "resolve branch da task"
+      },
+      "max_tokens": 1800
+    },
+    {
+      "id": "wizard-inicio-rapido-backlog",
+      "objetivo": "Adicionar no backlog um botão 'Workspace: início rápido' que chama o endpoint e abre o Workspace com supervisor pronto.",
+      "instrucao": "Altere o frontend que mostra a ficha da task no backlog (provavelmente apps/web/src/components/TaskDetail.tsx ou similar) para adicionar, ao lado de 'Plano para o Workspace Local', um botão 'Início rápido no Workspace'. Ao clicar, chame POST /workspace/inicio-rapido e, com sucesso, redirecione para /workspace?session={sessao_id}&chat={chat_session_id}&autostart=workspace. Desabilite o botão se já houver sessão ativa ou checkout sujo. Saída: diff unificado.",
+      "trechos": [
+        ["apps/web/src/components/TaskDetail.tsx", 1, 80]
+      ],
+      "gate": [
+        "grep -n 'inicio-rapido\\|Inicio rapido\\|Início rápido' apps/web/src/components/TaskDetail.tsx",
+        "cd /opt/workdev/apps/web && pnpm build 2>&1 | tail -20"
+      ],
+      "exige": {
+        "Início rápido|Inicio rapido": "botão existe",
+        "/workspace": "redireciona para Workspace",
+        "autostart=workspace": "dispara supervisor automaticamente"
+      },
+      "max_tokens": 1800
+    },
+    {
+      "id": "metricas-cache-correcao",
+      "objetivo": "Expor métricas de gate cache hit, correções locais e tokens economizados no endpoint de medição da sessão.",
+      "instrucao": "Altere apps/api/app/services/workspace_execucao.py:medicao (linha ~969) para incluir no retorno: gate_cache_hits, gate_cache_misses, correcoes_locais, correcoes_supervisor, tokens_economizados_estimados. Esses contadores devem ser gravados no meta da sessão durante as execuções (adicione em _executar_fatia/_gate/_correcao_local). Atualize o frontend PainelExecução para mostrar esses números. Saída: diff unificado + testes.",
+      "trechos": [
+        ["apps/api/app/services/workspace_execucao.py", 969, 995],
+        ["apps/api/app/services/workspace_execucao.py", 404, 433]
+      ],
+      "gate": [
+        "grep -n 'gate_cache_hits\\|correcoes_locais\\|tokens_economizados' apps/api/app/services/workspace_execucao.py",
+        "apps/api/venv/bin/python -m pytest apps/api/tests/test_workspace_execucao.py -v -k metricas"
+      ],
+      "exige": {
+        "gate_cache_hits": "contador existe",
+        "correcoes_locais": "contador existe",
+        "tokens_economizados": "estimativa existe"
+      },
+      "max_tokens": 1500
+    }
+  ],
+  "fora_do_alcance": "Esta task não cobre mudança de hardware/GPU, troca do modelo local, automação da etapa de Incorporar (continua sendo clique do operador por ADR 015), nem alteração do contrato da Bancada Local. Não cobre também migração de banco — a abordagem é código + testes."
+}

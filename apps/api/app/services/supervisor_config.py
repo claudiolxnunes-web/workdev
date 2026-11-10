@@ -46,6 +46,7 @@ class WorkspaceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     observador_auditoria: bool = True
     tentativas_autocorrecao: int = Field(default=1, ge=0, le=3)
+    tentativas_autocorrecao_local: int = Field(default=2, ge=0, le=3)
     max_tokens_fatia: int = Field(default=1500, ge=64, le=4000)
     pausar_em_risco: bool = True
     teto_falhas: int = Field(default=2, ge=1, le=5)

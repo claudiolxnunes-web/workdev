@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -179,6 +180,26 @@ def _bancada_planning_context(task: BacklogItem | None, project: Project | None,
     return "\n".join(lines)
 
 
+def _prompt_do_supervisor() -> str:
+    """O system prompt do supervisor, lido do arquivo.
+
+    O prompt vive em `docs/agents/WORKSPACE_SUPERVISOR_PROMPT.md` — um arquivo
+    editável, revisável e comparável, em vez de uma string de 90 linhas
+    embutida no router. O texto embutido abaixo é o fallback: se o arquivo
+    não estiver no disco (release enxuta, checkout parcial), o supervisor
+    continua funcionando.
+    """
+    caminho = Path(__file__).resolve().parents[3] / "docs" / "agents" / "WORKSPACE_SUPERVISOR_PROMPT.md"
+    try:
+        texto = caminho.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if not texto:
+        return ""
+    # O arquivo e markdown (com titulo e secoes); o prompt e texto puro.
+    return texto
+
+
 def _workspace_planning_context(
     task: BacklogItem | None, project: Project | None, prompt_livre: str | None = None,
     referencias: str = "",
@@ -199,6 +220,20 @@ def _workspace_planning_context(
             return None  # Sinal de que a descrição está vazia
         entrada = (f"Task ID: `{task.id}` (use ler_task para reler a ficha)\n"
                    f"Task: {task.title}\n{task.description or ''}")
+
+    externo = _prompt_do_supervisor()
+    if externo:
+        linhas = [
+            externo,
+            "",
+            f"Contexto do projeto: {project.name if project else 'N/A'} "
+            f"({project.slug if project else 'N/A'})",
+            "",
+            entrada,
+        ]
+        if referencias:
+            linhas += ["", referencias]
+        return "\n".join(linhas)
 
     linhas = [
         "Você é o supervisor do Workspace Local do WorkDev. O Workspace é onde o",

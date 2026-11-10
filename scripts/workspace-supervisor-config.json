@@ -1,0 +1,43 @@
+{
+  "$version": 1,
+  "description": "Configurações do supervisor do Workspace Local do WorkDev.",
+  "prompts": {
+    "full_markdown": "docs/agents/WORKSPACE_SUPERVISOR_PROMPT.md",
+    "compact_system": "docs/agents/WORKSPACE_SUPERVISOR_SYSTEM.txt",
+    "embedded_in_api": "apps/api/app/routers/chat_sessions.py:_workspace_planning_context"
+  },
+  "local_agent": {
+    "default_model_id": "workdev-qwen27b",
+    "documented_model": "Qwen3.8 35B A3B MoE",
+    "settings_file": "scripts/local-agent-settings.json",
+    "launcher": "scripts/start_local_agent.sh",
+    "note": "O modelo efetivo é decidido pelo llama-server local. O ID workdev-qwen27b é o apelido usado no catalogo local; o prompt do supervisor assume Qwen3.8 35B A3B MoE como padrao."
+  },
+  "workflow": {
+    "steps": [
+      "triagem_com_ler_task",
+      "discovery_com_buscar_texto",
+      "leitura_com_ler_trecho_em_paralelo",
+      "fatiamento_com_objetivo_unico_e_gate",
+      "validacao_com_validar_plano_workspace",
+      "entrega_em_bloco_json"
+    ],
+    "refuse_immediately_if": [
+      "task é puramente discovery/observacao",
+      "gate é humano/observacional",
+      "decisao arquitetural pendente (ADR sem opcao escolhida)",
+      "migracao de banco com dados reais",
+      "operacao em runtime de producao (UI, tmux, banco real, API externa)"
+    ]
+  },
+  "fatia_schema": {
+    "required_fields": ["id", "objetivo", "instrucao", "trechos", "gate", "exige", "max_tokens"],
+    "max_trechos": 8,
+    "max_linhas_por_trecho": 200,
+    "max_exige_regex": 5,
+    "max_tokens_range": [64, 4000]
+  },
+  "tests_that_cover_this_prompt": [
+    "apps/api/tests/test_workspace_planning_chat.py"
+  ]
+}
