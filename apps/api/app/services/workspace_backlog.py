@@ -45,6 +45,19 @@ def _sincronizar_grafo(subtask: BacklogSubtask, project_id) -> None:
                      daemon=True).start()
 
 
+def _remover_do_grafo(node_type: str, entity_id: str) -> None:
+    """Remove o node do grafo, fora da requisição: falha não derruba nada.
+
+    O mesmo padrão do `_sincronizar_grafo` — o Postgres já foi commitado, e
+    o grafo é Derivado. Se a remoção falhar, o node fica órfão até o
+    próximo backfill.
+    """
+    from app.services.engineering_graph import graph_sync
+    threading.Thread(target=graph_sync.delete_safely,
+                     args=(node_type, entity_id, None),
+                     daemon=True).start()
+
+
 def criar_subtasks(db: Session, task_id: str, fatias: list[dict]) -> list[str | None]:
     task = db.query(BacklogItem).filter(BacklogItem.id == _uuid(task_id)).first()
     if task is None:
@@ -69,11 +82,21 @@ def remover_subtasks_nao_iniciadas(db: Session, ids: list[str | None]) -> int:
     alvos = [u for u in (_uuid(i) for i in ids) if u]
     if not alvos:
         return 0
+    # As subtasks que realmente saem: o filtro tem status e agente, e so
+    # essas-existentem no grafo podem deixar node orfao.
+    removidas_ids = [
+        str(linha[0]) for linha in db.query(BacklogSubtask.id).filter(
+            BacklogSubtask.id.in_(alvos), BacklogSubtask.assigned_agent == AGENTE,
+            BacklogSubtask.status == "todo").all()
+    ]
     removidas = (db.query(BacklogSubtask)
                  .filter(BacklogSubtask.id.in_(alvos), BacklogSubtask.assigned_agent == AGENTE,
                          BacklogSubtask.status == "todo")
                  .delete(synchronize_session=False))
     db.commit()
+    # O node da subtask some junto (cascade Postgres -> grafo).
+    for subtask_id in removidas_ids:
+        _remover_do_grafo("Subtask", subtask_id)
     return removidas
 
 

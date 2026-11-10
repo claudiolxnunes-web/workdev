@@ -181,9 +181,26 @@ def update_status(item_id: UUID, status: str, reason: str | None = None,
 
 
 @router.delete("/backlog/{item_id}", status_code=204)
-def delete_item(item_id: UUID, db: Session = Depends(get_db)):
+def delete_item(item_id: UUID, background_tasks: BackgroundTasks,
+                db: Session = Depends(get_db)):
     obj = db.query(BacklogItem).filter(BacklogItem.id == item_id).first()
     if not obj:
         raise HTTPException(404, "Backlog item not found")
+    # O node e as edges saem juntos com o item: o Postgres e a fonte da verdade.
+    # O node do item depende do type ('feature' vira Feature, o resto Task) —
+    # a mesma regra do sync, agora case-insensitive.
+    node_type = "Feature" if (obj.type or "").strip().lower() == "feature" else "Task"
+    project_id = str(obj.project_id) if obj.project_id else None
+    # As subtasks filhas somem com o item no Postgres (FK); os nodes delas
+    # precisam sair do grafo tambem, ou ficam orfaos.
+    subtask_ids = [
+        str(linha[0]) for linha in db.query(BacklogSubtask.id).filter(
+            BacklogSubtask.backlog_id == item_id).all()
+    ]
     db.delete(obj)
     db.commit()
+    background_tasks.add_task(
+        graph_sync.delete_safely, node_type, str(item_id), project_id)
+    for subtask_id in subtask_ids:
+        background_tasks.add_task(
+            graph_sync.delete_safely, "Subtask", subtask_id, project_id)

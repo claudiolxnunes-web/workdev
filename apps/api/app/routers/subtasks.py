@@ -63,9 +63,14 @@ def update_subtask(subtask_id: UUID, sub: SubtaskUpdate,
 
 
 @router.delete("/subtasks/{subtask_id}", status_code=204)
-def delete_subtask(subtask_id: UUID, db: Session = Depends(get_db)):
+def delete_subtask(subtask_id: UUID, background_tasks: BackgroundTasks,
+                   db: Session = Depends(get_db)):
     obj = db.query(BacklogSubtask).filter(BacklogSubtask.id == subtask_id).first()
     if not obj:
         raise HTTPException(404, "Subtask not found")
+    # O node e as edges saem juntos com a subtask: o Postgres e a fonte da verdade.
+    project_id = str(obj.project_id) if obj.project_id else None
     db.delete(obj)
     db.commit()
+    background_tasks.add_task(
+        graph_sync.delete_safely, "Subtask", str(subtask_id), project_id)

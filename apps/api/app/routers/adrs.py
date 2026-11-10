@@ -104,9 +104,14 @@ def update_adr(adr_id: str, payload: ADRUpdate, db: Session = Depends(get_db)):
 
 
 @router.delete("/adrs/{adr_id}", status_code=204)
-def delete_adr(adr_id: str, db: Session = Depends(get_db)):
+def delete_adr(adr_id: str, background_tasks: BackgroundTasks,
+                db: Session = Depends(get_db)):
     adr = db.query(ADR).filter(ADR.id == adr_id).first()
     if not adr:
         raise HTTPException(status_code=404, detail="ADR not found")
+    # O node e as edges saem juntos com o ADR: o Postgres e a fonte da verdade.
+    project_id = str(adr.project_id) if adr.project_id else None
     db.delete(adr)
     db.commit()
+    background_tasks.add_task(
+        graph_sync.delete_safely, "ADR", str(adr_id), project_id)

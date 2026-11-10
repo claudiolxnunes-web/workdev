@@ -104,9 +104,14 @@ def update_rfc(rfc_id: str, payload: RFCUpdate, db: Session = Depends(get_db)):
 
 
 @router.delete("/rfcs/{rfc_id}", status_code=204)
-def delete_rfc(rfc_id: str, db: Session = Depends(get_db)):
+def delete_rfc(rfc_id: str, background_tasks: BackgroundTasks,
+               db: Session = Depends(get_db)):
     rfc = db.query(RFC).filter(RFC.id == rfc_id).first()
     if not rfc:
         raise HTTPException(status_code=404, detail="RFC not found")
+    # O node e as edges saem juntos com o RFC: o Postgres e a fonte da verdade.
+    project_id = str(rfc.project_id) if rfc.project_id else None
     db.delete(rfc)
     db.commit()
+    background_tasks.add_task(
+        graph_sync.delete_safely, "RFC", str(rfc_id), project_id)

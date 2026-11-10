@@ -181,7 +181,12 @@ class EngineeringGraphSync:
         item_type: str = "feature",
     ) -> dict[str, Any]:
         project = self.sync_project(project_id)
-        node_type = "Feature" if item_type == "feature" else "Task"
+        # O tipo do backlog nao e normalizado no banco: existem 'feature'
+        # (120 itens) e 'Feature' (2 itens, capitalizado). Comparar exato
+        # mandava os dois capitalizados para o ramo de Task — o node existia,
+        # mas com o tipo errado, e a reconciliacao via HAS_FEATURE nao
+        # encontrava. Medido em 2026-11-09.
+        node_type = "Feature" if (item_type or "").strip().lower() == "feature" else "Task"
         item = self.ensure_node(node_type, item_id, project_id)
         relationship = "HAS_FEATURE" if node_type == "Feature" else "HAS_TASK"
         self.ensure_edge(project["id"], item["id"], relationship)
@@ -287,6 +292,61 @@ class EngineeringGraphSync:
             return True
         except Exception:
             logger.exception("Falha ao sincronizar evento %s", operation)
+            return False
+
+    # ------------------------------------------------------------ cascade
+
+    def delete_node(
+        self,
+        node_type: str,
+        entity_id: str,
+        project_id: str | None = None,
+    ) -> bool:
+        """Remove o node e as edges que o tocam. Devolve o que foi removido.
+
+        O Postgres é a fonte da verdade: quando a entidade é deletada lá, o
+        node correspondente no grafo tem de sumir junto — senão fica órfão
+        (a task `e4f37cf4`). Medido em 2026-11-09: 153 nodes órfãos de
+        entidades que já não existiam no Postgres.
+
+        Remover as edges junto é o que fecha o grafo: um node sem origem
+        acorrentaria em um `HAS_SUBTASK` que aponta para o nada.
+        """
+        params: dict[str, str] = {
+            "entity_id": f"eq.{entity_id}",
+            "type": f"eq.{node_type}",
+        }
+        if project_id:
+            params["project_id"] = f"eq.{project_id}"
+        nodes = self._request("GET", "graph_nodes", params=params)
+        if not nodes:
+            return False
+
+        node_ids = [str(node["id"]) for node in nodes]
+        # As edges do Supabase referenciam o node pelo id (não pelo entity_id).
+        # Sem filtro por tipo, `in.(...)` traria as edges de todo o grafo.
+        for node_id in node_ids:
+            self._request(
+                "DELETE",
+                "graph_edges",
+                params={"or": f"(source_node.eq.{node_id},target_node.eq.{node_id})"},
+            )
+        self._request("DELETE", "graph_nodes", params={"id": f"in.({','.join(node_ids)})"})
+        return True
+
+    def delete_safely(self, node_type: str, entity_id: str,
+                      project_id: str | None = None) -> bool:
+        """`delete_node` sem levantar: falha no grafo não desfaz o DELETE no Postgres."""
+        if not self.configured:
+            logger.warning(
+                "Engineering Graph não configurado; remoção de %s %s aguardará backfill",
+                node_type, entity_id,
+            )
+            return False
+        try:
+            return self.delete_node(node_type, entity_id, project_id)
+        except Exception:
+            logger.exception("Falha ao remover node %s %s do grafo", node_type, entity_id)
             return False
 
 
