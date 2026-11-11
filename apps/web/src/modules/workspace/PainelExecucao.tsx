@@ -40,6 +40,7 @@ function linhaDoEvento(e: EventoFatia): string | null {
   }
   if (e.tipo === "correcao") return `${n}supervisor escreveu a correção: ${(e as { correcao?: string }).correcao ?? ""}`
   if (e.tipo === "correcao_sugerida") return `${n}observer pediu ajuste: ${(e as { correcao?: string }).correcao ?? ""}`
+  if (e.tipo === "continuo") return `${n}${(e as { mensagem?: string }).mensagem ?? "execução contínua"}`
   if (e.tipo === "fatia" && e.status === "simulada") return `${n}⏸ simulado (nada gravado): ${(e as { linhas?: number }).linhas ?? "?"} linha(s) — confira e clique em Aplicar no banco`
   if (e.tipo === "fatia" && e.status === "ok") return `${n}✓ ok · commit ${(e.commit ?? "").slice(0, 7)}`
   if (e.tipo === "fatia" && e.status === "falhou") return `${n}✗ falhou em ${e.etapa}: ${e.erro}`
@@ -159,6 +160,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
   const [incorporada, setIncorporada] = useState<string | null>(null)
   const [medicao, setMedicao] = useState<MedicaoSessao | null>(null)
   const [autoRepetir, setAutoRepetir] = useState(true)
+  const [continuo, setContinuo] = useState(false)
   const pausar = useRef(false)
   const fimLog = useRef<HTMLDivElement>(null)
 
@@ -186,7 +188,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
   const fatias = sessao?.plano?.fatias ?? []
   const proxima = fatias.find((f) => !FECHADAS.includes(f.status)) ?? null
 
-  async function rodar(id: string, n: number, correcao: string | null): Promise<string> {
+  async function rodar(id: string, n: number, correcao: string | null, modoContinuo = continuo): Promise<string> {
     let status = "erro"
     setSaida("")
     await executarFatia(id, n, correcao, (e) => {
@@ -195,7 +197,7 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
       if (e.tipo === "fatia" && e.status && e.status !== "rodando") status = e.status
       const linha = linhaDoEvento(e)
       if (linha) setLog((atual) => [...atual, linha])
-    })
+    }, modoContinuo)
     return status
   }
 
@@ -203,11 +205,16 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
     if (!sessao) return
     setExecutando(true); setEmLote(todas); setErro(""); pausar.current = false
     try {
+      // No modo contínuo o backend avança sozinho; o frontend só acompanha o fluxo.
+      if (continuo) {
+        await rodar(sessao.id, n, correcao, true)
+        return
+      }
       let atual: number | null = n
       let nota = correcao
       let repeticoes = 0
       while (atual != null) {
-        const status = await rodar(sessao.id, atual, nota)
+        const status = await rodar(sessao.id, atual, nota, false)
         nota = null
         const estado = await carregar()
         if (status === "falhou" && autoRepetir && repeticoes < AUTO_REPETICOES && !pausar.current) {
@@ -274,12 +281,19 @@ export function PainelExecucao({ versao, onMudou }: { versao: number; onMudou: (
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-slate-400">{fatias.length - abertas}/{fatias.length} fatia(s) concluída(s)</span>
             {proxima && !executando && (
-              <button type="button" onClick={() => void executar(proxima.n, null, true)} className="rounded bg-emerald-800 px-2 py-0.5 text-white hover:bg-emerald-700">Executar todas</button>
+              <button type="button" onClick={() => void executar(proxima.n, null, true)} className="rounded bg-emerald-800 px-2 py-0.5 text-white hover:bg-emerald-700">
+                {continuo ? "Executar até parar" : "Executar todas"}
+              </button>
             )}
             <label className="flex items-center gap-1 text-slate-400">
               <input type="checkbox" checked={autoRepetir} disabled={executando} onChange={(e) => setAutoRepetir(e.target.checked)} />
               repetir sozinho até {AUTO_REPETICOES}x quando falhar
             </label>
+            <label className="flex items-center gap-1 text-slate-400" title="Avança sozinho para a próxima fatia enquanto passar; para em falha ou em fatia de banco.">
+              <input type="checkbox" checked={continuo} disabled={executando} onChange={(e) => setContinuo(e.target.checked)} />
+              executar próximas automaticamente
+            </label>
+            {continuo && executando && <span className="text-sky-300">modo contínuo</span>}
             {executando && emLote && (
               <button type="button" onClick={() => { pausar.current = true }} className="rounded border border-amber-700 px-2 py-0.5 text-amber-200 hover:bg-amber-950">Pausar depois desta</button>
             )}

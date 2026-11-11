@@ -78,7 +78,7 @@ describe("PainelExecucao", () => {
     fireEvent.change(within(fatia2).getByLabelText("Correção da fatia 2"), { target: { value: "ajuste o teste" } })
     fireEvent.click(within(fatia2).getByRole("button", { name: "Repetir fatia 2" }))
     await waitFor(() => expect(chamadas.filter((c) => c.url.endsWith("/2/executar"))).toHaveLength(4))
-    expect(chamadas.filter((c) => c.url.endsWith("/2/executar"))[3].corpo).toEqual({ correcao: "ajuste o teste" })
+    expect(chamadas.filter((c) => c.url.endsWith("/2/executar"))[3].corpo).toEqual({ correcao: "ajuste o teste", continuo: false })
     expect(await screen.findByText("2/3 fatia(s) concluída(s)")).toBeInTheDocument()
   })
 
@@ -91,6 +91,16 @@ describe("PainelExecucao", () => {
     fireEvent.click(within(secao).getByRole("button", { name: "Incorporar" }))
     expect(await screen.findByText(/Incorporado: commit beefcaf em main \(squash\)/)).toBeInTheDocument()
     expect(chamadas.find((c) => c.url.endsWith("/incorporar"))!.corpo).toEqual({ modo: "squash" })
+  })
+
+  it("modo contínuo envia continuo=true e deixa o backend avançar", async () => {
+    roteiro = ["ok"]
+    render(<PainelExecucao versao={0} onMudou={() => {}} />)
+    fireEvent.click(await screen.findByLabelText(/executar próximas automaticamente/))
+    fireEvent.click(await screen.findByRole("button", { name: "Executar até parar" }))
+    await waitFor(() => expect(chamadas.some((c) => c.url.endsWith("/1/executar"))).toBe(true))
+    const exec = chamadas.find((c) => c.url.endsWith("/1/executar"))
+    expect(exec?.corpo).toEqual({ correcao: null, continuo: true })
   })
 
   it("repete sozinho a fatia que falhou e, desligado, para na primeira falha", async () => {

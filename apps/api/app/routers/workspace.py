@@ -124,6 +124,7 @@ class Plano(BaseModel):
 
 class Execucao(BaseModel):
     correcao: str | None = Field(default=None, max_length=2000)
+    continuo: bool = False
 
 
 class Incorporacao(BaseModel):
@@ -144,7 +145,8 @@ def aprovar_plano(ident: str, pedido: Plano):
 @router.post("/sessao/{ident}/fatias/{n}/executar")
 def executar_fatia(ident: str, n: int, pedido: Execucao | None = None):
     # Erros de validação chegam como evento "erro" do próprio fluxo.
-    return StreamingResponse(workspace_execucao.executar_fatia(ident, n, pedido.correcao if pedido else None),
+    continuo = bool(pedido and pedido.continuo)
+    return StreamingResponse(workspace_execucao.executar_fatia_continua(ident, n, pedido.correcao if pedido else None, continuo),
                              media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 

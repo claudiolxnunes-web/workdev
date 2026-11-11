@@ -141,14 +141,18 @@ def _todas() -> list[dict]:
     metas = []
     for arquivo in pasta.glob("*.json"):
         meta = _ler_meta(arquivo.stem)
-        if meta:
+        if meta and all(k in meta for k in ("id", "status", "criada_em", "caminho")):
             metas.append(_reconciliar(meta))
     return sorted(metas, key=lambda m: m["criada_em"], reverse=True)
 
 
 def _reconciliar(meta: dict) -> dict:
-    """Sessão marcada ativa sem diretório (apagado à mão, reboot no meio) é encerrada."""
-    if meta["status"] == "ativa" and not Path(meta["caminho"]).is_dir():
+    """Sessão marcada ativa sem diretório (apagado à mão, reboot no meio) é encerrada.
+
+    Meta sem campo `status` é tratada como corrompida e encerrada para não travar
+    a listagem.
+    """
+    if meta.get("status") == "ativa" and not Path(meta["caminho"]).is_dir():
         meta = {**meta, "status": "encerrada", "encerrada_em": _agora(),
                 "observacao": "diretório da sessão não existe mais; branch preservado"}
         _gravar_meta(meta)

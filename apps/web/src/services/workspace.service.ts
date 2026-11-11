@@ -162,10 +162,11 @@ export interface EventoFatia {
   correcao?: string
 }
 
-/** Executa a fatia n; cada evento SSE chega em onEvento, na ordem. */
-export async function executarFatia(id: string, n: number, correcao: string | null, onEvento: (e: EventoFatia) => void): Promise<void> {
+/** Executa a fatia n; cada evento SSE chega em onEvento, na ordem.
+ *  `continuo=true` pede ao backend para avançar sozinho enquanto passar. */
+export async function executarFatia(id: string, n: number, correcao: string | null, onEvento: (e: EventoFatia) => void, continuo = false): Promise<void> {
   const response = await fetch(`/api/workspace/sessao/${encodeURIComponent(id)}/fatias/${n}/executar`, {
-    method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ correcao }),
+    method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ correcao, continuo }),
   })
   if (!response.ok) throw new Error(`Workspace: HTTP ${response.status}`)
   const leitor = response.body?.getReader()

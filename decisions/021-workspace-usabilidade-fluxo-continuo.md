@@ -1,7 +1,7 @@
 # ADR 021 — Workspace Local: reduzir atrito com fluxo contínuo e correção local
 
 - **Data:** 2026-11-10
-- **Status:** proposta
+- **Status:** aceita
 - **Contexto de sistema:** WorkDev Core — Workspace Local, Bancada Local, AI Hub, frontend (`apps/web`) e backend (`apps/api`).
 - **Base técnica:** ADR 015 (Workspace aplica / Bancada propõe), ADR 018 (patch sem âncora), ADR 020 (quatro camadas de verificação).
 
@@ -110,6 +110,16 @@ Implementar uma chave de cache `sha256(head_commit + arquivos + comandos)` e inv
 3. Executar duas vezes a mesma fatia sem mudar arquivos. A segunda deve reaproveitar o gate (log: `gate_cache_hit=true`).
 4. Medir tokens de nuvem gastos em correção antes e depois da mudança; espera-se redução ≥ 50%.
 5. Medir tempo do operador desde "Plano para o Workspace Local" até a primeira fatia executada; espera-se redução ≥ 30%.
+
+## Progresso
+
+| Fase | Estado | Evidência |
+| --- | --- | --- |
+| 1 | Concluída | `apps/api/app/services/gate_cache.py` + `tests/test_gate_cache.py` (8 passed) |
+| 2 | Concluída | `workspace_execucao.py:_correcao_local()` + `tests/test_correcao_local.py` (2 passed) |
+| 3 | Concluída | `workspace_execucao.py:executar_fatia_continua()` + `tests/test_execucao_continua.py` (4 passed); toggle no `PainelExecucao.tsx` |
+| 4 | Pendente | Wizard unificado backlog → Workspace |
+| 5 | Pendente | Dashboard de métricas de cache/correção |
 
 ## Plano de implementação resumido
 

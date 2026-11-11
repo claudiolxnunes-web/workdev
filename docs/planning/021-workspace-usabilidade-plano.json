@@ -105,7 +105,7 @@
         ["apps/api/app/services/workspace_execucao.py", 404, 449]
       ],
       "gate": [
-        "apps/api/venv/bin/python -m pytest apps/api/tests/test_workspace_execucao.py -v -k execucao_continua",
+        "apps/api/venv/bin/python -m pytest apps/api/tests/test_execucao_continua.py -v",
         "grep -n 'executar_fatia_continua' apps/api/app/services/workspace_execucao.py"
       ],
       "exige": {
