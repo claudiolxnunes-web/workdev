@@ -24,7 +24,12 @@ from pathlib import Path
 # --------------------------------------------------------------------------
 
 WORKDEV_DIR = Path(os.environ.get("WORKDEV_DIR", "/opt/workdev"))
-ENV_FILE = Path(os.environ.get("SUPERVISOR_ENV_FILE", WORKDEV_DIR / "apps/api/.env"))
+# O ambiente do Supervisor vem por EnvironmentFile na unit (lido como root).
+# Este caminho é só a rede de segurança de quem roda na mão — e por isso
+# aponta para o arquivo mínimo do Supervisor, não para o .env da API inteiro:
+# o apps/api/.env tem 27 chaves e é legível pelo agente CLI.
+ENV_FILE = Path(os.environ.get(
+    "SUPERVISOR_ENV_FILE", "/etc/workdev/workdev-supervisor.env"))
 ESTADO_DIR = Path(os.environ.get("SUPERVISOR_STATE_DIR", "/var/lib/workdev-supervisor"))
 ESTADO_FILE = ESTADO_DIR / "state.json"
 RUNS_FILE = ESTADO_DIR / "runs.jsonl"

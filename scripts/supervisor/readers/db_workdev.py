@@ -51,16 +51,20 @@ class LeitorWorkdev:
 
 
 def dsn_workdev() -> str:
-    """DSN do Postgres do WorkDev, lido do .env da API.
+    """DSN do Postgres do WorkDev.
 
-    O .env é lido por caminho explícito: o Supervisor roda por systemd/cron,
-    onde o cwd não é garantido e o .bashrc não é lido. Mesma lição registrada
-    no ADR do RAG e no dos wrappers dos agentes CLI.
+    A chave chega pelo ambiente do serviço (EnvironmentFile na unit, lido
+    como root). O load_dotenv é só a rede de segurança para quem roda o
+    Supervisor na mão; se o arquivo não estiver legível, a variável do
+    ambiente já está no lugar.
     """
-    load_dotenv(config.ENV_FILE)
+    try:
+        load_dotenv(config.ENV_FILE)
+    except OSError:
+        pass
     url = os.environ.get("DATABASE_URL")
     if not url:
-        raise RuntimeError(f"DATABASE_URL ausente em {config.ENV_FILE}")
+        raise RuntimeError(f"DATABASE_URL ausente (nem no ambiente nem em {config.ENV_FILE})")
     # SQLAlchemy usa o dialeto no esquema; libpq não entende.
     for dialeto in ("postgresql+psycopg://", "postgresql+psycopg2://"):
         url = url.replace(dialeto, "postgresql://")
