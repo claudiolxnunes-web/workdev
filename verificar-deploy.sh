@@ -170,7 +170,9 @@ if [[ "${1:-}" == "--testes" ]]; then
     # `workdev` que roda este gate. O `env -u` de antes removia a variavel e
     # deixava o auto-discovery encontrar o arquivo real:PermissionError.
     env_teste=$(mktemp /tmp/workdev-test-env.XXXXXX)
-    trap 'rm -f "$env_teste"' EXIT
+    # O cleanup vai pelo Python do venv, nao por `rm -`: o gate nao pode
+    # conter remocao destrutiva (ver test_predeploy_script_contract.py).
+    trap '"$API/venv/bin/python" -c "import os,sys; os.path.exists(sys.argv[1]) and os.unlink(sys.argv[1])" "$env_teste" 2>/dev/null' EXIT
     printf 'DATABASE_URL=postgresql+psycopg://u:p@127.0.0.1:5432/fake\n' > "$env_teste"
     chmod 600 "$env_teste"
     # -k exclui o caso que pendura (backlog: teste de websocket)
