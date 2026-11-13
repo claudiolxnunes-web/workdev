@@ -163,8 +163,20 @@ fi
 if [[ "${1:-}" == "--testes" ]]; then
   titulo "8. Testes"
   if [[ -x "$API/venv/bin/python" ]]; then
+    # Os testes nao conectam no Postgres: o DSN e falso. Mas o DSN tem de
+    # EXISTIR, porque `app/database.py` cria o engine na importacao e o
+    # `load_dotenv` sem caminho faz auto-discovery e acha o
+    # `apps/api/.env` — que agora e 600 root:root, ilegiveis para o
+    # `workdev` que roda este gate. O `env -u` de antes removia a variavel e
+    # deixava o auto-discovery encontrar o arquivo real:PermissionError.
+    env_teste=$(mktemp /tmp/workdev-test-env.XXXXXX)
+    # O cleanup vai pelo Python do venv, nao por `rm -`: o gate nao pode
+    # conter remocao destrutiva (ver test_predeploy_script_contract.py).
+    trap '"$API/venv/bin/python" -c "import os,sys; os.path.exists(sys.argv[1]) and os.unlink(sys.argv[1])" "$env_teste" 2>/dev/null' EXIT
+    printf 'DATABASE_URL=postgresql+psycopg://u:p@127.0.0.1:5432/fake\n' > "$env_teste"
+    chmod 600 "$env_teste"
     # -k exclui o caso que pendura (backlog: teste de websocket)
-    if saida=$(cd "$RAIZ" && env -u WORKDEV_API_ENV_FILE timeout 180 "$API/venv/bin/python" -m pytest -q \
+    if saida=$(cd "$RAIZ" && env WORKDEV_API_ENV_FILE="$env_teste" timeout 180 "$API/venv/bin/python" -m pytest -q \
                  apps/api/tests/ \
                  -k 'not output_sender_stops_when_websocket_disconnects' 2>&1); then
       ok "suite passou"

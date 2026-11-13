@@ -47,6 +47,20 @@ def api_key() -> str:
     )
 
 
+def _ler_chave(caminho: str, nome: str) -> str:
+    """Lê UMA chave de um arquivo de ambiente. Não imprime o valor."""
+    try:
+        for raw in Path(caminho).read_text().splitlines():
+            chave, separador, valor = raw.partition("=")
+            if separador and chave.strip() == nome:
+                valor = valor.strip().strip("\"'")
+                if valor:
+                    return valor
+    except OSError as erro:
+        raise RuntimeError(f"Não consegui ler {nome} de {caminho}: {erro}")
+    raise RuntimeError(f"{nome} ausente em {caminho}")
+
+
 def run_review_gate(run_id: str) -> None:
     run_id = str(UUID(run_id))
     root = Path("/opt/workdev")
@@ -55,16 +69,30 @@ def run_review_gate(run_id: str) -> None:
     if not helper.is_file() or not interpreter.is_file():
         raise RuntimeError("Runner do gate ou Python da API ausente; review não enviado")
     # Separate DB configuration from CLI authentication configuration.
-    env_file = os.getenv("WORKDEV_GATE_ENV_FILE", str(root / "apps/api/.env"))
+    # O gate recebe o DATABASE_URL pelo AMBIENTE, não por arquivo: o processo
+    # roda como `workdev` (via sudo), e um arquivo legível por ele também
+    # seria legível pelo agente CLI. O .env da API inteiro (27 chaves) fica
+    # fora do alcance do agente.
+    env_file = os.getenv("WORKDEV_GATE_ENV_FILE", "/etc/workdev/workdev-gate.env")
     environment = os.environ.copy()
     environment.pop("WORKDEV_API_KEY", None)
-    environment["WORKDEV_API_ENV_FILE"] = env_file
     environment["PYTHONPATH"] = str(root / "apps/api")
     command = [str(interpreter), "-u", str(helper), run_id]
     if os.geteuid() == 0:
+        # Como root: lê o arquivo mínimo do gate e passa o DSN no ambiente do
+        # processo que roda como `workdev`.
+        dsn_gate = _ler_chave(env_file, "DATABASE_URL")
         command = ["sudo", "-n", "-u", "workdev", "env",
-                   "WORKDEV_API_ENV_FILE=" + env_file,
+                   "DATABASE_URL=" + dsn_gate,
+                   "WORKDEV_API_ENV_FILE=/dev/null",
                    "PYTHONPATH=" + str(root / "apps/api"), *command]
+    else:
+        # Já como `workdev`: o DSN tem de estar no ambiente (o arquivo é
+        # 600 root:root e não pode ser lido).
+        if not os.environ.get("DATABASE_URL"):
+            dsn_gate = _ler_chave(env_file, "DATABASE_URL")
+            environment["DATABASE_URL"] = dsn_gate
+        environment["WORKDEV_API_ENV_FILE"] = "/dev/null"
     print("Validando gate e registrando evidência antes do review...", flush=True)
     try:
         result = subprocess.run(command, cwd=root, env=environment, check=False)

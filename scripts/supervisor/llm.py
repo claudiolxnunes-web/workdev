@@ -144,7 +144,14 @@ def _cliente(modelo: str, cliente: Any | None):
         return cliente
     import anthropic
 
-    load_dotenv(config.ENV_FILE)
+    # A chave chega pelo ambiente do serviço (EnvironmentFile na unit, lido
+    # como root). O load_dotenv é só a rede de segurança para quem roda o
+    # Supervisor na mão; se o arquivo não estiver legível, a chave do
+    # ambiente já está no lugar.
+    try:
+        load_dotenv(config.ENV_FILE)
+    except OSError:
+        pass
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError("ANTHROPIC_API_KEY ausente")
     return anthropic.Anthropic(timeout=config.LLM_TIMEOUT_SEGUNDOS)

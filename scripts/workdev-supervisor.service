@@ -17,9 +17,15 @@ WorkingDirectory=/opt/workdev
 # HOME explícito. Serviço systemd não herda o do login, e python-dotenv,
 # psycopg e o SDK da Anthropic consultam o diretório do usuário.
 Environment=HOME=/home/workdev
-Environment=SUPERVISOR_ENV_FILE=/opt/workdev/apps/api/.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+
+# As credenciais do Supervisor chegam por EnvironmentFile, que o systemd lê
+# COMO ROOT e injeta no ambiente do processo. O processo não abre o
+# arquivo: assim ele pode ser 600 root:root e o agente CLI (que roda como
+# `workdev`) não consegue ler. Antes, o Supervisor fazia load_dotenv do
+# apps/api/.env — legível pelo agente, e com 27 chaves.
+EnvironmentFile=/etc/workdev/workdev-supervisor.env
 
 # Venv oficial da API. Nada do Supervisor é instalado globalmente.
 # flock impede execuções concorrentes: o timer não sobrepõe uma execução
