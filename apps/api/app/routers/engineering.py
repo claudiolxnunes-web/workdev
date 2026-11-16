@@ -227,6 +227,11 @@ def backfill_graph(db: Session = Depends(get_db)):
 
     result = {"synced": 0, "failed": 0, "errors": []}
 
+    # Convencao: entidades sem project_id pertencem ao WorkDev Core.
+    # O backfill do Postgres para o grafo nunca deve pular por causa de
+    # project_id NULL — o grafo exige project_id em todo nó.
+    WORKDEV_CORE = "c33052ce-b322-4394-9bb8-4e3d786183f1"
+
     def execute(operation: str, *args):
         try:
             getattr(graph_sync, operation)(*args)
@@ -267,21 +272,21 @@ def backfill_graph(db: Session = Depends(get_db)):
     )
     for rows, node_type, relationship in related:
         for row in rows:
-            if row.project_id:
-                execute(
-                    "sync_related",
-                    node_type,
-                    str(row.id),
-                    str(row.project_id),
-                    relationship,
-                    (
-                        str(row.feature_id)
-                        if node_type in ("ADR", "RFC") and row.feature_id
-                        else str(row.backlog_id)
-                        if node_type == "Knowledge" and row.backlog_id
-                        else None
-                    ),
-                )
+            project_id = row.project_id or WORKDEV_CORE
+            execute(
+                "sync_related",
+                node_type,
+                str(row.id),
+                str(project_id),
+                relationship,
+                (
+                    str(row.feature_id)
+                    if node_type in ("ADR", "RFC") and row.feature_id
+                    else str(row.backlog_id)
+                    if node_type == "Knowledge" and row.backlog_id
+                    else None
+                ),
+            )
 
     plans = db.query(ExecutionPlan).all()
     for plan in plans:
