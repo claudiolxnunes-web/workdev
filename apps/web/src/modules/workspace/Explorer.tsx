@@ -37,8 +37,10 @@ function Pasta({ caminho, nivel, onAbrir, aberto, sessao }: {
         <li key={item.caminho} role="treeitem" aria-expanded={item.tipo === "pasta" ? expandidas.has(item.caminho) : undefined}>
           <button
             type="button"
+            draggable={item.tipo === "arquivo"}
+            onDragStart={(e) => { if (item.tipo === "arquivo") e.dataTransfer.setData("text/plain", item.caminho) }}
             onClick={() => item.tipo === "pasta" ? alternar(item.caminho) : onAbrir(item.caminho)}
-            title={item.caminho}
+            title={item.caminho + (item.tipo === "arquivo" ? "\nArraste para anexar no chat" : "")}
             className={`flex w-full items-center gap-1 truncate py-0.5 pr-2 text-left text-xs hover:bg-slate-800 ${aberto === item.caminho ? "bg-slate-800 text-sky-200" : "text-slate-300"}`}
             style={{ paddingLeft: nivel * 12 + 8 }}
           >

@@ -7,7 +7,7 @@ import { Checagens, Pareceres, Selo } from "@/modules/bancada/Resultado"
 import { SeletorObserver } from "@/modules/bancada/SeletorObserver"
 import { SeletorModeloLocal } from "@/modules/local/SeletorModeloLocal"
 import { extrairDiff, ultimoPromptCorrecao } from "@/modules/bancada/proposta"
-import { MAX_TRECHOS, type Anexo } from "./tipos"
+import { MAX_LINHAS_TRECHO, MAX_TRECHOS, type Anexo } from "./tipos"
 
 // Chat da Bancada Local: o modelo local recebe a instrução + trechos anexados e
 // devolve uma PROPOSTA. Com "ler o repo", ele também busca e lê arquivos por
@@ -144,8 +144,38 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
   const [observer, setObserver] = useState<string | null>(null)
   const [ocupado, setOcupado] = useState(false)
   const [erro, setErro] = useState("")
+  const [arrastando, setArrastando] = useState(false)
   const fim = useRef<HTMLDivElement>(null)
   const reenvios = useRef(0)
+
+  // ── Drag & drop de arquivos ──────────────────────────────────────────────
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setArrastando(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setArrastando(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setArrastando(false)
+
+    const caminho = e.dataTransfer.getData("text/plain")
+    if (!caminho || !caminho.startsWith("/")) return
+
+    // Arrastar do Explorer envia o caminho completo; anexa o arquivo todo.
+    const novo: Anexo = { caminho, inicio: 1, fim: MAX_LINHAS_TRECHO }
+    setAnexos((atual) => atual.some((a) => a.caminho === novo.caminho) ? atual : [...atual, novo])
+    // Foca o input do chat.
+    setTimeout(() => document.getElementById("chat-local-input")?.focus(), 100)
+  }, [])
 
   const carregarEstado = useCallback(async () => {
     try { setEstado(await getEstado()) }
@@ -243,7 +273,17 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
 
   const desligado = estado?.ativo !== true
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate-950">
+    <div className="relative flex h-full min-h-0 flex-col bg-slate-950"
+      onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+      {arrastando && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-sky-950/80 backdrop-blur-sm border-2 border-dashed border-sky-500 rounded-lg">
+          <div className="text-center">
+            <span className="text-3xl">📎</span>
+            <p className="mt-2 text-sm font-medium text-sky-200">Soltar para anexar arquivo</p>
+            <p className="text-xs text-sky-400">O arquivo inteiro será anexado ao chat</p>
+          </div>
+        </div>
+      )}
       <header className="flex flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-900 px-3 py-1.5 text-xs">
         <h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Chat · modelo local</h2>
         <span className={estado?.ativo ? "text-emerald-300" : "text-slate-400"} title={estado?.modelo ?? undefined}>

@@ -56,30 +56,36 @@ export function BarraSessao({ taskId, chatSessionId, onAbrirDiff, onSessao, verC
 
   if (!carregado) return null
   return (
-    <section aria-label="Sessão do Workspace" className="mb-2 flex shrink-0 flex-wrap items-center gap-2 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs">
+    <section aria-label="Sessão do Workspace" className="mb-2 flex shrink-0 flex-wrap items-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs">
       {sessao ? <>
-        <span className="font-semibold text-emerald-300">● Sessão {sessao.id}</span>
-        <code className="text-slate-300">{sessao.branch}</code>
-        <span className="text-slate-500" title={sessao.base}>base {sessao.base.slice(0, 7)} ({sessao.branch_origem})</span>
-        <span className="text-slate-400">{sessao.commits.length} commit(s){sessao.alteracoes.length ? ` · ${sessao.alteracoes.length} alteração(ões) sem commit` : ""}</span>
-        <span className="ml-auto flex gap-1">
-          {onVerCheckout && (
-            <span role="group" aria-label="Ver" className="flex overflow-hidden rounded border border-slate-700">
-              <button type="button" aria-pressed={!verCheckout} onClick={() => onVerCheckout(false)}
-                className={`px-2 py-0.5 ${!verCheckout ? "bg-emerald-900 text-emerald-100" : "text-slate-400 hover:bg-slate-800"}`}>cópia da sessão</button>
-              <button type="button" aria-pressed={verCheckout} onClick={() => onVerCheckout(true)}
-                className={`px-2 py-0.5 ${verCheckout ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-slate-800"}`}>seu checkout</button>
-            </span>
-          )}
-          <button type="button" onClick={() => onAbrirDiff(sessao.id)} className="rounded bg-slate-700 px-2 py-0.5 hover:bg-slate-600">Ver diff da sessão</button>
-          <button type="button" disabled={ocupado} onClick={() => void carregar()} className="rounded px-2 py-0.5 text-slate-400 hover:bg-slate-800" title="Atualizar">↻</button>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-full bg-emerald-400" />
+          <span className="font-semibold text-emerald-200">{sessao.id}</span>
+        </span>
+        <span className="text-slate-500">·</span>
+        <code className="rounded bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300">{sessao.branch}</code>
+        {sessao.alteracoes.length > 0 && (
+          <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[11px] text-amber-300">{sessao.alteracoes.length} pendente(s)</span>
+        )}
+        {sessao.commits.length > 0 && (
+          <span className="text-slate-500">{sessao.commits.length} commit(s)</span>
+        )}
+        <span className="ml-auto flex items-center gap-1">
+          <span role="group" aria-label="Visão" className="flex overflow-hidden rounded border border-slate-700">
+            <button type="button" aria-pressed={!verCheckout} onClick={() => onVerCheckout(false)}
+              className={`px-2 py-0.5 text-[11px] ${!verCheckout ? "bg-emerald-900 text-emerald-100" : "text-slate-400 hover:bg-slate-800"}`} title="Ver cópia da sessão (onde o trabalho acontece)">sessão</button>
+            <button type="button" aria-pressed={verCheckout} onClick={() => onVerCheckout(true)}
+              className={`px-2 py-0.5 text-[11px] ${verCheckout ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-slate-800"}`} title="Ver seu checkout original">checkout</button>
+          </span>
+          <button type="button" onClick={() => onAbrirDiff(sessao.id)} className="rounded bg-slate-700 px-2 py-0.5 text-[11px] hover:bg-slate-600" title="Ver diff completo da sessão">diff</button>
           {confirmarDescarte
-            ? <button type="button" disabled={ocupado} onClick={() => void encerrar(true)} className="rounded bg-rose-800 px-2 py-0.5 hover:bg-rose-700 disabled:opacity-50">Encerrar e descartar o que não foi commitado</button>
-            : <button type="button" disabled={ocupado} onClick={() => void encerrar(false)} className="rounded border border-slate-700 px-2 py-0.5 hover:bg-slate-800 disabled:opacity-50">Encerrar sessão</button>}
+            ? <button type="button" disabled={ocupado} onClick={() => void encerrar(true)} className="rounded bg-rose-800 px-2 py-0.5 text-[11px] hover:bg-rose-700 disabled:opacity-50">descartar e encerrar</button>
+            : <button type="button" disabled={ocupado} onClick={() => void encerrar(false)} className="rounded border border-slate-700 px-2 py-0.5 text-[11px] hover:bg-slate-800 disabled:opacity-50">encerrar</button>}
+          <button type="button" disabled={ocupado} onClick={() => void carregar()} className="rounded px-1.5 py-0.5 text-slate-400 hover:bg-slate-800 disabled:opacity-50" title="Atualizar">↻</button>
         </span>
       </> : <>
-        <span className="text-slate-400">Sem sessão. O trabalho do modelo local vai para uma cópia isolada do projeto, num branch próprio — seu checkout não é tocado.</span>
-        <button type="button" disabled={ocupado} onClick={() => void comecar()} className="ml-auto rounded bg-emerald-800 px-3 py-0.5 hover:bg-emerald-700 disabled:opacity-50">{ocupado ? "Começando…" : "Começar sessão"}</button>
+        <span className="text-slate-400">Nenhuma sessão ativa — o trabalho vai para uma cópia isolada.</span>
+        <button type="button" disabled={ocupado} onClick={() => void comecar()} className="ml-auto rounded bg-emerald-800 px-3 py-0.5 text-[11px] hover:bg-emerald-700 disabled:opacity-50">{ocupado ? "..." : "Começar sessão"}</button>
       </>}
       {erro && <p role="alert" className="w-full text-rose-300">{erro}</p>}
     </section>

@@ -8,6 +8,7 @@ import { ChatSupervisor } from "@/modules/workspace/ChatSupervisor"
 import { Editor } from "@/modules/workspace/Editor"
 import { Explorer } from "@/modules/workspace/Explorer"
 import { PainelExecucao } from "@/modules/workspace/PainelExecucao"
+import { CommandPalette } from "@/modules/workspace/CommandPalette"
 import type { PlanoSupervisor } from "@/modules/workspace/plano"
 import { aprovarPlano, criarSessao, getSessoes } from "@/services/workspace.service"
 import { chaveAba, type Anexo } from "@/modules/workspace/tipos"
@@ -84,17 +85,18 @@ export default function Workspace() {
   const avisarSessao = useCallback((id: string | null) => setSessaoAtiva(id), [])
   const terminalRef = useRef<HTMLDivElement>(null)
   const [mostrarAtalhos, setMostrarAtalhos] = useState(false)
+  const [mostrarCmdPalette, setMostrarCmdPalette] = useState(false)
 
   // ── Atalhos de teclado ───────────────────────────────────────────────────
   useEffect(() => {
     function handle(e: KeyboardEvent) {
       const alvo = e.target as HTMLElement
       const digitando = alvo.tagName === "INPUT" || alvo.tagName === "TEXTAREA" || alvo.isContentEditable
-      if (digitando) return
+      if (digitando && e.key !== "Escape") return
       const ctrl = e.ctrlKey || e.metaKey
-      if (!ctrl && e.key === "?") { e.preventDefault(); setMostrarAtalhos(a => !a); return }
       if (ctrl && e.key === "/") { e.preventDefault(); setMostrarAtalhos(a => !a); return }
-      if (!ctrl) { if (e.key === "Escape") { (document.activeElement instanceof HTMLElement) && document.activeElement.blur(); setMostrarAtalhos(false) } return }
+      if (ctrl && e.key === "K") { e.preventDefault(); setMostrarCmdPalette(a => !a); return }
+      if (ctrl && e.key === "N") { e.preventDefault(); setAbaAI("local"); return }
       e.preventDefault()
       switch (e.key) {
         case "1": setAbaAI("supervisor"); break
@@ -113,8 +115,6 @@ export default function Workspace() {
             document.querySelector('[aria-label="Explorer"]')?.scrollIntoView({ behavior: "smooth" })
           }
           break
-        case "K": console.log("⌨ command palette"); break
-        case "N": console.log("⌨ new chat"); break
       }
     }
     window.addEventListener("keydown", handle)
@@ -239,6 +239,7 @@ export default function Workspace() {
         {anexos.length > 0 && (
           <span className="text-[11px] text-sky-400">{anexos.length} anexo(s)</span>
         )}
+        <button type="button" onClick={() => setMostrarAtalhos(a => !a)} className="rounded border border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-white" title="Atalhos de teclado">?</button>
       </span>
     </header>
   )
@@ -299,6 +300,22 @@ export default function Workspace() {
   // ── Desktop: painéis redimensionáveis ───────────────────────────────────
   return (
     <div className="flex h-[calc(100dvh-7rem)] min-h-[520px] flex-col">
+      <CommandPalette
+        abertas={{ aiHub: desktop, terminal: true }}
+        onAcao={(acao) => {
+          switch (acao.id) {
+            case "ai-supervisor": setAbaAI("supervisor"); break
+            case "ai-local": setAbaAI("local"); break
+            case "ai-execucao": setAbaAI("execucao"); break
+            case "terminal": terminalRef.current?.scrollIntoView({ behavior: "smooth" }); break
+            case "explorer": document.querySelector('[aria-label="Explorer"]')?.scrollIntoView({ behavior: "smooth" }); break
+            case "editor": document.querySelector('[aria-label="Editor"]')?.scrollIntoView({ behavior: "smooth" }); break
+            case "toggle-modelo": setAbaAI("local"); break
+            case "nova-conversa": setAbaAI("local"); break
+            case "enviar": setAbaAI("local"); break
+          }
+        }}
+      />
       {cabecalho}
       {barraSessao}
       <Group orientation="horizontal" id="workdev-workspace-colunas" defaultLayout={colunas.defaultLayout} onLayoutChanged={colunas.onLayoutChanged}
@@ -333,7 +350,9 @@ export default function Workspace() {
           </section>
         </Panel>
       </Group>
-      {/* Botão de atalhos */}
+      {/* Modal de atalhos */}
+      <TeclasAtalhos aberto={mostrarAtalhos} fechar={() => setMostrarAtalhos(false)} />
+      {/* Botão flutuante de atalhos */}
       <div className="fixed bottom-4 right-4 z-40">
         <div className="relative group">
           <button type="button" onClick={() => setMostrarAtalhos(a => !a)}
@@ -346,7 +365,6 @@ export default function Workspace() {
           </div>
         </div>
       </div>
-      <TeclasAtalhos aberto={mostrarAtalhos} fechar={() => setMostrarAtalhos(false)} />
     </div>
   )
 }
