@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
 
 // ─── Command Palette (Ctrl+K) ─────────────────────────────────────────────
 //
@@ -33,22 +33,32 @@ const ACOES: Acao[] = [
   { id: "enviar", label: "📤 Enviar mensagem", atalho: "ctrl+enter" },
 ]
 
-export function CommandPalette({ abertas, onAcao }: {
+export interface CommandPaletteRef {
+  abrir: () => void
+}
+
+export function CommandPalette({ abertas, onAcao, ref }: {
   abertas: Record<string, boolean>
   onAcao: (acao: Acao) => void
+  ref?: React.Ref<CommandPaletteRef>
 }) {
   const [aberto, setAberto] = useState(false)
   const [filtro, setFiltro] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
+
+  useImperativeHandle(ref, () => ({
+    abrir() {
+      setAberto(true)
+      setTimeout(() => inputRef.current?.focus(), 50)
+    }
+  }))
 
   useEffect(() => {
     function handle(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key === "k") {
         e.preventDefault()
         setAberto(v => !v)
-        if (!aberto) {
-          setTimeout(() => inputRef.current?.focus(), 50)
-        }
+        if (!aberto) setTimeout(() => inputRef.current?.focus(), 50)
       }
       if (e.key === "Escape" && aberto) {
         setAberto(false)
