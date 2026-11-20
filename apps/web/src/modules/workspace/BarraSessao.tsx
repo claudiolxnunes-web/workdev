@@ -72,9 +72,9 @@ export function BarraSessao({ taskId, chatSessionId, onAbrirDiff, onSessao, verC
         )}
         <span className="ml-auto flex items-center gap-1">
           <span role="group" aria-label="Visão" className="flex overflow-hidden rounded border border-slate-700">
-            <button type="button" aria-pressed={!verCheckout} onClick={() => onVerCheckout(false)}
+            <button type="button" aria-pressed={!verCheckout} onClick={() => onVerCheckout?.(false)}
               className={`px-2 py-0.5 text-[11px] ${!verCheckout ? "bg-emerald-900 text-emerald-100" : "text-slate-400 hover:bg-slate-800"}`} title="Ver cópia da sessão (onde o trabalho acontece)">sessão</button>
-            <button type="button" aria-pressed={verCheckout} onClick={() => onVerCheckout(true)}
+            <button type="button" aria-pressed={verCheckout} onClick={() => onVerCheckout?.(true)}
               className={`px-2 py-0.5 text-[11px] ${verCheckout ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-slate-800"}`} title="Ver seu checkout original">checkout</button>
           </span>
           <button type="button" onClick={() => onAbrirDiff(sessao.id)} className="rounded bg-slate-700 px-2 py-0.5 text-[11px] hover:bg-slate-600" title="Ver diff completo da sessão">diff</button>

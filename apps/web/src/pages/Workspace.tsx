@@ -45,24 +45,6 @@ function useDesktop(): boolean {
   return desktop
 }
 
-function seletorAbaIA(aba: AbaAI, icones: Record<AbaAI, string>) {
-  const rotulos: Record<AbaAI, string> = { supervisor: "Supervisor", local: "Local", execucao: "Execução" }
-  return (
-    <div role="tablist" aria-label="AI Hub" className="flex shrink-0 items-center gap-0.5 border-b border-slate-800 bg-slate-900/50 px-1 py-1">
-      {(Object.keys(rotulos) as AbaAI[]).map((chave) => (
-        <button key={chave} type="button" role="tab" aria-selected={aba === chave}
-          onClick={() => setAbaAI(chave)}
-          title={rotulos[chave]}
-          className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium transition-colors
-            ${aba === chave ? "bg-slate-700 text-white" : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"}`}>
-          <span className="text-sm leading-none">{icones[chave]}</span>
-          <span className="hidden sm:inline">{rotulos[chave]}</span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
 export default function Workspace() {
   const desktop = useDesktop()
   const colunas = useDefaultLayout({ id: "workdev-workspace-colunas", storage: armazenamento })
@@ -134,6 +116,24 @@ export default function Workspace() {
     ["?", "Atalhos"],
   ]
 
+  function seletorAbaIA(aba: AbaAI, icones: Record<AbaAI, string>) {
+    const rotulos: Record<AbaAI, string> = { supervisor: "Supervisor", local: "Local", execucao: "Execução" }
+    return (
+      <div role="tablist" aria-label="AI Hub" className="flex shrink-0 items-center gap-0.5 border-b border-slate-800 bg-slate-900/50 px-1 py-1">
+        {(Object.keys(rotulos) as AbaAI[]).map((chave) => (
+          <button key={chave} type="button" role="tab" aria-selected={aba === chave}
+            onClick={() => setAbaAI(chave)}
+            title={rotulos[chave]}
+            className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium transition-colors
+              ${aba === chave ? "bg-slate-700 text-white" : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"}`}>
+            <span className="text-sm leading-none">{icones[chave]}</span>
+            <span className="hidden sm:inline">{rotulos[chave]}</span>
+          </button>
+        ))}
+      </div>
+    )
+  }
+
   function TeclasAtalhos({ aberto, fechar }: { aberto: boolean; fechar: () => void }) {
     if (!aberto) return null
     return (
@@ -192,7 +192,8 @@ export default function Workspace() {
     onAnexar={anexar} sessao={sessaoVista} onSalvo={mudouSessao} />
 
   const supervisor = <ChatSupervisor sessionId={sessaoSupervisor} onSessionId={setSessaoSupervisor} onAprovarPlano={aprovar} />
-  const localChat = <ChatLocal anexos={anexos} onRemoverAnexo={(i) => setAnexos((atual) => atual.filter((_, j) => j !== i))}
+  const localChat = <ChatLocal anexos={anexos} onAdicionarAnexo={(novo) => setAnexos((atual) => atual.some((a) => a.caminho === novo.caminho) ? atual : [...atual, novo])}
+    onRemoverAnexo={(i) => setAnexos((atual) => atual.filter((_, j) => j !== i))}
     sessao={sessaoVista} onLimparAnexos={() => setAnexos([])}
     onAbrirProposta={(modelo, id, texto) => abrir({ tipo: "proposta", modelo, id, texto })} />
   const execucao = <PainelExecucao versao={versaoSessao} onMudou={mudouSessao} />

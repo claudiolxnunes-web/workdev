@@ -128,8 +128,8 @@ function CartaoModelo({ mensagem, ocupado, onAbrir, onVerificar, onParecer, onRe
   )
 }
 
-export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirProposta, sessao = null }: {
-  anexos: Anexo[]; onRemoverAnexo: (indice: number) => void; onLimparAnexos: () => void
+export function ChatLocal({ anexos, onAdicionarAnexo, onRemoverAnexo, onLimparAnexos, onAbrirProposta, sessao = null }: {
+  anexos: Anexo[]; onAdicionarAnexo: (a: Anexo) => void; onRemoverAnexo: (indice: number) => void; onLimparAnexos: () => void
   onAbrirProposta: (modelo: string, id: string, texto: string) => void
   /** Cópia da sessão em vista: os trechos e as leituras do modelo vêm dela. */
   sessao?: string | null
@@ -172,7 +172,7 @@ export function ChatLocal({ anexos, onRemoverAnexo, onLimparAnexos, onAbrirPropo
 
     // Arrastar do Explorer envia o caminho completo; anexa o arquivo todo.
     const novo: Anexo = { caminho, inicio: 1, fim: MAX_LINHAS_TRECHO }
-    setAnexos((atual) => atual.some((a) => a.caminho === novo.caminho) ? atual : [...atual, novo])
+    onAdicionarAnexo(novo)
     // Foca o input do chat.
     setTimeout(() => document.getElementById("chat-local-input")?.focus(), 100)
   }, [])
