@@ -67,7 +67,7 @@ export default function Workspace() {
   const desktop = useDesktop()
   const colunas = useDefaultLayout({ id: "workdev-workspace-colunas", storage: armazenamento })
   const centro = useDefaultLayout({ id: "workdev-workspace-centro", storage: armazenamento, panelIds: ["editor", "terminal"] })
-  const [abas, setAbas] = useState<Anexo[]>([])
+  const [abas, setAbas] = useState<AbaEditor[]>([])
   const [abaAtiva, setAbaAtiva] = useState<string | null>(null)
   const [anexos, setAnexos] = useState<Anexo[]>([])
   const [abaAI, setAbaAI] = useState<AbaAI>("supervisor")
@@ -155,7 +155,7 @@ export default function Workspace() {
   }
 
   // ── Editor abas ──────────────────────────────────────────────────────────
-  function abrir(aba: Anexo) {
+  function abrir(aba: AbaEditor) {
     const chave = chaveAba(aba)
     setAbas((atual) => atual.some((a) => chaveAba(a) === chave) ? atual.map((a) => chaveAba(a) === chave ? aba : a) : [...atual, aba])
     setAbaAtiva(chave)
