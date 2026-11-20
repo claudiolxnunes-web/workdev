@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
+import { useEffect, useImperativeHandle, useRef, useState } from "react"
 
 // ─── Command Palette (Ctrl+K) ─────────────────────────────────────────────
 //
