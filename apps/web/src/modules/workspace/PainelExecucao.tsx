@@ -23,6 +23,7 @@ const COR: Record<string, string> = {
 function linhaDoEvento(e: EventoFatia): string | null {
   const n = e.n ? `[${e.n}] ` : ""
   if (e.tipo === "fatia" && e.status === "rodando") return `${n}começou${e.etapa ? "" : ""}`
+  if (e.tipo === "inicio") return `${n}início: modelo ${(e as { modelo?: string }).modelo ?? "?"}`
   if (e.tipo === "etapa") return `${n}${e.etapa === "aplicar" ? "aplicando o diff na cópia" : e.etapa === "gate" ? "rodando o gate (testes do projeto)" : e.etapa === "auditoria" ? "auditando a proposta (observer)" : e.etapa === "simular" ? "validando e simulando o SQL (rollback)" : "commitando no branch da sessão"}`
   if (e.tipo === "ferramenta") {
     const a = e.argumentos ?? {}
