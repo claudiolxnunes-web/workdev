@@ -8,10 +8,10 @@ import { ChatSupervisor } from "@/modules/workspace/ChatSupervisor"
 import { Editor } from "@/modules/workspace/Editor"
 import { Explorer } from "@/modules/workspace/Explorer"
 import { PainelExecucao } from "@/modules/workspace/PainelExecucao"
-import { CommandPalette } from "@/modules/workspace/CommandPalette"
+import { CommandPalette, type CommandPaletteRef } from "@/modules/workspace/CommandPalette"
 import type { PlanoSupervisor } from "@/modules/workspace/plano"
 import { aprovarPlano, criarSessao, getSessoes } from "@/services/workspace.service"
-import { chaveAba, type Anexo } from "@/modules/workspace/tipos"
+import { chaveAba, type AbaEditor, type Anexo } from "@/modules/workspace/tipos"
 
 // ─── Workspace Local (redesenhado) ──────────────────────────────────────────
 //
@@ -66,8 +66,8 @@ export default function Workspace() {
   const sessaoVista = sessaoAtiva && !verCheckout ? sessaoAtiva : null
   const avisarSessao = useCallback((id: string | null) => setSessaoAtiva(id), [])
   const terminalRef = useRef<HTMLDivElement>(null)
+  const paletteRef = useRef<CommandPaletteRef>(null)
   const [mostrarAtalhos, setMostrarAtalhos] = useState(false)
-  const [mostrarCmdPalette, setMostrarCmdPalette] = useState(false)
 
   // ── Atalhos de teclado ───────────────────────────────────────────────────
   useEffect(() => {
@@ -77,7 +77,6 @@ export default function Workspace() {
       if (digitando && e.key !== "Escape") return
       const ctrl = e.ctrlKey || e.metaKey
       if (ctrl && e.key === "/") { e.preventDefault(); setMostrarAtalhos(a => !a); return }
-      if (ctrl && e.key === "K") { e.preventDefault(); setMostrarCmdPalette(a => !a); return }
       if (ctrl && e.key === "N") { e.preventDefault(); setAbaAI("local"); return }
       e.preventDefault()
       switch (e.key) {
@@ -243,8 +242,8 @@ export default function Workspace() {
           <button type="button" onClick={() => document.querySelector('[aria-label="Explorer"]')?.scrollIntoView({ behavior: "smooth" })} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Explorer (Ctrl+Shift+F)">📁</button>
           <button type="button" onClick={() => document.querySelector('[aria-label="Editor"]')?.scrollIntoView({ behavior: "smooth" })} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Editor (Ctrl+E)">📝</button>
           <span className="mx-1 h-4 w-px bg-slate-700" />
+          <button type="button" onClick={() => paletteRef.current?.abrir()} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Paleta de comandos (Ctrl+K)">🔍</button>
         </>}
-        <button type="button" onClick={() => setMostrarCmdPalette(a => !a)} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Paleta de comandos (Ctrl+K)">🔍</button>
       </span>
       <span className="ml-auto flex items-center gap-2">
         {abas.filter(a => a.tipo === "arquivo").length > 0 && (
@@ -314,7 +313,7 @@ export default function Workspace() {
   // ── Desktop: painéis redimensionáveis ───────────────────────────────────
   return (
     <div className="flex h-[calc(100dvh-7rem)] min-h-[520px] flex-col">
-      <CommandPalette
+      <CommandPalette ref={paletteRef}
         abertas={{ aiHub: desktop, terminal: true }}
         onAcao={(acao) => {
           switch (acao.id) {
