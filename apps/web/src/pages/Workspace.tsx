@@ -232,6 +232,19 @@ export default function Workspace() {
       ) : (
         <span className="text-xs text-slate-500">somente leitura</span>
       )}
+      <span role="toolbar" aria-label="Ações rápidas" className="ml-2 flex items-center gap-1">
+        {desktop && <>
+          <button type="button" onClick={() => setAbaAI("supervisor")} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Supervisor (Ctrl+1)">🧠</button>
+          <button type="button" onClick={() => setAbaAI("local")} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Chat Local (Ctrl+2)">💻</button>
+          <button type="button" onClick={() => setAbaAI("execucao")} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Execução (Ctrl+3)">▶</button>
+          <span className="mx-1 h-4 w-px bg-slate-700" />
+          <button type="button" onClick={() => terminalRef.current?.scrollIntoView({ behavior: "smooth" })} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Terminal (Ctrl+4)">💻</button>
+          <button type="button" onClick={() => document.querySelector('[aria-label="Explorer"]')?.scrollIntoView({ behavior: "smooth" })} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Explorer (Ctrl+Shift+F)">📁</button>
+          <button type="button" onClick={() => document.querySelector('[aria-label="Editor"]')?.scrollIntoView({ behavior: "smooth" })} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Editor (Ctrl+E)">📝</button>
+          <span className="mx-1 h-4 w-px bg-slate-700" />
+        </>}
+        <button type="button" onClick={() => setMostrarCmdPalette(a => !a)} className="rounded border border-slate-700 p-1.5 text-sm hover:bg-slate-800 hover:text-white" title="Paleta de comandos (Ctrl+K)">🔍</button>
+      </span>
       <span className="ml-auto flex items-center gap-2">
         {abas.filter(a => a.tipo === "arquivo").length > 0 && (
           <span className="text-[11px] text-slate-500">{abas.filter(a => a.tipo === "arquivo").length} arquivo(s)</span>
